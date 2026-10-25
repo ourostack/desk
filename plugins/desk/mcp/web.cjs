@@ -3,10 +3,10 @@
 // browser_context opens one of two browsers and closes it again:
 //   fresh  an empty throwaway profile in a private temp folder;
 //   mine   a private copy of the person's own Edge (or Chrome) profile, so their sign-ins work.
-// Both run headless as separate processes with their own user-data folder, through the Playwright
-// CLI that ships inside playwright-core (it talks to the browser over a pipe, never a debugging
-// port). So Desk never focuses a window, attaches to, closes or changes the person's running
-// browser, or touches another agent's browser. Closing a context deletes its folder.
+// Each runs headless as its own browser process with its own user-data folder, driven by the
+// Playwright CLI inside playwright-core, which talks to the browser over a pipe, not a debugging
+// port. So Desk never focuses a window, never attaches to, closes or changes the person's running
+// browser, and never touches another agent's browser. Closing a context deletes its folder.
 //
 // browser_command runs one Playwright CLI page command (snapshot, click, fill, goto, ...) in it.
 //
@@ -25,29 +25,22 @@ var PLAYWRIGHT_VERSION = "1.63.0";
 var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
 var ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var PREFIX = "desk-browser-";
+// Each context folder is its own Playwright CLI workspace, so one fixed session name per folder is enough.
 var SESSION = "desk";
-var INSTALL_MS = 180000;
-var OPEN_MS = 120000;
-var COMMAND_MS = 120000;
 // Commands that would open, close, re-point or attach a browser, or reach other sessions. Only browser_context opens and closes.
 var REFUSED = ["open", "attach", "detach", "close", "close-all", "kill-all", "list", "delete-data", "install", "install-browser",
   "config-print", "show", "tray", "pause-at", "resume", "step-over"];
-var REFUSED_OPTIONS = ["-s", "--session", "--config", "--profile", "--browser", "--persistent", "--headed", "--extension", "--endpoint", "--cdp-endpoint", "--help", "-h", "--version", "-v"];
+var REFUSED_OPTIONS = ["-s", "--session", "--config", "--profile", "--browser", "--persistent", "--headed", "--extension",
+  "--endpoint", "--cdp-endpoint", "--help", "-h", "--version", "-v"];
 // Parts of a profile that are large caches, belong to extensions, or would reopen the person's own tabs. Sign-ins live in Cookies, Local Storage and Login Data, which are kept.
-var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "CacheStorage", "ScriptCache",
-  "Extensions", "Extension Scripts", "Extension State", "Extension Rules", "Local Extension Settings", "Sync Extension Settings",
-  "File System", "Shared Dictionary", "IndexedDB", "WebStorage", "load_statistics.db", "WebAssistDatabase",
-  "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs", "SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile"];
-
-var BROWSERS = {
-  msedge: { name: "Microsoft Edge", short: "Edge" },
-  chrome: { name: "Google Chrome", short: "Chrome" }
-};
+var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "CacheStorage",
+  "ScriptCache", "Extensions", "Extension Scripts", "Extension State", "Extension Rules", "Local Extension Settings",
+  "Sync Extension Settings", "File System", "Shared Dictionary", "IndexedDB", "WebStorage", "load_statistics.db",
+  "WebAssistDatabase", "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs"];
+var BROWSERS = { msedge: { name: "Microsoft Edge", short: "Edge" }, chrome: { name: "Google Chrome", short: "Chrome" } };
 
 function plain(message) {
-  var error = new Error(message);
-  error.plain = true;
-  return error;
+  return Object.assign(new Error(message), { plain: true });
 }
 
 function exists(file) {
@@ -58,20 +51,13 @@ function exists(file) {
   }
 }
 
-function envValue(env, name) {
-  var key = Object.keys(env).filter(function (candidate) {
-    return candidate.toUpperCase() === name;
-  })[0];
-  return key === undefined ? undefined : env[key];
-}
-
 // Desk's state folder for the browser: $DESK_BROWSER_STATE_DIR, else $XDG_STATE_HOME/ouroboros-skills/desk/browser, else ~/.local/state/ouroboros-skills/desk/browser.
 function stateDir(env, homeDir) {
   if (env.DESK_BROWSER_STATE_DIR) return env.DESK_BROWSER_STATE_DIR;
   return path.join(env.XDG_STATE_HOME || path.join(homeDir, ".local", "state"), "ouroboros-skills", "desk", "browser");
 }
 
-// The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows.
+// The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.
 function npmCli(node, platform, fileExists) {
   var real = node;
   try {
@@ -89,55 +75,56 @@ function npmCli(node, platform, fileExists) {
 
 // Where each browser keeps its profiles.
 function profileRoot(channel, platform, env, homeDir) {
+  var chrome = channel === "chrome";
   if (platform === "win32") {
-    var local = envValue(env, "LOCALAPPDATA") || path.win32.join(homeDir, "AppData", "Local");
-    return channel === "chrome" ? path.win32.join(local, "Google", "Chrome", "User Data") : path.win32.join(local, "Microsoft", "Edge", "User Data");
+    var local = env.LOCALAPPDATA || path.win32.join(homeDir, "AppData", "Local");
+    return chrome ? path.win32.join(local, "Google", "Chrome", "User Data") : path.win32.join(local, "Microsoft", "Edge", "User Data");
   }
-  if (platform === "darwin") return path.join(homeDir, "Library", "Application Support", channel === "chrome" ? path.join("Google", "Chrome") : "Microsoft Edge");
-  return path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), channel === "chrome" ? "google-chrome" : "microsoft-edge");
+  if (platform === "darwin") return path.join(homeDir, "Library", "Application Support", chrome ? "Google/Chrome" : "Microsoft Edge");
+  return path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), chrome ? "google-chrome" : "microsoft-edge");
 }
 
 function settings(o) {
-  o = o || {};
   var env = o.env || process.env;
-  var homeDir = o.homeDir || env.HOME || env.USERPROFILE || os.homedir();
+  var homeDir = o.homeDir || os.homedir();
+  var platform = o.platform || process.platform;
+  var fileExists = o.exists || exists;
+  var node = o.node || process.execPath;
   return {
-    env: env,
-    homeDir: homeDir,
-    platform: o.platform || process.platform,
-    fileExists: o.exists || exists,
+    env: env, homeDir: homeDir, platform: platform, fileExists: fileExists, node: node,
+    npmCli: o.npmCli === undefined ? npmCli(node, platform, fileExists) : o.npmCli,
     tmpDir: o.tmpDir || os.tmpdir(),
     stateRoot: stateDir(env, homeDir),
-    node: o.node || process.execPath,
-    profileRoots: o.profileRoots || null
+    profileRoots: o.profileRoots || {},
+    installMs: o.installMs || 180000,
+    openMs: o.openMs || 120000,
+    commandMs: o.commandMs || 120000
   };
 }
 
 // The installed browser to drive: Edge first, then Chrome. For mine, only one whose profile folder exists.
 function chooseBrowser(s, mine) {
-  var order = ["msedge", "chrome"];
-  for (var index = 0; index < order.length; index += 1) {
-    var channel = order[index];
-    var found = browserDiscovery.channelBrowserSelection(channel, s.platform, s.env, s.fileExists);
-    if (!found.executablePath) continue;
-    var root = s.profileRoots ? s.profileRoots[channel] : profileRoot(channel, s.platform, s.env, s.homeDir);
-    if (mine && !(root && exists(path.join(root, "Local State")))) continue;
-    return { channel: channel, executablePath: found.executablePath, profileRoot: root };
-  }
+  var found = ["msedge", "chrome"].map(function (channel) {
+    var selected = browserDiscovery.channelBrowserSelection(channel, s.platform, s.env, s.fileExists);
+    var root = s.profileRoots[channel] || profileRoot(channel, s.platform, s.env, s.homeDir);
+    return { channel: channel, executablePath: selected.executablePath, profileRoot: root };
+  }).filter(function (browser) {
+    return browser.executablePath && (!mine || exists(path.join(browser.profileRoot, "Local State")));
+  });
+  if (found.length) return found[0];
   if (mine) throw plain("Desk could not find your own Edge or Chrome profile on this computer. Use a fresh browser instead (browser: \"fresh\").");
   throw plain("Desk needs Microsoft Edge or Google Chrome to open a browser, and found neither. Install one, then try again.");
 }
 
-// Copy the person's last-used profile and Local State (which holds the key their sign-ins are encrypted with) into the context folder.
+// Copy the person's last-used profile, and Local State, which holds the key their sign-ins are encrypted with.
 function copyProfile(source, dest) {
   var name = "Default";
   try {
-    var local = JSON.parse(fs.readFileSync(path.join(source, "Local State"), "utf8"));
-    if (local && local.profile && typeof local.profile.last_used === "string" && local.profile.last_used) name = local.profile.last_used;
+    var last = JSON.parse(fs.readFileSync(path.join(source, "Local State"), "utf8")).profile.last_used;
+    if (typeof last === "string" && /^[^/\\]+$/.test(last) && last !== "..") name = last;
   } catch (error) {
-    // an unreadable Local State fails the copy below with the plain message
+    // no usable last_used: copy Default
   }
-  if (name.indexOf("/") !== -1 || name.indexOf("\\") !== -1 || name === "..") name = "Default";
   fs.mkdirSync(dest, { mode: 448 });
   fs.copyFileSync(path.join(source, "Local State"), path.join(dest, "Local State"));
   fs.cpSync(path.join(source, name), path.join(dest, name), {
@@ -147,78 +134,6 @@ function copyProfile(source, dest) {
     }
   });
   return name;
-}
-
-// Run the Playwright CLI in a context folder; resolves { code, stdout, stderr }.
-function runCli(s, cli, cwd, args, timeoutMs) {
-  return new Promise(function (resolve) {
-    childProcess.execFile(s.node, [cli, "--session=" + SESSION].concat(args), {
-      cwd: cwd, env: s.env, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
-    }, function (error, stdout, stderr) {
-      resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, stdout: String(stdout || ""), stderr: String(stderr || ""), timedOut: Boolean(error && error.killed) });
-    });
-  });
-}
-
-// ---- installing playwright-core ----
-
-var installing = null;
-
-function cliPath(dir) {
-  return path.join(dir, "node_modules", "playwright-core", "lib", "tools", "cli-client", "cli.js");
-}
-
-function ensurePlaywright(s) {
-  var dir = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION);
-  if (exists(cliPath(dir))) return Promise.resolve(dir);
-  if (installing) return installing;
-  installing = new Promise(function (resolve, reject) {
-    var npm = npmCli(s.node, s.platform, s.fileExists);
-    if (!npm) {
-      reject(plain("Desk could not find npm next to Node (" + s.node + "), so it cannot install the browser driver. Reinstall Node.js with npm, then try again."));
-      return;
-    }
-    fs.mkdirSync(s.stateRoot, { recursive: true });
-    var staging = fs.mkdtempSync(path.join(s.stateRoot, "install-"));
-    fs.writeFileSync(path.join(staging, "package.json"), "{\"private\":true}\n");
-    var env = Object.assign({}, s.env, { npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false", npm_config_loglevel: "error" });
-    childProcess.execFile(s.node, [npm, "install", "--no-save", "--ignore-scripts", "playwright-core@" + PLAYWRIGHT_VERSION], {
-      cwd: staging, env: env, timeout: INSTALL_MS, windowsHide: true, maxBuffer: 16 * 1024 * 1024
-    }, function (error, stdout, stderr) {
-      if (error || !exists(cliPath(staging))) {
-        var last = String(stderr || "").trim().split("\n").pop() || (error && error.message) || "";
-        reject(plain("Desk could not install the browser driver (playwright-core " + PLAYWRIGHT_VERSION + ") with npm. Check the internet connection, then try again. npm said: " + last));
-        return;
-      }
-      try {
-        fs.renameSync(staging, dir);
-      } catch (renameError) {
-        // another Desk finished the same install first
-        if (!exists(cliPath(dir))) {
-          reject(plain("Desk installed the browser driver but could not move it into place: " + renameError.message));
-          return;
-        }
-      }
-      resolve(dir);
-    });
-  }).then(function (dir) {
-    installing = null;
-    return dir;
-  }, function (error) {
-    installing = null;
-    throw error;
-  });
-  return installing;
-}
-
-// ---- contexts ----
-
-function contextDir(s, id) {
-  return path.join(s.tmpDir, PREFIX + id);
-}
-
-function removeDir(dir) {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 }
 
 function launchConfig(kind, browser, profileDir, profileName, outputDir) {
@@ -231,20 +146,83 @@ function launchConfig(kind, browser, profileDir, profileName, outputDir) {
   return { browser: { browserName: "chromium", isolated: false, userDataDir: profileDir, launchOptions: launch }, outputDir: outputDir };
 }
 
-function cleanError(text) {
-  return String(text).split("\n").map(function (line) {
-    return line.trim();
-  }).filter(Boolean).slice(0, 6).join(" ");
+// ---- the Playwright CLI ----
+
+function cliPath(s) {
+  return path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION, "node_modules", "playwright-core", "lib", "tools", "cli-client", "cli.js");
 }
 
-function open(s, kind, owned) {
+// Run the Playwright CLI in a context folder; resolves { code, text, timedOut }.
+function runCli(s, cwd, args, timeoutMs) {
+  return new Promise(function (resolve) {
+    childProcess.execFile(s.node, [cliPath(s), "--session=" + SESSION].concat(args), {
+      cwd: cwd, env: s.env, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
+    }, function (error, stdout, stderr) {
+      resolve({ code: error ? 1 : 0, text: (stdout + "\n" + stderr).trim(), timedOut: Boolean(error && error.killed) });
+    });
+  });
+}
+
+var installing = {};
+
+function installPlaywright(s) {
+  if (!s.npmCli) {
+    return Promise.reject(plain("Desk could not find npm next to Node (" + s.node + "), so it cannot install the browser driver. Reinstall Node.js with npm, then try again."));
+  }
+  var dir = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION);
+  fs.mkdirSync(s.stateRoot, { recursive: true });
+  var staging = fs.mkdtempSync(path.join(s.stateRoot, "install-"));
+  fs.writeFileSync(path.join(staging, "package.json"), "{\"private\":true}\n");
+  var env = Object.assign({}, s.env, { npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false", npm_config_loglevel: "error", npm_config_fetch_retries: "1", npm_config_fetch_timeout: "20000" });
+  return new Promise(function (resolve, reject) {
+    childProcess.execFile(s.node, [s.npmCli, "install", "--no-save", "--ignore-scripts", "playwright-core@" + PLAYWRIGHT_VERSION], {
+      cwd: staging, env: env, timeout: s.installMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8"
+    }, function (error, stdout, stderr) {
+      var installed = path.join(staging, path.relative(dir, cliPath(s)));
+      if (error || !exists(installed)) {
+        reject(plain("Desk could not install the browser driver (playwright-core " + PLAYWRIGHT_VERSION + ") with npm. Check the internet connection, then try again. npm said: " + (stderr.trim().split("\n").filter(function (line) { return line.indexOf("complete log") === -1; }).pop() || "nothing")));
+        return;
+      }
+      try {
+        fs.renameSync(staging, dir);
+      } catch (renameError) {
+        // Another Desk process finished the same install first; its copy is used.
+      }
+      resolve();
+    });
+  });
+}
+
+function ensurePlaywright(s) {
+  if (exists(cliPath(s))) return Promise.resolve();
+  var key = s.stateRoot;
+  if (!installing[key]) {
+    installing[key] = installPlaywright(s).then(function () {
+      delete installing[key];
+      if (!exists(cliPath(s))) throw plain("Desk installed the browser driver but could not put it in place in " + s.stateRoot + ". Try again.");
+    }, function (error) {
+      delete installing[key];
+      throw error;
+    });
+  }
+  return installing[key];
+}
+
+// ---- contexts ----
+
+function contextDir(s, id) {
+  return path.join(s.tmpDir, PREFIX + id);
+}
+
+function open(s, kind) {
   if (kind !== "fresh" && kind !== "mine") throw plain("browser must be \"fresh\" or \"mine\".");
   var browser = chooseBrowser(s, kind === "mine");
+  var short = BROWSERS[browser.channel].short;
   var id = crypto.randomUUID();
   var dir = contextDir(s, id);
-  return ensurePlaywright(s).then(function (installed) {
+  var outputDir = path.join(s.stateRoot, "output", id);
+  return ensurePlaywright(s).then(function () {
     fs.mkdirSync(dir, { mode: 448 });
-    owned[id] = dir;
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind }) + "\n");
     fs.mkdirSync(path.join(dir, ".playwright"));
     var profileDir = path.join(dir, "profile");
@@ -253,42 +231,37 @@ function open(s, kind, owned) {
       try {
         profileName = copyProfile(browser.profileRoot, profileDir);
       } catch (error) {
-        throw plain("Desk could not copy your " + BROWSERS[browser.channel].short + " profile, probably because " + BROWSERS[browser.channel].short + " is using it. Close " + BROWSERS[browser.channel].short + ", or use a fresh browser (browser: \"fresh\").");
+        throw plain("Desk could not copy your " + short + " profile, probably because " + short + " is using it. Close " + short + ", or use a fresh browser (browser: \"fresh\").");
       }
     } else {
       fs.mkdirSync(profileDir, { mode: 448 });
     }
-    var outputDir = path.join(s.stateRoot, "output", id);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, profileName, outputDir)));
-    return runCli(s, cliPath(installed), dir, ["open", "--config=config.json"], OPEN_MS);
+    return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
-    if (result.code !== 0) throw plain("The browser did not start: " + (cleanError(result.stderr || result.stdout) || "no details") + ". Try again, or use a fresh browser.");
-    return { contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: path.join(s.stateRoot, "output", id),
-      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done." };
+    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.split("\n").slice(0, 6).join(" "));
+    return {
+      contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
+      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done."
+    };
   }).catch(function (error) {
-    return close(s, id, owned).then(function () {
-      throw error;
-    }, function () {
+    return close(s, id).then(function () {
       throw error;
     });
   });
 }
 
-function close(s, id, owned) {
+function close(s, id) {
   var dir = contextDir(s, id);
-  delete owned[id];
-  if (!fs.existsSync(dir)) return Promise.resolve({ contextId: id, closed: true });
-  var installed = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION);
-  var stop = exists(cliPath(installed)) && fs.existsSync(path.join(dir, "config.json"))
-    ? runCli(s, cliPath(installed), dir, ["close"], 30000) : Promise.resolve(null);
+  var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
   return stop.then(function () {
-    try {
-      removeDir(dir);
-    } catch (error) {
-      throw plain("The browser closed, but Desk could not delete its folder " + dir + ": " + error.message);
-    }
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     return { contextId: id, closed: true };
   });
+}
+
+function checkId(id) {
+  if (typeof id !== "string" || !ID.test(id)) throw plain("contextId must be the id that browser_context open returned.");
 }
 
 function checkArgs(args) {
@@ -306,181 +279,171 @@ function checkArgs(args) {
 }
 
 function command(s, id, args) {
-  if (typeof id !== "string" || !ID.test(id)) throw plain("contextId must be the id that browser_context open returned.");
+  checkId(id);
   checkArgs(args);
   var dir = contextDir(s, id);
-  var installed = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION);
-  if (!fs.existsSync(path.join(dir, "config.json")) || !exists(cliPath(installed))) {
-    throw plain("There is no open browser with that contextId. Open one with browser_context.");
-  }
-  return runCli(s, cliPath(installed), dir, args, COMMAND_MS).then(function (result) {
-    var text = (result.stdout + (result.stderr ? "\n" + result.stderr : "")).trim();
-    if (result.timedOut) throw plain("The command took longer than " + COMMAND_MS / 1000 + " seconds and was stopped.");
-    if (result.code !== 0) throw plain(text || "The command failed.");
-    return text;
+  if (!fs.existsSync(path.join(dir, "config.json"))) throw plain("There is no open browser with that contextId. Open one with browser_context.");
+  return runCli(s, dir, args, s.commandMs).then(function (result) {
+    if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
+    if (result.code !== 0) throw plain(result.text || "The command failed.");
+    return result.text;
   });
 }
 
-// Close what an earlier Desk process left open after it stopped without closing.
-function sweep(s) {
-  var entries = [];
+function ownerGone(file) {
   try {
-    entries = fs.readdirSync(s.tmpDir);
+    process.kill(JSON.parse(fs.readFileSync(file, "utf8")).pid, 0);
+    return false;
   } catch (error) {
-    return Promise.resolve();
+    return error.code === "ESRCH";
   }
-  var stale = entries.filter(function (name) {
-    if (name.indexOf(PREFIX) !== 0 || !ID.test(name.slice(PREFIX.length))) return false;
-    var owner = null;
-    try {
-      owner = JSON.parse(fs.readFileSync(path.join(s.tmpDir, name, "owner.json"), "utf8"));
-    } catch (error) {
-      return false;
-    }
-    if (!owner || typeof owner.pid !== "number" || owner.pid === process.pid) return false;
-    try {
-      process.kill(owner.pid, 0);
-      return false;
-    } catch (error) {
-      return error.code === "ESRCH";
-    }
+}
+
+// Close what an earlier Desk process left open when it stopped without closing.
+function sweep(s) {
+  var names = fs.existsSync(s.tmpDir) ? fs.readdirSync(s.tmpDir) : [];
+  var stale = names.filter(function (name) {
+    return name.indexOf(PREFIX) === 0 && ID.test(name.slice(PREFIX.length)) && ownerGone(path.join(s.tmpDir, name, "owner.json"));
   });
   return stale.reduce(function (chain, name) {
     return chain.then(function () {
-      return close(s, name.slice(PREFIX.length), {}).catch(function () {});
+      return close(s, name.slice(PREFIX.length));
     });
   }, Promise.resolve());
 }
 
 // ---- MCP ----
 
-function createController(o) {
-  var s = settings(o);
+function createController(options) {
+  var s = settings(options || {});
   var owned = {};
-  function result(promise) {
-    return Promise.resolve().then(promise).then(function (value) {
+  function answer(work) {
+    return Promise.resolve().then(work).then(function (value) {
       return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError: false };
     }, function (error) {
-      return { content: [{ type: "text", text: error && error.plain ? error.message : "Desk's browser hit an unexpected problem: " + (error && error.message || String(error)) }], isError: true };
+      return { content: [{ type: "text", text: error.plain ? error.message : "Desk's browser hit an unexpected problem: " + error.message }], isError: true };
     });
+  }
+  function context(input) {
+    if (input.action === "open") {
+      return open(s, input.browser || "fresh").then(function (opened) {
+        owned[opened.contextId] = true;
+        return opened;
+      });
+    }
+    if (input.action !== "close") throw plain("action must be \"open\" or \"close\".");
+    checkId(input.contextId);
+    delete owned[input.contextId];
+    return close(s, input.contextId);
   }
   return {
     settings: s,
-    owned: owned,
     call: function (name, input) {
-      input = input || {};
-      if (name === "browser_context") {
-        return result(function () {
-          if (input.action === "open") return open(s, input.browser || "fresh", owned);
-          if (input.action === "close") {
-            if (typeof input.contextId !== "string" || !ID.test(input.contextId)) throw plain("contextId must be the id that browser_context open returned.");
-            return close(s, input.contextId, owned);
-          }
-          throw plain("action must be \"open\" or \"close\".");
-        });
-      }
-      if (name === "browser_command") return result(function () { return command(s, input.contextId, input.args); });
-      return result(function () { throw plain("Unknown tool " + name + "."); });
+      var given = input || {};
+      if (name === "browser_context") return answer(function () { return context(given); });
+      if (name === "browser_command") return answer(function () { return command(s, given.contextId, given.args); });
+      return answer(function () { throw plain("Unknown tool " + name + "."); });
     },
     closeAll: function () {
       return Promise.all(Object.keys(owned).map(function (id) {
-        return close(s, id, owned).catch(function () {});
+        delete owned[id];
+        return close(s, id);
       }));
     },
     sweep: function () {
-      return sweep(s);
+      return Promise.resolve().then(function () {
+        return sweep(s);
+      }).catch(function (error) {
+        return error;
+      });
     }
   };
 }
 
+// options: stdin, stdout, signals (an emitter of SIGINT/SIGTERM/SIGHUP), exit, plus the controller's own settings.
 function serve(o) {
-  o = o || {};
-  var stdin = o.stdin || process.stdin;
-  var stdout = o.stdout || process.stdout;
+  var stdin = o.stdin;
   var controller = createController(o);
   var tools = require("./web-catalog.json").tools;
-  var buffered = "";
   var pending = [];
-  function send(message) {
-    stdout.write(JSON.stringify(message) + "\n");
+  var buffered = "";
+  function send(id, body) {
+    o.stdout.write(JSON.stringify(Object.assign({ jsonrpc: "2.0", id: id }, body)) + "\n");
   }
   function handle(line) {
     var message;
     try {
       message = JSON.parse(line);
     } catch (error) {
-      send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+      send(null, { error: { code: -32700, message: "Parse error" } });
       return;
     }
-    if (!message || typeof message !== "object" || message.id === undefined) return;
+    if (!message || message.id === undefined) return;
     var params = message.params || {};
     if (message.method === "initialize") {
-      send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: params.protocolVersion || "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "desk-web", version: "2.0.0" } } });
+      send(message.id, { result: { protocolVersion: params.protocolVersion || "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "desk-web", version: "2.0.0" } } });
     } else if (message.method === "ping") {
-      send({ jsonrpc: "2.0", id: message.id, result: {} });
+      send(message.id, { result: {} });
     } else if (message.method === "tools/list") {
-      send({ jsonrpc: "2.0", id: message.id, result: { tools: tools } });
+      send(message.id, { result: { tools: tools } });
     } else if (message.method === "tools/call") {
       pending.push(controller.call(params.name, params.arguments).then(function (body) {
-        send({ jsonrpc: "2.0", id: message.id, result: body });
+        send(message.id, { result: body });
       }));
     } else {
-      send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found: " + message.method } });
+      send(message.id, { error: { code: -32601, message: "Method not found: " + message.method } });
     }
   }
-  controller.sweep();
+  var swept = controller.sweep();
   return new Promise(function (resolve) {
-    var finished = false;
+    var finishing = null;
     function finish() {
-      if (finished) return;
-      finished = true;
-      Promise.all(pending).then(function () {
-        return controller.closeAll();
-      }).then(resolve, resolve);
+      if (!finishing) {
+        finishing = Promise.all(pending.concat([swept])).then(function () {
+          return controller.closeAll();
+        });
+      }
+      return finishing;
     }
+    function stop() {
+      o.exit(0);
+    }
+    ["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (signal) {
+      o.signals.once(signal, function () {
+        finish().then(stop, stop);
+      });
+    });
     stdin.setEncoding("utf8");
     stdin.on("data", function (chunk) {
       buffered += chunk;
-      var newline;
-      while ((newline = buffered.indexOf("\n")) !== -1) {
-        var line = buffered.slice(0, newline).trim();
-        buffered = buffered.slice(newline + 1);
-        if (line) handle(line);
-      }
-    });
-    stdin.on("end", finish);
-    stdin.on("error", finish);
-    if (o.signals !== false) {
-      ["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (signal) {
-        process.once(signal, function () {
-          finish();
-          controller.closeAll().then(function () {
-            process.exit(0);
-          });
-        });
+      var lines = buffered.split("\n");
+      buffered = lines.pop();
+      lines.forEach(function (line) {
+        if (line.trim()) handle(line);
       });
-    }
-    if (stdin.resume) stdin.resume();
+    });
+    stdin.on("end", function () {
+      finish().then(resolve, resolve);
+    });
+    stdin.resume();
   });
-}
-
-function run(o) {
-  return serve(o);
 }
 
 module.exports = {
   BROWSER_TOOL_NAMES: BROWSER_TOOL_NAMES,
   PLAYWRIGHT_VERSION: PLAYWRIGHT_VERSION,
-  stateDir: stateDir,
   npmCli: npmCli,
   profileRoot: profileRoot,
   copyProfile: copyProfile,
-  launchConfig: launchConfig,
   createController: createController,
-  ensurePlaywright: function (o) {
-    return ensurePlaywright(settings(o));
-  },
+  serve: serve,
   run: run
 };
 
+/* istanbul ignore next -- the hosts start this with the real process; tests call serve() with their own streams */
+function run() {
+  return serve({ stdin: process.stdin, stdout: process.stdout, signals: process, exit: function (code) { process.exit(code); } });
+}
+
+/* istanbul ignore next -- Copilot starts this file directly */
 if (require.main === module) run();

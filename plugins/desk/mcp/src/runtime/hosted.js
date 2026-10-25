@@ -40,7 +40,6 @@ export const HOSTED_SHELL_SKILLS = Object.freeze({
   "first-run-bootstrap": NEEDS_SHELL,
   "codex-onboarding": NEEDS_SHELL,
   "add-workspace-mcp": NEEDS_SHELL,
-  "cdp-headed-browser": NEEDS_SHELL,
   "factory-evaluator": NEEDS_SHELL,
   "using-superpowers-with-desk": NEEDS_SHELL,
   "session-start-migrations": NEEDS_SHELL,

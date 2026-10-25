@@ -78,12 +78,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  browser-lifecycle-install:
-    name: Browser latest-channel lifecycle
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  browser:
+    name: Browser fresh and mine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -91,61 +95,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Verify actual installation and warm browser consumption
+      - name: Open, use and close real fresh and mine browsers
         env:
-          DESK_BROWSER_INSTALL_SMOKE: "1"
-        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
-      - name: Verify credential rotation against the actual extension relay
-        run: |
-          npm install --prefix "$RUNNER_TEMP/desk-browser-credential" --no-audit --no-fund @playwright/mcp@latest classic-level@1.4.1
-          DESK_PLAYWRIGHT_TEST_MODULES="$RUNNER_TEMP/desk-browser-credential/node_modules" node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
-
-  private-browser-lifecycle:
-    name: Actual private browser (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            node: "22"
-          - os: windows-latest
-            node: "24"
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Verify native Windows private shell folders before launching
-        if: ${{ runner.os == 'Windows' }}
-        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="Windows shell folders" ./tests/desk/mcp/__tests__/launch/browser_private.test.js
-      - name: Verify actual cold private creation and retained page lifecycle
-        if: runner.os != 'Windows'
-        env:
-          DESK_PRIVATE_BROWSER_SMOKE: "1"
-          DESK_PRIVATE_BROWSER_EVIDENCE: ${{ runner.os == 'Linux' && '/tmp' || runner.temp }}/desk-private-browser-proof
-        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/browser_private_package.test.js
-      - name: Verify actual private lifecycle as a standard Windows user
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          DESK_PRIVATE_BROWSER_EVIDENCE: ${{ runner.temp }}/desk-private-browser-proof
-        run: |
-          $command = 'set "DESK_PRIVATE_BROWSER_SMOKE=1" && set "DESK_PRIVATE_BROWSER_EVIDENCE=' + $env:DESK_PRIVATE_BROWSER_EVIDENCE + '" && set "GITHUB_SHA=' + $env:GITHUB_SHA + '" && node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/browser_private_package.test.js'
-          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -LogDir "$env:DESK_PRIVATE_BROWSER_EVIDENCE" -Command $command
-      - name: Retain the actual browser proof
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: private-browser-${{ matrix.os }}
-          path: ${{ runner.os == 'Linux' && '/tmp' || runner.temp }}/desk-private-browser-proof
-          if-no-files-found: error
-          retention-days: 1
+          DESK_BROWSER_REAL: "1"
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web.test.js
 
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
@@ -179,10 +132,6 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           npm ci
-          npm ci --prefix ../browser-context-broker
-
-      - name: Install locked maintained browser test input
-        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
 
       - name: Run desk MCP coverage shard
         working-directory: plugins/desk/mcp
@@ -296,10 +245,6 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           npm ci
-          npm ci --prefix ../browser-context-broker
-
-      - name: Install locked maintained browser test input
-        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
 
       - name: Build and check the release without keeping it
         env:
@@ -567,7 +512,6 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           npm ci
-          npm ci --prefix ../browser-context-broker
 
       - name: Build the native runtime dependency pack
         shell: bash
@@ -675,59 +619,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  desk-native-messaging:
-    name: Native messaging source and capsule (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            node: "22"
-          - os: macos-latest
-            node: "22"
-          - os: windows-latest
-            node: "24"
-    env:
-      GOTOOLCHAIN: local
-      CGO_ENABLED: "0"
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up selected Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Set up pinned native compiler
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.1"
-          check-latest: false
-          cache: false
-      - name: Test unchanged native Go source on this actual OS
-        working-directory: plugins/desk/mcp/native/browser-messaging
-        run: go test ./...
-      - name: Reproduce all eight tracked public assets
-        shell: bash
-        run: |
-          node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs
-          node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs --verify
-          git diff --exit-code -- plugins/desk/mcp/artifacts/browser-messaging
-      - name: Install locked maintained browser test input
-        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
-      - name: Exercise protected capsule configs and real Go-to-Node entry on this OS
-        if: runner.os != 'Windows'
-        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="^native:" ./tests/desk/mcp/__tests__/launch/native_messaging_install.test.js
-      - name: Exercise protected capsule configs as a standard Windows user
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $command = 'node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="^native:" ./tests/desk/mcp/__tests__/launch/native_messaging_install.test.js'
-          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
-
   desk-native-windows:
     name: desk on native Windows
     runs-on: windows-latest
@@ -796,15 +687,13 @@ jobs:
   ci-gate:
     name: CI gate
     needs:
-      - browser-lifecycle-install
-      - private-browser-lifecycle
+      - browser
       - desk-mcp-coverage-shards
       - offline-eval-tests
       - release-dry-run
       - desk-mcp-tests
       - desk-runtime-packs
       - desk-native-windows
-      - desk-native-messaging
       - unused-code
     if: ${{ always() }}
     runs-on: ubuntu-latest

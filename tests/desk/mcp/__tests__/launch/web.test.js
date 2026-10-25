@@ -1,1936 +1,492 @@
-// Explicit two-tool browser frontend, normal preparation/refresh APIs, and the
-// retained nondefault proxy API. No test reaches a registry: preparation uses
-// an owned fake npm, while real SDK handshakes restore the shipped locked pack.
-// The proxy unit adapter below is deliberately not proof of the default route.
-
-import { afterEach, test } from "node:test"
+// Desk's browser (plugins/desk/mcp/web.cjs): fresh or mine, through the Playwright CLI.
+// Most tests drive a fake CLI and a fake npm placed where the real ones go, so they run everywhere without a browser.
+// With DESK_BROWSER_REAL=1 the last tests install the real playwright-core and drive a real Edge or Chrome.
+import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { spawn, spawnSync,execFileSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
 import fs from "node:fs"
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import http from "node:http"
+import os from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
-import { mcpRoot, pluginRoot, toolPayload,makeIsolatedHome,isolatedEnv } from "./_mcp_handshake.js"
-import { openSession } from "./_mcp_session.js"
+import { NO_POSIX_MODES, isWindows } from "../_platform.js"
 
 const require = createRequire(import.meta.url)
-const browserPath = path.join(mcpRoot, "web.cjs")
-const browser = require(browserPath)
-const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
-const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
-const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
-const legacyProxy = require(path.join(mcpRoot,"web-proxy.cjs"))
-// Retained non-default proxy unit API, not the desk-web route or its catalog.
-// Its ready/launch boundary is explicit here. Actual default SDK tests live in
-// browser_context_mcp.test.js and never delegate calls to this page proxy.
-const legacyTools = [
-  {name:"browser_navigate",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{url:{type:"string"}}}},
-  {name:"browser_snapshot",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{}}},
-  {name:"browser_wait_for",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{}}},
-]
-const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
+const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
+const webFile = path.join(repoRoot, "plugins", "desk", "mcp", "web.cjs")
+const web = require(webFile)
+const catalog = require(path.join(repoRoot, "plugins", "desk", "mcp", "web-catalog.json"))
 
-for (const channel of ["chrome", "msedge"]) {
-  test("browser selection retains the discovered Windows " + channel + " executable before environment isolation", () => {
-    const env = { LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local" }
-    const candidate = browser.browserPaths(channel, "win32", env)[0]
-    const selected = browser.browserSelection([], "win32", env, file => file === candidate)
-    assert.deepEqual(selected, { args: channel === "chrome" ? [] : ["--browser", "msedge"], executablePath: candidate })
-  })
-}
-
-for (const [channel, app] of [["chrome", "Google Chrome"], ["msedge", "Microsoft Edge"]]) {
-  test(`channel-specific ${channel} discovery uses trusted nativeHome rather than owner-isolated HOME`, () => {
-    const nativeHome = "/Users/native-browser-owner"
-    const isolatedHome = "/Users/isolated-cli-owner"
-    const native = `${nativeHome}/Applications/${app}.app/Contents/MacOS/${app}`
-    const isolated = `${isolatedHome}/Applications/${app}.app/Contents/MacOS/${app}`
-    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
-    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", { HOME: isolatedHome },
-      file => file === native || file === isolated, { nativeHome }),
-      { args: [...args, "--executable-path", native], executablePath: native })
-  })
-
-  test(`channel-specific discovery keeps normal system/per-user macOS ${channel} order and never selects the other channel`, () => {
-    const env = { HOME: "/Users/owned-fixture" }
-    const system = `/Applications/${app}.app/Contents/MacOS/${app}`
-    const user = `/Users/owned-fixture/Applications/${app}.app/Contents/MacOS/${app}`
-    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
-    assert.equal(typeof browser.channelBrowserSelection, "function")
-    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, () => true), { args, executablePath: system })
-    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => file === user),
-      { args: [...args, "--executable-path", user], executablePath: user })
-    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => ![system, user].includes(file)),
-      { args: [], executablePath: null })
-  })
-}
-
-test("the pure discovery module loads only itself and builtins, not the CLI/bootstrap closure", () => {
-  const modulePath = path.join(mcpRoot, "web-browser-discovery.cjs")
-  const code = `
-    const assert=require("node:assert/strict"), Module=require("node:module");
-    const source=${JSON.stringify(modulePath)}, loaded=[], load=Module._load;
-    Module._load=function(request,parent,isMain) {
-      if(parent?.filename===source) loaded.push(request);
-      return load.apply(this,arguments);
-    };
-    let helper;
-    try { helper=require(source); } finally { Module._load=load; }
-    assert.equal(typeof helper.channelBrowserSelection,"function");
-    assert.deepEqual(loaded,["path"]);
-  `
-  const got = spawnSync(process.execPath, ["--import", new URL("../_isolated_env.mjs", import.meta.url).href, "-e", code],
-    { env: process.env, encoding: "utf8" })
-  assert.equal(got.status, 0, got.stderr)
-})
-
-test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
-  assert.equal(typeof browser.prepareBrowserRuntime, "function")
-  const m = await machine("private-prepare-", { startRefresh: () => {} })
-  preinstall(m.state)
-  const result = await browser.prepareBrowserRuntime({ ...m.options,
-    env: { ...m.options.env, PLAYWRIGHT_MCP_EXTENSION_TOKEN: "not-for-private" },
-    pluginDirs: ["/must-not-read-profile"],
-    requireModule: () => { throw new Error("profile acquisition forbidden") },
-  })
-  assert.equal(result.nodePath, m.install.node)
-  assert.equal(result.stateRoot, m.state)
-  assert.equal(result.installed.version, "0.0.81")
-  assert.deepEqual(m.calls(), [])
-})
-
-test("private preparation shares one cold install across concurrent clients", posixOnly, async () => {
-  assert.equal(typeof browser.prepareBrowserRuntime, "function")
-  const m = await machine("private-prepare-cold-", { startRefresh: () => {} })
-  const results = await Promise.all([browser.prepareBrowserRuntime(m.options), browser.prepareBrowserRuntime(m.options)])
-  assert.equal(results[0].installed.dir, results[1].installed.dir)
-  assert.equal(m.calls().filter(c => c.args[0] === "install").length, 1)
-})
-
-test("private preparation rejects unsupported generations and missing Node/npm", posixOnly, async () => {
-  assert.equal(typeof browser.prepareBrowserRuntime, "function")
-  const m = await machine("private-prepare-invalid-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
-  await assert.rejects(browser.prepareBrowserRuntime(m.options), /patch|verified/i)
-  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, exists: () => false }), /npm/i)
-  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, current: { path: "/missing", version: "v1.0.0", abi: "1" } }), /Node/i)
-})
-test("normal refresh retains a primitive process-start diagnostic instead of losing a non-Error",posixOnly,async()=>{
-  const m=await refreshMachine("desk-web-primitive-resource-",{FAKE_NPM_VERSION:"0.0.82"})
-  const result=await m.refresh({spawn(){throw "Owned primitive spawn diagnostic"}})
-  assert.equal(result.ok,false)
-  assert.match(result.error,/Owned primitive spawn diagnostic/)
-})
-
-test("private preparation defaults options and fails before installation when npm is absent", async t => {
-  t.mock.method(fs, "statSync", () => ({ isFile: () => false }))
-  await assert.rejects(browser.prepareBrowserRuntime(), error => ["node_missing", "npm_missing"].includes(error.code))
-})
-
-test("private preparation preserves a code for lock contention without an installed generation", posixOnly, async () => {
-  const m = await machine("private-prepare-busy-", { firstInstallMs: 0, startRefresh: () => {} })
-  touch(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }))
-  await assert.rejects(browser.prepareBrowserRuntime(m.options), error => error.code === "install_failed" && /still installing/.test(error.message))
-  assert.deepEqual(m.calls(), [])
-})
-
-// ---- fixtures ----
-
-function fakeChild() {
-  const child = new EventEmitter()
-  child.killed = []
-  child.kill = (signal) => { child.killed.push(signal) }
-  return child
-}
-
-function touch(file, contents = "") {
-  mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, contents)
-  return file
-}
-
-// The browser a fake install leaves behind: a stub MCP server. It answers initialize, and answers tools/call with the options it was started with. FAKE_CLI_MODE picks a behavior: list_changed (a tools/list_changed notification, a log notification, noise and an answer to a request nobody made before each answer), rpcerror (answers a call with a JSON-RPC error), crash (exits 3 on a call), slow (never answers a call; logs a cancel to stderr), stubborn (ignores stdin closing), badinit (answers initialize with an error), dieearly (exits 4 a moment after initialize arrives), extra (lists one more tool), badlist (answers tools/list with an error), ping (pings the host before answering initialize), chunky (writes each answer in two pieces), roots (asks the host for roots before answering initialize), noinit (never answers initialize).
-const STUB_CLI = `
-const args = process.argv.slice(2)
-const mode = process.env.FAKE_CLI_MODE || "ok"
-let buffered = ""
-let chain = Promise.resolve()
-function send(message) {
-  const text = JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n"
-  if (mode !== "chunky") { process.stdout.write(text); return }
-  chain = chain.then(() => new Promise((resolve) => {
-    process.stdout.write(text.slice(0, 10))
-    setTimeout(() => { process.stdout.write(text.slice(10)); resolve() }, 20)
-  }))
-}
-process.stdin.setEncoding("utf8")
-process.stdin.on("data", (chunk) => {
-  buffered += chunk
-  let newline
-  while ((newline = buffered.indexOf("\\n")) >= 0) {
-    const line = buffered.slice(0, newline)
-    buffered = buffered.slice(newline + 1)
-    const message = JSON.parse(line)
-    if (message.method === "initialize") {
-      if (mode === "badinit") { send({ id: message.id, error: { code: -32000, message: "no handshake today" } }); continue }
-      if (mode === "noinit") continue
-      if (mode === "dieearly") { setTimeout(() => process.exit(4), 300); continue }
-      if (mode === "roots") send({ id: 99, method: "roots/list" })
-      if (mode === "ping") send({ id: 55, method: "ping" })
-      send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "Playwright", version: "stub" } } })
-    } else if (message.method === "tools/list") {
-      if (mode === "badlist") { send({ id: message.id, error: { code: -32603, message: "no list" } }); continue }
-      send({ id: message.id, result: { tools: [{ name: "stub_tool", inputSchema: { type: "object" } }].concat(mode === "extra" ? [{ name: "new_tool", inputSchema: { type: "object" } }] : []) } })
-    } else if (message.method === "notifications/cancelled") {
-      process.stderr.write("cancelled " + message.params.requestId + "\\n")
-    } else if (message.method === "tools/call") {
-      if (mode === "crash") process.exit(3)
-      if (mode === "rpcerror") { send({ id: message.id, error: { code: -32602, message: "bad arguments" } }); continue }
-      if (mode === "slow") { process.stderr.write("slow call " + message.id + "\\n"); continue }
-      if (mode === "list_changed") {
-        send({ method: "notifications/tools/list_changed" })
-        send({ method: "notifications/message", params: { level: "info", data: "log line" } })
-        process.stdout.write("not json at all\\n42\\n")
-        send({ id: 777, result: {} })
-      }
-      send({ id: message.id, result: { content: [{ type: "text", text: "ran " + message.params.name + " " + JSON.stringify(message.params.arguments) + " " + JSON.stringify(args) }] } })
-    } else if (message.id !== undefined && message.method === undefined) {
-      process.stderr.write("host answered " + message.id + " " + JSON.stringify(message.error || message.result) + "\\n")
-    }
-  }
-})
-process.stdin.on("end", () => { if (mode !== "stubborn") process.exit(0) })
-if (mode === "stubborn") setTimeout(() => {}, 600000)
-`
-
-// A fake npm: `install` writes a stub @playwright/mcp (and playwright-core) into --prefix, `view` prints a version, `config get registry` prints a registry. FAKE_NPM_MODE picks a failure (grandchild starts a second process and hangs, writing its pid to FAKE_NPM_GRANDCHILD), FAKE_NPM_VERSION the version, FAKE_NPM_DELAY_MS a pause, and FAKE_NPM_LOG receives one JSON line per call.
-const FAKE_NPM = `
+const FAKE_CLI = `
 const fs = require("fs"), path = require("path")
 const args = process.argv.slice(2)
-const mode = process.env.FAKE_NPM_MODE || "ok"
-const version = process.env.FAKE_NPM_VERSION || "0.0.82"
-if (process.env.FAKE_NPM_LOG) fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ args, retries: process.env.npm_config_fetch_retries, timeout: process.env.npm_config_fetch_timeout, path: process.env.PATH }) + "\\n")
-function main() {
-  if (mode === "hang") { setTimeout(() => {}, 600000); return }
-  if (mode === "grandchild") {
-    const grandchild = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
-    fs.writeFileSync(process.env.FAKE_NPM_GRANDCHILD, String(grandchild.pid))
-    setTimeout(() => {}, 600000)
-    return
-  }
-  if (mode === "failall" || (mode === "fail" && args[0] !== "config")) { process.stderr.write("npm error code ENOTCONN\\nnpm error network unreachable\\n"); process.exit(1) }
-  if (args[0] === "config") { process.stdout.write("https://registry.example/\\n"); return }
-  if (mode === "steal") fs.writeFileSync(path.join(process.env.DESK_BROWSER_STATE_DIR, "refresh.lock"), JSON.stringify({ pid: 1 }))
-  if (args[0] === "view") { process.stdout.write(mode === "emptyview" ? "" : version + "\\n"); return }
-  if (args[0] !== "install" || mode === "silent") return
-  const modules = path.join(args[args.indexOf("--prefix") + 1], "node_modules")
-  const pkg = path.join(modules, "@playwright", "mcp")
-  fs.mkdirSync(pkg, { recursive: true })
-  const bin = mode === "stringbin" ? "cli.js" : mode === "nobin" ? {} : { "playwright-mcp": "cli.js" }
-  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin }))
-  if (mode !== "nocli") fs.writeFileSync(path.join(pkg, "cli.js"), ${JSON.stringify(STUB_CLI)})
-  if (mode !== "nocore") {
-    fs.mkdirSync(path.join(modules, "playwright-core"), { recursive: true })
-    fs.writeFileSync(path.join(modules, "playwright-core", "package.json"), JSON.stringify({ version: "1.64.0-test" }))
-    fs.mkdirSync(path.join(modules, "playwright-core", "lib"), { recursive: true })
-    const lifecycle = ${JSON.stringify(stockLifecycle)}
-    fs.writeFileSync(path.join(modules, "playwright-core", "lib", "coreBundle.js"), mode === "badlifecycle" ? lifecycle.replace("let backendPromise;", "let backendPromise = factory.promise;") : lifecycle)
-    fs.mkdirSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client"), { recursive: true })
-    fs.writeFileSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client", "session.js"), ${JSON.stringify(errorFixture.sessionSource)})
-  }
-}
-setTimeout(main, Number(process.env.FAKE_NPM_DELAY_MS || 0))
+fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify({ args, cwd: process.cwd() }) + "\\n")
+const verb = args[1], mode = process.env.FAKE_CLI_MODE || ""
+if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
+if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
+if (verb === "fail-quiet") process.exit(1)
+if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
+if (verb === "sleep") setTimeout(() => {}, 10000)
 `
 
-/** A POSIX Node install whose bin/node links to this Node and whose npm is the fake. */
-function nodeInstall(root) {
-  const node = path.join(root, "bin", "node")
-  mkdirSync(path.dirname(node), { recursive: true })
-  symlinkSync(process.execPath, node)
-  const cli = touch(path.join(root, "lib", "node_modules", "npm", "bin", "npm-cli.js"), FAKE_NPM)
-  return { node, cli }
-}
+const FAKE_NPM = `
+const fs = require("fs"), path = require("path")
+const mode = process.env.FAKE_NPM_MODE
+const cli = (root) => { const dir = path.join(root, "node_modules", "playwright-core", "lib", "tools", "cli-client"); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, "cli.js"), fs.readFileSync(process.env.FAKE_CLI_SOURCE)) }
+if (mode === "fail") { process.stderr.write("npm ERR! network\\nnpm ERR! offline\\n"); process.exit(1) }
+if (mode === "fail-quiet") process.exit(1)
+if (mode === "empty") process.exit(0)
+if (mode === "slow") { setTimeout(() => { cli(process.cwd()) }, 300); return }
+cli(process.cwd())
+if (mode === "race-ok") cli(process.env.FAKE_FINAL)
+if (mode === "race-broken") { fs.mkdirSync(process.env.FAKE_FINAL, { recursive: true }); fs.writeFileSync(path.join(process.env.FAKE_FINAL, "junk"), "x") }
+`
 
-/** A Node install, a state folder and an npm log, with options that make that Node the only (and compatible) choice. */
-async function machine(prefix, overrides = {}) {
-  const root = await mkTempRoot(prefix)
-  const install = nodeInstall(path.join(root, "node"))
+const browserExe = isWindows ? "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe" : "/fake/msedge"
+const onlyEdge = (file) => file === browserExe || file.endsWith(path.join("Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge")) || file === "/opt/microsoft/msedge/msedge" || /Microsoft[\\/]Edge[\\/]Application[\\/]msedge\.exe$/u.test(file)
+
+async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
+  const root = await mkTempRoot("desk-web-test-")
   const state = path.join(root, "state")
-  const log = path.join(root, "npm.log")
-  const { env: extraEnv, ...rest } = overrides
+  const tmp = path.join(root, "tmp")
+  fs.mkdirSync(tmp)
+  const cliSource = path.join(root, "fake-cli.js")
+  fs.writeFileSync(cliSource, FAKE_CLI)
+  const npm = path.join(root, "fake-npm.js")
+  fs.writeFileSync(npm, FAKE_NPM)
+  const installDir = path.join(state, `playwright-core-${web.PLAYWRIGHT_VERSION}`)
+  const cliDir = path.join(installDir, "node_modules", "playwright-core", "lib", "tools", "cli-client")
+  if (cli) {
+    fs.mkdirSync(cliDir, { recursive: true })
+    fs.copyFileSync(cliSource, path.join(cliDir, "cli.js"))
+  }
+  const profiles = path.join(root, "profiles")
+  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
   const options = {
-    env: { PATH: "/usr/bin", DESK_BROWSER_STATE_DIR: state, FAKE_NPM_LOG: log, ...extraEnv },
-    platform: "linux",
-    arch: "x64",
-    homeDir: path.join(root, "home"),
-    systemPrefix: path.join(root, "sysroot"),
-    current: { path: install.node, version: "v22.9.0", abi: "127" },
-    now: () => 0,
-    probe: () => null,
-    exists: (file) => file === install.cli,
-    startRefresh: () => { throw new Error("no refresh expected") },
-    ...rest,
+    env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
+    profileRoots: { msedge: path.join(profiles, "edge"), chrome: path.join(profiles, "chrome") },
   }
-  return { root, install, state, log, options, calls: () => npmCalls(log) }
+  const calls = () => {
+    const log = path.join(cliDir, "calls.log")
+    return fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []
+  }
+  return { root, state, tmp, options, calls, installDir, cliDir, profiles }
 }
 
-function npmCalls(log) {
-  return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []
-}
-
-/** Install a stub copy into a state folder, as a finished install would leave it. */
-function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\n')\n", patched = true) {
-  const modules = path.join(state, id, "node_modules")
-  touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin: { "playwright-mcp": "cli.js" } }))
-  touch(path.join(modules, "@playwright", "mcp", "cli.js"), cli)
-  touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
-  touch(path.join(modules, "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
-  if (patched) playwrightPatch.apply({ dir: path.join(state, id), version, core: null })
-  touch(path.join(state, "current.json"), JSON.stringify({ version, dir: id, previous: null }))
-  return path.join(modules, "@playwright", "mcp", "cli.js")
-}
-
-/** Collects newline-delimited JSON-RPC responses written to a stream, the same helper bootstrap.test.js uses to read a degraded responder's stdout. */
-function collect(output) {
-  const chunks = []
-  output.on("data", (chunk) => chunks.push(chunk))
-  return () => Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
-}
-
-/** Run the launcher with a fake MCP spawn; resolves once the MCP is spawned (or the launcher ended without spawning it). Stdin/stdout default to a pair of streams with stdin already closed, so a launch that degrades instead of spawning resolves at once instead of waiting on the real process's stdin; a test that wants to drive the degraded responder itself passes its own `stdin`/`stdout` and ends them when it is done. */
-function launch(options = {}) {
-  const errors = []
-  const exits = []
-  const spawns = []
-  const child = fakeChild()
-  const signals = new EventEmitter()
-  const stdin = options.stdin || new PassThrough()
-  const stdout = options.stdout || new PassThrough()
-  const read = collect(stdout)
-  let spawned
-  const ready = new Promise((resolve) => { spawned = resolve })
-  const running = browser.run({
-    spawn: (file, argv, spawnOptions) => { spawns.push({ file, argv, stdio: spawnOptions.stdio, env: spawnOptions.env }); spawned(); return child },
-    signals,
-    kill: () => {},
-    stderr: { write: (text) => errors.push(text) },
-    exit: (code) => exits.push(code),
-    ...options,
-    stdin,
-    stdout,
-  })
-  if (!options.stdin) stdin.end()
-  return { running, ready: Promise.race([ready, running]), errors, exits, spawns, child, signals, stdin, stdout, read }
-}
-
-/** Run the launcher against a stdin that carries the given JSON-RPC requests (if any) and then closes, for exercising the "degrade, never die" paths: no spawn is faked, so a regression that reaches the real Playwright MCP spawn fails the test instead of spawning something real. Returns the parsed responses alongside the usual stderr lines and exit calls (expected to stay empty: a degraded server answers over the protocol, it does not exit). */
-async function launchDegraded(options, requests = []) {
-  const input = new PassThrough()
-  const output = new PassThrough()
-  const read = collect(output)
-  const errors = []
-  const exits = []
-  const running = browser.run({
-    stdin: input,
-    stdout: output,
-    stderr: { write: (text) => errors.push(text) },
-    exit: (code) => exits.push(code),
-    spawn: () => { throw new Error("no spawn expected") },
-    ...options,
-  })
-  for (const request of requests) input.write(`${JSON.stringify(request)}\n`)
-  input.end()
-  await running
-  return { errors, exits, responses: read() }
-}
-
-/** Waits until `check()` returns something truthy, or fails after `ms`. */
-async function until(check, what, ms = 15000) {
-  const deadline = Date.now() + ms
-  for (;;) {
-    const found = check()
-    if (found) return found
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-    await new Promise((resolve) => setTimeout(resolve, 10))
+function makeProfile(rootDir, { lastUsed = "Profile 1", withProfile = true } = {}) {
+  fs.mkdirSync(rootDir, { recursive: true })
+  fs.writeFileSync(path.join(rootDir, "Local State"), JSON.stringify({ profile: { last_used: lastUsed } }))
+  if (!withProfile) return
+  const profile = path.join(rootDir, lastUsed)
+  fs.mkdirSync(path.join(profile, "Network"), { recursive: true })
+  fs.writeFileSync(path.join(profile, "Network", "Cookies"), "cookies")
+  fs.writeFileSync(path.join(profile, "Preferences"), "{}")
+  for (const skipped of ["Cache", "Sessions", "Extensions"]) {
+    fs.mkdirSync(path.join(profile, skipped))
+    fs.writeFileSync(path.join(profile, skipped, "data"), "x")
   }
 }
 
-/** A host talking to the launcher in this process over a pair of streams, with the real stub browser behind it (the fake npm installs it). Every option of the launcher can be overridden; `exits` and `kills` record how the launcher ended the process. */
-function host(options) {
+const text = (result) => result.content[0].text
+const json = (result) => JSON.parse(text(result))
+
+// ---- pure helpers ----
+
+test("the catalog lists exactly the two browser tools", () => {
+  assert.deepEqual(catalog.tools.map((tool) => tool.name), web.BROWSER_TOOL_NAMES)
+  assert.deepEqual(catalog.tools[0].inputSchema.properties.browser.enum, ["fresh", "mine"])
+})
+
+test("profileRoot names each browser's profile folder on each platform", () => {
+  assert.equal(web.profileRoot("msedge", "win32", { LOCALAPPDATA: "C:\\L" }, "C:\\H"), "C:\\L\\Microsoft\\Edge\\User Data")
+  assert.equal(web.profileRoot("chrome", "win32", {}, "C:\\H"), "C:\\H\\AppData\\Local\\Google\\Chrome\\User Data")
+  assert.equal(web.profileRoot("msedge", "darwin", {}, "/Users/a"), path.join("/Users/a", "Library", "Application Support", "Microsoft Edge"))
+  assert.equal(web.profileRoot("chrome", "darwin", {}, "/Users/a"), path.join("/Users/a", "Library", "Application Support", "Google/Chrome"))
+  assert.equal(web.profileRoot("msedge", "linux", {}, "/home/a"), path.join("/home/a", ".config", "microsoft-edge"))
+  assert.equal(web.profileRoot("chrome", "linux", { XDG_CONFIG_HOME: "/x" }, "/home/a"), path.join("/x", "google-chrome"))
+})
+
+test("npmCli finds the npm beside this Node and reports none beside a missing one", () => {
+  assert.ok(web.npmCli(process.execPath, process.platform, (file) => fs.existsSync(file)))
+  assert.equal(web.npmCli(path.join(repoRoot, "no-such-node"), "linux", () => false), null)
+  assert.equal(web.npmCli("C:\\n\\node.exe", "win32", (file) => file === "C:\\n\\node_modules\\npm\\bin\\npm-cli.js"), "C:\\n\\node_modules\\npm\\bin\\npm-cli.js")
+})
+
+test("copyProfile copies the last-used profile and Local State, skipping caches, extensions and open tabs", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const dest = path.join(root, "dest")
+  assert.equal(web.copyProfile(source, dest), "Profile 1")
+  assert.ok(fs.existsSync(path.join(dest, "Local State")))
+  assert.equal(fs.readFileSync(path.join(dest, "Profile 1", "Network", "Cookies"), "utf8"), "cookies")
+  for (const skipped of ["Cache", "Sessions", "Extensions"]) assert.equal(fs.existsSync(path.join(dest, "Profile 1", skipped)), false, skipped)
+})
+
+test("copyProfile falls back to Default for a missing, unsafe or malformed last_used", async () => {
+  const { root } = await setup()
+  for (const [index, localState] of [{ profile: { last_used: "../x" } }, { profile: { last_used: ".." } }, { profile: { last_used: 5 } }, {}].entries()) {
+    const source = path.join(root, `src${index}`)
+    fs.mkdirSync(path.join(source, "Default"), { recursive: true })
+    fs.writeFileSync(path.join(source, "Local State"), JSON.stringify(localState))
+    assert.equal(web.copyProfile(source, path.join(root, `dest${index}`)), "Default")
+  }
+})
+
+// ---- the controller with a fake CLI ----
+
+test("fresh opens in a private folder, runs page commands and deletes the folder on close", async () => {
+  const { options, tmp, calls, state } = await setup()
+  const controller = web.createController(options)
+  const opened = await controller.call("browser_context", { action: "open" })
+  assert.equal(opened.isError, false, text(opened))
+  const { contextId, browser, app, files } = json(opened)
+  assert.equal(browser, "fresh")
+  assert.equal(app, "Microsoft Edge")
+  assert.equal(files, path.join(state, "output", contextId))
+  const dir = path.join(tmp, `desk-browser-${contextId}`)
+  if (!NO_POSIX_MODES) assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
+  const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"))
+  assert.equal(config.browser.launchOptions.headless, true)
+  assert.equal(config.browser.launchOptions.channel, "msedge")
+  assert.equal(config.browser.launchOptions.ignoreDefaultArgs, undefined)
+  assert.equal(config.browser.userDataDir, path.join(dir, "profile"))
+
+  const snapshot = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.deepEqual([snapshot.isError, text(snapshot)], [false, "- generic [ref=e1]"])
+  const literal = await controller.call("browser_command", { contextId, args: ["fill", "e1", "--", "--config"] })
+  assert.equal(literal.isError, false)
+
+  const closed = await controller.call("browser_context", { action: "close", contextId })
+  assert.deepEqual(json(closed), { contextId, closed: true })
+  assert.equal(fs.existsSync(dir), false)
+  assert.deepEqual(calls().map((call) => call.args.slice(1)), [["open", "--config=config.json"], ["snapshot"], ["fill", "e1", "--", "--config"], ["close"]])
+  assert.ok(calls().every((call) => call.args[0] === "--session=desk" && path.basename(call.cwd) === `desk-browser-${contextId}`))
+
+  const after = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+  assert.equal(after.isError, true)
+  assert.match(text(after), /no open browser with that contextId/u)
+})
+
+test("mine opens a private copy of the person's profile and deletes it on close", async () => {
+  const { options, tmp, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const controller = web.createController(options)
+  const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(opened.isError, false, text(opened))
+  const { contextId } = json(opened)
+  const dir = path.join(tmp, `desk-browser-${contextId}`)
+  assert.equal(fs.readFileSync(path.join(dir, "profile", "Profile 1", "Network", "Cookies"), "utf8"), "cookies")
+  assert.equal(fs.existsSync(path.join(dir, "profile", "Profile 1", "Sessions")), false)
+  const launch = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8")).browser.launchOptions
+  assert.deepEqual(launch.ignoreDefaultArgs, ["--use-mock-keychain", "--password-store=basic"])
+  assert.ok(launch.args.includes("--profile-directory=Profile 1"))
+  assert.ok(launch.args.includes("--disable-sync"))
+  assert.equal(fs.existsSync(path.join(profiles, "edge", "Profile 1", "Cache")), true, "the source profile is untouched")
+  await controller.call("browser_context", { action: "close", contextId })
+  assert.equal(fs.existsSync(dir), false)
+})
+
+test("mine gives a plain message when there is no profile, or it cannot be copied", async () => {
+  const { options, profiles, tmp } = await setup()
+  const controller = web.createController(options)
+  const none = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(none.isError, true)
+  assert.match(text(none), /could not find your own Edge or Chrome profile/u)
+  makeProfile(path.join(profiles, "edge"), { withProfile: false })
+  const busy = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(busy.isError, true)
+  assert.equal(text(busy), "Desk could not copy your Edge profile, probably because Edge is using it. Close Edge, or use a fresh browser (browser: \"fresh\").")
+  assert.deepEqual(fs.readdirSync(tmp), [], "the failed copy left no folder")
+})
+
+test("a missing browser, a failed start and bad input each give a plain message", async () => {
+  const { options, tmp } = await setup({ mode: "open-fail" })
+  const noBrowser = web.createController({ ...options, exists: () => false })
+  assert.match(text(await noBrowser.call("browser_context", { action: "open" })), /needs Microsoft Edge or Google Chrome/u)
+  const controller = web.createController(options)
+  const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
+  assert.equal(failed.isError, true)
+  assert.equal(text(failed), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed line two")
+  assert.deepEqual(fs.readdirSync(tmp), [])
+  assert.match(text(await controller.call("browser_context", { action: "open", browser: "other" })), /must be "fresh" or "mine"/u)
+  assert.match(text(await controller.call("browser_context", { action: "reopen" })), /action must be "open" or "close"/u)
+  assert.match(text(await controller.call("browser_context", { action: "close", contextId: "nope" })), /contextId must be/u)
+  assert.match(text(await controller.call("browser_command", {})), /contextId must be/u)
+  assert.match(text(await controller.call("browser_other")), /Unknown tool browser_other/u)
+  const gone = await controller.call("browser_context", { action: "close", contextId: "00000000-0000-4000-8000-000000000000" })
+  assert.deepEqual(json(gone), { contextId: "00000000-0000-4000-8000-000000000000", closed: true })
+})
+
+test("browser_command refuses lifecycle commands and browser options, and reports failures plainly", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, commandMs: 500 })
+  const { contextId } = json(await controller.call("browser_context", { action: "open" }))
+  const run = async (args) => text(await controller.call("browser_command", { contextId, args }))
+  for (const args of [undefined, [], [1]]) assert.match(await run(args), /args must be a list of strings/u)
+  for (const verb of ["open", "close", "kill-all", "close-all", "attach", "list"]) assert.match(await run([verb]), /is not available here/u)
+  for (const option of ["--session=x", "-s", "--browser=chrome", "--profile", "--config=x", "--extension"]) {
+    assert.match(await run(["snapshot", option]), /is not available here; the browser is chosen/u)
+  }
+  assert.equal(await run(["fail-quiet"]), "The command failed.")
+  assert.equal(await run(["fail-loud"]), "boom")
+  assert.match(await run(["sleep"]), /longer than 0.5 seconds/u)
+  await controller.closeAll()
+})
+
+test("an unexpected error is reported as such", async () => {
+  const { options, root } = await setup()
+  const controller = web.createController({ ...options, tmpDir: path.join(root, "missing") })
+  const result = await controller.call("browser_context", { action: "open" })
+  assert.equal(result.isError, true)
+  assert.match(text(result), /^Desk's browser hit an unexpected problem: /u)
+})
+
+// ---- installing playwright-core ----
+
+test("the first open installs playwright-core once, even when two opens race", async () => {
+  const { options, calls } = await setup({ cli: false, npmMode: "slow" })
+  const controller = web.createController(options)
+  const [a, b] = await Promise.all([controller.call("browser_context", { action: "open" }), controller.call("browser_context", { action: "open" })])
+  assert.equal(a.isError, false, text(a))
+  assert.equal(b.isError, false, text(b))
+  assert.equal(calls().filter((call) => call.args[1] === "open").length, 2)
+  await controller.closeAll()
+})
+
+test("install failures give plain messages", async () => {
+  for (const [npmMode, expected] of [["fail", /npm said: npm ERR! offline$/u], ["fail-quiet", /npm said: nothing$/u], ["empty", /npm said: nothing$/u], ["race-broken", /could not put it in place/u]]) {
+    const { options } = await setup({ cli: false, npmMode })
+    const result = await web.createController(options).call("browser_context", { action: "open" })
+    assert.equal(result.isError, true, npmMode)
+    assert.match(text(result), expected, npmMode)
+  }
+  const { options } = await setup({ cli: false })
+  const noNpm = await web.createController({ ...options, npmCli: null }).call("browser_context", { action: "open" })
+  assert.match(text(noNpm), /could not find npm next to Node/u)
+})
+
+test("an install another Desk process finished first is used", async () => {
+  const { options } = await setup({ cli: false, npmMode: "race-ok" })
+  const controller = web.createController(options)
+  const result = await controller.call("browser_context", { action: "open" })
+  assert.equal(result.isError, false, text(result))
+  await controller.closeAll()
+})
+
+test("a controller with no options uses the real process settings", () => {
+  const controller = web.createController()
+  assert.equal(controller.settings.node, process.execPath)
+  assert.equal(controller.settings.platform, process.platform)
+  assert.ok(controller.settings.stateRoot.length > 0)
+})
+
+// ---- leftovers ----
+
+test("startup closes contexts whose Desk process is gone, and keeps the rest", async () => {
+  const { options, tmp, calls } = await setup()
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid
+  const make = (id, owner, config = true) => {
+    const dir = path.join(tmp, `desk-browser-${id}`)
+    fs.mkdirSync(dir)
+    if (owner !== undefined) fs.writeFileSync(path.join(dir, "owner.json"), owner)
+    if (config) fs.writeFileSync(path.join(dir, "config.json"), "{}")
+    return dir
+  }
+  const stale = make("11111111-1111-4111-8111-111111111111", JSON.stringify({ pid: dead }))
+  const staleNoConfig = make("44444444-4444-4444-8444-444444444444", JSON.stringify({ pid: dead }), false)
+  const alive = make("22222222-2222-4222-8222-222222222222", JSON.stringify({ pid: process.pid }))
+  const noOwner = make("33333333-3333-4333-8333-333333333333", undefined)
+  const other = path.join(tmp, "desk-browser-not-an-id")
+  fs.mkdirSync(other)
+  await web.createController(options).sweep()
+  assert.equal(fs.existsSync(stale), false)
+  assert.equal(fs.existsSync(staleNoConfig), false)
+  assert.equal(fs.existsSync(alive), true)
+  assert.equal(fs.existsSync(noOwner), true)
+  assert.equal(fs.existsSync(other), true)
+  assert.deepEqual(calls().map((call) => call.args[1]), ["close"])
+
+  const { options: noCli, tmp: tmp2 } = await setup({ cli: false })
+  const leftover = path.join(tmp2, "desk-browser-55555555-5555-4555-8555-555555555555")
+  fs.mkdirSync(leftover)
+  fs.writeFileSync(path.join(leftover, "owner.json"), JSON.stringify({ pid: dead }))
+  fs.writeFileSync(path.join(leftover, "config.json"), "{}")
+  await web.createController(noCli).sweep()
+  assert.equal(fs.existsSync(leftover), false)
+
+  const notAFolder = path.join(tmp2, "file")
+  fs.writeFileSync(notAFolder, "x")
+  assert.ok(await web.createController({ ...noCli, tmpDir: notAFolder }).sweep() instanceof Error)
+  await web.createController({ ...noCli, tmpDir: path.join(tmp2, "missing") }).sweep()
+})
+
+// ---- the MCP server ----
+
+function server(options) {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
-  const read = collect(stdout)
-  const errors = []
-  const exits = []
-  const kills = []
   const signals = new EventEmitter()
-  const ownedNpm=[]
-  const ready=()=>browser.prepareBrowserRuntime({...options,npmSpawn:(...args)=>{
-    const child=(options.npmSpawn||spawn)(...args);ownedNpm.push(child);return child
-  }}).then(prepared=>({launch:{node:prepared.nodePath,indexFile:prepared.installed.cli,
-    args:browser.launchArgs(options.args||[],options.platform||process.platform,options.env,options.exists||existsSync,prepared.stateRoot),
-    env:browser.withNodeFirst(options.env,prepared.nodePath,options.platform||process.platform)}}),error=>({
-    retry:/still installing/.test(error.message),
-    payload:{status:"degraded",state:"degraded:"+error.code,code:error.code,summary:error.message,fix:"Call again in a minute or reconnect the desk-web MCP server"},
-  }))
-  const running = legacyProxy.serve({
-    ready:ready(),retry:ready,catalog:options.catalogFile?JSON.parse(readFileSync(options.catalogFile)).tools:legacyTools,
-    catalogVersion:options.catalogFile?JSON.parse(readFileSync(options.catalogFile)).playwrightMcpVersion:"owned unit fixture",
-    abort:()=>{for(const child of ownedNpm)browser.stopTree({platform:options.platform||process.platform,env:options.env,spawn},child,"SIGTERM")},
-    timeoutPayload:{code:"browser_not_ready",fix:"Call again in a minute"},
-    spawnPayload:error=>({code:"node_spawn_failed",summary:String(error)}),
-    exitPayload:(code,signal)=>({code:"browser_exited",summary:"Browser ended with "+(signal?"signal "+signal:"exit code "+code)}),
-    stderr: { write: (text) => errors.push(text) },
-    exit: (code) => exits.push(code),
-    kill: (pid, signal) => kills.push(signal),
-    signals,
-    ...options,spawn:options.spawn||spawn,
-    stdin,
-    stdout,
-  })
-  const session = {
-    running, errors, exits, kills, signals, stdin, stdout, read,
-    send: (message) => stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`),
-    reply: (id) => until(() => read().find((message) => message.id === id), `the answer to ${id}`),
-    async ask(id, method, params) {
-      session.send({ id, method, params })
-      return session.reply(id)
-    },
-    handshake: async () => {
-      await session.ask(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-host", version: "1" } })
-      session.send({ method: "notifications/initialized" })
-    },
-    call: (id, name = "browser_navigate", args = { url: "https://example.com" }) => session.ask(id, "tools/call", { name, arguments: args }),
-    close: () => { stdin.end(); return running },
-  }
-  sessions.push(session)
-  return session
-}
-
-// Every host a test opened is ended after that test, even when an assertion threw first: stdin closes, and a stop signal ends an install or a browser that is still going. A browser child left running keeps its pipes open, and the test file's process then never exits.
-const sessions = []
-const ownedMcpSessions=[]
-afterEach(async () => {
-  for(const session of ownedMcpSessions.splice(0))await session.close()
-  for (const session of sessions.splice(0)) {
-    session.stdin.end()
-    session.signals.emit("SIGTERM")
-    let timer
-    const gave = new Promise((resolve) => { timer = setTimeout(() => resolve("stuck"), 10000) })
-    const outcome = await Promise.race([session.running, gave])
-    clearTimeout(timer)
-    assert.notEqual(outcome, "stuck", "the launcher ended after its host closed")
-  }
-})
-
-// ---- the package follows its channel ----
-
-test("the launcher installs the @playwright/mcp channel with bounded npm calls, never a pinned version", () => {
-  assert.equal(browser.PACKAGE, "@playwright/mcp@latest")
-  assert.equal(browser.LEVEL_PACKAGE, "classic-level@1.4.1")
-  assert.equal(browser.WS_PACKAGE, "ws@8.21.3")
-  assert.doesNotMatch(readFileSync(browserPath, "utf8"), /@playwright\/mcp@\d/u)
-  assert.deepEqual(browser.DEFAULT_ARGS, ["--headless", "--isolated"])
-  assert.equal(browser.NPM_ENV.npm_config_fetch_retries, "0")
-  assert.equal(browser.NPM_ENV.npm_config_fetch_timeout, "10000")
-})
-
-test("the launcher uses only syntax that very old Node parses", () => {
-  const source = readFileSync(browserPath, "utf8").split("\n").filter((line) => !line.trim().startsWith("//")).join("\n")
-  assert.doesNotMatch(source, /=>|`|\?\.|\blet\s|\bconst\s|\basync\s/u)
-})
-
-// ---- which browser, and every option Playwright MCP gets ----
-
-test("browser locations follow Playwright's chrome and msedge channels on each platform", () => {
-  const env = { LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local", PROGRAMFILES: "C:\\Program Files", "PROGRAMFILES(X86)": "C:\\Program Files (x86)" }
-  assert.deepEqual(browser.browserPaths("chrome", "win32", env), [
-    "C:\\Users\\a\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  ])
-  assert.deepEqual(browser.browserPaths("msedge", "win32", { PROGRAMFILES: "C:\\Program Files" }), ["C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"])
-  assert.deepEqual(browser.browserPaths("chrome", "darwin", { HOME: "/Users/a" }), ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"])
-  assert.deepEqual(browser.browserPaths("msedge", "darwin", {}), ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"])
-  assert.deepEqual(browser.browserPaths("chrome", "linux", {}), ["/opt/google/chrome/chrome"])
-  assert.deepEqual(browser.browserPaths("msedge", "linux", {}), ["/opt/microsoft/msedge/msedge"])
-})
-
-test("Windows browser locations accept the environment's original variable casing", () => {
-  assert.deepEqual(browser.browserPaths("msedge", "win32", {
-    LocalAppData: "C:\\Users\\a\\AppData\\Local",
-    ProgramFiles: "C:\\Program Files",
-    "ProgramFiles(x86)": "C:\\Program Files (x86)",
-  }), [
-    "C:\\Users\\a\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  ])
-})
-
-test("the launcher keeps Playwright's Chrome default, passes Chrome from ~/Applications, falls back to Edge, and never overrides the caller", () => {
-  const env = { PROGRAMFILES: "C:\\Program Files" }
-  const edgeOnly = (file) => file.endsWith("msedge.exe")
-  assert.deepEqual(browser.browserArgs([], "win32", env, edgeOnly), ["--browser", "msedge"])
-  assert.deepEqual(browser.browserArgs([], "win32", env, () => true), [])
-  assert.deepEqual(browser.browserArgs([], "linux", {}, () => false), [])
-  assert.deepEqual(browser.browserArgs(["--browser", "firefox"], "win32", env, edgeOnly), [])
-  assert.deepEqual(browser.browserArgs(["--executable-path=/x"], "win32", env, edgeOnly), [])
-  assert.deepEqual(browser.browserArgs(["--cdp-endpoint=http://127.0.0.1:9"], "win32", env, edgeOnly), [])
-  assert.deepEqual(browser.browserArgs(["--caps", "vision"], "win32", env, edgeOnly), ["--browser", "msedge"])
-
-  const home = { HOME: "/Users/a" }
-  const userChrome = "/Users/a/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-  const userEdge = "/Users/a/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-  const systemEdge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-  assert.deepEqual(browser.browserArgs([], "darwin", home, (file) => file === userChrome || file === systemEdge), ["--executable-path", userChrome])
-  assert.deepEqual(browser.browserArgs([], "darwin", home, (file) => file === systemEdge), ["--browser", "msedge"])
-  assert.deepEqual(browser.browserArgs([], "darwin", home, (file) => file === userEdge), ["--browser", "msedge", "--executable-path", userEdge])
-  assert.deepEqual(browser.browserArgs([], "darwin", {}, () => false), [])
-})
-
-test("Desk's defaults and output folder come first, a connecting caller gets no defaults, and a caller's output folder wins", () => {
-  const none = () => false
-  assert.deepEqual(browser.launchArgs(["--caps", "pdf"], "linux", {}, none, "/s"), ["--headless", "--isolated", "--output-dir", path.join("/s", "output"), "--caps", "pdf"])
-  assert.deepEqual(browser.launchArgs(["--cdp-endpoint", "http://127.0.0.1:9"], "linux", {}, () => true, "/s"), ["--output-dir", path.join("/s", "output"), "--cdp-endpoint", "http://127.0.0.1:9"])
-  assert.deepEqual(browser.launchArgs(["--output-dir=/o"], "linux", {}, none, "/s"), ["--headless", "--isolated", "--output-dir=/o"])
-})
-
-// ---- which npm, which Node, which folder ----
-
-test("npm is the one that ships beside the chosen Node, found through links too", async () => {
-  const root = await mkTempRoot("desk-web-npm-")
-  const cli = touch(path.join(root, "real", "lib", "node_modules", "npm", "bin", "npm-cli.js"))
-  const node = touch(path.join(root, "real", "bin", "node"))
-  const exists = (file) => existsSync(file)
-  assert.equal(browser.npmCli(node, "linux", exists), path.join(root, "real", "bin", "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"))
-  const linked = path.join(root, "links", "node")
-  mkdirSync(path.dirname(linked), { recursive: true })
-  symlinkSync(node, linked)
-  assert.equal(realpathSync(browser.npmCli(linked, "darwin", exists)), realpathSync(cli))
-  assert.equal(browser.npmCli(path.join(root, "missing", "bin", "node"), "linux", exists), null)
-  const seen = []
-  assert.equal(browser.npmCli("C:\\node\\node.exe", "win32", (file) => { seen.push(file); return file === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js" }), "C:\\node\\node_modules\\npm\\bin\\npm-cli.js")
-  assert.equal(seen[0], "C:\\node\\node_modules\\npm\\bin\\npm-cli.js")
-})
-
-test("npm failures are reduced to their code and first message line", () => {
-  const refused = [
-    "npm error code ECONNREFUSED",
-    "npm error syscall connect",
-    "npm error errno ECONNREFUSED",
-    "npm error FetchError: request to http://127.0.0.1:9/@playwright%2fmcp failed, reason: connect ECONNREFUSED 127.0.0.1:9",
-    "npm error     at ClientRequest.<anonymous> (/n/lib/node_modules/npm/node_modules/minipass-fetch/lib/index.js:130:14)",
-    "npm error A complete log of this run can be found in: /h/.npm/_logs/x-debug-0.log",
-  ].join("\n")
-  assert.equal(browser.npmError({ stderr: refused, code: 1 }, "npm view"), "ECONNREFUSED: FetchError: request to http://127.0.0.1:9/@playwright%2fmcp failed, reason: connect ECONNREFUSED 127.0.0.1:9")
-  const missing = ["npm error code E404", "npm error 404 No match found for version x", "npm error 404", "npm ERR! code E999"].join("\n")
-  assert.equal(browser.npmError({ stderr: missing, code: 1 }, "npm view"), "E404: 404 No match found for version x")
-  assert.equal(browser.npmError({ stderr: "npm error code EAI_AGAIN\n", code: 1 }, "npm view"), "EAI_AGAIN")
-  assert.equal(browser.npmError({ stderr: "", code: 7 }, "npm install"), "npm install exited with code 7")
-  assert.equal(browser.npmError({ stderr: "spawn EMFILE", code: null }, "npm install"), "spawn EMFILE")
-  for (const key of ["sig", "SIG", "signature", "X-Amz-Signature", "X-Goog-Signature"]) {
-    const url = `https://packages.invalid/owned.tgz?scope=fixture&${key}=owned-not-a-real-signature&expiry=fixture`
-    assert.equal(browser.npmError({ stderr: `npm error code FETCH_ERROR\nnpm error request to ${url} failed\n`, code: 1 }, "npm install"),
-      "FETCH_ERROR: request to <redacted-url> failed")
-  }
-  assert.equal(browser.npmError({ stderr: "npm error request to https://packages.invalid/owned.tgz?format=public failed\n", code: 1 }, "npm install"),
-    "request to https://packages.invalid/owned.tgz?format=public failed")
-})
-
-test("the chosen Node's folder goes first on PATH, keeping the variable's own spelling", () => {
-  assert.deepEqual(browser.withNodeFirst({ PATH: "/usr/bin", HOME: "/h" }, "/n/bin/node", "linux"), { PATH: "/n/bin:/usr/bin", HOME: "/h" })
-  assert.deepEqual(browser.withNodeFirst({ Path: "C:\\Windows" }, "C:\\node\\node.exe", "win32"), { Path: "C:\\node;C:\\Windows" })
-  assert.deepEqual(browser.withNodeFirst({}, "/n/bin/node", "darwin"), { PATH: "/n/bin" })
-})
-
-test("the browser's state folder is per user and never inside a project", () => {
-  assert.equal(browser.stateDir({ DESK_BROWSER_STATE_DIR: "/custom" }, "/h"), "/custom")
-  assert.equal(browser.stateDir({ XDG_STATE_HOME: "/xdg" }, "/h"), path.join("/xdg", "ouroboros-skills", "desk", "browser"))
-  assert.equal(browser.stateDir({}, "/h"), path.join("/h", ".local", "state", "ouroboros-skills", "desk", "browser"))
-})
-
-test("only a complete install counts as installed", async () => {
-  const root = await mkTempRoot("desk-web-read-")
-  assert.equal(browser.readInstalled(root), null)
-  touch(path.join(root, "current.json"), JSON.stringify({ version: "1" }))
-  assert.equal(browser.readInstalled(root), null)
-  const pkg = path.join(root, "i", "node_modules", "@playwright", "mcp")
-  touch(path.join(root, "current.json"), JSON.stringify({ dir: "i" }))
-  touch(path.join(pkg, "package.json"), JSON.stringify({ bin: "cli.js" }))
-  assert.equal(browser.readInstalled(root), null, "no version")
-  touch(path.join(pkg, "package.json"), JSON.stringify({ version: "1", bin: {} }))
-  assert.equal(browser.readInstalled(root), null, "no bin")
-  touch(path.join(pkg, "package.json"), JSON.stringify({ version: "1", bin: "cli.js" }))
-  assert.equal(browser.readInstalled(root), null, "no entry script")
-  touch(path.join(pkg, "cli.js"))
-  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false, ws: false, patchRevision: 0 })
-  touch(path.join(root, "i", "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
-  assert.equal(browser.readInstalled(root).ws, true, "the tab-cleanup relay's WebSocket package is detected")
-  touch(path.join(root, "i", "node_modules", "classic-level", "package.json"), "{}")
-  assert.equal(browser.readInstalled(root).reader, true, "the token reader beside it")
-  const marked = path.join(root, "j", "node_modules", "@playwright", "mcp")
-  touch(path.join(marked, "package.json"), JSON.stringify({ version: "1", bin: "cli.js" }))
-  touch(path.join(marked, "cli.js"))
-  touch(path.join(root, "current.json"), JSON.stringify({ dir: "j" }))
-  assert.equal(browser.readInstalled(root).reader, false)
-  touch(path.join(root, "j", "reader-unavailable"))
-  assert.equal(browser.readInstalled(root).reader, true, "an install marked as unable to hold the reader was tried")
-  touch(path.join(root, "current.json"), JSON.stringify({ dir: "i" }))
-  touch(path.join(root, "i", "node_modules", "playwright-core", "package.json"), JSON.stringify({ version: 2 }))
-  assert.equal(browser.readInstalled(root).core, null)
-})
-
-// ---- the lock ----
-
-test("the lock admits one owner and replaces an owner that died or went stale", async () => {
-  const root = await mkTempRoot("desk-web-lock-")
-  const lock = path.join(root, "refresh.lock")
-  assert.equal(browser.takeLock(lock, Date.now), true)
-  assert.equal(browser.takeLock(lock, Date.now), false, "held by a live process")
-  writeFileSync(lock, "not json")
-  assert.equal(browser.takeLock(lock, Date.now), false, "an owner still writing its record is live")
-  const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" })
-  writeFileSync(lock, JSON.stringify({ pid: Number(dead.stdout) }))
-  assert.equal(browser.takeLock(lock, Date.now), true, "its owner exited")
-  assert.equal(JSON.parse(readFileSync(lock, "utf8")).pid, process.pid)
-  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
-  assert.equal(browser.takeLock(lock, Date.now), false, "the recorded owner is still alive")
-  assert.equal(browser.takeLock(lock, () => Date.now() + 11 * 60 * 1000), true, "older than ten minutes")
-  assert.throws(() => browser.takeLock(path.join(root, "missing", "refresh.lock"), Date.now), /ENOENT/u)
-})
-
-test("the lock keeps an owner whose liveness probe is not permitted", async (t) => {
-  const root = await mkTempRoot("desk-web-lock-permission-")
-  const lock = path.join(root, "refresh.lock")
-  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
-  t.mock.method(process, "kill", (pid, signal) => {
-    assert.equal(pid, process.pid)
-    assert.equal(signal, 0)
-    throw Object.assign(new Error("not permitted"), { code: "EPERM" })
-  })
-  assert.equal(browser.takeLock(lock, Date.now), false)
-  assert.equal(JSON.parse(readFileSync(lock, "utf8")).pid, process.pid)
-})
-
-test("a lock that vanishes while it is replaced is decided by the next create", async () => {
-  const root = await mkTempRoot("desk-web-lockrace-")
-  const lock = path.join(root, "refresh.lock")
-  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
-  // Released by its owner between the failed create and the staleness check, so both the check and the unlink miss it.
-  let calls = 0
-  const clock = () => { calls += 1; if (calls === 1) { try { require("node:fs").unlinkSync(lock) } catch {} } return Date.now() + 11 * 60 * 1000 }
-  assert.equal(browser.takeLock(lock, clock), true)
-})
-
-// ---- run: the first launch installs, later launches start at once ----
-
-test("cold explicit-browser preparation waits for a verified install under the chosen Node without launching a browser", posixOnly, async () => {
-  const m = await machine("desk-web-first-", { env: { FAKE_NPM_VERSION: "0.0.90", FAKE_NPM_DELAY_MS: "600" } })
-  const started = Date.now()
-  const prepared = await browser.prepareBrowserRuntime(m.options)
-  assert.ok(Date.now() - started >= 500, "preparation waits for the install, unlike the SDK handshake")
-  const installed = browser.readInstalled(m.state)
-  assert.equal(installed.version, "0.0.90")
-  assert.equal(prepared.installed.dir,installed.dir)
-  assert.equal(prepared.nodePath,m.install.node)
-  assert.equal(prepared.stateRoot,m.state)
-  assert.equal(installed.patchRevision,4)
-  const [call] = m.calls()
-  assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-3)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest"])
-  assert.equal(call.retries, "0")
-  assert.equal(call.timeout, "10000")
-  assert.equal(existsSync(path.join(m.state, "refresh.lock")), false, "the lock is released")
-})
-
-test("later explicit-browser preparation returns the verified copy without npm, then starts normal refresh", posixOnly, async () => {
-  const refreshes = []
-  const m = await machine("desk-web-later-", { startRefresh: (o) => refreshes.push(o), platform: "darwin" })
-  const cli = preinstall(m.state)
-  const prepared = await browser.prepareBrowserRuntime(m.options)
-  assert.equal(prepared.installed.cli, cli)
-  assert.deepEqual(m.calls(), [], "session start never waits on npm")
-  assert.deepEqual(refreshes, [{ node: m.install.node, npmCli: m.install.cli, env: m.options.env }])
-})
-
-test("unreachable registries refuse normal runtime preparation without publishing a generation or retaining the lock", posixOnly, async () => {
-  for (const mode of ["fail","failall"]) {
-    const m = await machine("desk-web-offline-", { env: { FAKE_NPM_MODE: mode } })
-    await assert.rejects(browser.prepareBrowserRuntime(m.options),error=>error.code==="install_failed"&&/ENOTCONN: network unreachable/.test(error.message))
-    assert.deepEqual(readdirSync(path.join(m.state, "installs")), [])
-    assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
-  }
-})
-
-test("an install that npm reports as done but left incomplete is an error, not a launch", posixOnly, async () => {
-  for (const mode of ["silent", "nocli", "nobin"]) {
-    const m = await machine("desk-web-incomplete-", { env: { FAKE_NPM_MODE: mode } })
-    await assert.rejects(browser.prepareBrowserRuntime(m.options),/npm install exited with code 0/)
-  }
-  const m = await machine("desk-web-stringbin-", { env: { FAKE_NPM_MODE: "stringbin" } })
-  const prepared=await browser.prepareBrowserRuntime(m.options)
-  assert.equal(prepared.installed.patchRevision,4)
-})
-
-test("a registry that hangs is cut off at the first-install time limit", posixOnly, async () => {
-  const m = await machine("desk-web-hang-", { env: { FAKE_NPM_MODE: "hang" }, firstInstallMs: 100 })
-  const started = Date.now()
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),/npm install timed out/)
-  assert.ok(Date.now() - started < 10000)
-})
-
-test("an npm call that times out is ended with everything it started", posixOnly, async (t) => {
-  const grandchildFile = path.join(await mkTempRoot("desk-web-timeoutgrand-"), "pid")
-  const m = await machine("desk-web-timeout-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile }, firstInstallMs: 2000 })
-  const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
-  let ended = false
-  t.after(() => { if (!ended && existsSync(grandchildFile)) { const pid = Number(readFileSync(grandchildFile, "utf8")); if (alive(pid)) process.kill(pid, "SIGKILL") } })
-  const running = browser.prepareBrowserRuntime(m.options).then(()=>assert.fail("hanging npm must refuse"),error=>error)
-  const helper = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
-  assert.equal(alive(helper), true, "the helper runs while npm is within its limit")
-  t.diagnostic("E4_FIX_CHILD "+JSON.stringify({pid:helper,start:execFileSync("/bin/ps",["-p",String(helper),"-o","lstart="],{encoding:"utf8"}).trim()}))
-  assert.match((await running).message, /timed out/u)
-  await until(() => !alive(helper), "the helper npm started to end")
-  ended = true
-})
-
-test("a POSIX tree stop falls back to the npm process when its process group is gone", posixOnly, () => {
-  const killed = []
-  browser.stopTree({ platform: "linux", children: [] }, { pid: 2147483646, kill: (signal) => killed.push(signal) }, "SIGKILL")
-  assert.deepEqual(killed, ["SIGKILL"])
-})
-
-test("a Windows tree stop runs taskkill from SystemRoot and falls back to the npm process when taskkill cannot end it", () => {
-  assert.equal(browser.taskkillPath({ SystemRoot: "D:\\Win" }), "D:\\Win\\System32\\taskkill.exe")
-  assert.equal(browser.taskkillPath({ SYSTEMROOT: "relative", windir: "E:\\W" }), "E:\\W\\System32\\taskkill.exe")
-  assert.equal(browser.taskkillPath({ PATH: "x" }), "C:\\Windows\\System32\\taskkill.exe")
-  const run = (spawnKiller) => {
-    const calls = []
-    const killed = []
-    const child = { pid: 42, kill: (signal) => killed.push(signal) }
-    browser.stopTree({ platform: "win32", env: { SystemRoot: "D:\\Win" }, spawn: (...argv) => { calls.push(argv); return spawnKiller() } }, child, "SIGKILL")
-    return { calls, killed }
-  }
-  const ended = run(() => { const killer = new EventEmitter(); setImmediate(() => killer.emit("exit", 0)); return killer })
-  assert.deepEqual(ended.calls, [["D:\\Win\\System32\\taskkill.exe", ["/PID", "42", "/T", "/F"], { stdio: "ignore", windowsHide: true }]])
-  const failed = new EventEmitter()
-  const failedRun = run(() => failed)
-  failed.emit("exit", 128)
-  assert.deepEqual(failedRun.killed, ["SIGKILL"])
-  const missing = new EventEmitter()
-  const missingRun = run(() => missing)
-  missing.emit("error", new Error("spawn ENOENT"))
-  assert.deepEqual(missingRun.killed, ["SIGKILL"])
-  assert.deepEqual(run(() => { throw new Error("spawn EMFILE") }).killed, ["SIGKILL"])
-  let spawned = 0
-  for (const ended of [{ exitCode: 0 }, { exitCode: null, signalCode: "SIGKILL" }]) {
-    const child = { pid: 42, kill: () => {}, ...ended }
-    browser.stopTree({ platform: "win32", env: {}, spawn: () => { spawned += 1; return new EventEmitter() } }, child, "SIGKILL")
-  }
-  assert.equal(spawned, 0, "an npm that already ended is not taskkilled, because its pid may belong to another process now")
-  const done = new EventEmitter()
-  const doneRun = run(() => done)
-  done.emit("exit", 0)
-  assert.deepEqual(doneRun.killed, [])
-})
-
-test("npm that cannot be spawned, or fails to start, is reported like any other install failure", posixOnly, async () => {
-  const m = await machine("desk-web-npmspawn-", { npmSpawn: () => { throw new Error("spawn EMFILE") } })
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),/spawn EMFILE/)
-
-  const n = await machine("desk-web-npmerror-", {
-    npmSpawn: () => {
-      const child = fakeChild()
-      child.stdout = new EventEmitter()
-      child.stderr = new EventEmitter()
-      setImmediate(() => { child.emit("error", new Error("spawn ENOENT")); child.emit("close", 1) })
-      return child
-    },
-  })
-  await assert.rejects(browser.prepareBrowserRuntime(n.options),/spawn ENOENT/)
-})
-
-test("explicit runtime preparation waits for another installer and returns that same verified generation", posixOnly, async () => {
-  const refreshes = []
-  const m = await machine("desk-web-wait-", { startRefresh: (o) => refreshes.push(o) })
-  mkdirSync(m.state, { recursive: true })
-  writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  setTimeout(() => { preinstall(m.state, "0.0.85", "installs/1-1-a", STUB_CLI); require("node:fs").unlinkSync(path.join(m.state, "refresh.lock")) }, 300)
-  const prepared=await browser.prepareBrowserRuntime(m.options)
-  assert.equal(prepared.installed.version,"0.0.85")
-  assert.deepEqual(m.calls(), [])
-  assert.equal(refreshes.length, 1)
-})
-
-test("a launch gives up when another session's install outlasts the time limit", posixOnly, async () => {
-  const m = await machine("desk-web-waitlong-", { firstInstallMs: 0 })
-  mkdirSync(m.state, { recursive: true })
-  writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),/another Desk session was still installing it/)
-})
-
-test("a state folder that cannot hold an install fails the launch and releases the lock", posixOnly, async () => {
-  const m = await machine("desk-web-badstate-")
-  touch(path.join(m.state, "installs"), "a file where a folder belongs")
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"ENOTDIR"})
-  assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
-})
-
-// ---- the refresh ----
-
-async function refreshMachine(prefix, env = {}) {
-  const m = await machine(prefix, { env })
-  return { ...m, refresh: (extra = {}) => browser.refresh({ env: m.options.env, platform: "linux", node: m.install.node, npmCli: m.install.cli, ...extra }) }
-}
-
-test("a fresh install is lifecycle-patched before any browser process starts", posixOnly, async () => {
-  const m = await machine("desk-web-patch-fresh-")
-  const result = await browser.prepareBrowserRuntime(m.options)
-  assert.equal(result.nodePath,m.install.node)
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-  const installed = browser.readInstalled(m.state)
-  const bundle = readFileSync(path.join(installed.dir, "node_modules", "playwright-core", "lib", "coreBundle.js"), "utf8")
-  assert.match(bundle, /No browser session is open/)
-})
-
-test("an offline legacy install is copied and patched without changing its live generation", posixOnly, async () => {
-  const m = await machine("desk-web-patch-migrate-", { env: { FAKE_NPM_MODE: "failall" }, startRefresh: () => {} })
-  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
-  const original = path.dirname(path.dirname(path.dirname(cli)))
-  const bundle = path.join(original, "playwright-core", "lib", "coreBundle.js")
-  touch(bundle, stockLifecycle)
-  const bin = path.join(original, ".bin", "playwright-mcp")
-  mkdirSync(path.dirname(bin), { recursive: true })
-  symlinkSync("../@playwright/mcp/cli.js", bin)
-  await browser.prepareBrowserRuntime(m.options)
-  const installed = browser.readInstalled(m.state)
-  assert.notEqual(installed.cli, cli, "a new client must use a new, patched generation")
-  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
-  assert.equal(readFileSync(bundle, "utf8"), stockLifecycle, "a running old client keeps unmodified files")
-  assert.equal(require("node:fs").readlinkSync(path.join(installed.dir, "node_modules", ".bin", "playwright-mcp")), "../@playwright/mcp/cli.js")
-  assert.deepEqual(m.calls(), [], "migration is offline, not a reinstall")
-})
-
-test("offline migration preserves a recorded reader refusal and its retry age", posixOnly, async () => {
-  const m = await machine("desk-web-patch-refusal-", { startRefresh: () => {} })
-  preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
-  const marker = touch(path.join(m.state, "installs/1-1-a/reader-unavailable"))
-  const age = new Date(Date.now() - 1000)
-  utimesSync(marker, age, age)
-  await browser.prepareBrowserRuntime(m.options)
-  const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
-  assert.equal(installed.reader, true)
-  assert.ok(Math.abs(installed.unavailableAt - age.getTime()) < 1)
-  assert.deepEqual(m.calls(), [])
-})
-
-test("a patch-incompatible fresh install refuses explicit preparation without publishing an unsafe pointer", posixOnly, async () => {
-  const m = await machine("desk-web-patch-unsupported-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"browser_patch_unsupported"})
-  assert.equal(existsSync(path.join(m.state, "current.json")), false)
-  assert.deepEqual(m.calls().map(call => call.args[0]), ["install"], "compatibility is not a registry or operator configuration fault")
-})
-
-test("an unchanged npm version still migrates a missing lifecycle patch", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-patch-same-version-", { FAKE_NPM_VERSION: "0.0.81" })
-  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
-  touch(path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
-  assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: true })
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-  assert.deepEqual(m.calls().map(call => call.args[0]), ["view"])
-})
-
-test("a revision-one generation migrates offline without changing its live bundle or helper", posixOnly, async () => {
-  const m = await machine("desk-web-credential-revision-", { env: { FAKE_NPM_MODE: "failall" }, startRefresh: () => {} })
-  const cli = preinstall(m.state)
-  const dir = path.join(m.state, "installs/1-1-a")
-  const lib = path.join(dir, "node_modules", "playwright-core", "lib")
-  const bundle = path.join(lib, "coreBundle.js")
-  const current = readFileSync(bundle, "utf8")
-  const start = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {"
-  const end = "\nfunction addServerListener("
-  // A genuine revision-one input: only idle-close is patched; no revision-three
-  // native regions are partially deleted and mislabelled as historical source.
-  const old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
-    current.slice(current.indexOf(start), current.indexOf(end)))
-  writeFileSync(bundle, old)
-  // Revision one predates the external Session transport as well. Pairing its
-  // Core with a revision-four Session would be an unsupported partial input.
-  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
-  writeFileSync(path.join(lib, "desk-extension-credential.cjs"), "old generation helper")
-  touch(path.join(dir, "playwright-patch.json"), JSON.stringify({
-    revision: 1, mcpVersion: "0.0.81", coreVersion: null,
-    bundleSha256: require("node:crypto").createHash("sha256").update(old).digest("hex"),
-  }))
-  await browser.prepareBrowserRuntime(m.options)
-  const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
-  assert.notEqual(installed.cli, cli)
-  assert.equal(readFileSync(bundle, "utf8"), old)
-  assert.equal(readFileSync(path.join(lib, "desk-extension-credential.cjs"), "utf8"), "old generation helper")
-  assert.deepEqual(m.calls(), [])
-})
-
-for (const revision of [2, 3]) {
-test(`released revision-${revision} stop custody migrates offline without mutating the live generation`, posixOnly, async () => {
-  const m = await machine("desk-web-stop-revision-", { env: { FAKE_NPM_MODE: "failall" }, startRefresh: () => {} })
-  const cli = preinstall(m.state)
-  const dir = path.join(m.state, "installs/1-1-a")
-  const lib = path.join(dir, "node_modules", "playwright-core", "lib")
-  const bundle = path.join(lib, "coreBundle.js")
-  const helper = readFileSync(path.join(lib, "desk-extension-credential.cjs"))
-  const current = readFileSync(bundle, "utf8")
-  const start = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {"
-  const end = "\nfunction addServerListener("
-  // Genuine released predecessors: idle-close plus the credential initializer,
-  // with revision three's complete custody repair, never a partially erased V4.
-  let old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
-    current.slice(current.indexOf(start), current.indexOf(end)))
-    .replace("  const relay = new CDPRelayServer(",
-      '  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n  const relay = new CDPRelayServer(')
-  if (revision === 3) {
-    old = old.replace("async function monitorSocketPath(socketPath) {", "async function monitorSocketPath(socketPath, deskStopping) {")
-      .replace("    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);",
-        "    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);\n    if (deskStopping?.()) return;")
-      .replace("  const server = import_net10.default.createServer((socket) => {",
-        "  let deskStopInProgress = false;\n  const server = import_net10.default.createServer((socket) => {")
-      .replace('        if (method === "stop") {',
-        '        if (method === "stop") {\n          deskStopInProgress = !!options?.exitOnClose;')
-      .replace("    if (options?.exitOnClose)\n      gracefullyProcessExitDoNotHang(0);",
-        "    if (options?.exitOnClose && !deskStopInProgress)\n      gracefullyProcessExitDoNotHang(0);")
-      .replace("  await monitorSocketPath(socketPath);", "  await monitorSocketPath(socketPath, () => deskStopInProgress);")
-    for (const invalid of [
-      old.replace("    if (deskStopping?.()) return;\n", ""),
-      old.replace("  let deskStopInProgress = false;\n", ""),
-      old.replace("    if (deskStopping?.()) return;", "    if (deskStopping?.()) return;\n    if (deskStopping?.()) return;"),
-      old.replace('  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n', ""),
-      old.replace("!currentStat.isSocket()", "!currentStat.isSocket"),
-      old.replace("  return socketPath;", "  return null;"),
-      old.replace("async function createBrowser(config,", "async function unexpectedBrowser(config,"),
-    ]) assert.throws(() => playwrightPatch.patchSource(invalid), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
-    // A V4 browser/acquisition attached to the old custody-only daemon is not a
-    // released generation and must not enter the historical migration branch.
-    const daemonStart = "async function startCliDaemonServer(", daemonEnd = "\nasync function saveSessionFile("
-    const mixed = current.slice(0, current.indexOf(daemonStart)) +
-      old.slice(old.indexOf(daemonStart), old.indexOf(daemonEnd, old.indexOf(daemonStart))) +
-      current.slice(current.indexOf(daemonEnd, current.indexOf(daemonStart)))
-    assert.throws(() => playwrightPatch.patchSource(mixed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
-  }
-  writeFileSync(bundle, old)
-  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
-  const receiptFile = path.join(dir, "playwright-patch.json")
-  const receipt = JSON.parse(readFileSync(receiptFile, "utf8"))
-  receipt.revision = revision
-  receipt.bundleSha256 = require("node:crypto").createHash("sha256").update(old).digest("hex")
-  writeFileSync(receiptFile, JSON.stringify(receipt))
-  assert.equal(browser.readInstalled(m.state).patchRevision, 0, "the historical receipt must not qualify as current")
-  await browser.prepareBrowserRuntime(m.options)
-  const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
-  assert.notEqual(installed.cli, cli)
-  assert.equal(readFileSync(bundle, "utf8"), old)
-  assert.equal(readFileSync(path.join(lib, "tools/cli-client/session.js"), "utf8"), errorFixture.sessionSource)
-  assert.deepEqual(readFileSync(path.join(lib, "desk-extension-credential.cjs")), helper)
-  assert.deepEqual(m.calls(), [], "the staged repair must not require npm")
-})
-}
-
-test("concurrent legacy clients publish one patched generation without npm", posixOnly, async () => {
-  const m = await machine("desk-web-patch-concurrent-", { startRefresh: () => {} })
-  preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI, false)
-  const prepared=await Promise.all(Array.from({ length: 4 },()=>browser.prepareBrowserRuntime(m.options)))
-  assert.equal(new Set(prepared.map(result=>result.installed.dir)).size,1)
-  assert.equal(readdirSync(path.join(m.state, "installs")).length, 2)
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-  assert.deepEqual(m.calls(), [])
-})
-
-test("a changed bundle invalidates its receipt and migrates instead of mutating the old generation", posixOnly, async () => {
-  const m = await machine("desk-web-patch-receipt-", { startRefresh: () => {} })
-  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI)
-  const bundle = path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js")
-  const changed = readFileSync(bundle, "utf8") + "\n// Owned changed package tree.\n"
-  writeFileSync(bundle, changed)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 0)
-  await browser.prepareBrowserRuntime(m.options)
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-  assert.notEqual(browser.readInstalled(m.state).cli, cli)
-  assert.equal(readFileSync(bundle, "utf8"), changed)
-  assert.deepEqual(m.calls(), [])
-})
-
-test("migration rejects package symlinks outside the install without reading or modifying their target", posixOnly, async () => {
-  const m = await machine("desk-web-patch-external-", { startRefresh: () => {} })
-  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI, false)
-  const outside = touch(path.join(m.root, "outside-package.txt"), "owned outside fixture")
-  symlinkSync(outside, path.join(path.dirname(path.dirname(path.dirname(cli))), "outside"))
-  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
-  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"browser_patch_failed"})
-  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(readFileSync(outside, "utf8"), "owned outside fixture")
-  assert.deepEqual(m.calls(), [])
-})
-
-test("an incompatible refresh retains its failure record and the verified pointer used by later explicit preparation", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-patch-refresh-fail-", { FAKE_NPM_MODE: "badlifecycle", FAKE_NPM_VERSION: "0.0.99" })
-  const cli = preinstall(m.state)
-  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
-  const result = await m.refresh()
-  assert.equal(result.ok, false)
-  assert.equal(result.code, "browser_patch_unsupported")
-  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-  const prepared=await browser.prepareBrowserRuntime({...m.options,startRefresh(){}})
-  assert.equal(prepared.installed.cli,cli)
-  assert.equal(JSON.parse(readFileSync(path.join(m.state,"last-refresh.json"))).result.code,"browser_patch_unsupported")
-})
-
-test("a pruning failure cannot publish a pointer to the generation being discarded", posixOnly, async (t) => {
-  const m = await refreshMachine("desk-web-patch-prune-fail-", { FAKE_NPM_VERSION: "0.0.99" })
-  preinstall(m.state)
-  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
-  const realReadDir = require("node:fs").readdirSync
-  t.mock.method(require("node:fs"), "readdirSync", (dir, ...args) => {
-    if (dir === path.join(m.state, "installs")) throw Object.assign(new Error("owned pruning failure"), { code: "EACCES" })
-    return realReadDir(dir, ...args)
-  })
-  assert.equal((await m.refresh()).ok, false)
-  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
-})
-
-test("a refresh that finds the channel unchanged installs nothing", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-same-", { FAKE_NPM_VERSION: "0.0.81" })
-  preinstall(m.state, "0.0.81")
-  assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
-  assert.deepEqual(m.calls().map((call) => call.args[0]), ["view"])
-  assert.deepEqual(JSON.parse(readFileSync(path.join(m.state, "last-refresh.json"), "utf8")).result, { ok: true, version: "0.0.81", changed: false })
-  assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
-})
-
-test("a refresh that finds a new release installs it beside the old one and switches the pointer", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-new-", { FAKE_NPM_VERSION: "0.0.83" })
-  preinstall(m.state, "0.0.81")
-  assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.83", changed: true })
-  const pointer = JSON.parse(readFileSync(path.join(m.state, "current.json"), "utf8"))
-  assert.equal(pointer.version, "0.0.83")
-  assert.equal(pointer.previous, "installs/1-1-a")
-  assert.equal(browser.readInstalled(m.state).version, "0.0.83")
-  assert.equal(readdirSync(path.join(m.state, "installs")).length, 2, "the previous copy stays for sessions still running it")
-  assert.deepEqual(readdirSync(m.state).filter((name) => name.endsWith(".tmp")), [])
-})
-
-test("a refresh prunes installs older than a week, except the current and previous ones", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-prune-", { FAKE_NPM_VERSION: "0.0.84" })
-  preinstall(m.state, "0.0.80", "installs/0-old")
-  preinstall(m.state, "0.0.81", "installs/1-young")
-  preinstall(m.state, "0.0.82", "installs/2-previous")
-  const stuck = path.join(m.state, "installs", "3-stuck")
-  touch(path.join(stuck, "locked", "file"))
-  chmodSync(path.join(stuck, "locked"), 0o500)
-  const week = 8 * 24 * 60 * 60 * 1000
-  for (const id of ["0-old", "2-previous", "3-stuck"]) utimesSync(path.join(m.state, "installs", id), new Date(Date.now() - week), new Date(Date.now() - week))
-  try {
-    assert.equal((await m.refresh()).changed, true)
-  } finally {
-    chmodSync(path.join(stuck, "locked"), 0o700)
-  }
-  const left = readdirSync(path.join(m.state, "installs"))
-  assert.equal(left.length, 4)
-  for (const id of ["1-young", "2-previous", "3-stuck"]) assert.ok(left.includes(id), id)
-  assert.ok(!left.includes("0-old"))
-})
-
-test("a refresh records a registry failure, an empty answer and a failed install without touching the installed copy", posixOnly, async () => {
-  for (const [mode, error] of [["fail", "ENOTCONN: network unreachable"], ["emptyview", "npm view exited with code 0"]]) {
-    const m = await refreshMachine("desk-web-refail-", { FAKE_NPM_MODE: mode })
-    preinstall(m.state, "0.0.81")
-    assert.deepEqual(await m.refresh(), { ok: false, error })
-    assert.equal(browser.readInstalled(m.state).version, "0.0.81")
-  }
-  const m = await refreshMachine("desk-web-refail2-", { FAKE_NPM_MODE: "silent", FAKE_NPM_VERSION: "0.0.99" })
-  assert.deepEqual(await m.refresh(), { ok: false, error: "npm install exited with code 0" })
-  assert.equal(browser.readInstalled(m.state), null)
-})
-
-test("a refresh skips while another session holds the lock, and survives a state folder it cannot write", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-busy-")
-  mkdirSync(m.state, { recursive: true })
-  writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  assert.deepEqual(await m.refresh(), { ok: true, skipped: "another Desk session holds the refresh lock" })
-  assert.deepEqual(m.calls(), [])
-
-  const n = await refreshMachine("desk-web-norecord-", { FAKE_NPM_VERSION: "0.0.81" })
-  preinstall(n.state, "0.0.81")
-  mkdirSync(path.join(n.state, "last-refresh.json", "x"), { recursive: true })
-  assert.deepEqual(await n.refresh(), { ok: true, version: "0.0.81", changed: false })
-  assert.equal(existsSync(path.join(n.state, "refresh.lock")), false, "a lost record never keeps the lock")
-
-  const root = await mkTempRoot("desk-web-nostate-")
-  touch(path.join(root, "file"))
-  const result = await browser.refresh({ env: { DESK_BROWSER_STATE_DIR: path.join(root, "file", "state") }, npmCli: n.install.cli })
-  assert.equal(result.ok, false)
-  assert.match(result.error, /EEXIST|ENOTDIR/u)
-})
-
-test("a refresh never removes a lock that another session took over", posixOnly, async () => {
-  const m = await refreshMachine("desk-web-steal-", { FAKE_NPM_MODE: "steal", FAKE_NPM_VERSION: "0.0.81" })
-  preinstall(m.state, "0.0.81")
-  assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
-  assert.equal(JSON.parse(readFileSync(path.join(m.state, "refresh.lock"), "utf8")).pid, 1)
-})
-
-test("a refresh that cannot start is ignored, never a crash in the launch", async () => {
-  const child = browser.startRefresh({ node: path.join(await mkTempRoot("desk-web-nonode-refresh-"), "missing-node"), npmCli: "npm-cli.js", env: {} })
-  await new Promise((resolve) => child.on("error", resolve))
-})
-
-test("a refresh fills its options from the real process", posixOnly, async () => {
-  const root = await mkTempRoot("desk-web-refdefaults-")
-  const install = nodeInstall(path.join(root, "node"))
-  const state = path.join(root, "state")
-  const saved = { ...process.env }
-  Object.assign(process.env, { DESK_BROWSER_STATE_DIR: state, FAKE_NPM_VERSION: "0.0.86" })
-  try {
-    assert.deepEqual(await browser.refresh({ npmCli: install.cli }), { ok: true, version: "0.0.86", changed: true })
-  } finally {
-    for (const key of ["DESK_BROWSER_STATE_DIR", "FAKE_NPM_VERSION"]) if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]
-  }
-})
-
-test("the launch starts the real refresh detached, and it brings the copy up to the channel", posixOnly, async () => {
-  const m = await machine("desk-web-detached-", { env: { FAKE_NPM_VERSION: "0.0.87" }, startRefresh: undefined })
-  preinstall(m.state, "0.0.81")
-  const prepared=await browser.prepareBrowserRuntime(m.options)
-  assert.equal(prepared.installed.version,"0.0.81","this operation retains the generation it selected")
-  const record = path.join(m.state, "last-refresh.json")
-  for (let tries = 0; tries < 100 && !existsSync(record); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.deepEqual(JSON.parse(readFileSync(record, "utf8")).result, { ok: true, version: "0.0.87", changed: true })
-  assert.equal(browser.readInstalled(m.state).version, "0.0.87", "the next session starts the new release")
-})
-
-// ---- run: failures before any install ----
-
-test("with no compatible Node the launcher names the fix and serves the browser as degraded, never a silent exit", async () => {
-  const m = await machine("desk-web-nonode-")
-  const old = path.join(m.root, "old", "node")
-  const { errors, exits, responses } = await launchDegraded(
-    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
-    [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_navigate" } }],
-  )
-  assert.deepEqual(exits, [])
-  assert.match(errors.join(""), /Desk needs Node\.js >=20\.0\.0 to start the browser; this one is v16\.20\.2.*serving degraded:node_missing/u)
-  const payload = toolPayload(responses[0])
-  assert.equal(payload.code, "node_missing")
-  assert.match(payload.fix, /Install Node >=20\.0\.0, then reconnect the desk-web MCP server/u)
-})
-
-test("missing npm refuses explicit browser preparation without conflating it with the SDK handshake", async () => {
-  const root = await mkTempRoot("desk-web-nonpm-")
-  const node = touch(path.join(root, "bin", "node"))
-  await assert.rejects(browser.prepareBrowserRuntime({
-    env: { PATH: "/usr/bin" }, platform: "linux", arch: "x64", homeDir: root, systemPrefix: root,
-    current: { path: node, version: "v22.9.0", abi: "127" }, now: () => 0, probe: () => null,
-  }),error=>error.code==="npm_missing"&&/has no npm beside it/.test(error.message))
-})
-
-test("a Node that cannot be spawned is named and served as degraded, never a silent exit", posixOnly, async () => {
-  const m = await machine("desk-web-spawnfail-", { startRefresh: () => {} })
-  const l = launch({...m.options,current:{path:path.join(m.root,"old/node"),version:"v16.20.2",abi:"93"},
-    env:{...m.options.env,PATH:path.dirname(m.install.node)},
-    systemPrefix:path.dirname(path.dirname(m.install.node)),probe:()=>({version:"v22.9.0",abi:"127"})})
-  await l.ready
-  assert.equal(l.spawns.length,1,"the existing normal selector chose the owned compatible Node")
-  l.child.emit("error", new Error("spawn EACCES"))
-  await l.running
-  assert.deepEqual(l.exits, [])
-  assert.match(l.errors.join(""), /Could not start the compatible browser frontend: spawn EACCES.*serving degraded:node_spawn_failed/u)
-})
-
-test("the degraded responder completes a full JSON-RPC handshake: initialize with and without a protocol version, ping, tools/list, an unknown method, and a line that is not JSON", async () => {
-  const m = await machine("desk-web-nonode-handshake-")
-  const old = path.join(m.root, "old", "node")
-  const { responses } = await launchDegraded(
-    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
-    [
-      { jsonrpc: "2.0", method: "notifications/initialized" },
-      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26" } },
-      { jsonrpc: "2.0", id: 1, method: "initialize" },
-      { jsonrpc: "2.0", id: 2, method: "ping" },
-      { jsonrpc: "2.0", id: 3, method: "tools/list" },
-      { jsonrpc: "2.0", id: 4, method: "prompts/list" },
-    ],
-  )
-  const [withVersion, bare, ping, list, unknown] = responses
-  assert.equal(withVersion.id, 0)
-  assert.equal(withVersion.result.protocolVersion, "2025-03-26")
-  assert.deepEqual(withVersion.result.capabilities, { tools: { listChanged: true } })
-  assert.match(withVersion.result.instructions, /reconnect the desk-web MCP server/u)
-  assert.equal(bare.id, 1)
-  assert.equal(bare.result.protocolVersion, "2025-06-18")
-  assert.deepEqual(ping.result, {})
-  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-  assert.equal(unknown.error.code, -32601)
-  assert.match(unknown.error.message, /prompts\/list/u)
-
-  const input = new PassThrough()
-  const output = new PassThrough()
-  const read = collect(output)
-  const running = browser.run({ ...m.options, current: { path: old, version: "v16.20.2", abi: "93" }, stdin: input, stdout: output, stderr: { write: () => {} } })
-  input.end("not json\n")
-  await running
-  assert.equal(read()[0].error.code, -32700)
-})
-
-test("the degraded responder never crashes on a line that is valid JSON but not a request object: null, a boolean, a number, an array, a bare string", async () => {
-  const m = await machine("desk-web-nonobject-")
-  const old = path.join(m.root, "old", "node")
-  const { responses } = await launchDegraded(
-    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
-    [null, true, 42, [], "hi"],
-  )
-  assert.equal(responses.length, 5)
-  for (const response of responses) {
-    assert.deepEqual(response, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })
-  }
-})
-
-test("the degraded responder tolerates a stdin double with no resume method", async () => {
-  const output = new PassThrough()
-  const handlers = {}
-  const stdin = {
-    setEncoding: () => {},
-    on: (event, handler) => { handlers[event] = handler },
-    removeListener: () => {},
-  }
-  const running = browser.serveDegraded({ stdin, stdout: output, payload: { status: "degraded", state: "degraded:x", code: "x", fix: "f" } })
-  handlers.end()
-  await running
-})
-
-test("SDK startup exceptions, including non-Errors, use the same explicit two-tool degraded responder", async () => {
-  for (const thrown of [new Error("disk gone"),"plain text"]) {
-    const env=Object.defineProperty({},"HOME",{get(){throw thrown}})
-    const { errors, exits } = await launchDegraded({env})
-    assert.deepEqual(exits, [])
-    assert.ok(errors.join("").includes(String(thrown.message||thrown)))
-    assert.match(errors.join(""),/serving degraded:browser_frontend_unavailable/)
-  }
-})
-
-test("run fills every other option from the real process", async () => {
-  const state = await mkTempRoot("desk-web-defaults-")
-  const cli = preinstall(state)
-  const refreshes = []
-  const spawns = []
-  const prepared = await browser.prepareBrowserRuntime({
-    env: { PATH: path.dirname(process.execPath), HOME: "/nonexistent", DESK_NODE_SYSTEM_PREFIX: "/nonexistent-prefix", DESK_BROWSER_STATE_DIR: state },
-    startRefresh: (o) => refreshes.push(o),
-    exit: () => {},
-    stderr: { write: () => {} },
-  })
-  assert.equal(prepared.nodePath,process.execPath)
-  assert.equal(prepared.installed.cli,cli)
-  assert.match(refreshes[0].npmCli, /npm-cli\.js$/u)
-  assert.equal(spawns.length,0,"preparation does not launch a browser")
-})
-
-test("run finds HOME through USERPROFILE and the running system's home", async () => {
-  for (const env of [{ PATH: "", USERPROFILE: "/nonexistent-profile" }, { PATH: "" }]) {
-    const { errors, exits } = await launchDegraded({ env, platform: "linux", current: { path: "/nonexistent/node", version: "v16.20.2", abi: "93" }, now: () => 0, probe: () => null })
-    assert.deepEqual(exits, [])
-    assert.match(errors.join(""), /serving degraded:node_missing/u)
-  }
-})
-
-// ---- the host configs ----
-
-test("the Claude and Copilot configs declare the web server beside Desk, never a bare playwright name", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(claude), ["desk", "desk-web"])
-  const server = claude["desk-web"]
-  assert.deepEqual(Object.keys(server), ["type", "command", "args", "cwd", "env"])
-  assert.equal(server.type, "stdio")
-  assert.equal(server.command, "node")
-  assert.equal(server.args[0], "-e")
-  assert.doesNotMatch(server.args[1], /\$\{|=>|`|\?\.|\blet\s|\bconst\s/u)
-  assert.match(server.args[1], /require\(path\.join\(root,'mcp','web\.cjs'\)\)\.run\(\{args:\[\]\}\)/u)
-  assert.equal(server.cwd, ".")
-  assert.deepEqual(server.env, { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" })
-  const copilot = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.copilot.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(copilot), ["desk", "desk-web"])
-  assert.deepEqual(copilot["desk-web"], { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} })
-})
-
-// ---- the tool catalog never changes under the host ----
-
-test("the inline launcher's degraded tool names, the degraded catalog and the first-use catalog all list the browser's tools in one order", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
-  const declarations=claude.args[1].split("\n").filter(line=>/^var (id|tools)=/.test(line)||/^function described\(/.test(line)).join("\n")
-  const inline=new Function(declarations+";return tools")()
-  assert.deepEqual(inline.map(tool=>tool.name), browser.BROWSER_TOOL_NAMES)
-  const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools
-  assert.deepEqual(inline,snapshot,"inline fallback preserves full discoverable schemas, not just names")
-  assert.deepEqual(snapshot.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-  for (const tool of snapshot) {
-    assert.equal(typeof tool.description, "string", tool.name)
-    assert.equal(tool.inputSchema.type, "object", tool.name)
-  }
-})
-
-test("retained proxy lists its explicit unit catalog consistently while default degraded tools retain the canonical two schemas", posixOnly, async () => {
-  const m = await machine("desk-web-catalog-", { env: { FAKE_NPM_MODE: "fail" } })
-  const h = host(m.options)
-  await h.handshake()
-  const first = await h.ask(2, "tools/list")
-  const second = await h.ask(3, "tools/list")
-  assert.deepEqual(first.result, second.result)
-  assert.deepEqual(first.result.tools,legacyTools)
-  assert.ok(first.result.tools.some((tool) => tool.name === "browser_navigate" && tool.inputSchema.properties.url), "real input schemas, not placeholders")
-  await h.close()
-
-  const input=new PassThrough(),output=new PassThrough(),read=collect(output)
-  const serving=browser.serveDegraded({stdin:input,stdout:output,payload:{code:"owned_unavailable"}})
-  input.end(JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/list"})+"\n")
-  await serving
-  assert.deepEqual(read()[0].result.tools,JSON.parse(readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
-})
-
-test("discoverable browser guidance offers executable page examples with private-only inline output", async () => {
-  const input = new PassThrough(), output = new PassThrough(), read = collect(output)
-  const serving = browser.serveDegraded({ stdin: input, stdout: output, payload: { code: "owned_unavailable" } })
-  input.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n")
-  await serving
-  const command = read()[0].result.tools.find(tool => tool.name === "browser_command")
-  const examples = [...command.description.matchAll(/\["[^"\n]*"(?:\s*,\s*"[^"\n]*")*\]/gu)]
-  assert.ok(examples.length > 0, "agent-facing guidance must offer executable argv examples, not unavailable help")
-  const { validatePageArgs } = require(path.join(mcpRoot, "browser-context-common.cjs"))
-  for (const example of examples) {
-    const args = JSON.parse(example[0])
-    assert.doesNotThrow(() => validatePageArgs(args, "private"))
-    if (args.includes("--json")) {
-      assert.match(command.description.slice(0, example.index).split(".").at(-1), /private/iu)
-      assert.throws(() => validatePageArgs(args, "signed-in"), { code: "reserved_option" })
-    } else {
-      assert.doesNotThrow(() => validatePageArgs(args, "signed-in"))
+  let exitCode = null
+  let buffered = ""
+  const waiting = new Map()
+  const received = []
+  stdout.setEncoding("utf8")
+  stdout.on("data", (chunk) => {
+    buffered += chunk
+    let newline
+    while ((newline = buffered.indexOf("\n")) >= 0) {
+      const message = JSON.parse(buffered.slice(0, newline))
+      buffered = buffered.slice(newline + 1)
+      received.push(message)
+      waiting.get(message.id)?.(message)
     }
-  }
-  assert.ok(examples.some(example => JSON.parse(example[0])[0] === "snapshot"))
-  assert.ok(examples.some(example => JSON.parse(example[0])[0] === "tab-list"))
-})
-
-test("actual default SDK handshake and invalid/legacy calls do not wait for or start browser installation", posixOnly, async () => {
-  const home=await makeIsolatedHome("desk-web-hostflow-")
-  const session = await openSession({ command: process.execPath, args: [path.join(mcpRoot,"web.cjs")], cwd: home.root, env: isolatedEnv(home) })
-  ownedMcpSessions.push(session)
-  const answer = await session.request("tools/call", { name: "browser_context", arguments: {action:"create"} })
-  assert.equal(answer.error, undefined)
-  assert.equal(answer.result.isError,true)
-  assert.equal(toolPayload(answer).code,"invalid_arguments")
-  const legacy=await session.call("browser_navigate",{url:"https://example.com"})
-  assert.equal(legacy.payload.code,"unknown_tool")
-  assert.equal(existsSync(path.join(home.home,".local/state/ouroboros-skills/desk/browser")),false)
-  assert.deepEqual(session.notifications, [])
-  await session.close()
-})
-
-test("an install that fails answers held and later calls with the code and the fix, and keeps the tool list", posixOnly, async () => {
-  const m = await machine("desk-web-installfail-", { env: { FAKE_NPM_MODE: "fail" } })
-  const h = host(m.options)
-  await h.handshake()
-  const held = await h.call(2)
-  assert.equal(held.result.isError, true)
-  assert.equal(toolPayload(held).state, "degraded:install_failed")
-  assert.match(toolPayload(held).fix, /reconnect the desk-web MCP server/u)
-  const later = await h.call(3)
-  assert.equal(toolPayload(later).code, "install_failed")
-  assert.equal((await h.ask(4, "tools/list")).result.tools.length, legacyTools.length)
-  await h.close()
-})
-
-test("a call that waits longer than the hold limit is answered with a retry hint, and the next call gets the browser the install finished", posixOnly, async () => {
-  // The extra tool makes the launcher write its "tool list differs" line, and it does that only after the browser has answered its handshake and the launcher has started sending it calls. Waiting for that line, not just for the install, keeps the 100 ms hold limit from also applying to a browser that is still starting.
-  const m = await machine("desk-web-holdlimit-", { env: { FAKE_NPM_DELAY_MS: "1200", FAKE_CLI_MODE: "extra" }, holdMs: 100 })
-  const h = host(m.options)
-  await h.handshake()
-  const early = await h.call(2)
-  assert.equal(toolPayload(early).code, "browser_not_ready")
-  assert.equal(early.result.isError, true)
-  assert.match(toolPayload(early).fix, /again in a minute/u)
-  await until(() => /tool list differs/u.test(h.errors.join("")), "the browser to finish starting")
-  assert.match((await h.call(3)).result.content[0].text, /^ran browser_navigate/u)
-  await h.close()
-})
-
-test("a call that arrives while the installed browser has not answered its handshake is answered at the hold limit, and closing the host stops that browser", posixOnly, async () => {
-  const m = await machine("desk-web-noinit-", { env: { FAKE_CLI_MODE: "noinit" }, holdMs: 100, closeMs: 10000 })
-  const browsers = []
-  const h = host({ ...m.options, spawn: (...argv) => { const child = spawn(...argv); browsers.push(child); return child } })
-  await h.handshake()
-  const first = await h.call(2)
-  assert.equal(toolPayload(first).code, "browser_not_ready")
-  await until(() => browsers.length === 1, "the install to finish and the browser to start")
-  const second = await h.call(3)
-  assert.equal(toolPayload(second).code, "browser_not_ready", "the browser still has not answered, so the call is bounded again")
-  assert.equal(browsers[0].exitCode, null, "the browser is still running while the host is open")
-  await h.close()
-  assert.equal(browsers[0].exitCode, 0, "closing the host closed the browser's stdin and it ended")
-})
-
-test("the first-use server answers the protocol itself: ping, initialize with and without a version, unknown methods, bad lines", posixOnly, async () => {
-  const m = await machine("desk-web-protocol-", { env: { FAKE_NPM_MODE: "fail" } })
-  const h = host(m.options)
-  const init = await h.ask(1, "initialize", { protocolVersion: "2025-03-26" })
-  assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } })
-  assert.equal(init.result.protocolVersion, "2025-03-26")
-  assert.equal((await h.ask(2, "initialize")).result.protocolVersion, "2025-06-18")
-  assert.deepEqual((await h.ask(3, "ping")).result, {})
-  assert.equal((await h.ask(4, "prompts/list")).error.code, -32601)
-  h.stdin.write("\n   \nnot json\n[1]\nnull\n7\n")
-  await until(() => h.read().filter((message) => message.id === null).length === 4, "four error answers")
-  assert.deepEqual(h.read().filter((message) => message.id === null).map((message) => message.error.code), [-32700, -32600, -32600, -32600])
-  h.send({ method: "notifications/unknown" })
-  h.send({ method: "notifications/cancelled", params: { requestId: "nothing" } })
-  assert.equal((await h.ask(5, "ping")).id, 5)
-  // A request whose params are not a call still reaches the held-call path with a name.
-  await h.close()
-})
-
-test("a held call can be cancelled by the host: it is dropped and never answered", posixOnly, async () => {
-  const m = await machine("desk-web-cancelheld-", { env: { FAKE_NPM_MODE: "fail", FAKE_NPM_DELAY_MS: "300" } })
-  const h = host(m.options)
-  await h.handshake()
-  h.send({ id: 7, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  h.send({ method: "notifications/cancelled", params: { requestId: 7 } })
-  h.send({ id: 8, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  assert.equal(toolPayload(await h.reply(8)).code, "install_failed")
-  assert.equal(h.read().some((message) => message.id === 7), false)
-  await h.close()
-})
-
-test("a running call can be cancelled: the browser hears the cancel under its own request id", posixOnly, async () => {
-  const m = await machine("desk-web-cancelrun-", { env: { FAKE_CLI_MODE: "slow" } })
-  const h = host(m.options)
-  await h.handshake()
-  h.send({ id: 9, method: "tools/call", params: { name: "browser_wait_for", arguments: {} } })
-  await until(() => /slow call 1/u.test(h.errors.join("")), "the browser to take the call")
-  h.send({ method: "notifications/cancelled", params: { requestId: 9, reason: "user" } })
-  h.send({ method: "notifications/cancelled", params: { requestId: 123 } })
-  await until(() => /cancelled 1/u.test(h.errors.join("")), "the browser to hear the cancel")
-  await h.close()
-})
-
-test("the browser's own notices pass through, but its tools/list_changed never reaches the host and its requests are refused", posixOnly, async () => {
-  const m = await machine("desk-web-notices-", { env: { FAKE_CLI_MODE: "list_changed" } })
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.equal(answer.result.isError, undefined)
-  const notices = h.read().filter((message) => message.id === undefined)
-  assert.deepEqual(notices.map((message) => message.method), ["notifications/message"])
-  assert.equal(notices[0].params.data, "log line")
-  await h.close()
-
-  const n = await machine("desk-web-roots-", { env: { FAKE_CLI_MODE: "roots" } })
-  const g = host(n.options)
-  await g.handshake()
-  await g.call(2)
-  await until(() => /host answered 99 .*Method not found: roots\/list/u.test(g.errors.join("")), "the refusal of the browser's request")
-  await g.close()
-})
-
-test("an error the browser gives for a call reaches the host unchanged", posixOnly, async () => {
-  const m = await machine("desk-web-rpcerror-", { env: { FAKE_CLI_MODE: "rpcerror" } })
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.deepEqual(answer.error, { code: -32602, message: "bad arguments" })
-  await h.close()
-})
-
-test("a browser that ends during a call answers it with the reason, then ends the launcher with the same exit code or signal", posixOnly, async () => {
-  const m = await machine("desk-web-crash-", { env: { FAKE_CLI_MODE: "crash" } })
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.equal(toolPayload(answer).code, "browser_exited")
-  assert.match(toolPayload(answer).summary, /exit code 3/u)
-  await h.running
-  assert.deepEqual(h.exits, [3])
-
-  const n = await machine("desk-web-sig-", {})
-  const children = []
-  const g = host({ ...n.options, spawn: (...argv) => { const child = spawn(...argv); children.push(child); return child } })
-  await g.handshake()
-  await g.call(2)
-  g.signals.emit("SIGTERM")
-  await g.running
-  assert.deepEqual(g.kills, ["SIGTERM"])
-  assert.deepEqual(g.exits, [])
-})
-
-test("a browser that cannot start answers calls with the reason instead of failing the server", posixOnly, async () => {
-  const missing = await machine("desk-web-nostart-", { spawn: () => { throw new Error("spawn EAGAIN") } })
-  const h = host(missing.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.equal(toolPayload(answer).code, "node_spawn_failed")
-  assert.match(toolPayload(answer).summary, /spawn EAGAIN/u)
-  assert.equal(toolPayload(await h.call(3)).code, "node_spawn_failed")
-  await h.close()
-
-  const gone = await machine("desk-web-enoent-", { spawn: (file, argv, options) => spawn(path.join(path.dirname(file), "no-such-node"), argv, options) })
-  const g = host(gone.options)
-  await g.handshake()
-  assert.equal(toolPayload(await g.call(2)).code, "node_spawn_failed")
-  await g.close()
-
-  const refused = await machine("desk-web-badinit-", { env: { FAKE_CLI_MODE: "badinit" } })
-  const r = host(refused.options)
-  await r.handshake()
-  const refusal = await r.call(2)
-  assert.equal(toolPayload(refusal).code, "node_spawn_failed")
-  assert.match(toolPayload(refusal).summary, /no handshake today/u)
-  await r.close()
-})
-
-test("an error on a running browser is noted on stderr and does not fail its calls", posixOnly, async () => {
-  const m = await machine("desk-web-childerror-")
-  const children = []
-  const h = host({ ...m.options, spawn: (...argv) => { const child = spawn(...argv); children.push(child); return child } })
-  await h.handshake()
-  await h.call(2)
-  children[0].emit("error", new Error("kill failed"))
-  assert.match(h.errors.join(""), /\[web\] kill failed/u)
-  assert.equal((await h.call(3)).result.isError, undefined)
-  await h.close()
-})
-
-test("a host that goes away before the install finishes starts no browser, and one that goes away later stops it, by force if it ignores that", posixOnly, async () => {
-  const m = await machine("desk-web-hostgone-", { env: { FAKE_NPM_DELAY_MS: "300" } })
-  const spawns = []
-  const early = host({ ...m.options, spawn: (...argv) => { spawns.push(argv); return spawn(...argv) } })
-  await early.handshake()
-  early.send({ id: 5, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  await early.close()
-  assert.equal(spawns.length, 0)
-  assert.equal(browser.readInstalled(m.state).version, "0.0.82", "the install still finishes, so the next launch has its browser")
-
-  const failed = await machine("desk-web-hostgone-fail-", { env: { FAKE_NPM_MODE: "fail" } })
-  const gone = host(failed.options)
-  gone.stdin.end()
-  await gone.running
-
-  const stubborn = await machine("desk-web-stubborn-", { env: { FAKE_CLI_MODE: "stubborn" }, closeMs: 100 })
-  const h = host(stubborn.options)
-  await h.handshake()
-  await h.call(2)
-  await h.close()
-  assert.deepEqual(h.kills, ["SIGTERM"], "the browser was ended by signal because it ignored its closed stdin")
-})
-
-/** A child that never started: no pid, and streams a launcher can write to. */
-function unstartedChild() {
-  const child = fakeChild()
-  child.stdin = new PassThrough()
-  child.stdout = new PassThrough()
-  child.stderr = new PassThrough()
-  return child
-}
-
-test("a browser that ends before it takes any call answers the held call with the reason and keeps serving", posixOnly, async () => {
-  const m = await machine("desk-web-dieearly-")
-  const fake = unstartedChild()
-  const h = host({ ...m.options, spawn: () => fake })
-  await h.handshake()
-  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  await until(() => fake.stdin.readableLength > 0, "the handshake to reach the browser")
-  fake.emit("exit", 4, null)
-  const answer = await h.reply(2)
-  assert.equal(toolPayload(answer).code, "browser_exited")
-  assert.match(toolPayload(answer).summary, /exit code 4/u)
-  assert.equal(toolPayload(await h.call(3)).code, "browser_exited")
-  assert.deepEqual(h.exits, [])
-  await h.close()
-})
-
-test("a browser that fails while the host is already gone ends the launcher quietly", posixOnly, async () => {
-  const early = await machine("desk-web-gonedie-", { env: { FAKE_CLI_MODE: "dieearly" } })
-  const spawned = []
-  const h = host({ ...early.options, spawn: (...argv) => { const child = spawn(...argv); spawned.push(child); return child } })
-  await h.handshake()
-  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  await until(() => spawned.length > 0, "the browser to start")
-  h.stdin.end()
-  await h.running
-  assert.equal(toolPayload(await h.reply(2)).code, "browser_exited")
-
-  const noExit = await machine("desk-web-gonenoexit-")
-  const fake = unstartedChild()
-  const g = host({ ...noExit.options, spawn: () => fake })
-  await g.handshake()
-  g.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  await until(() => fake.stdin.readableLength > 0, "the handshake to reach the browser")
-  g.stdin.end()
-  await new Promise((resolve) => setTimeout(resolve, 30))
-  fake.stdin.emit("error", new Error("EPIPE"))
-  fake.emit("exit", 4, null)
-  await g.running
-
-  const noStart = await machine("desk-web-gonenostart-")
-  const never = unstartedChild()
-  const k = host({ ...noStart.options, spawn: () => never })
-  await k.handshake()
-  k.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
-  await until(() => never.stdin.readableLength > 0, "the handshake to reach the browser")
-  k.stdin.end()
-  await new Promise((resolve) => setTimeout(resolve, 30))
-  never.emit("error", new Error("spawn ENOENT"))
-  await k.running
-  assert.equal(toolPayload(await k.reply(2)).code, "node_spawn_failed")
-})
-
-// ---- the snapshot is checked against the installed browser ----
-
-async function snapshotFile(tools, version = "9.9.9") {
-  const dir = await mkTempRoot("desk-web-snapshot-")
-  const file = path.join(dir, "web-catalog.json")
-  writeFileSync(file, JSON.stringify({ playwrightMcpVersion: version, tools }))
-  return file
-}
-
-test("the explicit context catalog is versioned locally rather than claiming an upstream page-tool snapshot", () => {
-  const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8"))
-  assert.equal(snapshot.schemaVersion,1)
-  assert.equal(Object.hasOwn(snapshot,"playwrightMcpVersion"),false)
-  assert.deepEqual(snapshot.tools.map(tool=>tool.name),["browser_context","browser_command"])
-})
-
-test("when the installed browser lists different tools, one stderr line names what was added, removed and changed, and the snapshot is still served", posixOnly, async () => {
-  const catalogFile = await snapshotFile([{ name: "stub_tool", description: "older text", inputSchema: { type: "object" } }, { name: "old_tool", inputSchema: { type: "object" } }])
-  const m = await machine("desk-web-drift-", { env: { FAKE_CLI_MODE: "extra" }, catalogFile })
-  const h = host(m.options)
-  await h.handshake()
-  await h.call(2)
-  await until(() => /differs from the snapshot/u.test(h.errors.join("")), "the comparison")
-  assert.match(h.errors.join(""), /\[web\] the installed browser's tool list differs from the snapshot \(Playwright MCP 9\.9\.9\) this session keeps serving: added new_tool; removed old_tool; changed stub_tool\n/u)
-  assert.deepEqual((await h.ask(3, "tools/list")).result.tools.map((tool) => tool.name), ["stub_tool", "old_tool"])
-  assert.equal(h.read().filter((message) => message.method === "notifications/tools/list_changed").length, 0)
-  await h.close()
-})
-
-test("an installed browser whose tools match the snapshot, whatever the key order, or that cannot list them, produces no comparison line", posixOnly, async () => {
-  for (const [mode, tools] of [["ok", [{ inputSchema: { type: "object" }, name: "stub_tool" }]], ["badlist", [{ name: "other" }]]]) {
-    const catalogFile = await snapshotFile(tools)
-    const m = await machine("desk-web-nodrift-", { env: { FAKE_CLI_MODE: mode }, catalogFile })
-    const h = host(m.options)
-    await h.handshake()
-    await h.call(2)
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.doesNotMatch(h.errors.join(""), /differs from the snapshot/u)
-    await h.close()
-  }
-})
-
-// ---- the hold keeps the host waiting, and recovers ----
-
-test("a held call with a progress token gets progress notices while it waits, and none once it is answered", posixOnly, async () => {
-  const m = await machine("desk-web-progress-", { env: { FAKE_NPM_DELAY_MS: "700" }, progressMs: 100 })
-  const h = host(m.options)
-  await h.handshake()
-  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: 0 } } })
-  h.send({ id: 3, method: "tools/call", params: { name: "browser_snapshot", arguments: {} } })
-  const answer = await h.reply(2)
-  await h.reply(3)
-  assert.equal(answer.result.isError, undefined)
-  const notices = h.read().filter((message) => message.method === "notifications/progress")
-  assert.ok(notices.length >= 2, `${notices.length} progress notices`)
-  assert.deepEqual(notices.map((message) => message.params.progressToken), notices.map(() => 0))
-  assert.deepEqual(notices.map((message) => message.params.progress), notices.map((_, index) => index + 1))
-  const count = notices.length
-  await new Promise((resolve) => setTimeout(resolve, 300))
-  assert.equal(h.read().filter((message) => message.method === "notifications/progress").length, count)
-  await h.close()
-})
-
-test("a call cancelled or timed out while held stops its progress notices", posixOnly, async () => {
-  const m = await machine("desk-web-progressstop-", { env: { FAKE_NPM_DELAY_MS: "900" }, progressMs: 50, holdMs: 200 })
-  const h = host(m.options)
-  await h.handshake()
-  h.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: "a" } } })
-  h.send({ method: "notifications/cancelled", params: { requestId: 2 } })
-  h.send({ id: 3, method: "tools/call", params: { name: "browser_navigate", arguments: {}, _meta: { progressToken: "b" } } })
-  assert.equal(toolPayload(await h.reply(3)).code, "browser_not_ready")
-  const seen = h.read().filter((message) => message.method === "notifications/progress")
-  assert.deepEqual([...new Set(seen.map((message) => message.params.progressToken))], ["b"])
-  const count = seen.length
-  await new Promise((resolve) => setTimeout(resolve, 200))
-  assert.equal(h.read().filter((message) => message.method === "notifications/progress").length, count)
-  await h.close()
-})
-
-test("a call that follows a lock-wait timeout starts the install again, so it succeeds once the other session is done", posixOnly, async () => {
-  const m = await machine("desk-web-retry-", { firstInstallMs: 0, startRefresh: () => {} })
-  mkdirSync(m.state, { recursive: true })
-  const lock = path.join(m.state, "refresh.lock")
-  writeFileSync(lock, JSON.stringify({ pid: process.pid }))
-  const h = host(m.options)
-  await h.handshake()
-  const first = await h.call(2)
-  assert.equal(toolPayload(first).code, "install_failed")
-  assert.match(toolPayload(first).summary, /another Desk session was still installing it/u)
-  preinstall(m.state, "0.0.88", "installs/1-1-a", STUB_CLI)
-  require("node:fs").unlinkSync(lock)
-  const second = await h.call(3)
-  assert.equal(second.result.isError, undefined)
-  assert.match(second.result.content[0].text, /^ran browser_navigate/u)
-  await h.close()
-})
-
-test("a real install error stays the answer for every later call, with no second install", posixOnly, async () => {
-  const m = await machine("desk-web-sticky-", { env: { FAKE_NPM_MODE: "fail" } })
-  const h = host(m.options)
-  await h.handshake()
-  assert.equal(toolPayload(await h.call(2)).code, "install_failed")
-  assert.equal(toolPayload(await h.call(3)).code, "install_failed")
-  assert.equal(m.calls().filter((call) => call.args[0] === "install").length, 1)
-  await h.close()
-})
-
-// ---- stop signals end the install ----
-
-test("a stop signal during the first install ends npm and everything it started, then ends the launcher with that signal", posixOnly, async (t) => {
-  const grandchildFile = path.join(await mkTempRoot("desk-web-grand-"), "pid")
-  const m = await machine("desk-web-signal-", { env: { FAKE_NPM_MODE: "grandchild", FAKE_NPM_GRANDCHILD: grandchildFile } })
-  const npms = []
-  const h = host({ ...m.options, npmSpawn: (...argv) => { const child = spawn(...argv); npms.push(child); return child } })
-  let ended = false
-  t.after(() => {
-    h.stdin.end()
-    h.signals.emit("SIGTERM")
-    if (!ended && existsSync(grandchildFile)) { try { process.kill(Number(readFileSync(grandchildFile, "utf8")), "SIGKILL") } catch { /* already gone */ } }
   })
-  await h.handshake()
-  const grandchild = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
-  const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
-  assert.equal(alive(grandchild), true)
-  h.signals.emit("SIGHUP")
-  await h.running
-  assert.deepEqual(h.kills, ["SIGHUP"])
-  await until(() => npms[0].exitCode !== null || npms[0].signalCode !== null, "npm to end")
-  await until(() => !alive(grandchild), "the helper to end")
-  ended = true
-  assert.equal(h.signals.listenerCount("SIGHUP"), 0, "the handlers are removed")
+  const done = web.serve({ ...options, stdin, stdout, signals, exit: (code) => { exitCode = code } })
+  let next = 0
+  const request = (method, params) => new Promise((resolve) => {
+    const id = ++next
+    waiting.set(id, resolve)
+    stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n")
+  })
+  return { stdin, signals, done, request, received, exitCode: () => exitCode }
+}
+
+test("the MCP server answers the handshake, lists the tools and runs calls", async () => {
+  const { options, tmp } = await setup()
+  const s = server(options)
+  const init = await s.request("initialize", { protocolVersion: "2025-03-26" })
+  assert.equal(init.result.protocolVersion, "2025-03-26")
+  assert.equal(init.result.serverInfo.name, "desk-web")
+  assert.equal((await s.request("initialize")).result.protocolVersion, "2025-06-18")
+  assert.deepEqual(await s.request("ping"), { jsonrpc: "2.0", id: 3, result: {} })
+  assert.deepEqual((await s.request("tools/list")).result.tools, catalog.tools)
+  assert.equal((await s.request("resources/list")).error.code, -32601)
+  s.stdin.write("not json\n\n" + JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\nnull\n")
+  const opened = await s.request("tools/call", { name: "browser_context", arguments: { action: "open" } })
+  const { contextId } = JSON.parse(opened.result.content[0].text)
+  assert.ok(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)))
+  assert.ok(s.received.some((message) => message.id === null && message.error.code === -32700))
+  s.stdin.end()
+  await s.done
+  assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false, "ending the server closes its browsers")
 })
 
-test("stopping installs falls back to the npm process when it has no process group, and on Windows", () => {
-  const killed = []
-  const child = { pid: undefined, kill: (signal) => killed.push(signal) }
-  browser.stopInstalls({ platform: "linux", children: [child] })
-  browser.stopInstalls({ platform: "win32", children: [child] })
-  assert.deepEqual(killed, ["SIGTERM", "SIGTERM"])
+test("a stop signal closes the server's browsers and exits", async () => {
+  const { options, tmp } = await setup()
+  const s = server(options)
+  const opened = await s.request("tools/call", { name: "browser_context", arguments: { action: "open" } })
+  const { contextId } = JSON.parse(opened.result.content[0].text)
+  s.signals.emit("SIGTERM")
+  for (let tries = 0; tries < 100 && s.exitCode() === null; tries += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(s.exitCode(), 0)
+  assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
+  s.stdin.end()
+  await s.done
 })
 
-// ---- small protocol details ----
-
-test("a ping from the browser is answered, and lines that arrive in pieces are put together on both sides", posixOnly, async () => {
-  const m = await machine("desk-web-pieces-", { env: { FAKE_CLI_MODE: "ping" } })
-  const h = host(m.options)
-  await h.handshake()
-  await h.call(2)
-  await until(() => /host answered 55 \{\}/u.test(h.errors.join("")), "the answer to the browser's ping")
-  await h.close()
-
-  const n = await machine("desk-web-chunky-", { env: { FAKE_CLI_MODE: "chunky" } })
-  const g = host(n.options)
-  const line = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })
-  g.stdin.write(line.slice(0, 12))
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  g.stdin.write(line.slice(12, 30))
-  g.stdin.write(`${line.slice(30)}\n`)
-  await g.reply(1)
-  const call = await g.call(2)
-  assert.match(call.result.content[0].text, /^ran browser_navigate/u)
-  await g.close()
-})
-
-// ---- the refresh script ----
-
-test("the catalog script installs the latest release, lists its tools, and rewrites or checks the snapshot", posixOnly, async () => {
-  const { run } = await import("../../../../../plugins/desk/mcp/scripts/refresh-web-catalog.mjs")
-  const m = await machine("desk-web-script-", { env: { FAKE_NPM_VERSION: "0.0.90" } })
-  const catalogFile = await snapshotFile([{ name: "stub_tool", inputSchema: { type: "object" } }, { name: "gone_tool", inputSchema: { type: "object" } }], "0.0.80")
-  const output = []
-  const io = { out: (text) => output.push(text), err: (text) => output.push(`ERR ${text}`) }
-  const args = ["--file", catalogFile, "--npm-cli", m.install.cli]
-  const saved = { ...process.env }
-  Object.assign(process.env, m.options.env)
+test("a failure while closing still lets the server finish and exit", async () => {
+  const { options, tmp } = await setup()
+  const s = server(options)
+  const opened = await s.request("tools/call", { name: "browser_context", arguments: { action: "open" } })
+  const { contextId } = JSON.parse(opened.result.content[0].text)
+  const original = fs.rmSync
+  fs.rmSync = () => { throw new Error("locked") }
   try {
-    assert.equal(await run([...args, "--check"], io), 1)
-    assert.match(output.join(""), /@playwright\/mcp 0\.0\.90 lists tools that differ from the snapshot \(0\.0\.80\): removed gone_tool/u)
-    assert.equal(JSON.parse(readFileSync(catalogFile, "utf8")).playwrightMcpVersion, "0.0.80", "check never writes")
-    assert.equal(await run(args, io), 0)
-    assert.deepEqual(JSON.parse(readFileSync(catalogFile, "utf8")), { playwrightMcpVersion: "0.0.90", tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] })
-    assert.equal(await run([...args, "--check"], io), 0)
-    assert.match(output.join(""), /lists the same tools as the snapshot \(0\.0\.90\)/u)
-    writeFileSync(catalogFile, JSON.stringify({ playwrightMcpVersion: "0.0.1", tools: [{ name: "stub_tool", inputSchema: { type: "object" } }] }))
-    assert.equal(await run([...args, "--check"], io), 0, "a new version with the same tools passes the check")
-    assert.equal(await run(args, io), 0)
-    assert.equal(JSON.parse(readFileSync(catalogFile, "utf8")).playwrightMcpVersion, "0.0.90", "a rewrite records the new version")
-    process.env.FAKE_NPM_MODE = "fail"
-    output.length = 0
-    assert.equal(await run([...args, "--check"], io), 2)
-    assert.match(output.join(""), /ERR npm install @playwright\/mcp@latest failed/u)
-    process.env.FAKE_NPM_MODE = "ok"
-    process.env.FAKE_CLI_MODE = "badlist"
-    output.length = 0
-    assert.equal(await run([...args, "--check"], io), 2)
-    assert.match(output.join(""), /ERR tools\/list failed: no list/u)
+    s.signals.emit("SIGINT")
+    for (let tries = 0; tries < 100 && s.exitCode() === null; tries += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+    s.stdin.end()
+    await s.done
   } finally {
-    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]
-    Object.assign(process.env, saved)
+    fs.rmSync = original
   }
+  assert.equal(s.exitCode(), 0)
+  fs.rmSync(path.join(tmp, `desk-browser-${contextId}`), { recursive: true, force: true })
 })
 
-test("the snapshot workflow runs daily and reports a difference as one issue", () => {
-  const workflow = readFileSync(path.join(pluginRoot, "..", "..", ".github", "workflows", "web-catalog-check.yml"), "utf8")
-  assert.match(workflow, /^name: Browser catalog snapshot check$/mu)
-  assert.match(workflow, /cron: "52 6 \* \* \*"/u)
-  assert.match(workflow, /refresh-web-catalog\.mjs --check/u)
-  assert.match(workflow, /issues: write/u)
-  assert.doesNotMatch(workflow, /pull-requests: write|contents: write/u)
-})
+// ---- real browsers ----
 
-// ---- spawned: the real entry points against a fixture plugin ----
+const real = process.env.DESK_BROWSER_REAL === "1" ? false : "set DESK_BROWSER_REAL=1 to drive a real browser"
 
-/** Real frontend closure plus the unchanged shipped SDK pack, under owned HOME. */
-async function fixturePlugin(prefix) {
-  const root = await mkTempRoot(prefix)
-  const plugin = path.join(root, "plugin")
-  mkdirSync(path.join(plugin, "mcp"), { recursive: true })
-  copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  const nativeClosure = require(path.join(mcpRoot, "web-extension-credential.cjs")).nativeInventory(realpathSync(mcpRoot)).map(entry => entry.path)
-  for (const file of new Set(["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-native-relay.cjs", "web-native-error-transport.cjs", "web-catalog.json", ...nativeClosure])) {
-    mkdirSync(path.dirname(path.join(plugin, "mcp", file)), { recursive: true })
-    copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
-  }
-  for (const entry of ["index.js","package.json","package-lock.json","config","scripts","src","artifacts",
-    "browser-context.cjs","browser-context-common.cjs","browser-context-runtime.cjs","browser-context-mcp.cjs",
-    "browser-private.cjs","private-browser-runtime.cjs"]) {
-    fs.cpSync(path.join(mcpRoot,entry),path.join(plugin,"mcp",entry),{recursive:true})
-  }
-  const state = path.join(root, "state")
-  const log = path.join(root, "npm.log")
-  const env = isolatedEnv({home:path.join(root,"home"),cache:path.join(root,"cache"),runtimeCache:path.join(root,"runtime-cache")},
-    {DESK_BROWSER_STATE_DIR:state,FAKE_NPM_LOG:log})
-  return { root, plugin, state, log, env }
-}
-
-/** Real host flow; invalid acquisition must be answered without browser setup. */
-async function firstCall({ command = process.execPath, args, env, cwd }) {
-  const session = await openSession({ command, args, env, cwd })
-  ownedMcpSessions.push(session)
-  const first = await session.request("tools/call", { name: "browser_context", arguments: {action:"create"} }, { timeout: 8000 }).catch((error) => { throw new Error(error.message + "\n" + session.stderr()) })
-  return { session, first }
-}
-
-test("the Claude inline launcher finds the actual two-tool SDK frontend through DESK_PLUGIN_ROOT or cwd without browser installation", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-web-claude-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
-  const { session, first } = await firstCall({ args: claude.args, cwd: fixture.root, env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin, FAKE_NPM_DELAY_MS: "1500" } })
-  assert.equal(first.error, undefined)
-  assert.equal(first.result.isError, true)
-  assert.equal(toolPayload(first).code,"invalid_arguments")
-  assert.deepEqual(session.notifications, [], "the host never hears that the tool list changed")
-  assert.deepEqual((await session.request("tools/list")).result.tools, session.tools.result.tools, "the tool list is the same after the browser took over")
-  assert.deepEqual(session.tools.result.tools,JSON.parse(readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
-  assert.deepEqual(npmCalls(fixture.log),[])
-  assert.equal(existsSync(fixture.state),false)
-  await session.close()
-  const viaCwd = await openSession({ command: process.execPath, args: claude.args, cwd: fixture.plugin, env: { ...fixture.env, DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
-  ownedMcpSessions.push(viaCwd)
-  assert.equal((await viaCwd.call("browser_snapshot",{})).payload.code,"unknown_tool")
-  await viaCwd.close()
-})
-
-test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
-  const cwd = await mkTempRoot("desk-web-noplugin-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
-  const result = spawnSync(process.execPath, claude.args, {
-    cwd,
-    encoding: "utf8",
-    env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}", NODE_OPTIONS: "" },
-    input: [
-      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "c", version: "1" } } },
-      { jsonrpc: "2.0", method: "notifications/initialized" },
-      { jsonrpc: "2.0", id: 1, method: "ping" },
-      { jsonrpc: "2.0", id: 2, method: "tools/list" },
-      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_context", arguments: {action:"create"} } },
-      { jsonrpc: "2.0", id: "u", method: "prompts/list" },
-      { jsonrpc: "2.0", id: 4, method: "initialize" },
-    ].map((message) => JSON.stringify(message)).join("\n") + "\nnot json\n",
+async function realSetup() {
+  const root = await mkTempRoot("desk-web-real-")
+  const tmp = path.join(root, "tmp")
+  fs.mkdirSync(tmp)
+  const env = { ...process.env, DESK_BROWSER_STATE_DIR: path.join(root, "state") }
+  const page = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html")
+    if (request.url === "/set") response.setHeader("set-cookie", "desk=signed-in; Max-Age=86400; Path=/")
+    response.end("<title>Desk test page</title><button>Press</button>")
   })
-  assert.equal(result.status, 0, result.stderr)
-  const [init, ping, list, status, unknown, bare] = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
-  assert.equal(init.id, 0)
-  assert.equal(init.result.protocolVersion, "2025-03-26")
-  assert.deepEqual(init.result.capabilities, { tools: { listChanged: true } })
-  assert.deepEqual(ping.result, {})
-  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-  assert.equal(toolPayload(status).state, "degraded:plugin_root_missing")
-  assert.match(toolPayload(status).fix, /Preserve existing contexts.*reconnect desk-web/u)
-  assert.equal(status.result.isError, true)
-  assert.equal(unknown.error.code, -32601)
-  assert.equal(bare.result.protocolVersion, "2025-06-18")
+  await new Promise((resolve) => page.listen(0, "127.0.0.1", resolve))
+  return { root, tmp, env, url: `http://127.0.0.1:${page.address().port}`, page }
+}
+
+test("real: fresh opens headless, loads a page, closes and its folder is gone", { skip: real, timeout: 300000 }, async () => {
+  const { tmp, env, url, page } = await realSetup()
+  const controller = web.createController({ env, tmpDir: tmp })
+  try {
+    const opened = await controller.call("browser_context", { action: "open", browser: "fresh" })
+    assert.equal(opened.isError, false, text(opened))
+    const { contextId } = json(opened)
+    const goto = await controller.call("browser_command", { contextId, args: ["goto", url] })
+    assert.match(text(goto), /Desk test page/u)
+    const snapshot = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+    assert.match(text(snapshot), /button "Press" \[ref=e\d+\]/u)
+    await controller.call("browser_context", { action: "close", contextId })
+    assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
+  } finally {
+    await controller.closeAll()
+    page.closeAllConnections()
+    page.close()
+  }
 })
 
-test("the Copilot entry point serves the same actual SDK schemas and never forwards legacy page globals", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-web-copilot-")
-  const { session, first } = await firstCall({ args: [path.join(fixture.plugin, "mcp", "web.cjs"), "--caps", "pdf"], cwd: fixture.root, env: { ...fixture.env, FAKE_NPM_DELAY_MS: "1200" } })
-  assert.equal(first.result.isError, true)
-  assert.equal(toolPayload(first).code,"invalid_arguments")
-  assert.deepEqual(session.notifications, [])
-  assert.deepEqual(session.tools.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-  await session.close()
-  assert.deepEqual(npmCalls(fixture.log),[])
-  assert.equal(existsSync(fixture.state),false)
-  // Reconnect serves the same frontend, not an ambient browser session.
-  const later = await openSession({ command: process.execPath, args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env: fixture.env })
-  ownedMcpSessions.push(later)
-  assert.equal(later.initialize.result.serverInfo.name, "desk-web")
-  assert.deepEqual(later.tools.result.tools,session.tools.result.tools)
-  await later.close()
-})
+test("real: mine carries the person's sign-in into a copy, leaves a running browser alone and deletes the copy", { skip: real, timeout: 300000 }, async () => {
+  const { root, tmp, env: isolated, url, page } = await realSetup()
+  // macOS keeps the key that protects saved sign-ins in the login keychain, which a browser finds only under the real home.
+  const env = process.platform === "darwin" ? { ...isolated, HOME: os.userInfo().homedir } : isolated
+  const controller = web.createController({ env, tmpDir: tmp })
+  const persons = path.join(root, "person")
+  let personal = null
+  try {
+    // Install the driver through a fresh open, then build "the person's" profile with a saved cookie.
+    const warm = await controller.call("browser_context", { action: "open" })
+    assert.equal(warm.isError, false, text(warm))
+    await controller.call("browser_context", { action: "close", contextId: json(warm).contextId })
+    const { chromium } = require(path.join(env.DESK_BROWSER_STATE_DIR, `playwright-core-${web.PLAYWRIGHT_VERSION}`, "node_modules", "playwright-core"))
+    const channel = json(warm).app === "Microsoft Edge" ? "msedge" : "chrome"
+    const options = { channel, headless: true, env, ignoreDefaultArgs: ["--use-mock-keychain", "--password-store=basic"] }
+    const setupContext = await chromium.launchPersistentContext(persons, options)
+    await (setupContext.pages()[0] ?? await setupContext.newPage()).goto(`${url}/set`)
+    await setupContext.close()
 
-test("concurrent actual SDK frontends share normal locked restoration without any browser installation", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-web-concurrent-")
-  const env = { ...fixture.env, FAKE_NPM_DELAY_MS: "400" }
-  const runs = await Promise.all(Array.from({ length: 5 }, async () => {
-    const { session, first } = await firstCall({ args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env })
-    await session.close()
-    return first
-  }))
-  for (const answer of runs) assert.equal(toolPayload(answer).code,"invalid_arguments")
-  assert.deepEqual(npmCalls(fixture.log),[])
-  assert.equal(existsSync(fixture.state),false)
-  assert.ok(readdirSync(env.DESK_RUNTIME_CACHE_DIR).length)
-})
+    // "The person's browser" keeps running on its own profile while Desk opens mine.
+    personal = await chromium.launch({ channel, headless: true })
+    const personalPage = await personal.newPage()
+    await personalPage.goto(url)
 
-test("an unchanged release keeps an install that has the reader and ws, or a recorded reader refusal", posixOnly, async () => {
-  for (const ready of [true, false]) {
-    const m = await refreshMachine("desk-web-reader-refresh-", { FAKE_NPM_VERSION: "0.0.81" })
-    preinstall(m.state)
-    if (ready) {
-      touch(path.join(m.state, "installs/1-1-a/node_modules/classic-level/package.json"), "{}")
-      touch(path.join(m.state, "installs/1-1-a/node_modules/ws/package.json"), "{}")
-    } else {
-      touch(path.join(m.state, "installs/1-1-a/reader-unavailable"), "")
-    }
-    assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
-    assert.equal(m.calls().some(call => call.args[0] === "install"), false)
+    const mine = web.createController({ env, tmpDir: tmp, profileRoots: { msedge: persons, chrome: persons } })
+    const opened = await mine.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    const { contextId } = json(opened)
+    await mine.call("browser_command", { contextId, args: ["goto", url] })
+    const cookie = await mine.call("browser_command", { contextId, args: ["eval", "() => document.cookie"] })
+    assert.match(text(cookie), /desk=signed-in/u)
+    await mine.call("browser_context", { action: "close", contextId })
+    assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
+
+    assert.equal(personal.isConnected(), true)
+    assert.equal(personal.contexts()[0].pages().length, 1)
+    assert.equal(await personalPage.title(), "Desk test page")
+  } finally {
+    await personal?.close()
+    await controller.closeAll()
+    page.closeAllConnections()
+    page.close()
   }
 })
