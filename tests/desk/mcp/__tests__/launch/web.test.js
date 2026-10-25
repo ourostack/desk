@@ -31,6 +31,31 @@ if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
 if (verb === "sleep") setTimeout(() => {}, 10000)
+// "daemon" modes start a detached fake daemon that starts a fake browser, as the real CLI does, and print its PID the way the real CLI does.
+if (verb === "open" && mode.startsWith("daemon")) {
+  const record = path.join(process.cwd(), "daemon.json")
+  require("child_process").spawn(process.execPath, [process.env.FAKE_DAEMON_SOURCE, record], { detached: true, stdio: "ignore", windowsHide: true }).unref()
+  while (!fs.existsSync(record)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+  const { daemon } = JSON.parse(fs.readFileSync(record, "utf8"))
+  if (mode === "daemon-open-fail") { process.stderr.write("Daemon pid=" + daemon + ": Daemon process exited with code 1\\n"); process.exit(1) }
+  process.stdout.write("### Browser \`desk\` opened with pid " + daemon + ".\\n")
+}
+// A well-behaved close stops the daemon and its browser; "daemon-leak" leaves both running, as a real browser on a copied profile did.
+if (verb === "close" && mode === "daemon") {
+  const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(process.cwd(), "daemon.json"), "utf8"))
+  for (const pid of [browser, daemon]) process.kill(pid)
+  while ([browser, daemon].some((pid) => { try { process.kill(pid, 0); return true } catch { return false } })) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+}
+// The PID of a process that is gone by the time Desk looks.
+if (verb === "open" && mode === "ghost") process.stdout.write("### Browser \`desk\` opened with pid " + process.pid + ".\\n")
+`
+
+const FAKE_DAEMON = `
+const fs = require("fs")
+const browser = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
+fs.writeFileSync(process.argv[2] + ".tmp", JSON.stringify({ daemon: process.pid, browser: browser.pid }))
+fs.renameSync(process.argv[2] + ".tmp", process.argv[2])
+setInterval(() => {}, 1000)
 `
 
 const FAKE_NPM = `
@@ -58,6 +83,8 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
   fs.writeFileSync(cliSource, FAKE_CLI)
   const npm = path.join(root, "fake-npm.js")
   fs.writeFileSync(npm, FAKE_NPM)
+  const daemonSource = path.join(root, "fake-daemon.js")
+  fs.writeFileSync(daemonSource, FAKE_DAEMON)
   const installDir = path.join(state, `playwright-core-${web.PLAYWRIGHT_VERSION}`)
   const cliDir = path.join(installDir, "node_modules", "playwright-core", "lib", "tools", "cli-client")
   if (cli) {
@@ -65,7 +92,7 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
     fs.copyFileSync(cliSource, path.join(cliDir, "cli.js"))
   }
   const profiles = path.join(root, "profiles")
-  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
+  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
   const options = {
     env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
     profileRoots: { msedge: path.join(profiles, "edge"), chrome: path.join(profiles, "chrome") },
@@ -299,6 +326,87 @@ test("an unexpected error is reported as such", async () => {
   assert.match(text(result), /^Desk's browser hit an unexpected problem: /u)
 })
 
+const running = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== "ESRCH"
+  }
+}
+
+const recorded = (tmp, contextId) => JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${contextId}`, "owner.json"), "utf8")).processes ?? []
+
+test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", async () => {
+  const { options, tmp } = await setup({ mode: "daemon-leak" })
+  const controller = web.createController({ ...options, exitWaitMs: 500 })
+  const first = json(await controller.call("browser_context", { action: "open" })).contextId
+  const second = json(await controller.call("browser_context", { action: "open" })).contextId
+  const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${first}`, "daemon.json"), "utf8"))
+  const others = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${second}`, "daemon.json"), "utf8"))
+  assert.deepEqual(recorded(tmp, first).map((entry) => entry.pid).sort(), [daemon, browser].sort())
+  assert.ok(recorded(tmp, first).every((entry) => typeof entry.start === "string" && entry.start.length > 0))
+
+  assert.deepEqual(json(await controller.call("browser_context", { action: "close", contextId: first })), { contextId: first, closed: true })
+  assert.deepEqual([running(daemon), running(browser)], [false, false])
+  assert.deepEqual([running(others.daemon), running(others.browser)], [true, true], "another context's processes are left alone")
+
+  // Server exit closes the rest the same way.
+  await controller.closeAll()
+  assert.deepEqual([running(others.daemon), running(others.browser)], [false, false])
+  assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${second}`)), false)
+})
+
+test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", async () => {
+  const { options, tmp } = await setup({ mode: "daemon" })
+  let reads = 0
+  const realTable = () => web.readProcessTable(process.platform, process.env)
+  const controller = web.createController({ ...options, exitWaitMs: 500, processTable: () => (reads++ === 0 ? realTable() : null) })
+  const blind = json(await controller.call("browser_context", { action: "open" })).contextId
+  const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${blind}`, "daemon.json"), "utf8"))
+  assert.equal(recorded(tmp, blind).length, 2)
+  assert.deepEqual(json(await controller.call("browser_context", { action: "close", contextId: blind })), { contextId: blind, closed: true })
+  assert.deepEqual([running(daemon), running(browser)], [false, false])
+
+  const seeing = web.createController({ ...options, exitWaitMs: 500 })
+  const id = json(await seeing.call("browser_context", { action: "open" })).contextId
+  await seeing.call("browser_context", { action: "close", contextId: id })
+  assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${id}`)), false)
+
+  const unreadable = web.createController({ ...options, processTable: () => null })
+  const lost = json(await unreadable.call("browser_context", { action: "open" })).contextId
+  assert.deepEqual(recorded(tmp, lost), [], "with no process table nothing is recorded")
+  const pids = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${lost}`, "daemon.json"), "utf8"))
+  await unreadable.call("browser_context", { action: "close", contextId: lost })
+  assert.deepEqual([running(pids.daemon), running(pids.browser)], [false, false])
+})
+
+test("a daemon that failed to start is ended, and a PID that is already gone records nothing", async () => {
+  const failed = await setup({ mode: "daemon-open-fail" })
+  const controller = web.createController({ ...failed.options, exitWaitMs: 500 })
+  const result = await controller.call("browser_context", { action: "open" })
+  assert.match(text(result), /The browser did not start.*Daemon pid=\d+/su)
+  const record = fs.readdirSync(failed.tmp)
+  assert.deepEqual(record, [], "the failed context's folder is gone")
+  const ghost = await setup({ mode: "ghost" })
+  const opened = json(await web.createController(ghost.options).call("browser_context", { action: "open" }))
+  assert.deepEqual(recorded(ghost.tmp, opened.contextId), [])
+})
+
+test("the process table is read with ps, or with PowerShell from the Windows folder, and an unreadable one is null", async () => {
+  assert.deepEqual(web.processTableCommand("darwin", {}), ["ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="]])
+  assert.equal(web.processTableCommand("win32", { SystemRoot: "D:\\Win" })[0], "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+  assert.equal(web.processTableCommand("win32", { windir: "E:\\W" })[0], "E:\\W\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+  assert.equal(web.processTableCommand("win32", {})[0], "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+  assert.match(web.processTableCommand("win32", {})[1].at(-1), /Win32_Process.*ProcessId.*ParentProcessId.*ToFileTimeUtc/u)
+  assert.deepEqual(web.parseProcessTable("  12   1 Sun Oct 25 16:28:30 2026\r\nnoise\n\n40 12 133000000000000000\n"), [
+    { pid: 12, ppid: 1, start: "Sun Oct 25 16:28:30 2026" }, { pid: 40, ppid: 12, start: "133000000000000000" },
+  ])
+  assert.equal(await web.readProcessTable("win32", { SystemRoot: path.join(os.tmpdir(), "desk-no-windows-here") }), null)
+  const table = await web.readProcessTable(process.platform, process.env)
+  assert.ok(table.some((row) => row.pid === process.pid && row.ppid === process.ppid))
+})
+
 test("closing retries a folder the browser still holds, and reports one that stays locked", async () => {
   const { options, tmp } = await setup()
   const controller = web.createController(options)
@@ -496,6 +604,18 @@ test("a failure while closing still lets the server finish and exit", async () =
 
 const real = process.env.DESK_BROWSER_REAL === "1" ? false : "set DESK_BROWSER_REAL=1 to drive a real browser"
 
+// The context's recorded processes: the CLI daemon and the browser it started, at least.
+async function realProcesses(tmp, contextId) {
+  const processes = recorded(tmp, contextId)
+  assert.ok(processes.length >= 2, `the daemon and its browser are recorded: ${JSON.stringify(processes)}`)
+  return processes
+}
+
+async function stillRunning(processes) {
+  const table = await web.readProcessTable(process.platform, process.env)
+  return processes.filter((entry) => table.some((row) => row.pid === entry.pid && row.start === entry.start))
+}
+
 async function realSetup() {
   const root = await mkTempRoot("desk-web-real-")
   const tmp = path.join(root, "tmp")
@@ -521,8 +641,16 @@ test("real: fresh opens headless, loads a page, closes and its folder is gone", 
     assert.match(text(goto), /Desk test page/u)
     const snapshot = await controller.call("browser_command", { contextId, args: ["snapshot"] })
     assert.match(text(snapshot), /button "Press" \[ref=e\d+\]/u)
+    const processes = await realProcesses(tmp, contextId)
     await controller.call("browser_context", { action: "close", contextId })
     assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
+    assert.deepEqual(await stillRunning(processes), [], "the daemon and the browser are gone after close")
+
+    // Server exit ends a context's processes too.
+    const second = json(await controller.call("browser_context", { action: "open", browser: "fresh" })).contextId
+    const secondProcesses = await realProcesses(tmp, second)
+    await controller.closeAll()
+    assert.deepEqual(await stillRunning(secondProcesses), [], "closeAll ends the daemon and the browser")
   } finally {
     await controller.closeAll()
     page.closeAllConnections()
@@ -561,8 +689,10 @@ test("real: mine carries the person's sign-in into a copy, leaves a running brow
     await mine.call("browser_command", { contextId, args: ["goto", url] })
     const cookie = await mine.call("browser_command", { contextId, args: ["eval", "() => document.cookie"] })
     assert.match(text(cookie), /desk=signed-in/u)
+    const processes = await realProcesses(tmp, contextId)
     await mine.call("browser_context", { action: "close", contextId })
     assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
+    assert.deepEqual(await stillRunning(processes), [], "the daemon and the browser on the copied profile are gone after close")
 
     assert.equal(personal.isConnected(), true)
     assert.equal(personal.contexts()[0].pages().length, 1)
