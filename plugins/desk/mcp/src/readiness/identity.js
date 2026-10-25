@@ -9,7 +9,7 @@ export function controllerIdentity({
   lexicalContract,
   semanticContract = null,
   build = null,
-} = {}) {
+}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
   const user = os.userInfo()

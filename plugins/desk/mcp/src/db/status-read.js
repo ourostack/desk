@@ -292,7 +292,36 @@ function activeGeneration(db) {
   `).get()
 }
 
-function openSnapshot(deskRoot) {
+// Runs `read` on one read-only snapshot of the index, or returns null when there is no index.
+function readIndex(deskRoot, read) {
+  if (!deskRoot || !existsSync(indexDbPath(deskRoot))) return null
+  const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
+  try {
+    db.exec("BEGIN")
+    return read(db)
+  } finally { db.close() }
+}
+
+// Who wrote the active generation, without counting vectors or reading its documents: a controller reads this before each catch-up and each status answer to learn whether another Desk build owns the index.
+export function readActiveIndex(deskRoot) {
+  return readIndex(deskRoot, (db) => {
+    const generation = activeGeneration(db)
+    if (!generation) return null
+    const cursor = JSON.parse(generation.event_cursor)
+    return {
+      generation: generation.id,
+      writer: readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor),
+    }
+  })
+}
+
+// What the stored generation `generationId` indexes, or null when it is gone.
+export function readCommittedContent(deskRoot, generationId) {
+  if (!Number.isSafeInteger(generationId)) return null
+  return readIndex(deskRoot, (db) => readGenerationContent(db, generationId))
+}
+
+export function openSnapshot(deskRoot) {
   if (!deskRoot || !existsSync(indexDbPath(deskRoot))) return null
   const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
   try {
