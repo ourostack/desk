@@ -74,23 +74,26 @@ async function inputOf(env, store, state, { current = true } = {}) {
   if (!isPlainObject(value) || value.schema !== INPUT || value.job !== state.job || value.basis !== state.basis ||
       !Array.isArray(value.sources) || !Array.isArray(value.private_evidence) || !sameStore(value.store, store)) return null
   if (state.input_seal !== await seal(env, "input", state.basis, value)) return null
-  if (!current) return value
-  if (!allowed(value.desk_root, store)) return null
+  return !current || inputCurrent(value, store) ? value : null
+}
+
+function inputCurrent(value, store) {
+  if (!allowed(value.desk_root, store)) return false
   for (const evidence of value.private_evidence) {
     const source = value.sources.find((facts) => facts.session.id === evidence.session)
-    if (!source || logEvidence({ facts: source, logPath: evidence.log_path, clockOrigin: evidence.clock_origin }).fingerprint !== evidence.fingerprint) return null
+    if (!source || logEvidence({ facts: source, logPath: evidence.log_path, clockOrigin: evidence.clock_origin }).fingerprint !== evidence.fingerprint) return false
   }
   if (value.task_card !== null) {
     try {
       const stat = lstatSync(value.task_card.path)
       if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024 ||
-          createHash("sha256").update(readFileSync(value.task_card.path, { flag: constants.O_RDONLY | constants.O_NOFOLLOW })).digest("hex") !== value.task_card.sha256) return null
+          createHash("sha256").update(readFileSync(value.task_card.path, { flag: constants.O_RDONLY | constants.O_NOFOLLOW })).digest("hex") !== value.task_card.sha256) return false
     } catch (error) {
       if (!["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(error.code)) throw error
-      return null
+      return false
     }
   }
-  return value
+  return true
 }
 
 function logEvidence(entry) {
@@ -223,17 +226,22 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock
   }
 }
 
-export async function prepareTaskContexts(env, {
+export async function prepareTaskContexts(env, options) {
+  return prepareContextGroups(env, options)
+}
+
+async function prepareContextGroups(env, {
   store, entries, pluginVersion, deadline = Infinity, clock = Date.now, readRemote = readDeskRemote, resolveIdentity = resolveJobIdentity,
-}) {
+}, verifiedGroups) {
   const limit = Math.min(deadline, clock() + PREPARATION_MS)
   const within = () => withinBudget(limit, clock)
   const counts = { prepared: 0, unchanged: 0, held: 0, deferred: [] }
   if ((await readConsent(env)).stores[store]?.contribute !== true) return counts
   const cardIndexes = new Map()
-  const groups = [...groupsOf(entries, store).values()]
+  const groups = verifiedGroups ?? [...groupsOf(entries, store).values()]
   for (const group of groups) {
     within()
+    if (!allowed(group.desk_root, store)) continue
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
     const sources = group.entries.map((entry) => entry.facts)
     if (sources.length > 512 || new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; continue }
@@ -243,8 +251,11 @@ export async function prepareTaskContexts(env, {
       const peers = groups.filter((item) => item.desk_root === group.desk_root && item.person_prefix === group.person_prefix)
       const progressJob = peers.map((item) => item.job).sort()[0]
       const cursor = await discoveryCursor(env, store, progressJob)
+      const started = clock()
+      // Keep the one-second discovery ceiling while leaving a third of short turns for persistence.
+      const discoveryDeadline = Math.min(started + PREPARATION_MS / 2, (started + 2 * limit) / 3)
       const index = taskCardIndex(group.desk_root, group.person_prefix, {
-        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
+        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: discoveryDeadline, clock, readRemote, resolveIdentity,
       })
       cardIndexes.set(deskKey, index)
       if (index.cursor !== cursor) await writeTaskContextFile(env, store, progressJob, "discovery.json", {
@@ -361,33 +372,40 @@ export async function readyTaskContexts(env, { store, entries, deadline = Infini
     if (skipJobs.has(job)) continue
     const state = await stateOf(env, store, job)
     if (state === null || !groups.has(job)) continue
-    const input = await inputOf(env, store, state)
-    if (input === null) continue
-    let record = state.record
-    const invalidation = state.phase !== "ready"
-    if (invalidation) {
-      if (state.published_sha === null) continue
-      record = {
-        schema: "desk.factory.context/1", job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [],
-        sources: input.sources.map((facts) => contextSource(facts, job)),
-        coverage: { state: "unavailable", reasons: [state.phase === "refused" ? "not_recorded" : "review_pending"], omitted_events: 0 },
-        privacy: null,
-      }
-      record.privacy = { verdict: "not_required", payload_sha256: contextPayloadHash(record), reviewer: null }
-    } else if (state.review_seal !== await seal(env, "review", state.basis, record)) continue
-    if (!validateContext(record).ok ||
-        !checkContextAgainstFacts(record, groups.get(job).entries.map((entry) => entry.facts)).ok) continue
-    const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
-    ready.push({
-      name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
-      source_files: groups.get(job).entries.map((entry) => ({
-        name: entry.name ?? `${entry.facts.session.host}-${entry.facts.session.id}.json`,
-        published: `${entry.facts.session.host}-${entry.facts.session.id}.json`,
-        sha: gitBlobSha(`${JSON.stringify(entry.facts)}\n`),
-      })),
-    })
+    const item = await readyContext(env, store, state, groups.get(job))
+    if (item !== null) ready.push(item)
   }
   return ready
+}
+
+async function readyContext(env, store, state, group, verifiedInput) {
+  const job = state.job
+  const invalidation = state.phase !== "ready"
+  if (invalidation && state.published_sha === null) return null
+  const input = verifiedInput === undefined
+    ? await inputOf(env, store, state)
+    : inputCurrent(verifiedInput, store) ? verifiedInput : null
+  if (input === null) return null
+  let record = state.record
+  if (invalidation) {
+    record = {
+      schema: "desk.factory.context/1", job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [],
+      sources: input.sources.map((facts) => contextSource(facts, job)),
+      coverage: { state: "unavailable", reasons: [state.phase === "refused" ? "not_recorded" : "review_pending"], omitted_events: 0 },
+      privacy: null,
+    }
+    record.privacy = { verdict: "not_required", payload_sha256: contextPayloadHash(record), reviewer: null }
+  } else if (state.review_seal !== await seal(env, "review", state.basis, record)) return null
+  if (!validateContext(record).ok || !checkContextAgainstFacts(record, group.entries.map((entry) => entry.facts)).ok) return null
+  const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
+  return {
+    name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
+    source_files: group.entries.map((entry) => ({
+      name: entry.name ?? `${entry.facts.session.host}-${entry.facts.session.id}.json`,
+      published: `${entry.facts.session.host}-${entry.facts.session.id}.json`,
+      sha: gitBlobSha(`${JSON.stringify(entry.facts)}\n`),
+    })),
+  }
 }
 
 const DAY_MS = 24 * 3600 * 1000
@@ -416,25 +434,109 @@ async function publicationStatus(env, store, patch) {
   }))
 }
 
+async function planningTurn(env, store) {
+  let first
+  await updateStatus(env, (status) => {
+    const turns = status.context_planning
+    if (turns !== undefined && !isPlainObject(turns)) throw new Error("context_planning_state_invalid")
+    first = turns?.[store] ?? "prepare"
+    if (turns?.[store] === null || !["prepare", "publish"].includes(first)) throw new Error("context_planning_state_invalid")
+    return { ...status, context_planning: { ...turns, [store]: first === "prepare" ? "publish" : "prepare" } }
+  })
+  return first
+}
+
 /** Local planning only; cached negative readiness never sends an unchanged queue online every start. */
 export async function planContextPublication(env, { store, entries, pluginVersion, now, deadline = Infinity, clock = Date.now, ...readers }) {
   const limit = Math.min(deadline, clock() + PREPARATION_MS)
-  const prepared = await prepareTaskContexts(env, { store, entries, pluginVersion, deadline: limit, clock, ...readers })
-  const ready = await readyTaskContexts(env, { store, entries, deadline: limit, clock, skipJobs: new Set(prepared.deferred) })
+  if ((await readConsent(env)).stores[store]?.contribute !== true) return { work: false, ready: [], states: [], deferred: false, prs: new Set() }
+  const groups = groupsOf(entries, store)
+  const jobs = (await listTaskContextJobs(env, store)).slice(0, CARD_LIMIT)
+  if (groups.size === 0 && jobs.length === 0) return { work: false, ready: [], states: [], deferred: false, prs: new Set() }
+  const ready = []
   const states = []
-  for (const job of (await listTaskContextJobs(env, store)).slice(0, 1000)) {
-    withinBudget(limit, clock)
-    const state = await stateOf(env, store, job)
+  let unfinished = false
+  let deferredWork = false
+  let next = 0
+  let start = 0
+  const cursorJob = jobs[0]
+  if (cursorJob !== undefined) {
+    const bytes = await readTaskContextFile(env, store, cursorJob, "publication.json")
+    if (bytes !== null) {
+      if (bytes.length > 256) throw new Error("context_publication_cursor_invalid")
+      let value
+      try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_publication_cursor_invalid") }
+      if (!isPlainObject(value) || Object.keys(value).sort().join() !== "cursor,schema" ||
+          value.schema !== "desk.factory.context-publication-cursor/1" || !Number.isSafeInteger(value.cursor) ||
+          value.cursor < 0 || value.cursor >= CARD_LIMIT) throw new Error("context_publication_cursor_invalid")
+      start = value.cursor % jobs.length
+    }
+  }
+  // Each stage gets first use of the remaining turn on alternate calls.
+  const first = await planningTurn(env, store)
+  let prepared = { prepared: 0, deferred: [] }
+  const prepare = async () => {
+    if (clock() < limit) {
+      try {
+        prepared = await prepareContextGroups(env, {
+          store, pluginVersion, deadline: Math.min(limit, clock() + PREPARATION_MS / 2), clock, ...readers,
+        }, [...groups.values()])
+      } catch (error) {
+        if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+        deferredWork = true
+      }
+    } else {
+      deferredWork = true
+    }
+  }
+  if (first === "prepare") await prepare()
+  const publicationLimit = Math.min(limit, clock() + PREPARATION_MS / 2)
+  for (let offset = 0; offset < jobs.length; offset += 1) {
+    const index = (start + offset) % jobs.length
+    next = index
+    if (clock() >= publicationLimit) { deferredWork = true; break }
+    const job = jobs[index]
+    let state = await stateOf(env, store, job)
+    next = (index + 1) % jobs.length
     if (state === null) continue
     if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
+    if (state.phase !== "ready" && state.published_sha === null && state.pr === null && state.sent_sha === null) {
+      unfinished ||= ["candidate", "privacy"].includes(state.phase)
+      states.push({ state, withdrawn: false })
+      continue
+    }
     const input = await inputOf(env, store, state, { current: false })
     if (input === null) continue
+    if (clock() >= publicationLimit) { next = states.length === 0 ? next : index; deferredWork = true; break }
     const route = declared(input.desk_root)
     const permission = contextPermission(input.desk_root, store)
     const withdrawn = isFolder(input.desk_root) && route.kind === "store" &&
       (!sameStore(route.store, store) || permission === "not_opted_in")
+    let item = !withdrawn && groups.has(job) ? await readyContext(env, store, state, groups.get(job), input) : null
+    if (item === null && !withdrawn && state.published_sha !== null && groups.has(job) && clock() < publicationLimit) {
+      try {
+        await prepareTaskContexts(env, {
+          store, entries: groups.get(job).entries, pluginVersion, deadline: publicationLimit, clock, ...readers,
+        })
+        state = await stateOf(env, store, job)
+        if (state !== null) item = await readyContext(env, store, state, groups.get(job))
+      } catch (error) {
+        if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+        deferredWork = true
+      }
+    }
+    if (state === null) continue
+    if (clock() >= publicationLimit) { deferredWork = true; break }
     states.push({ state, withdrawn })
+    if (item !== null) ready.push(item)
+    if (ready.length >= 8 && offset + 1 < jobs.length) { deferredWork = true; break }
   }
+  if (cursorJob !== undefined && (deferredWork || start !== 0)) {
+    await writeTaskContextFile(env, store, cursorJob, "publication.json", {
+      schema: "desk.factory.context-publication-cursor/1", cursor: next,
+    })
+  }
+  if (first === "publish") await prepare()
   const cached = (await readStatus(env)).context_publication?.[store]
   const held = Number.isFinite(cached?.hold_until) && cached.hold_until > now
   const stale = !Number.isFinite(Date.parse(cached?.checked_at)) || now - Date.parse(cached.checked_at) > DAY_MS
@@ -442,8 +544,8 @@ export async function planContextPublication(env, { store, entries, pluginVersio
   const retracting = states.some(({ state, withdrawn }) => withdrawn && state.published_sha !== null)
   const unsent = ready.some((item) => states.some(({ state }) => state.job === item.job &&
     state.published_sha !== item.sha && !(Number.isFinite(state.hold_until) && state.hold_until > now)))
-  const unfinished = states.some(({ state }) => ["candidate", "privacy"].includes(state.phase))
-  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, deferred: prepared.deferred.length > 0, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
+  unfinished ||= states.some(({ state }) => ["candidate", "privacy"].includes(state.phase))
+  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, deferred: deferredWork || prepared.deferred.length > 0, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
 }
 
 export async function contextOnBranch(read, tree) {
@@ -457,8 +559,8 @@ export async function contextOnBranch(read, tree) {
 }
 
 /** Only the actual default branch acknowledges a send; only an exact owned blob can be replaced or retracted. */
-export async function prepareContextPublication(env, { store, plan, client, ref, direct, now, readMain }) {
-  if (!plan.work) return []
+export async function prepareContextPublication(env, { store, plan, client, ref, direct, now, readMain, pendingPr = null, entries }) {
+  if (!plan.work && !Number.isSafeInteger(pendingPr)) return []
   const ready = direct && await storeAcceptsContext(client, store, ref)
   await publicationStatus(env, store, { ready, checked_at: new Date(now).toISOString(), hold_until: ready ? null : now + DAY_MS, code: ready ? null : direct ? "context_store_not_ready" : "context_authority_unavailable" })
   const main = await readMain()
@@ -467,7 +569,15 @@ export async function prepareContextPublication(env, { store, plan, client, ref,
     return []
   }
   const items = []
-  for (const entry of plan.states) {
+  const pending = []
+  if (Number.isSafeInteger(pendingPr)) {
+    for (const job of (await listTaskContextJobs(env, store)).slice(0, CARD_LIMIT)) {
+      const state = await stateOf(env, store, job)
+      if (state?.pr === pendingPr) pending.push({ state })
+    }
+  }
+  const groups = pending.length > 0 && entries !== undefined ? groupsOf(entries, store) : null
+  for (const entry of pending.length > 0 ? pending : plan.states) {
     let state = await stateOf(env, store, entry.state.job)
     if (state === null || (await readConsent(env)).stores[store]?.contribute !== true) continue
     if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
@@ -489,7 +599,8 @@ export async function prepareContextPublication(env, { store, plan, client, ref,
       else if (current === undefined) await changePublication(env, store, state.job, (fields) => ({ ...fields, published_sha: null, sent_sha: null, sent_basis: null, sent_delete: false, pr: null }))
       continue
     }
-    const item = plan.ready.find((candidate) => candidate.job === state.job)
+    const item = groups === null ? plan.ready.find((candidate) => candidate.job === state.job)
+      : groups.has(state.job) ? await readyContext(env, store, state, groups.get(state.job)) : null
     if (!ready || !item || (state.phase !== "ready" && !item.invalidation) || (Number.isFinite(state.hold_until) && state.hold_until > now)) continue
     if (state.basis !== item.basis || await inputOf(env, store, state) === null) continue
     if (!item.invalidation && (state.review_seal !== await seal(env, "review", state.basis, state.record) ||
@@ -509,14 +620,21 @@ export async function saveContextSent(env, store, items, pr) {
 }
 
 export async function saveContextRefused(env, store, plan, code, now) {
-  for (const { state: planned } of plan.states) {
-    if (!Number.isSafeInteger(planned.pr)) continue
-    await changePublication(env, store, planned.job, (fields) => ({ ...fields, pr: null }))
-    await updateTaskContextState(env, store, planned.job, (state) => {
-      if (state.sent_basis !== state.basis) return state
+  const refusedPrs = plan.refusedPrs ?? new Set(plan.states.map(({ state }) => state.pr).filter(Number.isSafeInteger))
+  for (const job of (await listTaskContextJobs(env, store)).slice(0, CARD_LIMIT)) {
+    const before = await stateOf(env, store, job)
+    if (before === null || !refusedPrs.has(before.pr)) continue
+    if (!await trustedPublication(env, before)) throw new Error("context_publication_receipt_invalid")
+    const fields = { ...publication(before), pr: null }
+    const proof = await seal(env, "publication", job, fields)
+    const after = await updateTaskContextState(env, store, job, (state) => {
+      if (stableStringify(publication(state)) !== stableStringify(publication(before))) return state
+      const cleared = { ...state, ...fields, publication_seal: proof }
+      if (state.sent_basis !== state.basis) return cleared
       const refusals = (Number.isSafeInteger(state.refusals) ? state.refusals : 0) + 1
-      return { ...state, refusals, hold_until: now + DAY_MS, ...(refusals >= 3 ? { phase: "refused", record: null } : {}) }
+      return { ...cleared, refusals, hold_until: now + DAY_MS, ...(refusals >= 3 ? { phase: "refused", record: null } : {}) }
     })
+    if (refusedPrs.has(after.pr)) throw new Error("context_publication_changed")
   }
   await publicationStatus(env, store, { code, hold_until: now + DAY_MS })
 }

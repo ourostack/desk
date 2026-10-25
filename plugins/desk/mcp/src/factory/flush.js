@@ -717,7 +717,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
   let captureRefused = null
   // The first refusal that names triage (`namesTriage`): the same rule, for the pull request that carried a triage batch.
   let triageRefused = null
-  let contextRefused = null
+  const contextRefusals = []
   let checkUnavailable = false
   let stale = 0
   let unmatched = 0
@@ -745,7 +745,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       break
     }
     const namedContext = codes.filter((candidate) => !STALE_INTAKE_CODES.has(candidate) && candidate.startsWith("context_"))
-    contextRefused ??= namedContext[0] ?? null
+    if (namedContext.length > 0) contextRefusals.push({ pr: pr.number, code: namedContext[0] })
     codes = codes.filter((candidate) => !namedContext.includes(candidate))
     const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
     captureRefused ??= named[0] ?? null
@@ -779,7 +779,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       rejected.add(name)
     }
   }
-  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable, triageRefused, contextRefused }
+  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable, triageRefused, contextRefusals }
 }
 
 function treeEntries(json) {
@@ -1343,9 +1343,22 @@ async function deliver(env, context) {
     }))).items
   }
   const extras = [...(captureItem === null ? [] : [captureItem]), ...triageItems]
-  if (rejections.contextRefused !== null) await contextSafely(null, () => saveContextRefused(env, store, contextPlan, rejections.contextRefused, now()))
-  const contextItems = await contextSafely([], () => prepareContextPublication(env, {
+  let contextAccountingFailed = false
+  for (const refusal of rejections.contextRefusals) {
+    const saved = await contextSafely(false, async () => {
+      await saveContextRefused(env, store, { ...contextPlan, refusedPrs: new Set([refusal.pr]) }, refusal.code, now())
+      return true
+    })
+    if (!saved) {
+      contextAccountingFailed = true
+      progress.rejectionsThrough = Number.isSafeInteger(through) ? through : 0
+    }
+  }
+  const pendingContextPr = !contextAccountingFailed && (contextPlan.work || mayBeOpen) && (contextEntries.length > 0 || contextPlan.states.length > 0)
+    ? await contextSafely(null, () => findOpenPr(client, store, head)) : null
+  const contextItems = contextAccountingFailed ? [] : await contextSafely([], () => prepareContextPublication(env, {
     store, plan: contextPlan, client, ref: base.sha, direct: deliveryRoute(account, infoAnswer.json) === "direct", now: now(),
+    pendingPr: pendingContextPr?.number ?? null, entries: contextEntries,
     readMain: async () => {
       const listing = newListing()
       return { blobs: await contextOnBranch((sha) => readTree(client, store, requireSha(sha), listing), base.tree), unknown: listing.truncated }

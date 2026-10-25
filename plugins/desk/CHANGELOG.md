@@ -1,5 +1,31 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.354 — 2026-10-24
+
+Keep the full existing one-second preparation window after inventory work, rather than halving the remaining allowance again. Alternate which stage runs first so preparation and publication both make progress across turns, within the unchanged one-second stage caps and two-second overall deadline.
+
+The operator's own records now stay in the desk. Agents read "customer data" and "screenshots with personal data" as covering the operator's own financial and legal case files, and moved complaint drafts and evidence out of Git into session folders, where the next session on another computer could not find them. [`session-resumption`](skills/session-resumption/SKILL.md) now defines customer data as data about other people that a product or employer holds, and says the operator's own records, correspondence, drafts and screenshots of their own accounts go in the task's folder and are committed; only secrets and credentials stay out. [`evaluate-release`](skills/evaluate-release/SKILL.md) keeps only screenshots that show other people's data outside Git.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.353 — 2026-10-24
+
+Prepare current task inputs before scanning large reviewed publication records, reusing validated source groups while rechecking prose consent. Keep the existing discovery, publication and overall time limits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.352 — 2026-10-24
+
+Let task-context discovery use enough of a shortened preparation turn to resolve a task and save its input, while retaining the one-second discovery ceiling and two-second total allowance.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.351 — 2026-10-24
+
+Keep validated task explanations moving through bounded publication checks. Resume from a protected cursor instead of discarding ready progress when later work reaches the unchanged time limit, and preserve immediate withdrawal of stale wording.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.350 — 2026-10-24
 
 Browser setup now works when the helper for another platform is missing from the installed plugin. Microsoft Defender removed the Windows browser helper from an installed Desk plugin on a Mac, and because setup required every platform's helper, browser setup on the Mac stopped too. Setup now requires only this computer's helper, which must be present and match the release, as before. A helper for another platform that is present must still match, so changed bytes still stop setup. A missing one no longer does: the setup result and the signed-in `browser_context` result carry a `notice` that names each missing file and says that Desk cannot connect to a browser on that platform until Desk is reinstalled there. The release, packaging and CI checks still require all eight helpers.
