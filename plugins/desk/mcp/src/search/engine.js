@@ -58,6 +58,16 @@ function fuseRankings(lists, limit) {
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit)
 }
 
+const words = (text) => String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3)
+
+/** The candidates whose path holds any of the topic's words, most words first: a task's folder and file names say what it is. */
+function rankByPath(topic, candidates) {
+  const wanted = new Set(words(topic))
+  const counts = new Map()
+  for (const result of candidates) counts.set(result.path, { result, count: new Set(words(result.path).filter((word) => wanted.has(word))).size })
+  return [...counts.values()].filter(({ count }) => count > 0).sort((a, b) => b.count - a.count).map(({ result }) => result)
+}
+
 const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
 // A model download that failed is tried again at the next desk change after this long.
@@ -282,10 +292,11 @@ export function createSearchEngine(options) {
     if (model === null) {
       return { topic, results: await exactWords(topic, request.scope, limit), search_mode: "exact_words", note: SEARCH_WORDING.recallGettingReady }
     }
-    // Both rankings, fused by reciprocal rank: a document strong on meaning and on exact words rises above one strong on
-    // either alone, and exact words also cover sections that have no vector yet.
+    // The rankings, fused by reciprocal rank: a document strong on meaning, on exact words and in its file name rises
+    // above one strong on only one of them, and exact words also cover sections that have no vector yet.
     const pool = Math.max(limit * 5, 50)
-    const results = fuseRankings([rankByMeaning(model.embed(topic), sections(), request.scope, pool), await exactWords(topic, request.scope, pool)], limit)
+    const rankings = [rankByMeaning(model.embed(topic), sections(), request.scope, pool), await exactWords(topic, request.scope, pool)]
+    const results = fuseRankings([...rankings, rankByPath(topic, rankings.flat())], limit)
     const { pending, total } = sectionCounts()
     if (pending === 0) return { topic, results, search_mode: "meaning" }
     return { topic, results, search_mode: "meaning_and_exact_words", note: SEARCH_WORDING.recallPreparing(pending, total) }
