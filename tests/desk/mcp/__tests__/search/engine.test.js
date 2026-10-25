@@ -305,6 +305,8 @@ test("recall fuses meaning and exact words, so a runbook in an iteration folder 
     "agent-capacity/claude-swap-upkeep/task.md": "# Swap upkeep\n\nCar engine vehicle.\n",
     "friends/friends-trust-layer-hardened/task.md": "# Trust layer\n\nKitchen soup promotion.\n",
     "sanctuary-server/butler-one-command-upgrade/task.md": "# Butler upgrade\n\nGarden plants soil.\n",
+    // Its path holds two of the query's words, the runbook's four.
+    "desk-plugin/eng-workflow-v2/desk/2026-10-22-out-of-alpha/progress.md": "# Progress\n\nCar notes.\n",
     [runbook]: "# Out of alpha promotion runbook\n\nThe steps that promote Desk out of alpha.\n",
   })
   const engine = engineFor(t, deskRoot, countingModel())
