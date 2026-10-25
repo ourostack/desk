@@ -18,7 +18,7 @@ import { keyedJobId, publishedFileName, serializePublished, toPublished } from "
 import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/reconcile-reasons.js"
 import { reconcile as reconcileOnce } from "../../../../../plugins/desk/mcp/src/factory/reconcile.js"
 import { main, runReconcileCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
-import { SENTINEL, STORE, scratch } from "./_session_helpers.js"
+import { SENTINEL, STORE, recent, scratch } from "./_session_helpers.js"
 import { NO_SHEBANG_SCRIPTS } from "../_platform.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
@@ -128,7 +128,7 @@ async function writeMarker(root, { name, host, id, desk, logPath, store, deskRoo
   await mkdir(path.join(root, "markers"), { recursive: true })
   await writeFile(path.join(root, "markers", name), JSON.stringify({
     schema_version: 1, host, session_id: id, log_path: logPath, cwd: desk, desk_root: deskRoot, end_reason: null,
-    ended_at: endedAt, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
+    ended_at: endedAt, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: recent(),
     ...(routing ? { routing: { store, source: "default", warnings: [] } } : {}),
   }))
 }

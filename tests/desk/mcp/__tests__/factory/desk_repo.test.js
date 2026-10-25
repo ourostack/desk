@@ -26,9 +26,13 @@ const LIVE_CARD = ["title: A live task", "status: processing", "created: \"2026-
 const fixtureCard = (label, status, extra = []) => card([`status: ${status}`, ...extra], `# ${label}\n\nUnique fixture content for ${label}, never reused elsewhere.`)
 
 // Runs Git in `repo`; `at` stamps the commit and every reflog entry it makes.
+// Git's automatic maintenance expires reflog entries by today's date (30 days
+// for unreachable ones, 90 for the rest), which would erase these fixed-date
+// entries once they age: the fixture's reflog never expires.
+const NO_REFLOG_EXPIRY = ["-c", "gc.reflogExpire=never", "-c", "gc.reflogExpireUnreachable=never"]
 function gitIn(repo, args, at) {
   const dates = at === undefined ? {} : { GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at }
-  const result = spawnSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+  const result = spawnSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...NO_REFLOG_EXPIRY, ...args], {
     encoding: "utf8",
     env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...dates },
   })
