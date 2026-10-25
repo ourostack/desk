@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { beginBackgroundConvergence, callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../factory/_private_state_helpers.js"
@@ -536,4 +536,12 @@ test("calling desk_work_ledger is refused without touching retained ledger parti
     restore()
     await cleanup(preserved.base)
   }
+})
+
+test("background convergence starts the search engine's first read, and does nothing without an engine", async () => {
+  let started = 0
+  assert.deepEqual(await beginBackgroundConvergence({ controller: { beginConvergence: async () => { started += 1; return { started: true } } } }), { started: true })
+  assert.equal(started, 1)
+  assert.equal(await beginBackgroundConvergence({ controller: null }), null)
+  assert.equal(await beginBackgroundConvergence(undefined), null)
 })
