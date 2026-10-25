@@ -399,7 +399,7 @@ test("with the real runtime inspector and importer, main restores the runtime af
   })
   try {
     // Wait for background convergence too, so nothing is still writing the index when the fixture is removed.
-    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail.controller_state === "LEXICAL_READY", { deadlineMs: 60000 })
+    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.search?.state === "exact_words_only", { deadlineMs: 60000 })
     assert.equal(ready.status, "ok")
     const search = await session.call("desk_search", { query: "lighthouse" })
     assert.equal(search.isError, false)
@@ -446,14 +446,6 @@ test("--degraded takes precedence over --onboarding", async () => {
   } finally {
     await desk.close()
   }
-})
-
-test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
-  const { hungTuning } = await import("../../../../../plugins/desk/mcp/index.js")
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "300" }), { probeMs: 300 })
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "0" }), {})
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "soon" }), {})
-  assert.deepEqual(hungTuning({}), {})
 })
 
 test("crash handlers hand uncaught errors and rejections to the session, and are removed on close", async () => {

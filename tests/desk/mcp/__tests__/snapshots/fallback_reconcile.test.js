@@ -771,7 +771,7 @@ test("desk_reindex uses runtime artifacts without artifact opts", async () => {
 
     assert.equal(calls, 0)
     assert.equal(result.status, "error")
-    assert.equal(result.code, "required_capability_unavailable")
+    assert.equal(result.code, "search_starting")
   } finally {
     globalThis.fetch = originalFetch
   }

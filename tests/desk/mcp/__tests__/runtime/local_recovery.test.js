@@ -45,13 +45,11 @@ function input(value) {
 }
 const update = { track: "work", slug: "one", status: "processing" }
 
-// The external controller process runs in this test's event loop instead.
 // Admission, journal, front door, card validation and Git writes are production.
 async function launch(options) {
   const toServer = new PassThrough()
   const fromServer = new PassThrough()
   const controllers = []
-  const runtimeServers = []
   const handle = await main({
     ...options, input: toServer, output: fromServer,
     stateHome: path.join(options.cwd, ".session-state"),
@@ -62,13 +60,7 @@ async function launch(options) {
     runtimeImporter: async () => ({
       ...server,
       connectOrStartController: async (settings) => {
-        const controller = await server.connectOrStartController({
-          ...settings, ephemeral: true, controllerLauncher: async (settings) => {
-            const runtime = await server.startControllerRuntime(settings)
-            runtimeServers.push(runtime)
-            return runtime
-          },
-        })
+        const controller = await server.connectOrStartController(settings)
         controllers.push(controller)
         return controller
       },
@@ -89,9 +81,7 @@ async function launch(options) {
       } finally {
         // Closed whatever happened above: a server left listening keeps this file's process alive until the job's time limit.
         await Promise.allSettled(controllers.map((controller) => controller.close()))
-        await Promise.allSettled(runtimeServers.map((runtime) => runtime.close()))
       }
-      assert.ok(runtimeServers.every((runtime) => !runtime.server.listening), "all fixture-owned servers are closed")
     },
   }
 }
@@ -395,21 +385,11 @@ for (const [operation, value, refused] of [
     const { startInProcess } = await import("./_in_process_desk.js")
     const mcpRoot = fixture()
     const localRoot = fixture()
-    const runtimeServers = []
     const desk = await startInProcess({
       argv: ["--root", mcpRoot], cwd: mcpRoot, env: env(),
       stateHome: path.join(mcpRoot, ".session-state"), runtimeInspector: null,
       readinessPolicy: { semantic: "unsupported" },
-      runtimeImporter: async () => ({
-        ...server,
-        connectOrStartController: (settings) => server.connectOrStartController({
-          ...settings, ephemeral: true, controllerLauncher: async (settings) => {
-            const runtime = await server.startControllerRuntime(settings)
-            runtimeServers.push(runtime)
-            return runtime
-          },
-        }),
-      }),
+      runtimeImporter: async () => server,
     })
     try {
       const since = Date.now()
@@ -427,7 +407,6 @@ for (const [operation, value, refused] of [
       }
     } finally {
       await desk.close()
-      for (const runtime of runtimeServers) await runtime.close()
     }
   })
 }

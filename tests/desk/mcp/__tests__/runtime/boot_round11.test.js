@@ -223,7 +223,6 @@ test("no desk_commit when the commit failed, git cannot name HEAD, or the desk i
 
 import { ensureStateIgnored } from "../../../../../plugins/desk/mcp/src/util/state-ignore.js"
 import { openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { createWorkspaceWatcher } from "../../../../../plugins/desk/mcp/src/readiness/workspace-watcher.js"
 
 const gitIn = (root, ...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
 async function gitRoot() {
@@ -265,15 +264,11 @@ test("ensureStateIgnored keeps an existing exclude file's lines, with or without
   assert.equal(await fs.readFile(path.join(bare, ".git", "info", "exclude"), "utf8"), ".state/\n")
 })
 
-test("opening the index and starting the readiness watcher on a git desk without a .gitignore leave git status clean", async () => {
+test("opening the index on a git desk without a .gitignore leave git status clean", async () => {
   const root = await gitRoot()
   const db = openDb(root)
   db.close()
   assert.equal(gitIn(root, "status", "--short").stdout, "")
-  const other = await gitRoot()
-  const watcher = await createWorkspaceWatcher({ root: other })
-  await watcher.close?.()
-  assert.equal(gitIn(other, "status", "--short").stdout, "")
   const overridden = await gitRoot()
   openDb(overridden, { dbPath: path.join(overridden, "elsewhere", "x.sqlite") }).close()
   assert.equal(await fs.readFile(path.join(overridden, ".git", "info", "exclude"), "utf8").then((text) => text.includes(".state/")), false)

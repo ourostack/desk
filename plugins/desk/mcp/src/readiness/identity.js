@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 import { realpathSync, statSync } from "node:fs"
-import * as filesystem from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -10,7 +9,7 @@ export function controllerIdentity({
   lexicalContract,
   semanticContract = null,
   build = null,
-} = {}) {
+}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
   const user = os.userInfo()
@@ -46,71 +45,6 @@ export function controllerIdentity({
 export function lexicalControllerIdentity(identity) {
   const { semantic_contract, ...ownership } = identity
   return ownership
-}
-
-export function semanticContractDiagnostic(expected, observed) {
-  if (stableStringify(expected) === stableStringify(observed)) return null
-  return {
-    code: "controller_semantic_mismatch",
-    reason: "semantic_contract_mismatch",
-    message: "The root-scoped lexical controller has a different semantic contract. Semantic partitioning is not supported in this alpha.",
-    expected,
-    observed,
-  }
-}
-
-export function validateControllerEndpoint(endpoint, platform = process.platform) {
-  if (platform === "win32") return
-  if (typeof endpoint !== "string" || !path.posix.isAbsolute(endpoint)
-    || endpoint.includes("\0") || Buffer.byteLength(endpoint) > 100) {
-    throw new Error("readiness controller endpoint must be an absolute POSIX path of at most 100 bytes")
-  }
-}
-
-export function validatePrivateDirectory(directory, {
-  uid = process.getuid?.(), fs = filesystem,
-} = {}) {
-  const stat = fs.lstatSync(directory)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid
-    || (stat.mode & 0o777) !== 0o700) {
-    throw new Error("readiness controller has unsafe directory ownership or permissions")
-  }
-}
-
-// The rendezvous every session on a root must agree on: the per-user folder /tmp/desk-readiness-<uid>, keyed by the controller identity (real root path, user, lexical contract and Desk build). It deliberately ignores XDG_RUNTIME_DIR and TMPDIR: sessions started with different values (a desktop host and a terminal, for example) would otherwise derive different sockets for one root, share one owner record and journal, and elect two controllers.
-export function deriveControllerEndpoint({
-  identity, platform = process.platform, uid = process.getuid?.(), fs = filesystem,
-} = {}) {
-  if (platform === "win32") {
-    return `\\\\.\\pipe\\desk-readiness-${identity.user.username}-${identity.id}`
-  }
-  if (!Number.isSafeInteger(uid) || uid < 0 || identity.user.uid !== uid) {
-    throw new Error("readiness controller identity has unsafe OS-user ownership")
-  }
-  const basename = `${digest(stableStringify(lexicalControllerIdentity(identity))).slice(0, 32)}.sock`
-  const tempRoot = fs.realpathSync("/tmp")
-  validateRuntimeAncestors(tempRoot, { uid, fs })
-  const directory = path.posix.join(tempRoot, `desk-readiness-${uid}`)
-  const endpoint = path.posix.join(directory, basename)
-  validateControllerEndpoint(endpoint, platform)
-  try {
-    fs.mkdirSync(directory, { mode: 0o700 })
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error
-  }
-  validatePrivateDirectory(directory, { uid, fs })
-  return endpoint
-}
-
-function validateRuntimeAncestors(directory, { uid, fs }) {
-  for (let current = directory; ; current = path.posix.dirname(current)) {
-    const stat = fs.lstatSync(current)
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== 0 && stat.uid !== uid)
-      || ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0)) {
-      throw new Error("readiness controller has unsafe runtime directory ancestry")
-    }
-    if (current === "/") return
-  }
 }
 
 export function stableStringify(value) {

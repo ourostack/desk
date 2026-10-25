@@ -143,30 +143,6 @@ return fixture;`
   assert.equal(heard.at(-1), "reply")
 })
 
-test("readiness diagnostic pure: module anchors are atomic, mirror-scoped and syntax checked without execution", async () => {
-  const { transformSource } = await diagnostics()
-  for (const file of ["readiness/controller-client.js", "readiness/controller-server.js", "readiness/journal.js", "runtime/bootstrap.js", "runtime/admission-worker.js"]) {
-    const original = readFileSync(new URL(file, diagnosticSource), "utf8")
-    const url = new URL(file, diagnosticSource).href
-    const changed = transformSource(url, original, diagnosticScope)
-    assert.equal(changed.coverage, "applied", file)
-    const syntax = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: changed.source, encoding: "utf8" })
-    assert.equal(syntax.status, 0, syntax.stderr)
-    const missing = transformSource(url, "", diagnosticScope)
-    assert.equal(missing.coverage, "unknown")
-    assert.equal(missing.source, "")
-    const duplicated = transformSource(url, original + "\n" + original, diagnosticScope)
-    assert.equal(duplicated.coverage, "unknown")
-    assert.equal(duplicated.source, original + "\n" + original)
-    const mirrorURL = new URL("source-mirror/" + "a".repeat(64) + "/src/" + file, diagnosticScope.cacheRoot).href
-    assert.equal(transformSource(mirrorURL, original, diagnosticScope).coverage, "applied")
-    assert.equal(transformSource("file:///outside/src/" + file, original, diagnosticScope).source, original)
-    const twice = transformSource(url, changed.source, diagnosticScope)
-    assert.equal(twice.coverage, "unknown", "a repeated loader must not decorate already instrumented code")
-    assert.equal(twice.source, changed.source)
-  }
-})
-
 test("readiness diagnostic pure: protection awaits once and propagates the original async rejection", async () => {
   const helper = await diagnostics()
   const original = `
@@ -581,32 +557,6 @@ test("a HEAD change is noticed without a tool call: the .git/HEAD watch or recon
   await waitFor(() => existsSync(path.join(fixture.stateDir, "last-start.json")) && readLastStart(fixture).state === "degraded:state_branch_detached")
   git(fixture.desk, "switch", "main")
   await waitFor(() => readLastStart(fixture).state === "ready")
-})
-
-test("a lost readiness controller is re-elected in the background by the surviving session", { skip: process.platform === "win32" ? "POSIX signals" : false }, async (t) => {
-  const fixture = await makeGitDesk()
-  const configPath = writeActivation(fixture)
-  mkdirSync(fixture.stateDir, { recursive: true })
-  const first = await startDesk(fixture, { args: ["--activation-config", configPath] })
-  t.after(() => first.close())
-  assert.equal((await first.statusUntil(settled)).state, "ready")
-  const second = await startDesk(fixture, { args: ["--activation-config", configPath] })
-  t.after(() => second.close())
-  assert.equal((await second.statusUntil(settled)).state, "ready")
-  // The first session owns the controller; kill it the way a closed host session would.
-  const owned = controllerRecords([fixture.readinessHome]).filter((record) => record.parentPid === first.child.pid).map((record) => record.pid)
-  assert.equal(owned.length, 1, "the first session's controller child is on record")
-  first.child.kill("SIGKILL")
-  await new Promise((resolve) => first.child.once("exit", resolve))
-  // The controller child shuts down on its own once its parent's channel drops. Until it has exited, a write can still reach it and
-  // lose its recording as the controller goes away (canonical_write_recording_failed, connect ENOENT on main on 2026-10-07), which is
-  // a write during the loss, not after it.
-  await waitForProcessesGone(owned)
-  const search = await second.call("desk_search", { query: "lighthouse" })
-  assert.equal(search.isError, false)
-  const write = await second.call("task_create", { track: "ops", slug: "after-owner-loss", title: "Survivor write" })
-  assert.equal(write.isError, false, JSON.stringify(write.payload))
-  assert.equal((await second.statusUntil((payload) => payload.state === "ready" && payload.readiness)).readiness.state !== "unavailable", true)
 })
 
 test("a deliberate git switch mid-session stays put: writes go read-only with the doctor fix, and switching back restores ready", async (t) => {

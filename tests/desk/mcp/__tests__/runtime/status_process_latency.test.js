@@ -8,9 +8,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamTransport } from "./_in_process_desk.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
-import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 
-for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot"]) {
+for (const phase of ["rootStatus"]) {
 test(`actual MCP and controller processes retain 200 ms status/list/ping caps through blocked ${phase} and late destination`, async (t) => {
   const base = await mkTempRoot("status-process-")
   const home = path.join(base, "home")
@@ -111,7 +110,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       const value = await status()
-      if (value.root?.path === root && value.local_db?.state === "available" && (!requireSeam || existsSync(marker))) return value
+      if (value.root?.path === root && value.search !== undefined && (!requireSeam || existsSync(marker))) return value
       if (value.root?.path && value.root.path !== root) {
         assert.equal(value.root.path, a, "only the still-admitted A context may be shown while B is unresolved")
         assert.equal(value.admission.phase, "resolving_inputs")
@@ -132,7 +131,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   assert.ok(existsSync(marker), "qualification must traverse the real SQLite seam")
   const inspection = JSON.parse(readFileSync(marker, "utf8"))
   assert.notEqual(inspection.pid, child.pid, "SQLite must run outside the MCP answering process")
-  assert.equal(inspection.root, phase === "rootStatus" ? a : indexDbPath(a))
+  assert.equal(inspection.root, a)
   // Start a new blocked computation and qualify protocol control traffic on
   // another process, not on a stream with an in-process controller.
   await status()
@@ -152,11 +151,10 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     desk_runtime: { semantic: "unsupported" } }))
   const second = await current(b)
   assert.equal(second.root.path, b)
-  assert.equal(second.local_db.path, indexDbPath(b))
   assert.equal(second.write_scope.mode, "workspace")
   assert.notEqual(second.status_detail_from, first.status_detail_from)
   t.diagnostic(JSON.stringify({ phase, maxStatusMs: Math.max(...statusTimes), statusCalls: statusTimes.length,
     controlMs, capMs: 200, currentDestinationAfterReplacement: true,
-    fields: ["state", "root.path", "local_db.path", "write_scope.mode", "status_detail_from"] }))
+    fields: ["state", "root.path", "write_scope.mode", "status_detail_from"] }))
 })
 }
