@@ -43,7 +43,9 @@ export function createSearchEngine(options) {
   }
   const db = openDb(deskRoot, { dbPath: ":memory:" })
   const store = semantic === "unsupported" ? null : openVectorStore(stateDir, MODEL.id)
-  const oldIndex = cleanup(stateDir)
+  let oldIndex = { removed: false, bytes: 0 }
+  // removeOldIndex never rejects: every failure leaves the files for the next start.
+  const cleaning = Promise.resolve(cleanup(stateDir)).then((result) => { oldIndex = result })
   let built = false
   let dirty = true
   let refreshing = null
@@ -129,9 +131,12 @@ export function createSearchEngine(options) {
         await ensureModel()
         if (model === null || closed) return
         // A short pause between batches keeps the machine responsive while a whole desk is embedded the first time.
-        for (let batch = [...pendingTexts()].slice(0, batchSize); batch.length > 0 && !closed; batch = [...pendingTexts()].slice(0, batchSize)) {
-          store.save(batch.map(([hash, text]) => [hash, model.embed(text)]))
-          await new Promise((resolve) => setTimeout(resolve, pauseMs))
+        // Texts that changed during a pass are found by the next pass.
+        for (let pending = [...pendingTexts()]; pending.length > 0 && !closed; pending = [...pendingTexts()]) {
+          for (let start = 0; start < pending.length && !closed; start += batchSize) {
+            store.save(pending.slice(start, start + batchSize).map(([hash, text]) => [hash, model.embed(text)]))
+            await new Promise((resolve) => setTimeout(resolve, pauseMs))
+          }
         }
       } catch {
         // A vector that could not be saved is embedded again at the next desk change.
@@ -260,6 +265,7 @@ export function createSearchEngine(options) {
     searchStatus,
     // Resolves once the current refresh and background embedding are done (tests).
     async settled() {
+      await cleaning
       while (refreshing || embedding || modelLoading) await Promise.allSettled([refreshing, embedding, modelLoading])
     },
     async close() {

@@ -48,18 +48,7 @@ export function lexicalControllerIdentity(identity) {
   return ownership
 }
 
-export function semanticContractDiagnostic(expected, observed) {
-  if (stableStringify(expected) === stableStringify(observed)) return null
-  return {
-    code: "controller_semantic_mismatch",
-    reason: "semantic_contract_mismatch",
-    message: "The root-scoped lexical controller has a different semantic contract. Semantic partitioning is not supported in this alpha.",
-    expected,
-    observed,
-  }
-}
-
-export function validateControllerEndpoint(endpoint, platform = process.platform) {
+function validateControllerEndpoint(endpoint, platform = process.platform) {
   if (platform === "win32") return
   if (typeof endpoint !== "string" || !path.posix.isAbsolute(endpoint)
     || endpoint.includes("\0") || Buffer.byteLength(endpoint) > 100) {
@@ -67,7 +56,7 @@ export function validateControllerEndpoint(endpoint, platform = process.platform
   }
 }
 
-export function validatePrivateDirectory(directory, {
+function validatePrivateDirectory(directory, {
   uid = process.getuid?.(), fs = filesystem,
 } = {}) {
   const stat = fs.lstatSync(directory)

@@ -448,14 +448,6 @@ test("--degraded takes precedence over --onboarding", async () => {
   }
 })
 
-test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
-  const { hungTuning } = await import("../../../../../plugins/desk/mcp/index.js")
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "300" }), { probeMs: 300 })
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "0" }), {})
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "soon" }), {})
-  assert.deepEqual(hungTuning({}), {})
-})
-
 test("crash handlers hand uncaught errors and rejections to the session, and are removed on close", async () => {
   const { installCrashHandlers } = await import("../../../../../plugins/desk/mcp/index.js")
   const { EventEmitter } = await import("node:events")

@@ -228,9 +228,11 @@ test("a desk that cannot be read fails the search that needed it, and a backgrou
 
 test("status says once the old search index was removed, in megabytes or gigabytes", async (t) => {
   const deskRoot = await desk({})
-  const small = engineFor(t, deskRoot, { semantic: "unsupported", cleanup: () => ({ removed: true, bytes: 82_000_000 }) })
+  const small = engineFor(t, deskRoot, { semantic: "unsupported", cleanup: async () => ({ removed: true, bytes: 82_000_000 }) })
+  await small.settled()
   assert.equal(small.searchStatus().old_index_removed, "Desk removed its old search index (82 MB), which this version no longer uses.")
   const large = engineFor(t, deskRoot, { semantic: "unsupported", cleanup: () => ({ removed: true, bytes: 9_700_000_000 }) })
+  await large.settled()
   assert.equal(large.searchStatus().old_index_removed, "Desk removed its old search index (9.7 GB), which this version no longer uses.")
 })
 

@@ -51,9 +51,9 @@ const SEMANTIC_REPAIR_COMMAND =
   "Start Ollama, pull nomic-embed-text, then run desk_reindex; no force is required after v1.2.2 because missing vectors are repaired automatically."
 
 // What a search says when it served exact-word results because meaning-based search is not current yet.
-export const SEMANTIC_CATCHING_UP = "Meaning-based search is still catching up; these results match exact words and are usable."
+const SEMANTIC_CATCHING_UP = "Meaning-based search is still catching up; these results match exact words and are usable."
 // What it says when the desk's readiness policy turns meaning-based search off.
-export const SEMANTIC_OFF = Object.freeze({ reason: "semantic_off", message: "Meaning-based search is off for this desk; these results match exact words." })
+const SEMANTIC_OFF = Object.freeze({ reason: "semantic_off", message: "Meaning-based search is off for this desk; these results match exact words." })
 
 function semanticUnavailableFields(diagnostic, opts) {
   return {

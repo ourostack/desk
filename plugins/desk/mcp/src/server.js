@@ -53,15 +53,11 @@ import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 export { waitForStatusInspection } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
-import { configureRuntimeArtifacts } from "./server-helpers.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
-import { admitControlPlane } from "./activation/admit.js"
 import { createSearchEngine } from "./search/engine.js"
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
 
-export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { admitControlPlane, configureRuntimeArtifacts }
 
 // Each session runs Desk search in its own process (src/search/engine.js). Session admission still calls it its
 // "controller": the engine answers the few calls admission makes of one.

@@ -2,7 +2,7 @@
 // in plain JavaScript: a text's vector is the average of its word pieces' vectors, so no neural network, native code or
 // service is needed. The model's two files are downloaded once, at a pinned revision, into the desk's state folder.
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 
 const REVISION = "bf8b056651a2c21b8d2565580b8569da283cab23"
@@ -21,17 +21,17 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
 async function modelFile(dir, name, { model, fetchImpl }) {
   const file = path.join(dir, name)
   try {
-    const bytes = readFileSync(file)
+    const bytes = await readFile(file)
     if (sha256(bytes) === model.files[name]) return bytes
   } catch { /* not downloaded yet */ }
   const response = await fetchImpl(`${model.url}/${name}`)
   if (!response.ok) throw new Error(`downloading ${name} failed with HTTP ${response.status}`)
   const bytes = Buffer.from(await response.arrayBuffer())
   if (sha256(bytes) !== model.files[name]) throw new Error(`downloaded ${name} does not match its pinned hash`)
-  mkdirSync(dir, { recursive: true })
+  await mkdir(dir, { recursive: true })
   const partial = `${file}.${process.pid}.partial`
-  writeFileSync(partial, bytes)
-  renameSync(partial, file)
+  await writeFile(partial, bytes)
+  await rename(partial, file)
   return bytes
 }
 

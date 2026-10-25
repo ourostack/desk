@@ -183,7 +183,6 @@ async function makeSession(t, runtimePayload) {
     }),
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
-    hung: { probe: async () => ({ state: "refused" }) },
   })
   t.after(() => session.dispose())
   await session.admission.refresh({ force: true })
@@ -231,7 +230,6 @@ async function revalidatingSession(t, { resolve }) {
       connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
     }, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
-    hung: { probe: async () => ({ state: "refused" }) },
   })
   t.after(() => session.dispose())
   return session

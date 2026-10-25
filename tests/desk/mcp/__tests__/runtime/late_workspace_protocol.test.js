@@ -10,9 +10,6 @@ import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { runInWorker } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { copilotSessionFile, recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
-import { request } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
-import { startControllerProcess } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 let sequence = 0
@@ -52,8 +49,7 @@ function binding(file, root, extra = {}) {
   }))
 }
 
-async function fixture(t, { explicit = false, person = null, capturedFolder = false, sessionRoot = false,
-  controlledController = false } = {}) {
+async function fixture(t, { explicit = false, person = null, capturedFolder = false, sessionRoot = false } = {}) {
   const base = await mkTempRoot("late-workspace-")
   const home = path.join(base, "home")
   const a = desk(path.join(home, "desk"), person)
@@ -109,91 +105,12 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   let held = null
   let retainPastHook = false
   let pastHook = null
-  const controllerArm = path.join(base, "controller-block-arm")
-  const controllerBlock = path.join(base, "controller-block.json")
-  const controllerPreload = path.join(base, "controller-block.mjs")
-  if (controlledController) writeFileSync(controllerPreload, `
-import { existsSync, renameSync, writeFileSync } from "node:fs";
-const stringify = JSON.stringify;
-let blocked = false;
-const publish = (value) => {
-  const target = ${JSON.stringify(controllerBlock)};
-  const pending = target + "." + process.pid;
-  writeFileSync(pending, stringify(value));
-  renameSync(pending, target);
-};
-JSON.stringify = function(...args) {
-  if (!blocked && existsSync(${JSON.stringify(controllerArm)}) &&
-      new Error().stack.includes("handleLine") && new Error().stack.includes("controller-server.js") &&
-      args[0]?.result?.convergence?.status === "succeeded") {
-    blocked = true;
-    const started = Date.now();
-    publish({pid: process.pid, started, finished: null});
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
-    publish({pid: process.pid, started, finished: Date.now()});
-  }
-  return stringify.apply(this, args);
-};
-`)
-  // Only rendezvous/election is replaced. The maintained controller child
-  // owns its watcher, journal, index writer and response serialization on a
-  // separate event loop, as production does. Authority and Git remain real.
-  // Each fixture's unique canonical root derives its exact owned rendezvous;
-  // only those captured endpoints are checked during teardown.
-  const connector = async ({ deskRoot, policy, stateHome }) => {
-    const { protocolVersion, lexicalContract } = server.readinessContracts(policy)
-    const identity = controllerIdentity({
-      root: deskRoot, protocolVersion, lexicalContract,
-      semanticContract: { mode: policy.semantic, embedding_spec: null },
-    })
-    const endpoint = deriveControllerEndpoint({ identity })
-    // Production joins a live owner at this rendezvous or waits for it to go
-    // before electing a new one. The session closes a superseded controller
-    // without awaiting it (forgetController), so finish that release here:
-    // binding the same endpoint while the old child still holds it fails with
-    // EADDRINUSE, most often on slower Windows runners.
-    for (const earlier of controllers.filter((entry) => entry.endpoint === endpoint)) {
-      await earlier.controller.close()
-      await earlier.exited
-    }
-    let child
-    const controller = await startControllerProcess({
-      identity, endpoint, stateDir: path.join(stateHome, identity.id),
-      policy, embed: null, ephemeral: true,
-    }, {
-      spawn: (file, args, options) => {
-        child = fork(file, args, controlledController
-          ? { ...options, execArgv: ["--import", pathToFileURL(controllerPreload).href] } : options)
-        return child
-      },
-    })
-    const exited = new Promise((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) resolve()
-      else child.once("exit", resolve)
-    })
-    assert.notEqual(controller.owner.pid, process.pid, "controller work must not share the MCP event loop")
-    assert.equal(controller.owner.pid, child.pid)
-    controllers.push({ controller, child, exited, identity, endpoint })
-    endpoints.push(endpoint)
-    connectedRoots.push(deskRoot)
-    const call = (method, params = {}, timeoutMs = 2000, signal) => request({
-      endpoint, identity, method, params: { ...params, token: controller.owner.token }, timeoutMs, signal,
-    })
-    assert.equal((await call("handshake")).accepted, true)
-    // The same request budgets as the production client (controller-client.js
-    // createClient): a durable journal write, convergence and the event fence
-    // wait without a deadline, and markUncertain exists for the recording
-    // failure path.
-    return {
-      accepted: true, identity,
-      status: (timeoutMs = 2000) => call("status", {}, timeoutMs),
-      beginConvergence: () => call("beginConvergence", {}, null),
-      barrier: (params) => call("barrier", params, params?.wait ? null : 2000),
-      recordChange: (change) => call("recordChange", typeof change === "string" ? { path: change } : change, null),
-      markUncertain: (reason) => call("markUncertain", { reason }),
-      fenceEvents: ({ signal } = {}) => call("fenceEvents", {}, null, signal),
-      close: () => controller.close(),
-    }
+  // The session's real search engine, recorded so the test can tell which desk each admission connected.
+  const connector = async (options) => {
+    const engine = await server.connectOrStartController(options)
+    controllers.push(engine)
+    connectedRoots.push(options.deskRoot)
+    return engine
   }
   const handle = await main({
     argv: [...(explicit ? ["--root", a] : []), ...(sessionRoot ? ["--host-session-root", a] : []), ...(person ? ["--person", person] : [])],
@@ -240,16 +157,7 @@ JSON.stringify = function(...args) {
     assert.equal(handle.admission.running, false)
     input.end()
     await handle.closed
-    for (const { controller, exited, identity, endpoint } of controllers) {
-      await controller.close()
-      await exited
-      await assert.rejects(request({
-        endpoint, identity, method: "handshake", params: { token: controller.owner.token }, timeoutMs: 2000,
-      }), "the exact controller server must be closed after its process exits")
-    }
-    assert.ok(controllers.every(({ child }) => child.exitCode !== null || child.signalCode !== null))
-    const { existsSync } = await import("node:fs")
-    if (process.platform !== "win32") assert.ok(endpoints.every((endpoint) => !existsSync(endpoint)))
+    for (const engine of controllers) await engine.close()
   })
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "late-context-fixture", version: "1" } })
   await rpc("tools/list", {})
@@ -293,8 +201,6 @@ JSON.stringify = function(...args) {
       await handle.admission.idle({ waitMs: 15000 })
       hold = true
     },
-    armSlowController: () => writeFileSync(controllerArm, "arm"),
-    controllerBlock,
     waitHeld: async () => {
       const deadline = Date.now() + 15000
       while (!held && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
@@ -312,69 +218,6 @@ JSON.stringify = function(...args) {
     clearHold: () => { hold = false },
   }
 }
-
-test("a slow completed controller response cannot monopolize the MCP status event loop", async (t) => {
-  const f = await fixture(t, { controlledController: true })
-  f.associate(f.b)
-  assertWritten(await f.call("task_update", update))
-  const convergenceDeadline = Date.now() + 15000
-  let completed
-  do {
-    completed = await f.status()
-    assert.equal(completed.root.path, f.b)
-    if (completed.readiness?.detail?.convergence?.status === "succeeded") break
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  } while (Date.now() < convergenceDeadline)
-  assert.equal(completed.readiness.detail.convergence.status, "succeeded",
-    `the controlled stall must occur after actual convergence has completed: ${JSON.stringify(completed.readiness.detail.convergence)}`)
-  const stringify = JSON.stringify
-  let blocked = false
-  let blockedMs = null
-  t.mock.method(JSON, "stringify", function(...args) {
-    const stack = new Error().stack
-    if (!blocked && stack.includes("handleLine") && stack.includes("controller-server.js") &&
-        args[0]?.result?.convergence?.status === "succeeded") {
-      blocked = true
-      const at = Date.now()
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
-      blockedMs = Date.now() - at
-    }
-    return stringify.apply(this, args)
-  })
-  f.armSlowController()
-  const started = Date.now()
-  let timerMs
-  const timer = new Promise((resolve) => setTimeout(() => { timerMs = Date.now() - started; resolve() }, 25))
-  const status = await f.status()
-  const mcpStatusMs = Date.now() - started
-  await timer
-  assert.equal(status.root.path, f.b)
-  const deadline = Date.now() + 5000
-  while (!existsSync(f.controllerBlock) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
-  const entered = JSON.parse(readFileSync(f.controllerBlock, "utf8"))
-  assert.equal(entered.finished, null, "control messages must be measured while the controller seam is actually busy")
-  const busyStarted = Date.now()
-  let busyTimerMs
-  await Promise.all([
-    f.rpc("ping", {}), f.rpc("tools/list", {}),
-    new Promise((resolve) => setTimeout(() => { busyTimerMs = Date.now() - busyStarted; resolve() }, 25)),
-  ])
-  const busyControlMs = Date.now() - busyStarted
-  assert.ok(busyTimerMs < 200)
-  assert.ok(busyControlMs < 200, "ping and tools/list must retain their cap while controller serialization blocks")
-  while (JSON.parse(readFileSync(f.controllerBlock, "utf8")).finished === null &&
-      Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
-  const controller = JSON.parse(readFileSync(f.controllerBlock, "utf8"))
-  assert.notEqual(controller.pid, process.pid)
-  assert.ok(controller.finished - controller.started >= 350, "the real completed controller response must hit the controlled sync seam")
-  assert.equal(blocked, false, "controller serialization must never run in the MCP process")
-  assert.equal(blockedMs, null)
-  assert.ok(mcpStatusMs < 200)
-  assert.ok(timerMs < 200, "the MCP timer must remain responsive while controller serialization blocks")
-  t.diagnostic(JSON.stringify({ controllerBlockMs: controller.finished - controller.started,
-    mcpStatusMs, timerMs, busyTimerMs, busyControlMs, controllerPid: controller.pid,
-    mcpPid: process.pid, capMs: 200 }))
-})
 
 test("actual protocol reconciles ready fallback A to late saved B before mutation and clears task focus", async (t) => {
   const f = await fixture(t)

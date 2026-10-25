@@ -5,7 +5,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { INDEX_WRITER_KEY, indexWriterRecord } from "./index-writer.js"
 
 // Each commit adds a generation row holding the whole document list, and builds sharing a desk commit often. Older rows are kept only so a compaction that is still running can find the generation it started from.
-export const RETAINED_LEXICAL_GENERATIONS = 8
+const RETAINED_LEXICAL_GENERATIONS = 8
 
 // Mirrors the identities committed by the canonical indexer, not the event cursor.
 export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "desk-lexical-required-v1" }) {
@@ -17,10 +17,6 @@ export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "de
     tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
     policy_identity: policyIdentity,
   }
-}
-
-export function matchesLexicalGenerationIdentity(stored, expected) {
-  return Object.entries(expected).every(([key, value]) => stored?.[key] === value)
 }
 
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
@@ -76,7 +72,7 @@ export function commitLexicalGeneration({ db, documents, eventCursor = null, ide
 }
 
 // What a generation indexes: its documents (path and content hash) and the identities that decide how they were chunked and embedded. Two generations with the same content index the same desk the same way, whichever controller committed them, so either one serves the same answers.
-export function generationContent(documents, identities) {
+function generationContent(documents, identities) {
   const docs = documents.map((doc) => [doc.path, doc.hash]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   const embeddingSpec = identities.embedding_spec
   return `sha256:${createHash("sha256").update(stableStringify({

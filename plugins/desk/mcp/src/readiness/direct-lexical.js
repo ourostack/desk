@@ -6,7 +6,7 @@ import { indexedSearch, indexedTimeline } from "../tools/search.js"
 import { resolveEnsureIndexOptions } from "../server-helpers.js"
 import { expectedLexicalGenerationIdentity } from "./generations.js"
 
-export async function loadCurrentTombstoneLedger({ deskRoot, signal } = {}) {
+async function loadCurrentTombstoneLedger({ deskRoot, signal } = {}) {
   signal?.throwIfAborted()
   const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
   const ledger = await loadTombstoneLedger(tombstones)
