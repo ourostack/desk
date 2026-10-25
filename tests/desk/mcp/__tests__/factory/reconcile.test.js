@@ -18,7 +18,7 @@ import { keyedJobId, publishedFileName, serializePublished, toPublished } from "
 import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/reconcile-reasons.js"
 import { reconcile as reconcileOnce } from "../../../../../plugins/desk/mcp/src/factory/reconcile.js"
 import { main, runReconcileCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
-import { SENTINEL, STORE, scratch } from "./_session_helpers.js"
+import { SENTINEL, STORE, recent, scratch } from "./_session_helpers.js"
 import { NO_SHEBANG_SCRIPTS } from "../_platform.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
@@ -124,11 +124,12 @@ async function readConsent(env) {
   return read(env)
 }
 
-async function writeMarker(root, { name, host, id, desk, logPath, store, deskRoot = desk, endedAt = "2026-09-25T09:30:00.000Z", routing = true }) {
+// `updatedAt` is recent by default because a marker over 30 days old by the real clock says nothing about its route.
+async function writeMarker(root, { name, host, id, desk, logPath, store, deskRoot = desk, endedAt = "2026-09-25T09:30:00.000Z", updatedAt = recent(), routing = true }) {
   await mkdir(path.join(root, "markers"), { recursive: true })
   await writeFile(path.join(root, "markers", name), JSON.stringify({
     schema_version: 1, host, session_id: id, log_path: logPath, cwd: desk, desk_root: deskRoot, end_reason: null,
-    ended_at: endedAt, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: "2026-09-25T09:30:00.000Z",
+    ended_at: endedAt, plugins: [{ name: "desk", version: "1.0.0" }], updated_at: updatedAt,
     ...(routing ? { routing: { store, source: "default", warnings: [] } } : {}),
   }))
 }
@@ -656,7 +657,8 @@ test("a task with no bound session is always not_bound; the desk's unbound marke
   await marker(2, STORE, path.join(desk, "..", "missing.jsonl"))
   await marker(3, "acme/unconsented")
   await marker(4, STORE, path.join(desk, "..", "also-missing.jsonl"))
-  await writeMarker(root, { name: `claude-code-${sessionId(5)}.json`, host: "claude-code", id: sessionId(5), desk, logPath: path.join(desk, "..", "open.jsonl"), store: STORE, endedAt: null })
+  // An open session is placed in the window by its last update.
+  await writeMarker(root, { name: `claude-code-${sessionId(5)}.json`, host: "claude-code", id: sessionId(5), desk, logPath: path.join(desk, "..", "open.jsonl"), store: STORE, endedAt: null, updatedAt: "2026-09-25T09:30:00.000Z" })
   // A marker's file name must be its own session's.
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(6)}.json`), readFileSync(path.join(root, "markers", `claude-code-${sessionId(4)}.json`)))
   // Markers outside the window do not count: one from after the window, one from before it, and one exactly at its end.
