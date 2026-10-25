@@ -198,7 +198,7 @@ exports.program=async () => {
     execute: async (node, args, opts) => {
       // Coverage may inject its own preload after this product boundary.
       assert.equal(opts.env.NODE_OPTIONS, undefined, "private runner must not inherit caller preloads")
-      const result = await exec(node, [...resourceImports(),"--import", processPreload,"--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
+      const result = await exec(node, [...resourceImports(),"--import", pathToFileURL(processPreload).href,"--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
         .catch(error => {
           const payload = JSON.parse(error.stdout)
           throw Object.assign(Error(payload.message), { code: payload.code })
