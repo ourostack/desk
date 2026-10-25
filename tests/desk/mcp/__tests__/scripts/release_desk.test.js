@@ -84,13 +84,43 @@ test("release policy follows the current line, explicitly promotes to RC, and re
     ["3.2.0-alpha.333", "rc", "3.2.0-rc.1"],
     ["3.2.0-rc.1", undefined, "3.2.0-rc.2"],
     ["3.2.0-rc.9", "rc", "3.2.0-rc.10"],
+    ["3.2.0-alpha.355", "stable", "3.2.0"],
+    ["3.2.0-rc.4", "stable", "3.2.0"],
+    ["3.2.0", undefined, "3.2.1"],
+    ["3.2.0", "auto", "3.2.1"],
+    ["3.2.9", "stable", "3.2.10"],
+    ["3.2.0", "rc", "3.2.1-rc.1"],
   ]) assert.equal(release.nextReleaseVersion(version, stage), want)
   for (const stage of ["alpha", "ga", "", null]) {
     assert.throws(() => release.nextReleaseVersion("3.2.0-rc.1", stage), /stage/u)
   }
-  for (const version of ["invalid", "3.2.0", "3.2.0-beta.1", "3.2.0-rc.01", "03.2.0-alpha.1", "3.2.0-alpha.1+build"]) {
+  for (const version of ["invalid", "3.2.0-beta.1", "3.2.0-rc.01", "03.2.0-alpha.1", "3.2.0-alpha.1+build"]) {
     assert.throws(() => release.nextReleaseVersion(version, "rc"), /version/u)
   }
+})
+
+test("stable releases the plain version from an alpha or RC with or without fragments, and auto after it moves to the next patch", (t) => {
+  for (const from of ["3.2.0-alpha.333", "3.2.0-rc.2"]) {
+    const root = fixture(t, from)
+    const result = release.releaseDesk({ root, date: "2026-10-25", stage: "stable" })
+    assert.deepEqual(result, { released: true, from, to: "3.2.0", fragments: [] })
+    for (const file of release.DESK_VERSION_FILES) {
+      const text = readFileSync(path.join(root, file), "utf8")
+      assert.doesNotMatch(text, release.versionToken(from), file)
+      assert.match(text, release.versionToken("3.2.0"), file)
+    }
+    assert.match(readFileSync(path.join(root, release.CHANGELOG), "utf8"), /^# desk plugin — changelog\n\n## 3\.2\.0 — 2026-10-25\n\n\S/u)
+    assert.deepEqual(release.releaseDesk({ root, date: "2026-10-25", stage: "stable" }), { released: false, fragments: [] })
+    assert.deepEqual(release.releaseDesk({ root, date: "2026-10-25" }), { released: false, fragments: [] })
+    fragment(root, "after-stable.md", "A fix after stable.\n")
+    assert.deepEqual(release.releaseDesk({ root, date: "2026-10-26" }), {
+      released: true, from: "3.2.0", to: "3.2.1", fragments: [`${fragmentDir}/after-stable.md`],
+    })
+    assert.match(readFileSync(path.join(root, release.CHANGELOG), "utf8"), /^# desk plugin — changelog\n\n## 3\.2\.1 — 2026-10-26\n\nA fix after stable\./u)
+  }
+  const root = fixture(t, "3.2.0-rc.2")
+  fragment(root, "last-fix.md", "A last fix.\n")
+  assert.equal(release.releaseDesk({ root, date: "2026-10-25", stage: "stable" }).to, "3.2.0")
 })
 
 test("empty alpha promotion couples every Desk surface, leaves other plugins and MCP alone, and repeated RC dispatch is inert", (t) => {
@@ -125,6 +155,7 @@ test("RC promotion refuses malformed or stale surfaces and invalid stages withou
     [() => {}, "alpha", /stage/u],
     [(root) => writeFileSync(path.join(root, "plugins/desk/.claude-plugin/plugin.json"), '{"version":"invalid"}'), "rc", /version/u],
     [(root) => writeFileSync(path.join(root, "plugins/desk/agency.json"), "{}\n"), "rc", /stale/u],
+    [(root) => writeFileSync(path.join(root, "plugins/desk/agency.json"), "{}\n"), "stable", /stale/u],
     [(root) => writeFileSync(path.join(root, "plugins/desk/agency.json"), '{"version":"3.2.0-alpha.333"'), "rc", /JSON/u],
     [(root) => writeFileSync(path.join(root, release.CHANGELOG), "# Broken\n"), "rc", /title/u],
   ]) {
@@ -134,9 +165,9 @@ test("RC promotion refuses malformed or stale surfaces and invalid stages withou
     assert.throws(() => release.releaseDesk({ root, date: "2026-10-20", stage }), pattern)
     assert.deepEqual(snapshot(root), before)
   }
-  const root = fixture(t, "3.2.0")
+  const root = fixture(t, "3.2.0-beta.1")
   const before = snapshot(root)
-  assert.throws(() => release.releaseDesk({ root, date: "2026-10-20" }), /version/u)
+  assert.throws(() => release.releaseDesk({ root, date: "2026-10-20", stage: "stable" }), /version/u)
   assert.deepEqual(snapshot(root), before)
 })
 
@@ -281,7 +312,7 @@ test("manual release stage is a choice defaulting to auto and survives both conc
   const input = { ...workflow.on.workflow_dispatch.inputs.stage }
   delete input.description
   assert.deepEqual(input, {
-    type: "choice", options: ["auto", "rc"], default: "auto", required: true,
+    type: "choice", options: ["auto", "rc", "stable"], default: "auto", required: true,
   })
   const build = stepNamed(workflow.jobs.build, "Build and check the release")
   const push = stepNamed(workflow.jobs.push, "Verify and push the release")
@@ -291,7 +322,7 @@ test("manual release stage is a choice defaulting to auto and survives both conc
   const handoffs = push.run.split("\n").filter((line) => line.includes("gh workflow run desk-release.yml"))
   assert.equal(handoffs.length, 2)
   for (const line of handoffs) {
-    for (const stage of ["auto", "rc"]) {
+    for (const stage of ["auto", "rc", "stable"]) {
       const result = spawnSync("bash", ["-c", `gh() { printf '%s\\n' "$@"; }\n${line}`], {
         encoding: "utf8", env: { ...bareEnv, RELEASE_STAGE: stage, GITHUB_REPOSITORY: "fixture/desk" },
       })
@@ -530,6 +561,26 @@ test("actual workflow catch-up marks RC-carried PRs with their first bot release
   assert.doesNotMatch(repeated.calls, /--method POST repos\/o\/r\/issues\/2[01]\/comments/u)
   for (const number of [20, 21]) {
     assert.ok(repeated.calls.includes(`api --method POST repos/o/r/issues/${number}/labels --raw-field labels[]=released`), repeated.calls)
+  }
+})
+
+test("marking accepts a plain stable version subject and still rejects lookalikes", () => {
+  const mark = {
+    history: [
+      ["dev", "stable carried (#30)"],
+      ["spoof", "Release Desk 3.2.0"],
+      ["bot", "Release Desk 3.2.0 trailing text"],
+      ["bot", "Release Desk 3.2.0"],
+      ["dev", "after stable (#31)"],
+      ["bot", "Release Desk 3.2.1"],
+    ],
+    unlabeled: [[30, "stable carried (#30)"], [31, "after stable (#31)"]],
+  }
+  const { result, calls } = markingRun({ mark })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const lines = calls.trim().split("\n")
+  for (const [number, version] of [[30, "3.2.0"], [31, "3.2.1"]]) {
+    assert.ok(lines.includes(`api --method POST repos/o/r/issues/${number}/comments --field body=Released in Desk ${version}`), calls)
   }
 })
 
