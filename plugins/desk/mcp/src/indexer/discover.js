@@ -170,7 +170,7 @@ async function describeCached(deskRoot, abs, rel, signal, cache) {
 }
 
 /** After a full `discover` with `cache`: the same list, rereading only the desk-relative `.md` paths in `changed`. */
-export async function rediscover(deskRoot, { cache, changed, signal }) {
+async function rediscover(deskRoot, { cache, changed, signal }) {
   for (const rel of changed) {
     const desc = inScope(rel, cache.rules) ? await describeCached(deskRoot, path.join(deskRoot, ...rel.split("/")), rel, signal, cache.docs) : null
     if (desc === null) cache.docs.delete(rel)
