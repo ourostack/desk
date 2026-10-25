@@ -70,7 +70,7 @@ test("once embedded, recall and similar rank by meaning, and status says search 
   const recall = await engine.semantic({ kind: "recall", topic: "automobile", limit: 2 })
   assert.equal(recall.search_mode, "meaning")
   assert.deepEqual(recall.results.map((r) => r.path).sort(), ["cars/task-a/task.md", "cars/task-c/task.md"])
-  assert.ok(recall.results.every((r) => r.match === "meaning" && r.score > 0.9))
+  assert.ok(recall.results.every((r) => ["meaning", "meaning_and_exact_words"].includes(r.match) && r.score > 0))
   // Equal scores are ordered by path; the archive is searched by default and left out with scope "active".
   const garden = await engine.semantic({ kind: "recall", topic: "flowers", limit: 99 })
   assert.deepEqual(garden.results.slice(0, 2).map((r) => r.path), ["garden/_archive/old/task.md", "garden/task-d/task.md"])
@@ -295,4 +295,22 @@ test("starting search on a Git desk keeps its state folder out of Git", async (t
   await engine.settled()
   const status = spawnSync("git", ["-C", deskRoot, "status", "--short", "--untracked-files=all"], { encoding: "utf8" }).stdout
   assert.doesNotMatch(status, /\.state/u)
+})
+
+test("recall fuses meaning and exact words, so a runbook in an iteration folder that matches both comes first", async (t) => {
+  // The case from a real desk: meaning alone ranked other task cards above the runbook the query names. The fixture
+  // model knows none of the query's words, so meaning ties every document and orders them by path, the runbook second.
+  const runbook = "desk-plugin/eng-workflow-v2/desk/2026-10-22-out-of-alpha/promotion-runbook.md"
+  const deskRoot = await desk({
+    "agent-capacity/claude-swap-upkeep/task.md": "# Swap upkeep\n\nCar engine vehicle.\n",
+    "friends/friends-trust-layer-hardened/task.md": "# Trust layer\n\nKitchen soup promotion.\n",
+    "sanctuary-server/butler-one-command-upgrade/task.md": "# Butler upgrade\n\nGarden plants soil.\n",
+    [runbook]: "# Out of alpha promotion runbook\n\nThe steps that promote Desk out of alpha.\n",
+  })
+  const engine = engineFor(t, deskRoot, countingModel())
+  await engine.reindex()
+  await engine.settled()
+  const recall = await engine.semantic({ kind: "recall", topic: "out of alpha promotion runbook", limit: 3 })
+  assert.equal(recall.search_mode, "meaning")
+  assert.deepEqual(recall.results[0], { ...recall.results[0], path: runbook, match: "meaning_and_exact_words" })
 })

@@ -40,6 +40,24 @@ function tidyRepository(root) {
   })
 }
 
+// Reciprocal rank fusion (Cormack et al., 2009) with its usual constant.
+const FUSION_K = 60
+
+/** Merges ranked result lists by path: each list adds 1 / (FUSION_K + rank) to a document's score. */
+function fuseRankings(lists, limit) {
+  const fused = new Map()
+  for (const list of lists) {
+    list.forEach((result, rank) => {
+      const entry = fused.get(result.path)
+      const add = 1 / (FUSION_K + rank + 1)
+      if (entry === undefined) fused.set(result.path, { ...result, score: add })
+      else fused.set(result.path, { ...entry, score: entry.score + add, match: "meaning_and_exact_words" })
+    })
+  }
+  return [...fused.values()].map((result) => ({ ...result, score: Number(result.score.toFixed(6)) }))
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit)
+}
+
 const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
 // A model download that failed is tried again at the next desk change after this long.
@@ -264,15 +282,12 @@ export function createSearchEngine(options) {
     if (model === null) {
       return { topic, results: await exactWords(topic, request.scope, limit), search_mode: "exact_words", note: SEARCH_WORDING.recallGettingReady }
     }
-    const meaning = rankByMeaning(model.embed(topic), sections(), request.scope, limit)
+    // Both rankings, fused by reciprocal rank: a document strong on meaning and on exact words rises above one strong on
+    // either alone, and exact words also cover sections that have no vector yet.
+    const pool = Math.max(limit * 5, 50)
+    const results = fuseRankings([rankByMeaning(model.embed(topic), sections(), request.scope, pool), await exactWords(topic, request.scope, pool)], limit)
     const { pending, total } = sectionCounts()
-    if (pending === 0) return { topic, results: meaning, search_mode: "meaning" }
-    // Some sections have no vector yet: exact-word matches cover them, sharing the list with the best meaning matches.
-    const half = Math.ceil(limit / 2)
-    const seen = new Set()
-    const results = [...meaning.slice(0, half), ...await exactWords(topic, request.scope, limit), ...meaning.slice(half)]
-      .filter((result) => !seen.has(result.path) && seen.add(result.path))
-      .slice(0, limit)
+    if (pending === 0) return { topic, results, search_mode: "meaning" }
     return { topic, results, search_mode: "meaning_and_exact_words", note: SEARCH_WORDING.recallPreparing(pending, total) }
   }
 

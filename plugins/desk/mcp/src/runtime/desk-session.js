@@ -1067,6 +1067,10 @@ export function createDeskSession(deps) {
         : { ...payload, status_detail_from: detailFrom,
           status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
     }
+    // Search status comes straight from the session's search engine, which answers at once. The runtime status run
+    // also carries it, but on a large desk that run rarely finishes within this call's budget.
+    const engine = context.admission?.controller
+    if (typeof engine?.searchStatus === "function") payload = { ...payload, search: engine.searchStatus() }
     const full = withAdmission(payload, stamped ?? statusSnapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     return jsonResult(input?.detail === true ? full : compactStatus(full))
