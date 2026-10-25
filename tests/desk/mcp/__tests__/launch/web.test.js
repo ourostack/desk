@@ -121,7 +121,7 @@ test("copyProfile copies the last-used profile and Local State, skipping caches,
   const source = path.join(root, "src")
   makeProfile(source)
   const dest = path.join(root, "dest")
-  assert.equal(web.copyProfile(source, dest), "Profile 1")
+  assert.deepEqual(web.copyProfile(source, dest), { name: "Profile 1", skipped: [] })
   assert.ok(fs.existsSync(path.join(dest, "Local State")))
   assert.equal(fs.readFileSync(path.join(dest, "Profile 1", "Network", "Cookies"), "utf8"), "cookies")
   for (const skipped of ["Cache", "Sessions", "Extensions"]) assert.equal(fs.existsSync(path.join(dest, "Profile 1", skipped)), false, skipped)
@@ -133,7 +133,7 @@ test("copyProfile falls back to Default for a missing, unsafe or malformed last_
     const source = path.join(root, `src${index}`)
     fs.mkdirSync(path.join(source, "Default"), { recursive: true })
     fs.writeFileSync(path.join(source, "Local State"), JSON.stringify(localState))
-    assert.equal(web.copyProfile(source, path.join(root, `dest${index}`)), "Default")
+    assert.equal(web.copyProfile(source, path.join(root, `dest${index}`)).name, "Default")
   }
 })
 
@@ -189,6 +189,43 @@ test("mine opens a private copy of the person's profile and deletes it on close"
   assert.equal(fs.existsSync(path.join(profiles, "edge", "Profile 1", "Cache")), true, "the source profile is untouched")
   await controller.call("browser_context", { action: "close", contextId })
   assert.equal(fs.existsSync(dir), false)
+})
+
+test("mine skips files the running browser holds locked, and says when the cookies stayed behind", async () => {
+  const chromeExe = isWindows ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "/opt/google/chrome/chrome"
+  const onlyChrome = (file) => file === chromeExe || file.endsWith(path.join("Google Chrome.app", "Contents", "MacOS", "Google Chrome")) || /Google[\\/]Chrome[\\/]Application[\\/]chrome\.exe$/u.test(file)
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  makeProfile(path.join(profiles, "chrome"))
+  fs.writeFileSync(path.join(profiles, "edge", "Profile 1", "Preferences.lock"), "x")
+  const original = fs.copyFileSync
+  let locked = /(?:Cookies|Preferences\.lock)$/u
+  fs.copyFileSync = (from, ...rest) => {
+    if (locked.test(from)) throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" })
+    return original(from, ...rest)
+  }
+  try {
+    const edge = web.createController(options)
+    const opened = json(await edge.call("browser_context", { action: "open", browser: "mine" }))
+    assert.equal(opened.signIns, "Edge is open, so only your Microsoft work sign-in carries over; close Edge to use all your sign-ins.")
+    const profile = path.join(tmp, `desk-browser-${opened.contextId}`, "profile", "Profile 1")
+    assert.equal(fs.existsSync(path.join(profile, "Network", "Cookies")), false)
+    assert.equal(fs.existsSync(path.join(profile, "Preferences")), true)
+    await edge.closeAll()
+
+    const chrome = json(await web.createController({ ...options, exists: onlyChrome }).call("browser_context", { action: "open", browser: "mine" }))
+    assert.equal(chrome.app, "Google Chrome")
+    assert.equal(chrome.signIns, "Chrome is open, so some of your sign-ins did not carry over; close Chrome to use all your sign-ins.")
+
+    locked = /Preferences\.lock$/u
+    const other = web.createController(options)
+    const unlocked = json(await other.call("browser_context", { action: "open", browser: "mine" }))
+    assert.equal(unlocked.signIns, undefined, "only a missing cookie file changes the result")
+    await other.closeAll()
+  } finally {
+    fs.copyFileSync = original
+  }
+  for (const name of fs.readdirSync(tmp)) fs.rmSync(path.join(tmp, name), { recursive: true, force: true })
 })
 
 test("mine gives a plain message when there is no profile, or it cannot be copied", async () => {

@@ -117,6 +117,7 @@ function chooseBrowser(s, mine) {
 }
 
 // Copy the person's last-used profile, and Local State, which holds the key their sign-ins are encrypted with.
+// A file the running browser holds locked (Windows does this to Cookies and a few others) is skipped, not fatal; the result lists what was skipped.
 function copyProfile(source, dest) {
   var name = "Default";
   try {
@@ -127,13 +128,22 @@ function copyProfile(source, dest) {
   }
   fs.mkdirSync(dest, { mode: 448 });
   fs.copyFileSync(path.join(source, "Local State"), path.join(dest, "Local State"));
-  fs.cpSync(path.join(source, name), path.join(dest, name), {
-    recursive: true,
-    filter: function (file) {
-      return SKIP.indexOf(path.basename(file)) === -1;
-    }
-  });
-  return name;
+  var skipped = [];
+  function copy(from, to, relative) {
+    fs.mkdirSync(to);
+    fs.readdirSync(from, { withFileTypes: true }).forEach(function (entry) {
+      if (SKIP.indexOf(entry.name) !== -1) return;
+      var inner = relative ? relative + "/" + entry.name : entry.name;
+      if (entry.isDirectory()) return copy(path.join(from, entry.name), path.join(to, entry.name), inner);
+      try {
+        fs.copyFileSync(path.join(from, entry.name), path.join(to, entry.name));
+      } catch (error) {
+        skipped.push(inner);
+      }
+    });
+  }
+  copy(path.join(source, name), path.join(dest, name), "");
+  return { name: name, skipped: skipped };
 }
 
 function launchConfig(kind, browser, profileDir, profileName, outputDir) {
@@ -221,6 +231,7 @@ function open(s, kind) {
   var id = crypto.randomUUID();
   var dir = contextDir(s, id);
   var outputDir = path.join(s.stateRoot, "output", id);
+  var cookiesLeft = false;
   return ensurePlaywright(s).then(function () {
     fs.mkdirSync(dir, { mode: 448 });
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind }) + "\n");
@@ -229,7 +240,9 @@ function open(s, kind) {
     var profileName = null;
     if (kind === "mine") {
       try {
-        profileName = copyProfile(browser.profileRoot, profileDir);
+        var copied = copyProfile(browser.profileRoot, profileDir);
+        profileName = copied.name;
+        cookiesLeft = copied.skipped.indexOf("Network/Cookies") !== -1 || copied.skipped.indexOf("Cookies") !== -1;
       } catch (error) {
         throw plain("Desk could not copy your " + short + " profile, probably because " + short + " is using it. Close " + short + ", or use a fresh browser (browser: \"fresh\").");
       }
@@ -240,10 +253,16 @@ function open(s, kind) {
     return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
     if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
-    return {
+    var opened = {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
       note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done."
     };
+    if (cookiesLeft) {
+      opened.signIns = browser.channel === "msedge"
+        ? "Edge is open, so only your Microsoft work sign-in carries over; close Edge to use all your sign-ins."
+        : "Chrome is open, so some of your sign-ins did not carry over; close Chrome to use all your sign-ins.";
+    }
+    return opened;
   }).catch(function (error) {
     return close(s, id).then(function () {
       throw error;

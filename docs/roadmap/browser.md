@@ -11,3 +11,7 @@ On October 25, 2026 Desk's browser became two choices, `fresh` and `mine`, run h
 - **Recovery loops and the launcher proxy:** a session could keep working through a browser crash or a slow first install without the agent opening a new browser.
 - **Private contexts that survive a Desk restart:** an agent could reopen the same browser after its MCP server restarts instead of opening a new one.
 - **Tab groups named after each agent:** the person could see which agent owns which tabs in their own browser.
+
+## Known gap
+
+- **All sign-ins in `mine` on Windows while Edge is open:** Windows locks Edge's cookie file and a few others while Edge runs, so Desk copies everything else and skips them. The Microsoft work sign-in still carries over through the Windows account, but ordinary site sign-ins do not, and `browser_context` says so. Closing Edge first carries them all. Reading the locked files would need an administrator-only snapshot or touching the running Edge, and Desk does neither.

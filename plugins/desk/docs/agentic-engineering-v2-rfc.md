@@ -182,7 +182,7 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 - A kaizen verdict on live data: the first card needs at least 6 independent groups of finished jobs on each side of its countermeasure's release before the build can confirm it or not.
 - Draining recorded friction into kaizen cards: [#54](https://github.com/ourostack/desk/pull/54) shipped the filing step and made `curator` the kaizen worker; the curator's first pass over the desks' friction has not run yet.
 - A separate factory store for work done under a company overlay, and the admin session that manages it (section 4, “How the data flows”). Routing is built: a session that loads the overlay goes to the overlay's store and never to the public one ([#44](https://github.com/ourostack/desk/pull/44)). Until that store exists and the machine consents to it, such sessions are delivered nowhere.
-- A real-session check of `mine` on Windows while Edge is open: Edge may lock its cookie file, and Desk then answers "Close Edge, or use a fresh browser".
+- Every sign-in in `mine` on Windows while Edge is open: Windows locks Edge's cookie file, so Desk skips it and only the work sign-in carries over until Edge is closed.
 - A fresh install on Claude Code, from `SETUP.md` through a first `browser_context` open, recorded end to end on a clean profile. The browser's pieces are each proven (below), but that single run has not been recorded.
 
 **Next.** An evaluation by an engineer outside the team, then the maintainer's decision on promotion.
