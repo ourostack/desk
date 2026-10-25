@@ -35,7 +35,9 @@ if (verb === "sleep") setTimeout(() => {}, 10000)
 if (verb === "open" && mode.startsWith("daemon")) {
   const record = path.join(process.cwd(), "daemon.json")
   require("child_process").spawn(process.execPath, [process.env.FAKE_DAEMON_SOURCE, record], { detached: true, stdio: "ignore", windowsHide: true }).unref()
-  while (!fs.existsSync(record)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+  for (const begun = Date.now(); !fs.existsSync(record); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)) {
+    if (Date.now() - begun > 15000) { process.stderr.write("the fake daemon did not start\\n"); process.exit(1) }
+  }
   const { daemon } = JSON.parse(fs.readFileSync(record, "utf8"))
   if (mode === "daemon-open-fail") { process.stderr.write("Daemon pid=" + daemon + ": Daemon process exited with code 1\\n"); process.exit(1) }
   process.stdout.write("### Browser \`desk\` opened with pid " + daemon + ".\\n")
@@ -337,7 +339,7 @@ const running = (pid) => {
 
 const recorded = (tmp, contextId) => JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${contextId}`, "owner.json"), "utf8")).processes ?? []
 
-test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", async () => {
+test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", { timeout: 180000 }, async () => {
   const { options, tmp } = await setup({ mode: "daemon-leak" })
   const controller = web.createController({ ...options, exitWaitMs: 500 })
   const first = json(await controller.call("browser_context", { action: "open" })).contextId
@@ -357,7 +359,7 @@ test("close ends the browser and the CLI daemon the context started, even when t
   assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${second}`)), false)
 })
 
-test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", async () => {
+test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", { timeout: 180000 }, async () => {
   const { options, tmp } = await setup({ mode: "daemon" })
   let reads = 0
   const realTable = () => web.readProcessTable(process.platform, process.env)
@@ -381,7 +383,7 @@ test("close kills nothing when the CLI's close already ended the browser, and co
   assert.deepEqual([running(pids.daemon), running(pids.browser)], [false, false])
 })
 
-test("a daemon that failed to start is ended, and a PID that is already gone records nothing", async () => {
+test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000 }, async () => {
   const failed = await setup({ mode: "daemon-open-fail" })
   const controller = web.createController({ ...failed.options, exitWaitMs: 500 })
   const result = await controller.call("browser_context", { action: "open" })
@@ -393,7 +395,7 @@ test("a daemon that failed to start is ended, and a PID that is already gone rec
   assert.deepEqual(recorded(ghost.tmp, opened.contextId), [])
 })
 
-test("the process table is read with ps, or with PowerShell from the Windows folder, and an unreadable one is null", async () => {
+test("the process table is read with ps, or with PowerShell from the Windows folder, and an unreadable one is null", { timeout: 120000 }, async (t) => {
   assert.deepEqual(web.processTableCommand("darwin", {}), ["ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="]])
   assert.equal(web.processTableCommand("win32", { SystemRoot: "D:\\Win" })[0], "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
   assert.equal(web.processTableCommand("win32", { windir: "E:\\W" })[0], "E:\\W\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
@@ -403,8 +405,19 @@ test("the process table is read with ps, or with PowerShell from the Windows fol
     { pid: 12, ppid: 1, start: "Sun Oct 25 16:28:30 2026" }, { pid: 40, ppid: 12, start: "133000000000000000" },
   ])
   assert.equal(await web.readProcessTable("win32", { SystemRoot: path.join(os.tmpdir(), "desk-no-windows-here") }), null)
+  const begun = Date.now()
   const table = await web.readProcessTable(process.platform, process.env)
+  t.diagnostic(`process table: ${table?.length} processes in ${Date.now() - begun} ms`)
   assert.ok(table.some((row) => row.pid === process.pid && row.ppid === process.ppid))
+})
+
+test("a process counts as a child only if it started no earlier than its parent, since Windows reuses a dead parent's PID", () => {
+  const dates = [{ pid: 10, ppid: 1, start: "Sun Oct 25 16:00:00 2026" }, { pid: 11, ppid: 10, start: "Sun Oct 25 16:00:05 2026" },
+    { pid: 12, ppid: 10, start: "Sun Oct 25 15:00:00 2026" }, { pid: 13, ppid: 11, start: "Sun Oct 25 16:01:00 2026" }]
+  assert.deepEqual(web.liveTree(dates, [{ pid: 10, start: "Sun Oct 25 16:00:00 2026" }]).map((entry) => entry.pid), [10, 11, 13])
+  assert.deepEqual(web.liveTree(dates, [{ pid: 10, start: "Sun Oct 25 15:59:59 2026" }]), [], "a reused PID is not the recorded process")
+  const filetimes = [{ pid: 20, ppid: 4, start: "134062272000000000" }, { pid: 21, ppid: 20, start: "134062272010000000" }, { pid: 22, ppid: 20, start: "134062271990000000" }]
+  assert.deepEqual(web.liveTree(filetimes, [{ pid: 20, start: "134062272000000000" }]).map((entry) => entry.pid), [20, 21])
 })
 
 test("closing retries a folder the browser still holds, and reports one that stays locked", async () => {

@@ -331,21 +331,29 @@ function parseProcessTable(text) {
 function readProcessTable(platform, env) {
   var command = processTableCommand(platform, env);
   return new Promise(function (resolve) {
-    childProcess.execFile(command[0], command[1], { timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" }, function (error, stdout) {
+    var child = childProcess.execFile(command[0], command[1], { timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" }, function (error, stdout) {
       resolve(error ? null : parseProcessTable(stdout));
     });
+    // PowerShell reads a piped stdin before it exits, so it is closed at once.
+    child.stdin.end();
   });
 }
 
-// The given processes that are still running as themselves, and everything they have started since.
+// Windows start times are file-time numbers, ps start times are dates.
+function startValue(start) {
+  return /^\d+$/.test(start) ? Number(start.slice(0, -4)) : Date.parse(start);
+}
+
+// The given processes that are still running as themselves, and everything they have started since. A child must have
+// started no earlier than its parent, because Windows keeps a parent PID after the parent exits and may reuse it.
 function liveTree(table, roots) {
   var live = table.filter(function (row) {
     return roots.some(function (root) { return root.pid === row.pid && root.start === row.start; });
   });
   for (var i = 0; i < live.length; i += 1) {
-    var parent = live[i].pid;
+    var parent = live[i];
     table.forEach(function (row) {
-      if (row.ppid === parent && live.indexOf(row) === -1) live.push(row);
+      if (row.ppid === parent.pid && live.indexOf(row) === -1 && startValue(row.start) >= startValue(parent.start)) live.push(row);
     });
   }
   return live.map(function (row) { return { pid: row.pid, start: row.start }; });
@@ -594,6 +602,7 @@ module.exports = {
   processTableCommand: processTableCommand,
   parseProcessTable: parseProcessTable,
   readProcessTable: readProcessTable,
+  liveTree: liveTree,
   createController: createController,
   serve: serve,
   run: run
