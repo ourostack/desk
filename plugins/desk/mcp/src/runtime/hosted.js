@@ -28,7 +28,6 @@ export const HOSTED_UNAVAILABLE = Object.freeze({
 // desk_doctor repairs that act on the machine Desk runs on. switch_state_branch is not here: it only switches the desk checkout back to its state branch, and that checkout is the operator's desk, which the hosted service holds on their behalf.
 export const HOSTED_UNAVAILABLE_REPAIRS = Object.freeze({
   prune_readiness_state: HOST_MACHINE,
-  reclaim_controller: HOST_MACHINE,
 })
 
 // Skills whose body needs a shell, git, gh or the plugin's own scripts: a hosted chat has none of them.

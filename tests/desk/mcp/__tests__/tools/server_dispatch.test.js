@@ -152,12 +152,10 @@ test("server.callTool routes desk_thread to the real implementation", async () =
     name: "desk_thread",
     input: { start_path: "nope/does/not/exist.md" },
   })
-  // No isError — without a readiness controller, desk_thread returns the
-  // structured fail-closed lexical capability diagnostic.
+  // No isError: before the session's search engine starts, desk_thread says search is starting.
   const body = parseResult(res)
   assert.equal(body.status, "error")
-  assert.equal(body.code, "required_capability_unavailable")
-  assert.equal(body.capability, "lexical")
+  assert.equal(body.code, "search_starting")
 })
 
 test("server.callTool rejects unknown tool names", async () => {

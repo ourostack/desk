@@ -4,18 +4,14 @@ import { test } from "node:test"
 import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
-import { mkdirSync } from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 
 // Keep legacy indexed ranking coverage separate from the alpha consumer contract.
 import { __searchInternalsForTests, desk_search as routedSearch, desk_timeline as routedTimeline, indexedSearch as desk_search, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
-import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
-import { getSemanticCoverage } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -25,81 +21,24 @@ import {
   writeFile,
 } from "./_search_helpers.js"
 
-async function createRoutedSemanticReadiness(t, root, { semanticCurrent = true, mode = "background" } = {}) {
-  const canonicalRoot = await fs.realpath(root)
-  const stateHome = path.join(canonicalRoot, "controller-state")
-  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
-  const controller = await connectOrStartController({
-    root: canonicalRoot,
-    stateHome,
-    ephemeral: true,
-    watcher: { fence: async () => ({ certain: true }) },
-    semanticContract: { mode, embedding_spec: mode === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC },
-    handlers: { async beginConvergence({ eventCursor }) {
-      const summary = await rebuildIndex(canonicalRoot, {
-        eventCursor,
-        embed: { fetch: makeEmbedFetch() },
-      })
-      const db = openDb(canonicalRoot)
-      try {
-        return {
-          summary,
-          semantic: {
-            ...getSemanticCoverage(db),
-            provenance_current: semanticCurrent,
-            query_embedding: semanticCurrent
-              ? { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } }
-              : {
-                  available: false,
-                  diagnostic: {
-                    model: ACTIVE_EMBEDDING_SPEC.model,
-                    reason: "semantic_unavailable",
-                    message: "semantic convergence is not current for the active generation",
-                  },
-                },
-          },
-        }
-      } finally {
-        closeDb(db)
-      }
-    } },
-  })
-  t.after(async () => controller.close())
-  await controller.beginConvergence()
-  return controller
+function engineFor(t, deskRoot, options = {}) {
+  const engine = createSearchEngine({ deskRoot, semantic: "unsupported", watch: () => ({ close() {} }), cleanup: () => ({ removed: false, bytes: 0 }), ...options })
+  t.after(() => engine.close())
+  return engine
 }
 
-test("search without a readiness controller reads files immediately without index or embedding work", async () => {
+test("before the search engine starts, search and timeline read the files and carry no meaning-search fields", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "immediatequartz")
-  let independentEmbeds = 0
-  const result = await routedSearch({
-    deskRoot: root, input: { query: "immediatequartz" },
-    opts: { embed: { fetch: async () => { independentEmbeds++; throw new Error("query must not embed") } } },
-  })
-  assert.equal(result.results[0].snippet, "immediatequartz")
-  assert.equal(result.search_mode, "lexical")
-  assert.equal(result.readiness_diagnostic.reason, "controller_unavailable")
-  assert.equal(independentEmbeds, 0)
-  await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
-})
-
-for (const [name, tool] of [["search", routedSearch], ["query timeline", routedTimeline]]) {
-  test(`routed lexical-only ${name} does not prescribe unobserved provider or index repair`, async () => {
-    const root = await mkTempDeskRoot()
-    await writeFile(root, "track/work/task.md", "immediatequartz")
-    const result = await tool({
-      deskRoot: root, input: { query: "immediatequartz" },
-    })
+  for (const tool of [routedSearch, routedTimeline]) {
+    const result = await tool({ deskRoot: root, input: { query: "immediatequartz" } })
     assert.equal(result.results[0].path, "track/work/task.md")
     assert.equal(result.search_mode, "lexical")
-    assert.equal(result.semantic_unavailable, true)
-    assert.equal(result.readiness_diagnostic.reason, "controller_unavailable")
-    assert.ok(result.semantic_diagnostic.message)
+    assert.equal(Object.hasOwn(result, "semantic_unavailable"), false)
     assert.equal(Object.hasOwn(result, "semantic_repair"), false)
-    await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
-  })
-}
+  }
+  await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
+})
 
 test("indexed search closes and propagates sqlite extension load failures", async (t) => {
   const root = await mkTempDeskRoot()
@@ -115,52 +54,18 @@ test("indexed search closes and propagates sqlite extension load failures", asyn
   )
 })
 
-test("routed semantic tools serve the current semantic snapshot", async (t) => {
-  const { desk_recall, desk_similar } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz rollout detail\n")
-  await writeFile(root, "track/other/task.md", "---\nstatus: processing\nschema_version: 1\n---\nrollout plan near quartz\n")
-  const readiness = await createRoutedSemanticReadiness(t, root)
-  const recall = await desk_recall({
-    deskRoot: root,
-    readiness,
-    input: { topic: "quartz rollout", limit: 1 },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
-  const similar = await desk_similar({
-    deskRoot: root,
-    readiness,
-    input: { path: "track/work/task.md", limit: 1 },
-  })
-  assert.equal(recall.results[0].path, "track/work/task.md")
-  assert.equal(similar.results[0].path, "track/other/task.md")
-})
-
-test("routed timeline serves hybrid query results and temporal no-query results", async (t) => {
+test("routed timeline reads the session search engine, with and without a query", async (t) => {
   const { desk_timeline } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const root = await mkTempDeskRoot()
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => { throw new Error("routed timeline must use the injected embedding fetch") }
-  t.after(() => { globalThis.fetch = originalFetch })
   await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
   await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
-  const readiness = await createRoutedSemanticReadiness(t, root)
-  const temporal = await desk_timeline({
-    deskRoot: root,
-    readiness,
-    input: { from: "2026-01-01" },
-  })
-  const hybrid = await desk_timeline({
-    deskRoot: root,
-    readiness,
-    input: { from: "2026-01-01", query: "quartz" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
+  const readiness = engineFor(t, root)
+  const temporal = await desk_timeline({ deskRoot: root, readiness, input: { from: "2026-01-01" } })
+  const query = await desk_timeline({ deskRoot: root, readiness, input: { from: "2026-01-01", query: "quartz" } })
   assert.deepEqual(temporal.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
   assert.equal(temporal.search_mode, "temporal")
-  assert.deepEqual(hybrid.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
-  assert.equal(hybrid.search_mode, "hybrid", JSON.stringify(hybrid))
-  assert.equal(hybrid.semantic_unavailable, false)
+  assert.deepEqual(query.results.map((r) => r.path), [path.posix.join("track", "new", "task.md")])
+  assert.equal(query.search_mode, "lexical")
 })
 
 test("timeline hybrid keeps the strongest chunk per document", async () => {
@@ -191,33 +96,10 @@ test("timeline hybrid keeps the strongest chunk per document", async () => {
   assert.equal(result.results[0].path, "track/work/task.md")
 })
 
-test("routed search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz lexical fallback\n")
-  const readiness = await createRoutedSemanticReadiness(t, root, { semanticCurrent: false })
-  const result = await routedSearch({
-    deskRoot: root,
-    readiness,
-    input: { query: "quartz" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
-  assert.equal(result.search_mode, "lexical")
-  assert.equal(result.semantic_unavailable, true)
-  assert.equal(result.results[0].path, "track/work/task.md")
-})
-
-test("the search fallback note is plain", async (t) => {
+test("the exact-word note of indexed search and timeline is plain", async () => {
   const plain = "Meaning-based search is still catching up; these results match exact words and are usable."
-  const jargon = /convergence|generation/iu
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nstatus: processing\nupdated: 2026-09-19\nschema_version: 1\n---\nquartz lexical fallback\n")
-  // Through the controller, while meaning-based search is not current.
-  const readiness = await createRoutedSemanticReadiness(t, root, { semanticCurrent: false })
-  const routed = await routedSearch({ deskRoot: root, readiness, input: { query: "quartz" }, opts: { embed: { fetch: makeEmbedFetch() } } })
-  assert.equal(routed.search_mode, "lexical")
-  assert.equal(routed.semantic_note, plain)
-  assert.doesNotMatch(routed.semantic_note, jargon)
-  // The indexed search and timeline, when the router serves exact words only and gives no reason of its own.
   await buildFixtureIndex(root)
   const search = await desk_search({ deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true } })
   assert.equal(search.semantic_note, plain)
@@ -226,148 +108,20 @@ test("the search fallback note is plain", async (t) => {
   assert.equal(timeline.semantic_note, plain)
   assert.equal(timeline.semantic_diagnostic.message, plain)
   for (const result of [search, timeline]) assert.ok(!("semantic_repair" in result), "nothing to repair: it is catching up")
-  // A desk whose policy turns meaning-based search off is not told it is catching up.
-  const offRoot = await mkTempDeskRoot()
-  await writeFile(offRoot, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz lexical only\n")
-  const off = await routedSearch({ deskRoot: offRoot, readiness: await createRoutedSemanticReadiness(t, offRoot, { mode: "unsupported" }), input: { query: "quartz" } })
-  assert.equal(off.search_mode, "lexical")
+  const off = await desk_search({ deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true, semanticDiagnostic: { reason: "semantic_off" } } })
   assert.equal(off.semantic_note, "Meaning-based search is off for this desk; these results match exact words.")
-  assert.doesNotMatch(off.semantic_note, jargon)
 })
 
-// Words an agent should never have to decode in a readiness refusal, its detail or a fallback note. Tool and setting names (desk_search, desk_runtime.semantic) and quoted values are exact identifiers the reader acts on, so they are left out of the check.
-const READINESS_JARGON = /converg|semantic|generation|lexical|controller|barrier|journal|reconcil|\bproo?f\b|\bproven\b|RECOVERING|_READY\b/iu
-function assertPlain(text, where) {
-  assert.equal(typeof text, "string", `${where}: a sentence`)
-  assert.ok(text.length > 0, `${where}: not empty`)
-  const prose = text.replace(/`[^`]*`|"[^"]*"|\b[a-z]+(?:[_.][a-z]+)+\b/gu, "")
-  assert.doesNotMatch(prose, READINESS_JARGON, `${where}: ${text}`)
-}
-// Every sentence a refusal carries for the reader; `diagnostic.technical` keeps the raw cause and is left out.
-function readerWords(result) {
-  return [
-    ["diagnostic.message", result.diagnostic?.message], ["diagnostic.detail", result.diagnostic?.detail], ["fix", result.fix],
-    ["readiness_diagnostic.message", result.readiness_diagnostic?.message],
-  ].filter(([, text]) => text !== undefined)
-}
+// Words an agent should never have to decode in what search says. Tool names and quoted values are exact identifiers the reader acts on, so they are left out of the check.
+const SEARCH_JARGON = /converg|generation|controller|barrier|journal|reconcil|\bproo?f\b|\bproven\b|RECOVERING|_READY\b|vector|embedding/iu
 
-test("every readiness refusal and its detail are plain", async () => {
-  const { READINESS_WORDING, createQueryRouter } = await import("../../../../../plugins/desk/mcp/src/readiness/query-router.js")
-  for (const text of READINESS_WORDING) assertPlain(text, "router wording")
-
-  const root = await mkTempDeskRoot()
-  const owner = { version: "3.2.0-alpha.349", build: "0".repeat(64), this_controller: false }
-  const status = async () => ({ state: "LEXICAL_CONVERGING", freshness: { certain: false, reason: "index_owner_catching_up", cursor: null }, index_owner: owner })
-  const throwing = (error) => async () => { throw error }
-  const late = () => new Promise((resolve) => setTimeout(() => resolve({ current: false }), 200))
-  const direct = async () => ({ results: [] })
-  const cases = {
-    "no search service": createQueryRouter({ semanticBackend: () => {} }),
-    "meaning-based search off": createQueryRouter({ semanticBackend: () => {}, controller: { identity: { semantic_contract: { mode: "unsupported" } } } }),
-    "another build rewrote the index": createQueryRouter({ semanticBackend: () => {}, controller: { status,
-      barrier: throwing(Object.assign(new Error("active lexical generation or journal coverage changed before compaction"), { code: "generation_superseded" })) } }),
-    "unknown failure": createQueryRouter({ semanticBackend: () => {}, controller: { status, barrier: throwing(new Error("socket closed")) } }),
-    "owner still catching up": createQueryRouter({ semanticBackend: () => {}, controller: { status, beginConvergence: async () => ({}),
-      barrier: async () => ({ current: false, state: "LEXICAL_CONVERGING", reason: "index_owner_catching_up" }) } }),
-    "owner indexes differently": createQueryRouter({ semanticBackend: () => {}, controller: { status, beginConvergence: async () => ({}),
-      barrier: async () => ({ current: false, state: "LEXICAL_CONVERGING", reason: "index_owned_by_newer_desk" }) } }),
-    "deadline": createQueryRouter({ semanticBackend: () => {}, semanticDeadlineMs: 5, controller: { status, beginConvergence: async () => ({}),
-      barrier: async (request) => (request?.wait ? late() : { current: false, state: "RECOVERING" }) } }),
+test("everything the search engine says is plain", () => {
+  for (const wording of Object.values(SEARCH_WORDING)) {
+    const text = typeof wording === "function" ? wording(3, 10) : wording
+    assert.doesNotMatch(text.replace(/`[^`]*`/gu, ""), SEARCH_JARGON, text)
   }
-  for (const [name, router] of Object.entries(cases)) {
-    const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
-    assert.equal(result.status, "error", name)
-    for (const [field, text] of readerWords(result)) assertPlain(text, `${name}, ${field}`)
-  }
-  assertPlain((await createQueryRouter().semantic({ deskRoot: root, kind: "graph" })).diagnostic.message, "unknown kind")
-  // The refusals that waited on the owner name it.
-  const deadline = await cases.deadline.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
-  assert.equal(deadline.diagnostic.reason, "semantic_deadline")
-  assert.equal(deadline.diagnostic.detail,
-    "The search index was still being updated when the wait ran out. Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it.")
-
-  // Exact-word search and reindex: the notes they carry when the index cannot answer.
-  const lexical = {
-    "no search service": createQueryRouter({ directBackend: direct }),
-    "index behind": createQueryRouter({ directBackend: direct, controller: { status, barrier: async () => ({ current: false }) } }),
-    "service failed": createQueryRouter({ directBackend: direct, controller: { status, barrier: throwing(new Error("readiness controller request timed out: barrier")) } }),
-  }
-  for (const [name, router] of Object.entries(lexical)) {
-    for (const [field, text] of readerWords(await router.lexical({ deskRoot: root, query: "quartz" }))) assertPlain(text, `search, ${name}, ${field}`)
-    for (const [field, text] of readerWords(await router.lexical({ deskRoot: root, kind: "thread", start_path: "a.md" }))) assertPlain(text, `thread, ${name}, ${field}`)
-  }
-  assertPlain((await createQueryRouter().reindex({})).diagnostic.message, "reindex without a search service")
-  const behind = createQueryRouter({ controller: { beginConvergence: async () => ({}), barrier: async () => ({ current: false }) } })
-  assertPlain((await behind.reindex({})).diagnostic.message, "reindex not caught up")
 })
 
-test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {
-  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
-  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
-  const { desk_reindex } = await import("../../../../../plugins/desk/mcp/src/tools/reindex.js")
-  const root = await fs.realpath(await mkTempDeskRoot())
-  await writeFile(root, "track/work/task.md", "startupquartz")
-  const stateHome = path.join(root, "controller-state")
-  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
-  let release, enter
-  const held = new Promise((resolve) => { release = resolve })
-  const entered = new Promise((resolve) => { enter = resolve })
-  let passes = 0, active = 0, maxActive = 0
-  let independentEmbeds = 0
-  const options = {
-    root, stateHome, ephemeral: true,
-    watcher: { fence: async () => ({ certain: true }) },
-    handlers: { async beginConvergence({ eventCursor }) {
-      passes++
-      active++
-      maxActive = Math.max(maxActive, active)
-      try { return { summary: await rebuildIndex(root, {
-        eventCursor, embed: { fetch: async (...args) => {
-          enter(); await held; return makeEmbedFetch()(...args)
-        } },
-      }) } } finally { active-- }
-    } },
-  }
-  const controller = await connectOrStartController(options)
-  const consumer = await connectOrStartController(options)
-  let joined
-  const join = new Promise((resolve) => { joined = resolve })
-  const begin = consumer.beginConvergence
-  consumer.beginConvergence = async () => {
-    const result = await begin()
-    joined()
-    return result
-  }
-  t.after(async () => { release(); await consumer.close(); await controller.close() })
-  const convergence = controller.beginConvergence()
-  await entered
-  let reindex
-  try {
-    const result = await routedSearch({
-      deskRoot: root, readiness: consumer, input: { query: "startupquartz" },
-      opts: { embed: { fetch: async () => { independentEmbeds++; return makeEmbedFetch()() } } },
-    })
-    assert.equal(result.results[0].snippet, "startupquartz")
-    assert.equal(independentEmbeds, 0, "search must not start an ensureIndex repair")
-    reindex = desk_reindex({ deskRoot: root, readiness: consumer, input: { force: true } })
-    const outcome = Promise.allSettled([reindex])
-    await join
-    release()
-    await convergence
-    const [resultReindex] = await outcome
-    assert.equal(resultReindex.status, "fulfilled")
-    assert.equal(resultReindex.value.status, "ok")
-    assert.equal(resultReindex.value.reused, true, "compatibility reindex joins the in-flight controller operation")
-    assert.equal(maxActive, 1, "only the controller serializes index passes, including uncertainty reconciliation")
-    const db = openDb(root)
-    try {
-      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM text_vectors t
-        WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`).get().orphan_count, 0)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 1)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, passes)
-    } finally { closeDb(db) }
-  } finally { release(); await Promise.allSettled([convergence, reindex]) }
-})
 
 // Build a fixture desk where chunks across multiple tracks share or differ
 // on the first-word "family" (deterministic 768-dim vectors per

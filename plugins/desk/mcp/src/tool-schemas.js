@@ -17,7 +17,7 @@
 
 import { flag, integer, list, oneOf, schema, text } from "./tool-schema-parts.js"
 
-export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
+export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "prune_readiness_state"])
 
 // Tools that take no input at all. Only these may declare no properties.
 export const NO_INPUT_TOOLS = Object.freeze([])

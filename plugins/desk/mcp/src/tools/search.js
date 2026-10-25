@@ -1,7 +1,6 @@
-// Public search tools use the controller-owned query router. Search/timeline
-// are lexical in this alpha; recall/similar return the typed semantic refusal.
-// Read-only indexed backends retain the existing ranking/serialization, also
-// used over a disposable FTS corpus for fresh direct-filesystem results.
+// Public search tools go to the session's search engine (src/search/engine.js), or to the files before it starts.
+// The indexed backends here rank exact-word results over an index database: the engine's in-memory one, or a
+// disposable corpus read straight from the files.
 //
 // Design references (see desk-search-design.md):
 //   §4 hybrid ranking — semantic 0.55 + bm25 0.25 + recency 0.12 + state 0.08
@@ -597,208 +596,23 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
 // Tool: desk_recall
 // ---------------------------------------------------------------------------
 
-/**
- * desk_recall — semantic-only "do I remember anything about X" lookup.
- *
- * Per design §6 #4 the long-term plan is HDBSCAN clustering with one-line
- * cluster labels. MVP simplification (planning Unit 5): return top-N by
- * cosine, no clustering. Documented inline. The `cluster_count` field is
- * always equal to the result count in MVP — a future PR can swap clustering
- * in without changing the tool's response shape.
- *
- * Input: { topic: string, limit?: number }
- * Returns: { results, cluster_count?, semantic_unavailable } OR an error
- *   payload when Ollama is down.
- */
+// desk_recall — "do I remember anything about X", ranked by meaning in the session's search engine
+// (src/search/engine.js), which always answers.
 export async function desk_recall({ deskRoot, input, opts, readiness, queryRouter, signal }) {
   return (queryRouter ?? searchRouter(readiness)).semantic({
     ...input, deskRoot, opts, signal, kind: "recall",
   })
 }
 
-export async function indexedRecall({ deskRoot, input, opts, db: suppliedDb }) {
-  const t0 = Date.now()
-  const topic = String(input?.topic ?? "").trim()
-  if (!topic) {
-    return { results: [], note: "empty topic" }
-  }
-  const limit = clampLimit(input?.limit)
-  const scope = input?.scope
-
-  const db = suppliedDb ?? openSearchDb(deskRoot)
-  try {
-    const {
-      vector: queryVec,
-      available,
-      diagnostic: semanticDiagnostic,
-    } = await embedQuery(topic, opts?.embed ?? {})
-    if (!available) {
-      return {
-        error: "semantic_unavailable",
-        note: "Recall requires semantic search; the embedding service is unavailable.",
-        ...semanticUnavailableFields(semanticDiagnostic),
-        latency_ms: Date.now() - t0,
-      }
-    }
-
-    // Over-fetch a wider net (limit * 3 per spec) — clustering would dedupe
-    // down; MVP just dedupes by doc_id and takes top-limit. desk_recall
-    // default: "all" — this IS the historical/lookback tool; archive
-    // should be searched by default.
-    const vecRows = gatherVecCandidates(db, queryVec, limit * 3)
-    const chunkIds = vecRows.map((r) => r.chunk_id)
-    const hydrated = hydrateChunks(db, chunkIds)
-
-    const bestByDoc = new Map()
-    for (const row of hydrated.values()) {
-      if (!passesScope(row, scope, "all")) continue
-      const score = clipCosine(cosine(queryVec, row.embedding))
-      const existing = bestByDoc.get(row.doc_id)
-      if (shouldReplaceBest(existing, score)) {
-        bestByDoc.set(row.doc_id, {
-          path: row.doc_path,
-          kind: row.kind,
-          snippet: makeSnippet(row.text, [topic]),
-          score,
-        })
-      }
-    }
-
-    const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-
-    return {
-      topic,
-      results,
-      cluster_count: results.length, // MVP: 1:1 with results
-      latency_ms: Date.now() - t0,
-      note:
-        "clustering deferred to a follow-up — see desk-search-design §6 #4. " +
-        "cluster_count equals results.length until HDBSCAN lands.",
-    }
-  } finally {
-    if (!suppliedDb) closeDb(db)
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Tool: desk_similar
 // ---------------------------------------------------------------------------
 
-/**
- * desk_similar — "more like this" against a given doc path.
- *
- * Strategy: read the seed doc's section embeddings; average them
- * into a centroid; nearest-search the other sections excluding the seed
- * doc's own chunks; rank by cosine. Centroid > first-chunk-only because
- * task docs often have boilerplate frontmatter at the top — using the doc's
- * entire embedded body better captures what the doc is "about".
- *
- * Input: { path: string, limit?: number }
- * Returns: { results, latency_ms } OR error when path is unknown OR when
- *   the seed has no embeddings (Ollama was down at index time).
- */
+// desk_similar — "more like this": the documents nearest the average of the seed document's section vectors.
 export async function desk_similar({ deskRoot, input, opts, readiness, queryRouter, signal }) {
   return (queryRouter ?? searchRouter(readiness)).semantic({
     ...input, deskRoot, opts, signal, kind: "similar",
   })
-}
-
-export async function indexedSimilar({ deskRoot, input, db: suppliedDb }) {
-  const t0 = Date.now()
-  const seedPath = String(input?.path ?? "").trim()
-  if (!seedPath) {
-    return { error: "invalid_input", note: "`path` is required" }
-  }
-  const limit = clampLimit(input?.limit)
-  const scope = input?.scope
-
-  const db = suppliedDb ?? openSearchDb(deskRoot)
-  try {
-    const seedDoc = db
-      .prepare("SELECT id, path, kind, track, task_slug FROM docs WHERE path = ?")
-      .get(seedPath)
-    if (!seedDoc) {
-      return {
-        error: "not_found",
-        note: `path not in index: ${seedPath}`,
-        latency_ms: Date.now() - t0,
-      }
-    }
-
-    // Pull seed embeddings.
-    const seedRows = db
-      .prepare(
-        `SELECT c.id AS chunk_id, tv.embedding
-         FROM chunks c
-         JOIN ${ACTIVE_TEXT_VECTOR_JOIN}
-         WHERE c.doc_id = ?`,
-      )
-      .all(seedDoc.id)
-    const seedEmbeddings = seedRows
-      .map((r) => decodeEmbedding(r.embedding))
-      .filter((e) => e != null)
-    if (!seedEmbeddings.length) {
-      return {
-        error: "semantic_unavailable",
-        note:
-          "seed doc has no embeddings; the index was built while semantic embeddings were unavailable.",
-        semantic_repair: SEMANTIC_REPAIR_COMMAND,
-        latency_ms: Date.now() - t0,
-      }
-    }
-
-    const dim = seedEmbeddings[0].length
-    const centroid = new Array(dim).fill(0)
-    for (const e of seedEmbeddings) {
-      for (let i = 0; i < dim; i++) centroid[i] += e[i]
-    }
-    for (let i = 0; i < dim; i++) centroid[i] /= seedEmbeddings.length
-
-    // Set of seed chunk_ids to exclude.
-    const seedChunkIds = new Set(seedRows.map((r) => r.chunk_id))
-
-    // KNN — over-fetch since we drop seed chunks + dedupe by doc.
-    const vecRows = gatherVecCandidates(db, centroid, (limit + seedChunkIds.size + 5) * 3)
-    const chunkIds = vecRows
-      .map((r) => r.chunk_id)
-      .filter((id) => !seedChunkIds.has(id))
-    const hydrated = hydrateChunks(db, chunkIds)
-
-    const bestByDoc = new Map()
-    for (const row of hydrated.values()) {
-      // desk_similar default: "all" — similarity has no time/status semantic;
-      // when asking "what's like this doc" we want the full corpus.
-      if (!passesScope(row, scope, "all")) continue
-      const score = clipCosine(cosine(centroid, row.embedding))
-      const existing = bestByDoc.get(row.doc_id)
-      if (shouldReplaceBest(existing, score)) {
-        bestByDoc.set(row.doc_id, {
-          path: row.doc_path,
-          kind: row.kind,
-          track: row.track,
-          task_slug: row.task_slug,
-          status: row.status,
-          updated_at: row.updated_at,
-          snippet: makeSnippet(row.text, []),
-          score,
-        })
-      }
-    }
-
-    const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-
-    return {
-      seed: seedPath,
-      results,
-      latency_ms: Date.now() - t0,
-    }
-  } finally {
-    if (!suppliedDb) closeDb(db)
-  }
 }
 
 // ---------------------------------------------------------------------------

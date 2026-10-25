@@ -26,7 +26,6 @@ import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
-import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
 
@@ -39,7 +38,6 @@ const ROOT_SOURCE_PRIORITY = Object.freeze([
   "home_fallback", "overlay_home_fallback", "host-project", "env:DESK",
   "activation-config", "host-session-root", "explicit-root",
 ])
-const RECLAIM_REPAIR = "reclaim_controller"
 // Every field desk_doctor reads off `input`: both are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
 // (the module server.js registers for this tool name) — `deskDoctor` is the
@@ -148,7 +146,7 @@ export function watchGitHead(gitDir, options, listener) {
 /**
  * Build a session. `deps` carries everything index.js resolved or was given:
  * resolveInputs() (async; `{ root, activation }` or `{ rootError }` / `{ root, activationError }`), loadRuntime(activation) (async; `{ runtimeServer, runtimeStatus }` or `{ outcome }`), setupDiagnostic(error),
- * args, authorityProviders, readinessStateHome, deskStateDir, git, watch, timers, stderr, notifyToolsChanged, launcher, hung.
+ * args, authorityProviders, readinessStateHome, deskStateDir, git, watch, timers, stderr, notifyToolsChanged, launcher.
  */
 function switchFailureReason(snapshot) {
   const observed = snapshot.diagnostic?.observed
@@ -174,20 +172,12 @@ export function createDeskSession(deps) {
     stderr = process.stderr,
     notifyToolsChanged = () => {},
     launcher = null,
-    hung: hungOptions = {},
     statusRunLimitMs = STATUS_RUN_LIMIT_MS,
     controllerRecheckMs = CONTROLLER_RECHECK_MS,
     env = process.env,
     headIO = headFileSystem,
   } = deps
-  const hungPolicy = {
-    misses: HUNG_MISSES,
-    probeMs: HUNG_PROBE_MS,
-    probe: probeController,
-    reclaim: async (probe) => (await import("../readiness/controller-process.js")).reclaimControllerChild(probe),
-    ...hungOptions,
-  }
-  const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher, phase: null }
+  const context = { pendingRepairs: [], exceptions: [], launcher, phase: null }
   const lexicalViews = new WeakMap()
   const focus = createFocusHolder()
   let headWatch = null
@@ -198,7 +188,6 @@ export function createDeskSession(deps) {
   const headDescriptors = new Set()
   let disposed = false
   let unwatchController = null
-  let hungOwner = null
   // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget. `at` is when its computation started and `seq` orders computations, so a detail is only ever replaced by a newer one.
   let lastStatusDetail = null
   // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work: `{ promise, at, started, seq }`. One older than statusRunLimitMs is abandoned in favor of a new one.
@@ -342,8 +331,6 @@ export function createDeskSession(deps) {
     context.policyKey = null
     context.activation = null
     context.stateBranchName = null
-    context.hung = { misses: 0 }
-    hungOwner = null
   }
 
   // The automatic state-branch switch belongs to the session's first admission attempt only, whatever that attempt ends in (ready, any degraded state, or a throw). After it, only desk_doctor's switch_state_branch repair switches.
@@ -513,13 +500,6 @@ export function createDeskSession(deps) {
     } else if (context.controllerLost) {
       controllerProblem = await reconnectController({ deskRoot, policy, onRepair })
     }
-    if (controllerProblem !== null) {
-      controllerProblem = await noticeHungController({ controllerProblem, deskRoot, policy })
-    } else if (context.admission?.controller) {
-      // Connected: a hung controller that answers again is no longer counted or reported.
-      context.hung = { misses: 0 }
-      hungOwner = null
-    }
 
     setPhase("checking_semantic_readiness")
     let semanticProblem = null
@@ -624,26 +604,6 @@ export function createDeskSession(deps) {
     } catch (error) {
       return admissionOutcome(error)
     }
-  }
-
-  // The loaded runtime's Desk build. Its controller connector elects by it, so the probes must look at the same controller.
-  function runningBuild() {
-    return context.runtimeServer?.RUNNING_BUILD ?? null
-  }
-
-  // Count consecutive misses of one owner generation. Election never stops it; explicit repair must go through its child supervisor.
-  async function noticeHungController({ controllerProblem, deskRoot, policy }) {
-    if (controllerProblem.code !== "controller_unavailable") return controllerProblem
-    const probe = await hungPolicy.probe({ root: deskRoot, policy, build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
-    if (!probeMissed(probe)) {
-      context.hung = { misses: 0 }
-      hungOwner = null
-      return controllerProblem
-    }
-    const owner = controllerProbeKey(probe)
-    context.hung = { misses: hungOwner === owner ? context.hung.misses + 1 : 1, ...hungControllerReport(probe) }
-    hungOwner = owner
-    return hungOutcome(controllerProblem, context.hung, hungPolicy.misses)
   }
 
   async function semanticBarrier(controller) {
@@ -1205,7 +1165,6 @@ export function createDeskSession(deps) {
       return jsonResult(previewRuntimeSnapshot(admission.snapshot().state === "ready" ? "ready" : "diagnostic"))
     }
     if (input.repair === STATE_BRANCH_REPAIR) return switchStateBranch(release)
-    if (input.repair === RECLAIM_REPAIR) return reclaimController(release)
     if (input.repair === "prune_readiness_state") {
       const result = await pruneReadinessLeftovers({ stateHome: readinessStateHome })
       return jsonResult({
@@ -1255,41 +1214,6 @@ export function createDeskSession(deps) {
     return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix, ...why })
   }
 
-  // Legacy/unverified owners remain report-only. A supervisor may stop only its retained controller child.
-  async function reclaimController(release) {
-    if (!context.root || !context.policyKey) {
-      return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
-    }
-    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
-    const report = hungControllerReport(probe)
-    const hung = probeMissed(probe)
-    if (hung && hungOwner === controllerProbeKey(probe) && context.hung.misses >= hungPolicy.misses && report.owner_verified && report.owner_kind === "controller_child") {
-      const result = await hungPolicy.reclaim(probe)
-      if (result.reclaimed) {
-        forgetController()
-        context.hung = { misses: 0 }
-        hungOwner = null
-        const line = recordRepair(`repaired: stopped hung readiness controller child ${report.owner_pid}; MCP sessions remain connected`)
-        context.pendingRepairs.push(line)
-        release()
-        const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
-        return jsonResult({ status: "ok", repair: RECLAIM_REPAIR, ...result, controller: report, state: snapshot.state })
-      }
-      return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, ...result, controller: report, fix: `Controller reclaim was refused (${result.reason}); call desk_status to recheck its live owner.` }, true)
-    }
-    return jsonResult({
-      status: "report",
-      repair: RECLAIM_REPAIR,
-      reclaimed: false,
-      controller: report,
-      missed_checks: context.hung.misses,
-      summary: hung
-        ? `${notAnswering(report)}. Reclaim requires ${hungPolicy.misses} missed checks and a live-verified controller child supervised by its owning session. Desk never signals a process merely named in an owner record.`
-        : `The readiness controller for this root is not hung (probe: ${probe.state}); there is nothing to reclaim.`,
-      fix: hung ? hungFix(report) : "Call desk_status.",
-    })
-  }
-
   // After the handshake, an exception nothing else caught (index.js's process handlers report it here): record it, keep serving, and re-admit on the backoff.
   function recordException(kind, error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -1337,7 +1261,6 @@ export function createDeskSession(deps) {
         phase_since: context.phase?.since ?? null,
         state_branch: branchSummary(context.stateBranch),
         controller: context.admission?.controller ? "connected" : "absent",
-        hung_controller: context.hung.misses > 0 ? { ...context.hung } : null,
         writes: !disposed && !admission.running && requirementMet("write", context) ? "available" : "refused",
         exceptions: context.exceptions,
         launcher: launcher === null ? null : { code: launcher.code, reason: launcher.reason, mode: launcher.mode },
@@ -1552,39 +1475,6 @@ function controllerLostOutcome(error) {
     fix: CONTROLLER_FIX,
     diagnostic: { mode: "degraded", observed: observed(error) },
   }
-}
-
-// Before enough misses: still controller_unavailable, with the count. After: controller_hung, controller-free, and the owner named.
-function hungOutcome(controllerProblem, hung, needed) {
-  const detected = hung.misses >= needed
-  return {
-    ...controllerProblem,
-    code: detected ? "controller_hung" : controllerProblem.code,
-    summary: `${notAnswering(hung)} (${Math.min(hung.misses, needed)} of ${needed} checks missed${detected ? "; hung" : ""}).`,
-    fix: hungFix(hung),
-    diagnostic: { ...controllerProblem.diagnostic, hung_controller: hung },
-  }
-}
-
-function notAnswering(report) {
-  const how = report.state === "silent" ? "accepts connections but does not answer" : "does not accept connections while the process recorded as its owner runs"
-  return `The readiness controller for this root (owner pid ${report.owner_pid}, ${report.endpoint}) ${how}`
-}
-
-function controllerProbeKey(probe) {
-  const owner = probe.record?.owner
-  return JSON.stringify([probe.endpoint, owner?.pid, owner?.process_start, owner?.token])
-}
-
-// Unverified and legacy owners are report-only; a supervised child has an in-session repair path.
-function hungFix(report) {
-  if (report.owner_verified && report.owner_kind === "controller_child") {
-    return 'Search uses plain text and writes work. After 3 missed checks, call desk_doctor {"repair":"reclaim_controller"} to stop only the verified hung controller child and re-elect it; every MCP session stays connected. Desk also keeps checking for recovery in the background.'
-  }
-  const owner = report.owner_verified
-    ? `the Desk process that owns it (pid ${report.owner_pid}) ends`
-    : `process ${report.owner_pid}, which its owner record names, ends (no live process-start match was established, so Desk cannot tell whether that process is still the owner or another process that reused its PID)`
-  return `Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when ${owner}; Desk keeps checking in the background.`
 }
 
 function overrideOutcome(override) {
