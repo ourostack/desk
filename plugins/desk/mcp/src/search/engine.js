@@ -14,6 +14,8 @@ import { indexedThread } from "../tools/thread.js"
 import { loadEmbedder, MODEL } from "./embedder.js"
 import { openVectorStore } from "./vectors.js"
 import { removeOldIndex } from "./old-index.js"
+import { ensureStateIgnored } from "../util/state-ignore.js"
+import { ensureCardGuard } from "../desk/card-commit-guard.js"
 
 const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
@@ -43,6 +45,9 @@ export function createSearchEngine(options) {
     cleanup: removeOldIndex,
     ...options,
   }
+  // The index lives in memory, so opening it does not keep `.state/` out of Git or install the card guard; do both here.
+  ensureStateIgnored(deskRoot)
+  ensureCardGuard(deskRoot)
   const db = openDb(deskRoot, { dbPath: ":memory:" })
   const store = semantic === "unsupported" ? null : openVectorStore(stateDir, MODEL.id)
   let oldIndex = { removed: false, bytes: 0 }

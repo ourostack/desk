@@ -2,23 +2,42 @@
 // unchanged text is never embedded again. Several sessions on one desk may write it at once; a vector for a text is the
 // same whoever writes it, so the first write wins.
 import Database from "better-sqlite3"
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, renameSync } from "node:fs"
 import * as path from "node:path"
 
 export function vectorsDbPath(stateDir) {
   return path.join(stateDir, "desk-vectors.sqlite")
 }
 
-/** Opens the store and reads every vector of `model` into memory. */
-export function openVectorStore(stateDir, model) {
+function openDatabase(file) {
+  const db = new Database(file)
+  try {
+    db.pragma("journal_mode = WAL")
+    db.pragma("busy_timeout = 5000")
+    db.exec(`CREATE TABLE IF NOT EXISTS vectors (
+      model TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL,
+      UNIQUE (model, text_hash)
+    )`)
+    return db
+  } catch (error) {
+    db.close()
+    throw error
+  }
+}
+
+/** Opens the store and reads every vector of `model` into memory. A damaged file is moved aside and the vectors are made again. */
+export function openVectorStore(stateDir, model, { now = Date.now } = {}) {
   mkdirSync(stateDir, { recursive: true })
-  const db = new Database(vectorsDbPath(stateDir))
-  db.pragma("journal_mode = WAL")
-  db.pragma("busy_timeout = 5000")
-  db.exec(`CREATE TABLE IF NOT EXISTS vectors (
-    model TEXT NOT NULL, text_hash TEXT NOT NULL, embedding BLOB NOT NULL,
-    UNIQUE (model, text_hash)
-  )`)
+  const file = vectorsDbPath(stateDir)
+  let db
+  try {
+    db = openDatabase(file)
+  } catch (error) {
+    if (error.code !== "SQLITE_NOTADB" && error.code !== "SQLITE_CORRUPT") throw error
+    const aside = `${file}.corrupt-${now()}`
+    for (const suffix of ["", "-wal", "-shm"]) if (existsSync(file + suffix)) renameSync(file + suffix, aside + suffix)
+    db = openDatabase(file)
+  }
   const vectors = new Map()
   for (const row of db.prepare("SELECT text_hash, embedding FROM vectors WHERE model = ?").iterate(model)) {
     vectors.set(row.text_hash, new Float32Array(row.embedding.buffer.slice(row.embedding.byteOffset, row.embedding.byteOffset + row.embedding.byteLength)))

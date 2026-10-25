@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { existsSync, promises as fs } from "node:fs"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { configureRuntimeArtifacts } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
@@ -284,4 +285,14 @@ test("by default the engine removes the old index from the desk's state folder",
   t.after(() => engine.close())
   // Whether it was removed depends on lsof being installed; either way the engine starts and the vectors file is not touched.
   assert.equal(typeof engine.searchStatus().message, "string")
+})
+
+test("starting search on a Git desk keeps its state folder out of Git", async (t) => {
+  const deskRoot = await desk({ "cars/task-a/task.md": CAR })
+  assert.equal(spawnSync("git", ["init", "-q", deskRoot]).status, 0)
+  const engine = engineFor(t, deskRoot, { semantic: "background", loadModel: async () => { throw new Error("offline") } })
+  await engine.lexical({ query: "car" })
+  await engine.settled()
+  const status = spawnSync("git", ["-C", deskRoot, "status", "--short", "--untracked-files=all"], { encoding: "utf8" }).stdout
+  assert.doesNotMatch(status, /\.state/u)
 })
