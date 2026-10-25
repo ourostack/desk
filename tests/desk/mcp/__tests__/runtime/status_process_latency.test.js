@@ -110,7 +110,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       const value = await status()
-      if (value.root?.path === root && value.search !== undefined && (!requireSeam || existsSync(marker))) return value
+      if (value.root?.path === root && value.write_scope !== undefined && (!requireSeam || existsSync(marker))) return value
       if (value.root?.path && value.root.path !== root) {
         assert.equal(value.root.path, a, "only the still-admitted A context may be shown while B is unresolved")
         assert.equal(value.admission.phase, "resolving_inputs")

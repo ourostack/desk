@@ -190,7 +190,7 @@ test("a close-only spawn error also retires its exact-owned reader", async () =>
 
 test("consumer qualification rejects old-root, old-time, undated and silently relabeled cached detail", () => {
   const recent = {
-    root: { path: "root" }, search: { state: "ready" },
+    root: { path: "root" }, search: { state: "ready" }, write_scope: { mode: "workspace" },
     status_detail: "cached: completed same-context computation", status_detail_from: "2026-10-10T01:00:00.000Z",
   }
   const checkpoint = { root: "root", since: Date.parse("2026-10-10T00:59:59.999Z") }
