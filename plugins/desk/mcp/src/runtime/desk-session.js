@@ -1041,7 +1041,7 @@ export function createDeskSession(deps) {
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }
       } else if (!outcome.timedOut && joined) {
         // The joined computation answered in time, but it started before this call, so its detail is marked with when it started.
-        payload = { ...outcome.value.payload, status_detail: `cached: this detail comes from a runtime status computation (index, readiness controller) that was already running when this call arrived; it started at ${run.at}.`, status_detail_from: run.at }
+        payload = { ...outcome.value.payload, status_detail: `cached: this detail comes from a runtime status computation (search and index) that was already running when this call arrived; it started at ${run.at}.`, status_detail_from: run.at }
         detailFrom = run.at
       } else if (!outcome.timedOut) {
         payload = outcome.value.payload
@@ -1049,8 +1049,8 @@ export function createDeskSession(deps) {
         stamped = snapshot
       } else {
         const why = joined
-          ? `a runtime status computation (index, readiness controller) that started at ${run.at} is still running`
-          : "the runtime status (index, readiness controller) did not answer within this call's budget"
+          ? `a runtime status computation (search and index) that started at ${run.at} is still running`
+          : "the runtime status (search and index) did not answer within this call's budget"
         // The session admitted this root before the runtime's status was asked for it, so the answer names the desk even though the rest of the detail is not loaded yet.
         payload = lastStatusDetail === null
           ? { ...payload, detail_pending: true, root: { path: context.root.root, source: context.root.source }, status_detail: `unavailable: ${why}; call desk_status again shortly` }

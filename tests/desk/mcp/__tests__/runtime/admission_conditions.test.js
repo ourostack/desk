@@ -4,20 +4,13 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { spawn } from "node:child_process"
-import { once } from "node:events"
-import * as net from "node:net"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
-import { readinessContracts } from "../../../../../plugins/desk/mcp/src/server.js"
-import { killAndWait } from "../_kill_and_wait.js"
 import {
-  HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, sessionBuild, settled, startDesk, writeActivation, writeFile,
+  HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
 
-const posixOnly = process.platform === "win32" ? "unix sockets and file modes are POSIX-only" : false
 
 function assertHandshake(session) {
   assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
@@ -47,33 +40,6 @@ async function assertWritesRefused(session, code) {
   assert.equal(write.payload.tool, "task_create")
   assert.equal(typeof write.payload.fix, "string")
   assert.ok(write.payload.fix.length > 0)
-}
-
-function controllerFixture(fixture, semanticContract = { mode: "unsupported", embedding_spec: null }) {
-  const { protocolVersion, lexicalContract, build } = readinessContracts({ lexical: "required", semantic: "unsupported" }, { build: sessionBuild() })
-  const identity = controllerIdentity({ root: fixture.desk, protocolVersion, lexicalContract, semanticContract, build })
-  const endpoint = deriveControllerEndpoint({ identity, env: {} })
-  const stateDir = path.join(fixture.readinessHome, identity.id)
-  return { identity, endpoint, stateDir, protocolVersion, lexicalContract, build }
-}
-
-async function waitForRelease(ownerFile, endpoint) {
-  const deadline = Date.now() + 10000
-  while (existsSync(ownerFile) || existsSync(endpoint)) {
-    assert.ok(Date.now() < deadline, "the session's child must release its rendezvous after the parent ends")
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
-
-// A socket file that nobody listens on: a child process binds it and is killed before it can clean up.
-async function leaveStaleSocket(endpoint) {
-  mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
-  const child = spawn(process.execPath, ["-e", `require("net").createServer().listen(${JSON.stringify(endpoint)}, () => process.stdout.write("up"))`], { stdio: ["ignore", "pipe", "inherit"] })
-  await new Promise((resolve) => child.stdout.once("data", resolve))
-  const pid = child.pid
-  child.kill("SIGKILL")
-  await new Promise((resolve) => child.once("exit", resolve))
-  return pid
 }
 
 // ---- conditions that stop admission before the desk is readable ----
@@ -128,95 +94,6 @@ test("invalid write authority: reads serve, writes refuse with degraded:authorit
 
 // ---- readiness controller faults: controller-free reads, background re-election ----
 
-// A controller process that accepts connections and never answers, the way a wedged Desk does. It stands in for another session's Desk MCP server.
-async function startHungController(endpoint) {
-  mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
-  const child = spawn(process.execPath, ["-e",
-    `require("net").createServer(() => {}).listen(${JSON.stringify(endpoint)}, () => process.stdout.write("up"))`,
-  ], { stdio: ["ignore", "pipe", "inherit"] })
-  await new Promise((resolve) => child.stdout.once("data", resolve))
-  return child
-}
-
-for (const signal of ["SIGTERM", "SIGINT"]) {
-  test(`a host retaining ${signal} keeps its live controller through two signal and election cycles`, { skip: posixOnly, timeout: 120000 }, async (t) => {
-    const fixture = await makeGitDesk()
-    const configPath = writeActivation(fixture)
-    const { stateDir } = controllerFixture(fixture)
-    const ownerFile = path.join(stateDir, "owner.json")
-    const preload = path.join(fixture.root, "retaining-host.mjs")
-    writeFile(preload, `
-      import { isMainThread } from "node:worker_threads"
-      if (isMainThread) {
-        process.on(${JSON.stringify(signal)}, () => process.stderr.write("HOST_RETAINS_PROCESS\\n"))
-      }
-    `)
-    const sockets = []
-    const owner = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload] })
-    t.after(() => {
-      for (const socket of sockets) socket.destroy()
-      return owner.close()
-    })
-    assertHandshake(owner)
-    assert.equal((await owner.statusUntil(settled)).state, "ready")
-    const record = JSON.parse(readFileSync(ownerFile, "utf8"))
-    assert.equal(record.owner.parent_pid, owner.child.pid)
-    assert.notEqual(record.owner.pid, owner.child.pid)
-    // Connect before either signal: even an unlinked controller can still answer through an accepted socket.
-    for (let cycle = 0; cycle < 2; cycle += 1) {
-      const socket = net.createConnection(record.endpoint)
-      sockets.push(socket)
-      await once(socket, "connect", { signal: AbortSignal.timeout(10000) })
-    }
-    const outcomes = []
-    for (let cycle = 0; cycle < 2; cycle += 1) {
-      owner.child.kill(signal)
-      while (owner.stderr().split("HOST_RETAINS_PROCESS\n").length - 1 <= cycle) {
-        await once(owner.child.stderr, "data", { signal: AbortSignal.timeout(10000) })
-      }
-      assert.equal(owner.child.exitCode, null)
-      assert.equal(owner.child.signalCode, null)
-      assert.deepEqual((await owner.request("ping")).result, {})
-      const ownershipKept = existsSync(ownerFile) && existsSync(record.endpoint)
-      const other = await startDesk(fixture, { args: ["--activation-config", configPath] })
-      t.after(() => other.close())
-      assertHandshake(other)
-      assert.equal((await other.statusUntil((payload) => payload.state === "ready")).admission.controller, "connected")
-      const elected = JSON.parse(readFileSync(ownerFile, "utf8"))
-      const socket = sockets[cycle]
-      let response = ""
-      socket.setEncoding("utf8")
-      socket.on("data", (chunk) => { response += chunk })
-      const reply = once(socket, "end", { signal: AbortSignal.timeout(10000) })
-      socket.write(`${JSON.stringify({
-        type: "request", id: cycle, method: "handshake",
-        params: { token: record.owner.token, identity: record.identity.id, semantic_contract: record.identity.semantic_contract },
-      })}\n`)
-      await reply
-      const handshake = JSON.parse(response).result
-      assert.equal(handshake.accepted, true)
-      assert.equal(handshake.owner.pid, record.owner.pid, "the original controller child is still serving")
-      await assertReadsServeDirectly(other)
-      const write = await other.call("task_create", { track: "ops", slug: `retained-${signal.toLowerCase()}-${cycle}`, title: "Retained controller" })
-      assert.equal(write.isError, false, JSON.stringify(write.payload))
-      outcomes.push({
-        cycle: cycle + 1,
-        ownershipKept,
-        sameOwner: elected.owner.pid === record.owner.pid && elected.owner.token === record.owner.token,
-        sameSocket: elected.socket.dev === record.socket.dev && elected.socket.ino === record.socket.ino,
-      })
-      t.diagnostic(JSON.stringify({ signal, ...outcomes[cycle], sessionPid: owner.child.pid, originalPid: record.owner.pid, electedPid: elected.owner.pid }))
-      assert.deepEqual(await other.close(), { code: 0, signal: null })
-    }
-    assert.deepEqual(outcomes, [1, 2].map((cycle) => ({ cycle, ownershipKept: true, sameOwner: true, sameSocket: true })))
-    assert.deepEqual(JSON.parse(readFileSync(ownerFile, "utf8")), record, "the retained controller keeps its exact ownership record")
-    assert.deepEqual((await owner.request("tools/list")).result.tools, owner.tools.result.tools)
-    assert.deepEqual(await owner.close(), { code: 0, signal: null })
-    await waitForRelease(ownerFile, record.endpoint)
-    assert.equal(existsSync(ownerFile), false)
-    assert.equal(existsSync(record.endpoint), false)
-  })
-}
 
 test("a clean detached HEAD on a remote branch is switched back to the state branch, keeping untracked files", async (t) => {
   const fixture = await makeGitDesk()

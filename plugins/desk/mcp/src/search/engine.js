@@ -3,9 +3,11 @@
 // batch at a time. Every search answers at once: meaning-based recall adds exact-word matches for whatever is not
 // embedded yet, and says so in one sentence.
 import { watch as watchNative, realpathSync } from "node:fs"
+import { stat } from "node:fs/promises"
 import * as path from "node:path"
 import { openDb, closeDb } from "../db/init.js"
 import { rebuildIndex } from "../indexer/index.js"
+import { createDiscoverCache } from "../indexer/discover.js"
 import { resolveEnsureIndexOptions } from "../server-helpers.js"
 import { indexedSearch, indexedTimeline, makeSnippet, passesScope } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
@@ -58,6 +60,12 @@ export function createSearchEngine(options) {
   // Without a watcher every search reads the desk again first.
   let watcherFailed = false
   const watcher = startWatcher()
+  // After the first full read, a refresh rereads only the Markdown files the watcher or a Desk write named. A change it
+  // cannot place (a folder created, moved or removed, a .gitignore, an event without a name) reads the whole desk again.
+  const discoverCache = createDiscoverCache()
+  let fullScan = true
+  let changedFiles = new Set()
+  let otherPaths = new Set()
 
   function startWatcher() {
     try {
@@ -65,7 +73,7 @@ export function createSearchEngine(options) {
       /* istanbul ignore next -- the platform split */
       const root = process.platform === "win32" ? realpathSync.native(deskRoot) : deskRoot
       const handle = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
-        if (filename == null || !IGNORED.has(String(filename).split(/[\\/]/)[0])) dirty = true
+        noteChange(filename == null ? null : String(filename).replaceAll("\\", "/"))
       })
       handle.on?.("error", () => { watcherFailed = true })
       return handle
@@ -74,15 +82,47 @@ export function createSearchEngine(options) {
       return null
     }
   }
+  function noteChange(rel) {
+    if (rel === null) {
+      fullScan = true
+    } else if (IGNORED.has(rel.split("/")[0])) {
+      return
+    } else if (rel.endsWith(".md")) {
+      changedFiles.add(rel)
+    } else {
+      otherPaths.add(rel)
+    }
+    dirty = true
+  }
+
+  // Whether a changed path that is not a Markdown file may have moved Markdown files: a folder, a folder that is gone
+  // (a name without a dot) or a .gitignore.
+  async function movesFiles(paths) {
+    for (const rel of paths) {
+      if (rel.split("/").at(-1) === ".gitignore") return true
+      const found = await stat(path.join(deskRoot, rel)).catch(() => null)
+      if (found === null ? !rel.split("/").at(-1).includes(".") : found.isDirectory()) return true
+    }
+    return false
+  }
+
   function refresh() {
     refreshing ??= (async () => {
       dirty = false
+      const files = changedFiles
+      const others = otherPaths
+      const full = fullScan || watcherFailed || !built
+      changedFiles = new Set()
+      otherPaths = new Set()
+      fullScan = false
       try {
         const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
-        await rebuildIndex(deskRoot, { db, skipEmbed: true, vectorCleanup: false, tombstones })
+        const changedPaths = full || await movesFiles(others) ? undefined : files
+        await rebuildIndex(deskRoot, { db, skipEmbed: true, vectorCleanup: false, tombstones, discoverCache, changedPaths })
         built = true
       } catch (error) {
         dirty = true
+        fullScan = true
         throw error
       } finally {
         refreshing = null
@@ -238,6 +278,7 @@ export function createSearchEngine(options) {
   }
 
   function markChanged() {
+    fullScan = true
     dirty = true
   }
 
@@ -249,7 +290,7 @@ export function createSearchEngine(options) {
     status: async () => ({ state: "READY", convergence: { status: "ready" }, search: searchStatus() }),
     beginConvergence: () => { refresh().catch(() => {}); return Promise.resolve({ started: true }) },
     barrier: async ({ capability } = {}) => ({ capability, current: true, certain: true }),
-    recordChange: async () => { markChanged(); return { recorded: true } },
+    recordChange: async ({ path: rel }) => { noteChange(typeof rel === "string" ? rel.replaceAll("\\", "/") : null); return { recorded: true } },
     markUncertain: async () => { markChanged() },
     onExit: () => () => {},
     // What the search tools call.

@@ -82,18 +82,29 @@ function stripPersonPrefix(relPath) {
  *                    status, schema_version, created_at, updated_at,
  *                    hash, mtime, frontmatter, body }
  */
-export async function discover(deskRoot, { signal } = {}) {
+// `cache` (from createDiscoverCache), kept by a long-lived caller, lets a file whose size and modification time are
+// unchanged be reused without reading it again, and lets `rediscover` update the list from changed paths alone.
+export function createDiscoverCache() {
+  return { docs: new Map(), rules: null }
+}
+
+export async function discover(deskRoot, { signal, cache = null } = {}) {
   throwIfAborted(signal)
   const results = []
   const exclusionRules = await loadExclusionRules({ deskRoot })
-  await walk(deskRoot, deskRoot, results, signal, exclusionRules)
+  await walk(deskRoot, deskRoot, results, signal, exclusionRules, cache?.docs ?? null)
   throwIfAborted(signal)
+  if (cache) {
+    cache.rules = exclusionRules
+    const found = new Set(results.map((doc) => doc.path))
+    for (const rel of cache.docs.keys()) if (!found.has(rel)) cache.docs.delete(rel)
+  }
   // Stable ordering — easier to reason about in tests and in CLI output.
   results.sort((a, b) => a.path.localeCompare(b.path))
   return results
 }
 
-async function walk(deskRoot, dir, out, signal, exclusionRules) {
+async function walk(deskRoot, dir, out, signal, exclusionRules, cache) {
   throwIfAborted(signal)
   let entries
   try {
@@ -114,7 +125,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
       const sub = path.join(dir, name)
       const relDir = toDeskPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
-      await walk(deskRoot, sub, out, signal, exclusionRules)
+      await walk(deskRoot, sub, out, signal, exclusionRules, cache)
       continue
     }
     if (!ent.isFile()) continue
@@ -126,9 +137,41 @@ async function walk(deskRoot, dir, out, signal, exclusionRules) {
     if (isExcluded(rel, exclusionRules)) continue
     if (!isIndexable(rel)) continue
 
-    const desc = await describeDoc(deskRoot, abs, rel, signal)
+    const desc = cache ? await describeCached(deskRoot, abs, rel, signal, cache) : await describeDoc(deskRoot, abs, rel, signal)
     if (desc) out.push(desc)
   }
+}
+
+async function describeCached(deskRoot, abs, rel, signal, cache) {
+  let stat
+  try {
+    stat = await fs.stat(abs)
+  } catch {
+    return null
+  }
+  const hit = cache.get(rel)
+  if (hit?.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.desc
+  const desc = await describeDoc(deskRoot, abs, rel, signal)
+  if (desc) cache.set(rel, { mtimeMs: stat.mtimeMs, size: stat.size, desc })
+  return desc
+}
+
+/** After a full `discover` with `cache`: the same list, rereading only the desk-relative `.md` paths in `changed`. */
+export async function rediscover(deskRoot, { cache, changed, signal }) {
+  for (const rel of changed) {
+    const desc = inScope(rel, cache.rules) ? await describeCached(deskRoot, path.join(deskRoot, ...rel.split("/")), rel, signal, cache.docs) : null
+    if (desc === null) cache.docs.delete(rel)
+  }
+  return [...cache.docs.values()].map((entry) => entry.desc).sort((a, b) => a.path.localeCompare(b.path))
+}
+
+// Whether a walk reaches and keeps `rel`.
+function inScope(rel, rules) {
+  const parts = rel.split("/")
+  for (let i = 1; i < parts.length; i++) {
+    if (SKIP_DIRS.has(parts[i - 1]) || shouldSkipDirectory(parts.slice(0, i).join("/"), rules)) return false
+  }
+  return rel.endsWith(".md") && !isExcluded(rel, rules) && isIndexable(rel)
 }
 
 function isExcluded(relPath, rules) {

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { existsSync } from "node:fs"
+import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { configureRuntimeArtifacts } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
@@ -193,6 +193,48 @@ test("a model that fails to load is reported plainly and tried again later; an e
   await engine.settled()
   assert.equal(attempts, 2)
   assert.equal(engine.searchStatus().state, "preparing")
+})
+
+test("a changed Markdown file is reread on its own; a folder, a vanished folder or a .gitignore reads the whole desk", async (t) => {
+  const deskRoot = await desk({ "cars/task-a/task.md": CAR, "data.json": "{}" })
+  let notify
+  const engine = engineFor(t, deskRoot, { semantic: "unsupported", watch: (_root, _options, callback) => { notify = callback; return { close() {} } } })
+  const hits = async (query) => (await engine.lexical({ query })).results.map((result) => result.path)
+  assert.deepEqual(await hits("car"), ["cars/task-a/task.md"])
+  await writeFile(deskRoot, "food/task-b/task.md", SOUP)
+  await writeFile(deskRoot, "garden/task-d/task.md", GARDEN)
+  notify("rename", "food/task-b/task.md")
+  assert.deepEqual(await hits("soup"), ["food/task-b/task.md"])
+  assert.deepEqual(await hits("flowers"), [], "only the named file was read")
+  // A file that is not Markdown, present or gone, moves nothing.
+  notify("change", "data.json")
+  notify("rename", "notes.tmp")
+  assert.deepEqual(await hits("flowers"), [])
+  notify("rename", "garden")
+  assert.deepEqual(await hits("flowers"), ["garden/task-d/task.md"])
+  await writeFile(deskRoot, "more/task-e/task.md", "# Plants\n\npebbles\n")
+  notify("rename", "gone-folder")
+  assert.deepEqual(await hits("pebbles"), ["more/task-e/task.md"])
+  await writeFile(deskRoot, "more/task-f/task.md", "# Plants\n\ngravel\n")
+  notify("change", ".gitignore")
+  assert.deepEqual(await hits("gravel"), ["more/task-f/task.md"])
+
+  // A Desk write names its file; a removed file, a file outside the index and a folder named like a file drop out.
+  await writeFile(deskRoot, "more/task-g/task.md", "# Plants\n\nmoss\n")
+  await engine.recordChange({ path: "more\\task-g\\task.md" })
+  assert.deepEqual(await hits("moss"), ["more/task-g/task.md"])
+  await fs.rm(path.join(deskRoot, "food"), { recursive: true })
+  await writeFile(deskRoot, "deps/node_modules/x/task.md", SOUP)
+  await fs.mkdir(path.join(deskRoot, "cars", "task-z", "task.md"), { recursive: true })
+  for (const rel of ["food/task-b/task.md", "deps/node_modules/x/task.md", "cars/task-z/task.md"]) notify("rename", rel)
+  assert.deepEqual(await hits("soup"), [])
+
+  // A full read after an edit and a removal picks up both.
+  await writeFile(deskRoot, "cars/task-a/task.md", "# Car notes\n\nA bicycle now.\n")
+  await fs.rm(path.join(deskRoot, "garden"), { recursive: true })
+  await engine.recordChange({})
+  assert.deepEqual(await hits("bicycle"), ["cars/task-a/task.md"])
+  assert.deepEqual(await hits("flowers"), [])
 })
 
 test("the engine answers the calls session admission makes of a search service", async (t) => {

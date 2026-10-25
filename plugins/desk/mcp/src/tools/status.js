@@ -109,7 +109,7 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
     if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const activation = activationStatus(statusContext.activation)
-    const search = searchStatus(statusContext.admission)
+    const search = await searchStatus(statusContext.admission)
 
     return {
       status: root.valid ? "ok" : "error",
