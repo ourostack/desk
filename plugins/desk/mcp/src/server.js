@@ -66,7 +66,7 @@ export { admitControlPlane, configureRuntimeArtifacts }
 // Each session runs Desk search in its own process (src/search/engine.js). Session admission still calls it its
 // "controller": the engine answers the few calls admission makes of one.
 export async function connectOrStartController({ deskRoot, policy, createEngine = createSearchEngine }) {
-  return createEngine({ deskRoot, semantic: policy?.semantic })
+  return createEngine({ deskRoot, semantic: policy.semantic })
 }
 
 export async function beginBackgroundConvergence(admission) {

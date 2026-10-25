@@ -26,20 +26,21 @@ export const SEARCH_WORDING = Object.freeze({
   recallPreparing: (pending, total) => `${pending} of ${total} desk sections are still being prepared for meaning-based search, so exact-word matches are included.`,
   recallGettingReady: "Meaning-based search is getting ready, so these results match exact words.",
   similarNotReady: "This document is not prepared for meaning-based search yet; try again shortly.",
-  oldIndexRemoved: (bytes) => `Desk removed its old search index (${Math.round(bytes / 1e6)} MB), which this version no longer uses.`,
+  oldIndexRemoved: (bytes) => `Desk removed its old search index (${bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`}), which this version no longer uses.`,
 })
 
-export function createSearchEngine({
-  deskRoot,
-  stateDir = path.join(deskRoot, ".state"),
-  semantic = "background",
-  loadModel = loadEmbedder,
-  watch = watchNative,
-  batchSize = 64,
-  pauseMs = 25,
-  now = Date.now,
-  cleanup = removeOldIndex,
-} = {}) {
+export function createSearchEngine(options) {
+  const { deskRoot, stateDir, semantic, loadModel, watch, batchSize, pauseMs, now, cleanup } = {
+    stateDir: path.join(options.deskRoot, ".state"),
+    semantic: "background",
+    loadModel: loadEmbedder,
+    watch: watchNative,
+    batchSize: 64,
+    pauseMs: 25,
+    now: Date.now,
+    cleanup: removeOldIndex,
+    ...options,
+  }
   const db = openDb(deskRoot, { dbPath: ":memory:" })
   const store = semantic === "unsupported" ? null : openVectorStore(stateDir, MODEL.id)
   const oldIndex = cleanup(stateDir)
@@ -100,7 +101,7 @@ export function createSearchEngine({
       model = loaded
       modelError = null
     }, (error) => {
-      modelError = String(error?.message ?? error)
+      modelError = error.message
       modelFailedAt = now()
     }).finally(() => { modelLoading = null })
     return modelLoading
@@ -259,7 +260,7 @@ export function createSearchEngine({
     searchStatus,
     // Resolves once the current refresh and background embedding are done (tests).
     async settled() {
-      while (refreshing || embedding || modelLoading) await (refreshing ?? embedding ?? modelLoading).catch(() => {})
+      while (refreshing || embedding || modelLoading) await Promise.allSettled([refreshing, embedding, modelLoading])
     },
     async close() {
       closed = true

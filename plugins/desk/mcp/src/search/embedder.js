@@ -18,16 +18,16 @@ export const MODEL = Object.freeze({
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
 
 // Reads a model file from `dir`, downloading it first when it is missing or does not match its pinned hash.
-async function modelFile(dir, name, fetchImpl) {
+async function modelFile(dir, name, { model, fetchImpl }) {
   const file = path.join(dir, name)
   try {
     const bytes = readFileSync(file)
-    if (sha256(bytes) === MODEL.files[name]) return bytes
+    if (sha256(bytes) === model.files[name]) return bytes
   } catch { /* not downloaded yet */ }
-  const response = await fetchImpl(`${MODEL.url}/${name}`)
+  const response = await fetchImpl(`${model.url}/${name}`)
   if (!response.ok) throw new Error(`downloading ${name} failed with HTTP ${response.status}`)
   const bytes = Buffer.from(await response.arrayBuffer())
-  if (sha256(bytes) !== MODEL.files[name]) throw new Error(`downloaded ${name} does not match its pinned hash`)
+  if (sha256(bytes) !== model.files[name]) throw new Error(`downloaded ${name} does not match its pinned hash`)
   mkdirSync(dir, { recursive: true })
   const partial = `${file}.${process.pid}.partial`
   writeFileSync(partial, bytes)
@@ -36,17 +36,18 @@ async function modelFile(dir, name, fetchImpl) {
 }
 
 /** Loads the model from `<stateDir>/embedding-model/`, downloading it on first use. Resolves to `{ id, embed(text) }`. */
-export async function loadEmbedder({ stateDir, fetch: fetchImpl = globalThis.fetch } = {}) {
-  const dir = path.join(stateDir, "embedding-model", MODEL.id.replace(/[/@]/g, "-"))
-  const tokenizer = JSON.parse((await modelFile(dir, "tokenizer.json", fetchImpl)).toString("utf8"))
-  const weights = await modelFile(dir, "model.safetensors", fetchImpl)
+export async function loadEmbedder(options) {
+  const { stateDir, fetch: fetchImpl, model } = { fetch: globalThis.fetch, model: MODEL, ...options }
+  const dir = path.join(stateDir, "embedding-model", model.id.replace(/[/@]/g, "-"))
+  const tokenizer = JSON.parse((await modelFile(dir, "tokenizer.json", { model, fetchImpl })).toString("utf8"))
+  const weights = await modelFile(dir, "model.safetensors", { model, fetchImpl })
   const headerLength = Number(weights.readBigUInt64LE(0))
   const { embeddings } = JSON.parse(weights.subarray(8, 8 + headerLength).toString("utf8"))
   const [rows, dimension] = embeddings.shape
   const start = 8 + headerLength + embeddings.data_offsets[0]
   const table = new Float32Array(weights.buffer.slice(weights.byteOffset + start, weights.byteOffset + start + rows * dimension * 4))
   const vocab = new Map(Object.entries(tokenizer.model.vocab))
-  return { id: MODEL.id, dimension, embed: (text) => embedWith(text, { vocab, table, dimension }) }
+  return { id: model.id, dimension, embed: (text) => embedWith(text, { vocab, table, dimension }) }
 }
 
 function embedWith(text, { vocab, table, dimension }) {
