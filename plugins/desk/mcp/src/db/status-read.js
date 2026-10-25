@@ -134,7 +134,7 @@ function tooLongNote({ shortened, skipped }, waiting) {
   return `${parts.join("; ")}. Exact-word search (desk_search) still finds ${shortened.sections + skipped.sections + waiting === 1 ? "it" : "them"} in full.`
 }
 
-export function unavailableLocalDb(dbPath, state) {
+function unavailableLocalDb(dbPath, state) {
   return {
     local_db: {
       path: dbPath,

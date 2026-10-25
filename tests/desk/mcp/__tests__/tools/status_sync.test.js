@@ -163,24 +163,14 @@ test("the wait a session uses to close a status run also lasts until the desk_st
   }
 })
 
-test("an aborted status run stops waiting for the controller, and the close wait for a call that never settles ends in an error", async () => {
+test("the close wait for a desk_status call that never settles ends in an error", async () => {
   const deskRoot = await mkPlainRepo("desk-status-call-bounded-")
-  // A controller that never answers: the aborted run stops waiting for it, so its close wait resolves.
-  const controllerRun = new AbortController()
-  const asked = Promise.withResolvers()
-  const admission = { controller: { status: () => { asked.resolve(); return new Promise(() => {}) } } }
-  const stuckOnController = desk_status({ deskRoot, env, signal: controllerRun.signal, statusContext: { admission } }).then(() => "answered", () => "rejected")
-  await asked.promise
-  controllerRun.abort(new Error("runtime status context ended"))
-  await waitForStatusInspection(controllerRun.signal)
-  assert.equal(await stuckOnController, "rejected")
-
   // A read that takes no signal and never returns: the wait gives up with an error the session keeps the run for.
   const run = new AbortController()
   const reading = Promise.withResolvers()
   const release = Promise.withResolvers()
-  const queryRouter = { snapshot: async () => { reading.resolve(); await release.promise; throw new Error("released") } }
-  const stuck = desk_status({ deskRoot, env, signal: run.signal, queryRouter }).then(() => "answered", () => "rejected")
+  const admission = { controller: { searchStatus: async () => { reading.resolve(); await release.promise; throw new Error("released") } } }
+  const stuck = desk_status({ deskRoot, env, signal: run.signal, statusContext: { admission } }).then(() => "answered", () => "rejected")
   await reading.promise
   run.abort(new Error("runtime status context ended"))
   await assert.rejects(waitForStatusInspection(run.signal, { callSettleMs: 50 }), { code: "status_call_not_settled" })

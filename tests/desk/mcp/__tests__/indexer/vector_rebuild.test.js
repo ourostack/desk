@@ -1543,7 +1543,7 @@ test("desk_reindex force rebuild restores vector packs with live embeddings disa
     },
   })
   assert.equal(result.status, "error")
-  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.code, "search_starting")
 
   const db = openDb(deskRoot)
   try {

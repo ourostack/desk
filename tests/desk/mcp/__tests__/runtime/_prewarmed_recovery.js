@@ -40,7 +40,9 @@ async function prewarm(transport, { root, marker, evidence }) {
       const elapsedMs = performance.now() - started
       if (elapsedMs >= 200) throw new Error(`actual bootstrap prewarm status exceeded 200 ms: ${elapsedMs}`)
       const status = JSON.parse(result.content[0].text)
+      // A detail marked "Destination verification is pending" was answered during a revalidation, so it is not yet complete.
       if (!result.isError && status.state === "ready" && !status.detail_pending &&
+          !String(status.status_detail ?? "").includes("Destination verification is pending") &&
           status.root?.path === root && status.root.valid && status.write_scope?.mode === "workspace") {
         writeFileSync(evidence, JSON.stringify({
           state: status.state, root: status.root.path, detail: status.status_detail,

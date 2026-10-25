@@ -29,7 +29,7 @@ import * as path from "node:path"
 import { deskRelativePath, toDeskPath } from "../util/paths.js"
 import Database from "better-sqlite3"
 import { indexDbPath, closeDb } from "../db/init.js"
-import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { searchRouter } from "../search/files-router.js"
 
 const DEFAULT_DEPTH = 4
 const MAX_DEPTH = 32
@@ -166,7 +166,7 @@ function bfs(db, startDocId, depth, direction) {
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
 export async function desk_thread({ deskRoot, input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
+  return (queryRouter ?? searchRouter(readiness)).lexical({
     ...input, deskRoot, signal, kind: "thread",
   })
 }

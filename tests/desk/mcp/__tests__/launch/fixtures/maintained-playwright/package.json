@@ -1,9 +1,0 @@
-{
-  "name": "desk-maintained-playwright-test-input",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Locked public maintained source used only by browser component tests.",
-  "dependencies": {
-    "playwright-core": "1.64.0-alpha-1790635538000"
-  }
-}

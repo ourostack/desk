@@ -17,50 +17,23 @@ import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-test("alpha thread waits for controller convergence and never reads an unproven graph", async (t) => {
-  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
+test("desk_thread walks the session search engine's in-memory index", async (t) => {
+  const { createSearchEngine } = await import("../../../../../plugins/desk/mcp/src/search/engine.js")
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "quartz")
   await writeFile(root, "track/work/planning.md", "plan")
-  let release, enter
-  const hold = new Promise((resolve) => { release = resolve })
-  const entered = new Promise((resolve) => { enter = resolve })
-  const controller = await connectOrStartController({
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
-    watcher: { fence: async () => ({ certain: true }) },
-    handlers: { async beginConvergence({ eventCursor }) {
-      enter(); await hold
-      return { summary: await rebuildIndex(root, { skipEmbed: true, eventCursor }) }
-    } },
-  })
-  t.after(async () => { release(); await controller.close() })
-  const convergence = controller.beginConvergence()
-  await entered
-  const abort = new AbortController()
-  const cancelled = routedThread({
-    deskRoot: root, readiness: controller, signal: abort.signal,
-    input: { start_path: path.join("track", "work", "planning.md") },
-  })
-  const rejected = assert.rejects(cancelled, /caller cancelled/)
-  abort.abort(new Error("caller cancelled"))
-  await rejected
-  const waiting = routedThread({
-    deskRoot: root, readiness: controller,
-    input: { start_path: path.join("track", "work", "planning.md") },
-  })
-  release()
-  await convergence
-  const result = await waiting
+  const engine = createSearchEngine({ deskRoot: root, semantic: "unsupported", watch: () => ({ close() {} }) })
+  t.after(() => engine.close())
+  const result = await routedThread({ deskRoot: root, readiness: engine, input: { start_path: path.join("track", "work", "planning.md") } })
   assert.equal(result.chain.length, 2)
   assert.equal(result.chain[1].path, path.posix.join("track", "work", "task.md"))
 })
 
-test("alpha thread reports unavailable instead of fabricating a direct graph", async () => {
+test("before the search engine starts, desk_thread says search is starting and writes nothing", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "quartz")
   const result = await routedThread({ deskRoot: root, input: { start_path: "track/work/task.md" } })
-  assert.equal(result.code, "required_capability_unavailable")
-  assert.equal(result.capability, "lexical")
+  assert.equal(result.code, "search_starting")
   await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
 })
 

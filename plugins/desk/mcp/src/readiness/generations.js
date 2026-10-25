@@ -19,10 +19,6 @@ export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "de
   }
 }
 
-export function matchesLexicalGenerationIdentity(stored, expected) {
-  return Object.entries(expected).every(([key, value]) => stored?.[key] === value)
-}
-
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
 // Network work (including embedding) belongs after this function returns.
 export function commitLexicalGeneration({ db, documents, eventCursor = null, identities, writer, apply = () => {} }) {
