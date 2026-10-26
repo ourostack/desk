@@ -54,11 +54,14 @@ test("routed timeline reads the session search engine, with and without a query"
 test("timeline keeps the strongest section per document", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nupdated: 2026-09-19\n---\n## One\n\nalpha opening\n\n## Two\n\nalpha later stronger detail alpha\n")
+  await writeFile(root, "track/first/task.md", "---\nupdated: 2026-09-19\n---\n## One\n\nalpha opening stronger alpha\n\n## Two\n\nalpha later\n")
   await buildFixtureIndex(root)
   const result = await indexedTimeline({ deskRoot: root, input: { from: "2026-01-01", query: "alpha" } })
   assert.equal(result.search_mode, "lexical")
-  assert.equal(result.results.length, 1)
-  assert.equal(result.results[0].path, "track/work/task.md")
+  const snippets = Object.fromEntries(result.results.map((r) => [r.path, r.snippet]))
+  assert.deepEqual(Object.keys(snippets).sort(), ["track/first/task.md", "track/work/task.md"])
+  assert.match(snippets["track/work/task.md"], /stronger/u)
+  assert.match(snippets["track/first/task.md"], /stronger/u)
 })
 test("indexed search and timeline carry no meaning-search fields", async () => {
   const root = await mkTempDeskRoot()

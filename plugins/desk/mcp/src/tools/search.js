@@ -421,8 +421,9 @@ export async function indexedSearch({ deskRoot, input, opts, db }) {
   // the best chunk per doc.
   const bestByDoc = new Map()
   for (const [id, row] of hydrated) {
+    // The candidate query already applied the scope. It applied the filters too, but this recheck also
+    // drops everything for a filter value of the wrong type, which the query ignores.
     if (!passesFilter(row, filters)) continue
-    if (!passesScope(row, scope, "active")) continue
     const { score, breakdown } = combineScore({
       bm25: bm25ByChunk.get(id),
       recency: recencyDecay(row.updated_at, now),
