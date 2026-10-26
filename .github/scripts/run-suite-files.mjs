@@ -1,6 +1,7 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--repeat <n>] [--tests-root <folder>] [--durations <table.json>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--repeat <n>] [--jobs <n>] [--tests-root <folder>] [--durations <table.json>]
+// --jobs runs up to n files at once, each in its own process with its own HOME (_isolated_env.mjs), heaviest first by the duration table, so the shard ends close to its longest file. The results are in file name order whatever the finishing order.
 // --repeat runs each file n times in a row (for measuring how often a file fails); the file's result is its first failing run, or its last run, with every run's outcome in `runs`.
 // Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
@@ -8,7 +9,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
-import { assignShards, loadDurations } from "./suite-shards.mjs"
+import { assignShards, loadDurations, weightOf } from "./suite-shards.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -111,8 +112,9 @@ const aclProbe = args.includes("--probe-acl") ? await probeAcl() : null
 console.log("acl probe:", JSON.stringify(aclProbe))
 
 const repeat = Math.max(1, Number(arg("--repeat", "1")) || 1)
+const jobs = Math.max(1, Math.floor(Number(arg("--jobs", "1"))) || 1)
 const results = []
-for (const file of mine) {
+const runAll = async (file) => {
   const runs = []
   for (let i = 0; i < repeat; i += 1) runs.push(await runFile(file))
   const result = { ...(runs.find((r) => r.exitCode !== 0) ?? runs.at(-1)), ...(repeat > 1 ? { runs: runs.map(({ exitCode, timedOut, ms, fail, failedTests }) => ({ exitCode, timedOut, ms, fail, failedTests })) } : {}) }
@@ -122,6 +124,12 @@ for (const file of mine) {
   // The failure itself goes in the log too: a full rerun replaces the run's artifacts, and with them the earlier attempt's results.json.
   for (const f of result.failures) console.log(`        not ok: ${f.name}\n          ${f.error.replace(/\s+/gu, " ").slice(0, 800)}\n          at ${f.stack}`)
 }
+const weight = (file) => weightOf(path.relative(testsRoot, file).split(path.sep).join("/"), durations)
+const queue = [...mine].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0))
+await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
+  while (queue.length > 0) await runAll(queue.shift())
+}))
+results.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
 fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, aclProbe, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)
 const timeouts = results.filter((r) => r.timedOut)
