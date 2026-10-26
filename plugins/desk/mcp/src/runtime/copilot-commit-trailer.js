@@ -71,7 +71,7 @@ export function disableAskUser(options) {
 
 const SETTINGS = {
   trailer: { key: "includeCoAuthoredBy", subject: "commit trailer", sessionRule: "add no AI co-author trailer to commits in this session", effect: "Copilot stops asking for an AI co-author trailer on commits", setRule: "add none in this session either", stillOn: "Copilot still asks for an AI co-author trailer on commits" },
-  askUser: { key: "askUser", subject: "question form", sessionRule: "ask questions in plain chat in this session, never with the ask_user form", effect: "Copilot no longer offers the ask_user question form", stillOn: "Copilot still offers the ask_user question form" },
+  askUser: { key: "askUser", subject: "question form", sessionRule: "ask in plain chat, never with ask_user", effect: "the ask_user form is off", stillOn: "the ask_user form stays on" },
   memory: { key: "memory", memory: true, subject: "native memory", sessionRule: "do not use native memory tools; keep durable context in the Git-backed desk" },
 }
 
