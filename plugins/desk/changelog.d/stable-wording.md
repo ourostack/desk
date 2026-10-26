@@ -1,0 +1,1 @@
+Desk is stable, and the README, plugin descriptions and docs now say so instead of calling it an opt-in alpha or a preview. The repository README gives one install line for each host, Copilot CLI first. Version numbers, release stage names and earlier changelog entries are unchanged.

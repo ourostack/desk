@@ -9,7 +9,7 @@ Agentic Engineering V2 is a way of working in which humans hand agents whole eng
 
 **Contract and status.** Sections 1 to 8 describe how V2 works when it is complete. Section 9 says what runs today; nothing in sections 1 to 8 should be described as working if section 9 lists it as being built. V2 lives at https://github.com/ourostack/desk, and its channel is that repository's `main` branch.
 
-**Where things stand today, before you read the design.** As of 28 September 2026, V2 is opt-in alpha and an outside engineer can evaluate it end to end. Install, the startup foundations, channel-based updates, the public factory store and its [public site](https://ourostack.github.io/factory/) all run today. The kaizen loop, andon alarms and cross-job rollups are merged but not yet proven live end to end, and a self-review of the factory's own data caught and fixed two data-quality problems in it (details in section 9). A handful of gaps are still open, including draining recorded friction into kaizen cards and a separate factory store for work done under a company overlay. Section 9 is the complete, current account; treat nothing elsewhere in this document as already working where section 9 says otherwise.
+**Where things stand today, before you read the design.** As of 28 September 2026, V2 is stable (Desk 3.2.0 and later) and an outside engineer can evaluate it end to end. Install, the startup foundations, channel-based updates, the public factory store and its [public site](https://ourostack.github.io/factory/) all run today. The kaizen loop, andon alarms and cross-job rollups are merged but not yet proven live end to end, and a self-review of the factory's own data caught and fixed two data-quality problems in it (details in section 9). A handful of gaps are still open, including draining recorded friction into kaizen cards and a separate factory store for work done under a company overlay. Section 9 is the complete, current account; treat nothing elsewhere in this document as already working where section 9 says otherwise.
 
 **See it.** The public factory site is built live from the store: https://ourostack.github.io/factory/.
 
@@ -136,7 +136,7 @@ Upstream providers such as Superpowers are vendored from their own default branc
 
 **Your first job.** After setup, start a session and describe the outcome you want and why, not the steps. Your agent talks it through with you, records it as a task in your desk, and asks for go. After go, leave it to work: it comes back for a real decision, for authority it lacks, or with the result and its evidence. If you catch yourself relaying output, re-explaining context or narrating steps, expect your agent to suggest a reset, and take it.
 
-**V2 replaces V1; it never runs alongside it.** Until the maintainer makes the promotion call, V2 is opt-in: you get it by installing from this repository. Promotion moves V1 users over; there is no parallel installation and no separate rollback package, because Git already holds the history. Existing alpha users who installed from the earlier repository move to this one automatically. V1's plugins in `ourostack/ouroboros-skills` keep working until promotion and retire with it.
+**V2 replaces V1; it never runs alongside it.** V2 is opt-in: you get it by installing from this repository. Promotion moves V1 users over; there is no parallel installation and no separate rollback package, because Git already holds the history. Existing early users who installed from the earlier repository move to this one automatically. V1's plugins in `ourostack/ouroboros-skills` keep working until promotion and retire with it.
 
 ## 8. Limits
 
@@ -146,7 +146,7 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 
 ## 9. Status
 
-**As of 28 September 2026: opt-in alpha, ready for evaluation.** An engineer outside the team can now evaluate V2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
+**As of 28 September 2026: ready for evaluation. Desk 3.2.0 and later are stable.** An engineer outside the team can now evaluate V2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
 
 **Browser status updated October 14, 2026.** The browser entries below distinguish the carried alpha.322 direct-stock change from the [undelivered effortless-browser target](#31-effortless-browser-contract). Other status entries retain their September evidence; this bounded update does not re-certify fresh setup, host composition, recovery, organization or the work factory store. The [packet](evaluation-packet.md#how-the-evaluation-works) starts those cold-run gates unrun, and evaluation and promotion remain human decisions.
 

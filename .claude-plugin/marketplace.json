@@ -6,7 +6,7 @@
     "url": "https://github.com/ourostack/desk"
   },
   "metadata": {
-    "description": "Opt-in alpha: Desk and Crew retain durable work state and authority; Superpowers is the engineering method, independent review has one remediation owner, and Plain Language governs prose. Host packaging does not imply runtime qualification.",
+    "description": "Desk and Crew retain durable work state and authority; Superpowers is the engineering method, independent review has one remediation owner, and Plain Language governs prose. Host packaging does not imply runtime qualification.",
     "version": "1.0.0"
   },
   "plugins": [

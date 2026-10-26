@@ -2,11 +2,11 @@
 
 Spawned by consumers (Claude Code, Copilot CLI, ouroboros daemon) to expose a uniform tool surface for working with a desk workspace. Tools include task / track / friction / lesson CRUD and exact-word plus meaning-based search.
 
-## Lexical-first alpha candidate
+## Lexical-first milestone
 
-Desk `3.2.0-alpha.7` / `desk-mcp@1.4.0-alpha.6` packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): correct lexical answers during startup and file changes, fresh direct fallback when readiness is uncertain, durable journal/restart behavior, one index writer, and zero orphan vectors.
+This server packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): correct lexical answers during startup and file changes, fresh direct fallback when readiness is uncertain, durable journal/restart behavior, one index writer, and zero orphan vectors.
 
-Semantic scheduling and transactional recovery are not qualified in this alpha. Repeated tombstone-policy changes fail closed but may return a generic error instead of typed `readiness_changed_during_read`. Runtime dependency packs reuse byte-identical, previously native-verified payloads with provenance; repackaging is not fresh native execution.
+Semantic scheduling and transactional recovery are not qualified yet. Repeated tombstone-policy changes fail closed but may return a generic error instead of typed `readiness_changed_during_read`. Runtime dependency packs reuse byte-identical, previously native-verified payloads with provenance; repackaging is not fresh native execution.
 
 ## Run it directly
 
