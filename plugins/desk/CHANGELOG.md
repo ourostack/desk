@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.22 — 2026-10-26
+
+Three rules moved from one operator's desk notes into the shared skills that own them, and visual proof is now the default. [`using-desk`](skills/using-desk/SKILL.md) and [`evidence-discipline`](skills/evidence-discipline/SKILL.md) ask for bounded visual proof, captured as you go, of anything a person sees (screens, settings before and after, replies, refusals, errors, results), not only of a claimed rendered or rollout state. The rule follows what the work touches, not what it is called, and a brief's silence never waives it. The foundation stays the same size. [`interaction-style`](skills/interaction-style/SKILL.md) now says to answer the operator before any blocking wait and, while they are present, to wait in slices of a minute or less. `evidence-discipline` adds a rule: a fact the operator states is recorded at once, dated and attributed. `using-desk` now follows the operator's experience taxonomy: UX is the parent of HX (human experience) and AX (agent experience), so HX is no longer called "formerly UX". The coaching rule for the same correction twice now says to record it with `lesson_add`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.21 — 2026-10-26
 
 Every child brief now asks for visual proof, and every return lists it. The Superpowers mapper adds a visual-proof sentence to `briefRules` ([`mcp/src/activation/superpowers-context.js`](mcp/src/activation/superpowers-context.js)): when the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), the child saves bounded screenshots into its own `evidence/<brief name>/` folder beside its brief, so children whose briefs share a folder never overwrite each other's files, and returns an Evidence list beside Resources. [`work-orchestration`](skills/work-orchestration/SKILL.md) carries the same sentence for briefs the root writes itself, and has the root check Evidence on integration and send back visual work that arrives without visuals. Before, briefs for "look into" or "deep-dive" work said nothing about screenshots, so children returned none. A test keeps the mapper's sentence and the skill's the same.
