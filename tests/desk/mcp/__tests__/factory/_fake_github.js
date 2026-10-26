@@ -11,7 +11,6 @@ import { createHash } from "node:crypto"
 import "../_isolated_env.mjs"
 import { anonymousGithub } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { isTriagePath, validateTriageChange } from "../../../../../plugins/desk/mcp/src/factory/triage-schema.js"
 
 export const TOKEN = "ghp_SENTINEL"
 export const BOT = "github-actions[bot]"
@@ -69,10 +68,6 @@ export function fakeGitHub({
   captureJson = null,
   // Capture records already on the default branch: `{ "<intake id>.json": bytes }`.
   mainCapture = {},
-  // The store's `triage.json` on the default branch (a string), or `null` for none; `setTriageJson` changes it.
-  triageJson = null,
-  // Triage batches already on the default branch: `{ "<batch>.json": bytes }`.
-  mainTriage = {},
   contextJson = null,
   mainContext = {},
   intercept = null,
@@ -162,14 +157,6 @@ export function fakeGitHub({
     }))
     rootEntries.push(["capture", { type: "tree", sha: captureTree }])
   }
-  if (Object.keys(mainTriage).length > 0) {
-    const triageTree = putTree(Object.entries(mainTriage).map(([name, bytes]) => {
-      const sha = gitBlobSha(bytes)
-      blobs.set(sha, Buffer.from(bytes).toString("utf8"))
-      return [name, { type: "blob", sha }]
-    }))
-    rootEntries.push(["triage", { type: "tree", sha: triageTree }])
-  }
   if (factoryJson !== null) {
     const sha = gitBlobSha(factoryJson)
     blobs.set(sha, factoryJson)
@@ -231,10 +218,6 @@ export function fakeGitHub({
     if (method === "GET" && pathPart === `repos/${store}/contents/capture.json`) {
       if (captureJson === null) return httpError(404, "Not Found")
       return ok({ type: "file", encoding: "base64", content: Buffer.from(captureJson, "utf8").toString("base64") })
-    }
-    if (method === "GET" && pathPart === `repos/${store}/contents/triage.json`) {
-      if (triageJson === null) return httpError(404, "Not Found")
-      return ok({ type: "file", encoding: "base64", content: Buffer.from(triageJson, "utf8").toString("base64") })
     }
     if (method === "GET" && pathPart === `repos/${store}/contents/context.json`) {
       if (contextJson === null) return httpError(404, "Not Found")
@@ -436,33 +419,11 @@ export function fakeGitHub({
       pr.merged_at = "merged"
       return pr
     },
-    /** The store's `triage.json` changes on the default branch (a string, or `null` to remove it). */
-    setTriageJson(value) {
-      triageJson = value
-    },
     setContextJson(value) {
       contextJson = value
     },
     /** The bytes of a blob the model holds, as text. */
     blobText: (sha) => blobs.get(sha),
-    /**
-     * The store's trusted validate and merge for the open intake PR's triage files, with the real change gate (`validateTriageChange`): each
-     * `triage/` path the PR changes is judged as added, modified or removed against the default branch, and `trustedMaintainer` is the PR
-     * actor's push permission read now. Any refusal rejects the PR with its first code, as the store's workflow comments it; otherwise it merges.
-     */
-    settleOpenPr() {
-      const pr = pulls.find((item) => item.state === "open")
-      const head = filesOf(commits.get(repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)).tree)
-      const before = filesOf(commits.get(storeRepo().refs.get("heads/main")).tree)
-      const trustedMaintainer = storeRepo().meta.permissions.push === true && pr.headRepo === store
-      for (const name of new Set([...head.keys(), ...before.keys()])) {
-        if (!isTriagePath(name) || head.get(name) === before.get(name)) continue
-        const status = !before.has(name) ? "added" : head.has(name) ? "modified" : "removed"
-        const checked = validateTriageChange({ path: name, status, bytes: blobs.get(head.get(name)), ...(before.has(name) ? { previousBytes: blobs.get(before.get(name)) } : {}), trustedMaintainer })
-        if (!checked.ok) return { merged: false, code: checked.errors[0].code, pr: this.rejectOpenPr(`factory-rejected: ${checked.errors[0].code}`) }
-      }
-      return { merged: true, pr: this.mergeOpenPr() }
-    },
     /** Rejects the open intake PR the way the store's merge workflow does: a comment, then close. */
     rejectOpenPr(body, login = BOT) {
       const pr = pulls.find((item) => item.state === "open")

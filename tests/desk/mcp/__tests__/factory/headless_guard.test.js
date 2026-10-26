@@ -17,7 +17,6 @@ import { bootOnce, isNoninteractive } from "../../../../../plugins/desk/mcp/src/
 import { runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { runHook as endRunHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 import { runHook as syncRunHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
-import { runTriageChild } from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
 import { bootFixtureEnv } from "../_boot_fixture.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
@@ -25,14 +24,6 @@ import { ID, STORE, json, scratch, session } from "./_session_helpers.js"
 const require = createRequire(import.meta.url)
 const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const PLUGIN = path.dirname(HOOKS)
-
-test("recursive triage refuses before CLI discovery, diagnostics or model launch", async () => {
-  let spawned = 0
-  const result = await runTriageChild({ env: { DESK_FACTORY_HEADLESS: "1" },
-    spawn: () => { spawned += 1; throw new Error("must not spawn") } })
-  assert.deepEqual(result, { state: "headless_session" })
-  assert.equal(spawned, 0)
-})
 
 test("the flag counts only when set and neither empty nor 0", () => {
   for (const value of ["1", "true", "yes", " 1 ", " ", " 0 "]) assert.equal(isHeadlessFactorySession({ DESK_FACTORY_HEADLESS: value }), true, value)

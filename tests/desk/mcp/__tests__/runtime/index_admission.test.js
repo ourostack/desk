@@ -131,6 +131,7 @@ test("fresh own-host status names the resolved root while runtime import is stil
   assert.equal(status.root.path, f.workspace)
   assert.equal(status.root.source, "host-project")
   assert.equal(status.admission.writes, "refused")
+  assert.ok(Number.isInteger(status.admission.handshake_ms) && status.admission.handshake_ms >= 0, "the detail names when this process first answered tools/list")
   assert.doesNotMatch(JSON.stringify(status), /first-run-bootstrap|no_desk_root|exporting DESK/u)
 })
 

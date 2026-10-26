@@ -16,9 +16,6 @@ import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-sta
 import { LOCK_OUTER_AGE_MS, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { consumeEvaluationContinuation } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
-import { runTriageStep } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
-import { KEYS, NEEDS_PREPARED_RUN, qualifiedSeams, triageWorld } from "./_triage_world.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -57,15 +54,8 @@ function fakes(log, { clock, over = {} } = {}) {
     log.push([key, options])
     return over[key]?.result ?? { ok: true, result: "done" }
   }
-  // The triage step answers more than a code: whether it took the agent slot and the continuation it minted.
-  const triage = async (env, options) => {
-    log.push(["triage", options])
-    const answer = over.triage?.result ?? { ok: true, result: "done", launched: false }
-    await recordStep(env, "triage", { ok: answer.ok, result: answer.result, now: options.now })
-    return answer
-  }
   const impls = {
-    triage, consumeContinuation: async () => ({ state: "unknown_token" }),
+    consumeContinuation: async () => ({ state: "unknown_token" }),
     evaluate: selfRecording("evaluate"), routeIssues: collector("routeIssues"), routeLocal: collector("routeLocal"),
     mirror: selfRecording("mirror"), reconcile: selfRecording("reconcile"), verify: selfRecording("verify"), measure: selfRecording("measure"),
     // The kick that drains the queue never starts a process in a test.
@@ -87,18 +77,11 @@ test("the steps run in exactly this order, each with the desk, the person and a 
   const log = []
   const clock = fakeClock()
   const outcome = await run(ctx, log, { clock: clock.read })
-  assert.deepEqual(names(log), ["routeIssues", "routeLocal", "triage", "evaluate", "mirror", "reconcile", "verify", "measure"])
-  assert.deepEqual(LOOP_STEP_NAMES, ["route", "triage", "evaluate", "mirror", "reconcile", "verify", "measure"])
+  assert.deepEqual(names(log), ["routeIssues", "routeLocal", "evaluate", "mirror", "reconcile", "verify", "measure"])
+  assert.deepEqual(LOOP_STEP_NAMES, ["route", "evaluate", "mirror", "reconcile", "verify", "measure"])
   const by = Object.fromEntries(log)
   assert.equal(by.evaluate.pluginVersion, "9.9.9")
   assert.equal(by.evaluate.maxRuns, 1, "one worker generation starts at most one evaluation")
-  assert.deepEqual([by.triage.deskRoot, by.triage.personPrefix, by.triage.pluginVersion], [ctx.desk, "desks/ari", "9.9.9"])
-  assert.match(by.triage.generation, /^[0-9a-f]{32}$/u)
-  assert.equal(typeof by.triage.lock, "object", "the worker passes the lock it holds, as the qualifier's proof")
-  assert.ok(by.triage.lock !== null)
-  assert.equal(by.triage.deadline.getTime(), by.evaluate.deadline.getTime(), "both agent steps share the one deadline")
-  assert.equal(typeof by.triage.onChild, "function")
-  assert.equal(typeof by.triage.onChildExit, "function")
   assert.ok(by.evaluate.deadline.getTime() <= clock.now - 0 + LOOP_BUDGET_MS - LATER_STEPS_RESERVE_MS, "the evaluator's deadline leaves room for the later steps")
   assert.ok(by.evaluate.deadline.getTime() > clock.now, "and is in the future")
   assert.equal(typeof by.evaluate.onChild, "function")
@@ -109,13 +92,13 @@ test("the steps run in exactly this order, each with the desk, the person and a 
   }
   assert.deepEqual(by.reconcile.desks, [ctx.desk])
   assert.equal(by.reconcile.personPrefix, "desks/ari")
-  assert.deepEqual(by.measure.attempted, ["route", "triage", "evaluate", "mirror", "reconcile", "verify"])
+  assert.deepEqual(by.measure.attempted, ["route", "evaluate", "mirror", "reconcile", "verify"])
   assert.deepEqual(outcome, {
-    result: "completed", ran: 7, skipped: 0, failed: 0,
-    steps: { route: "routed", triage: "done", evaluate: "done", mirror: "done", reconcile: "done", verify: "done", measure: "done" },
+    result: "completed", ran: 6, skipped: 0, failed: 0,
+    steps: { route: "routed", evaluate: "done", mirror: "done", reconcile: "done", verify: "done", measure: "done" },
   })
   const status = await readStatus(ctx.env)
-  assert.deepEqual(Object.keys(status.loop.steps).sort(), ["evaluate", "measure", "mirror", "reconcile", "route", "triage", "verify"])
+  assert.deepEqual(Object.keys(status.loop.steps).sort(), ["evaluate", "measure", "mirror", "reconcile", "route", "verify"])
   assert.equal(status.loop.steps.route.last_result, "routed")
   assert.equal(status.loop.steps.route.runs, 1, "the route pair records once")
 }))
@@ -123,7 +106,7 @@ test("the steps run in exactly this order, each with the desk, the person and a 
 test("a step that throws records a failure and the next step still runs, with nothing of the error kept", () => scratch(async (ctx) => {
   const log = []
   const outcome = await run(ctx, log, {}, { mirror: { throws: true }, evaluate: { throws: true } })
-  assert.deepEqual(names(log), ["routeIssues", "routeLocal", "triage", "evaluate", "mirror", "reconcile", "verify", "measure"])
+  assert.deepEqual(names(log), ["routeIssues", "routeLocal", "evaluate", "mirror", "reconcile", "verify", "measure"])
   assert.equal(outcome.steps.evaluate, "step_error")
   assert.equal(outcome.steps.mirror, "step_error")
   assert.equal(outcome.steps.reconcile, "done")
@@ -176,12 +159,12 @@ test("steps inside their minimum gap are skipped, leave last_ran_at as it was an
   await recordStep(ctx.env, "reconcile", { ok: true, result: "done", now: earlier })
   const log = []
   const outcome = await run(ctx, log, { clock: clock.read })
-  assert.deepEqual(names(log), ["triage", "evaluate", "mirror", "verify", "measure"], "route and reconcile are inside their gaps (6 hours and 24 hours); triage has no gap, its refresh runs every time")
-  assert.deepEqual(Object.fromEntries(log).measure.attempted, ["triage", "evaluate", "mirror", "verify"])
+  assert.deepEqual(names(log), ["evaluate", "mirror", "verify", "measure"], "route and reconcile are inside their gaps (6 hours and 24 hours)")
+  assert.deepEqual(Object.fromEntries(log).measure.attempted, ["evaluate", "mirror", "verify"])
   assert.equal(outcome.steps.route, "skipped")
   assert.equal(outcome.steps.reconcile, "skipped")
   assert.equal(outcome.skipped, 2)
-  assert.equal(outcome.ran, 5)
+  assert.equal(outcome.ran, 4)
   const status = await readStatus(ctx.env)
   assert.equal(status.loop.steps.route.last_ran_at, earlier.toISOString())
   assert.equal(status.loop.steps.route.runs, 1)
@@ -315,7 +298,7 @@ test("the worker stops starting steps once the 20-minute budget is spent, and sa
   const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls })
   assert.deepEqual(names(log), ["routeIssues", "routeLocal"], "route's second half was already inside its step; no later step starts")
   assert.equal(outcome.result, "budget_spent")
-  assert.deepEqual(outcome.steps, { route: "routed", triage: "not_started", evaluate: "not_started", mirror: "not_started", reconcile: "not_started", verify: "not_started", measure: "not_started" })
+  assert.deepEqual(outcome.steps, { route: "routed", evaluate: "not_started", mirror: "not_started", reconcile: "not_started", verify: "not_started", measure: "not_started" })
   assert.equal(outcome.ran, 1)
   const budgetOf = (value) => value
   assert.equal(budgetOf(LOOP_BUDGET_MS), 20 * MINUTE)
@@ -643,116 +626,29 @@ test("requests that cannot be read make nothing due early", () => scratch(async 
   assert.equal(outcome.steps.evaluate, "skipped")
 }))
 
-test("one_agent_slot_and_one_continuation", { skip: NEEDS_PREPARED_RUN }, async () => {
-  // The real triage step, shared ledger and continuation; only the runner custody and the other steps are fakes. Twenty cards, twenty
-  // accepted results, still one agent.
-  const keys = Array.from({ length: 20 }, (_, index) => `andon:example-org/example-repo#${300 + index}`)
-  const w = await triageWorld({ now: new Date(), keys })
-  await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 2, ready_later: 0 } }))
-  const lockFile = path.join(await factoryStateRoot(w.env), "locks", "loop-worker.running")
-  const generation = async (clock = Date.now) => {
-    const log = []
-    const impls = fakes(log)
-    const kicks = []
-    impls.triage = (env, options) => runTriageStep(env, { ...options, impls: qualifiedSeams() })
-    impls.consumeContinuation = consumeEvaluationContinuation
-    impls.kick = async (env, options) => { kicks.push({ options, lock: await fs.stat(lockFile).then(() => "held", () => "free") }); return { kicked: true, reason: "continuation" } }
-    const outcome = await runLoopWorker(w.env, { deskRoot: w.deskRoot, personPrefix: "", pluginVersion: "9.9.9", impls, clock })
-    return { outcome, log, kicks }
-  }
-  // Generation one: triage takes the slot from an evaluation that was due, so the evaluator is neither run nor stamped.
-  const first = await generation()
-  assert.equal(first.outcome.steps.triage, "ran", JSON.stringify(first.outcome))
-  assert.deepEqual((await readStatus(w.env)).triage.counts, { reviewed: 20, refused: 0, deferred: 0, unreviewed: 0 }, "despite twenty results")
-  assert.equal(first.outcome.steps.evaluate, "slot_taken")
-  assert.equal(names(first.log).includes("evaluate"), false, "one agent a generation")
-  const after = await readStatus(w.env)
-  assert.equal(after.loop.steps.evaluate, undefined, "a deferred evaluation is not recorded as a run")
-  const token = after.loop.evaluation_continuation
-  assert.equal(typeof token, "object")
-  assert.deepEqual(first.kicks, [{ options: { continuation: true, scope: { deskRoot: w.deskRoot, personPrefix: "" } }, lock: "free" }], "exactly one kick, after the lock is released")
-  assert.deepEqual(first.log.find(([name]) => name === "measure")[1].attempted, ["route", "triage", "mirror", "reconcile", "verify"])
-  // Generation two: the evaluator consumes the token under the lock and runs; triage's window is used, so the slot is the evaluator's.
-  const second = await generation()
-  assert.equal(second.outcome.steps.triage, "not_due")
-  assert.equal(second.outcome.steps.evaluate, "done")
-  assert.equal(names(second.log).filter((name) => name === "evaluate").length, 1)
-  assert.deepEqual(second.kicks, [], "a continuation is kicked once, never again")
-  assert.equal((await readStatus(w.env)).loop.evaluation_continuation, undefined)
-  assert.equal((await consumeEvaluationContinuation(w.env, { token, now: new Date(), status: await readStatus(w.env) })).state, "already_consumed")
-  const third = await generation()
-  assert.deepEqual(third.kicks, [])
-})
-
-test("prior_evaluation_failure_not_bypassed", { skip: NEEDS_PREPARED_RUN }, async () => {
-  const w = await triageWorld({ now: new Date(), keys: KEYS.slice(0, 1) })
-  await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 1, ready_later: 0 } }))
-  const worker = async (over = {}) => {
-    const log = []
-    const impls = { ...fakes(log), triage: (env, options) => runTriageStep(env, { ...options, impls: qualifiedSeams() }), consumeContinuation: consumeEvaluationContinuation, ...over }
-    return { outcome: await runLoopWorker(w.env, { deskRoot: w.deskRoot, personPrefix: "", pluginVersion: "9.9.9", impls }), log, kicks: impls.kicks }
-  }
-  const first = await worker()
-  assert.equal(first.outcome.steps.evaluate, "slot_taken")
-  const token = (await readStatus(w.env)).loop.evaluation_continuation
-  assert.equal(typeof token, "object")
-  // A genuine evaluation runs and fails before the continuation is used: its cooldown (the step's gap) now holds.
-  await recordStep(w.env, "evaluate", { ok: false, result: "timeout", now: new Date() })
-  const second = await worker()
-  assert.equal(second.outcome.steps.evaluate, "skipped", "the continuation does not bypass the failure's gap")
-  assert.equal(names(second.log).includes("evaluate"), false)
-  assert.equal((await readStatus(w.env)).loop.evaluation_continuation, undefined, "the refused token is offered once and dropped")
-  assert.equal((await readStatus(w.env)).loop.steps.evaluate.last_result, "timeout")
-  assert.deepEqual(second.kicks, [])
-  // A consumed token makes an evaluator inside its gap due; a ledger that cannot answer changes nothing.
-  await updateStatus(w.env, (status) => ({ ...status, loop: { ...status.loop, evaluation_continuation: token } }))
-  const refusedByError = await worker({ consumeContinuation: async () => { throw new Error("PRIVATE ledger") } })
-  assert.equal(refusedByError.outcome.steps.evaluate, "skipped")
-  await updateStatus(w.env, (status) => ({ ...status, loop: { ...status.loop, evaluation_continuation: token } }))
-  const seen = []
-  const consumed = await worker({ consumeContinuation: async (env, options) => { seen.push(options); return { state: "consumed" } } })
-  assert.equal(consumed.outcome.steps.evaluate, "done")
-  assert.deepEqual(seen[0].token, token)
-  assert.ok(seen[0].now instanceof Date)
-  assert.equal(typeof seen[0].status, "object")
-  // A token replaced while it was being consumed is left for its own worker.
-  await recordStep(w.env, "evaluate", { ok: false, result: "timeout", now: new Date() })
-  await updateStatus(w.env, (status) => ({ ...status, loop: { ...status.loop, evaluation_continuation: token } }))
-  const newer = { ...token, replaced: true }
-  await worker({ consumeContinuation: async (env) => { await updateStatus(env, (status) => ({ ...status, loop: { ...status.loop, evaluation_continuation: newer } })); return { state: "eligibility_changed" } } })
-  assert.deepEqual((await readStatus(w.env)).loop.evaluation_continuation, newer)
-})
-
-test("a triage step that throws leaves the slot unknown: the evaluator does not launch in that generation", () => scratch(async (ctx) => {
-  const log = []
-  const impls = fakes(log)
-  impls.triage = async () => { throw new Error("PRIVATE triage") }
-  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
-  assert.deepEqual([outcome.steps.triage, outcome.steps.evaluate], ["step_error", "slot_unknown"])
-  assert.equal(names(log).includes("evaluate"), false)
-  assert.equal((await readStatus(ctx.env)).loop.steps.evaluate, undefined, "a held evaluator is not stamped")
-  assert.deepEqual(impls.kicks, [])
-}))
-
-test("a triage that failed, or that found a continuation already issued, starts no kick; a launch without a waiting evaluation neither", () => scratch(async (ctx) => {
-  for (const answer of [
-    { ok: false, result: "timeout", launched: true },
-    { ok: false, result: "no_time_for_a_run", launched: false },
-    { ok: true, result: "ran", launched: true, continuation: { state: "exists" } },
-    { ok: true, result: "ran", launched: true },
-  ]) {
+test("a continuation an earlier Desk left is consumed under the lock and removed, and only a consumed one makes the evaluator due", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  for (const [state, ran] of [["consumed", true], ["unknown_token", false]]) {
     await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"), { force: true })
-    const impls = fakes([], { over: { triage: { result: answer } } })
-    const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
-    assert.deepEqual(impls.kicks, [], JSON.stringify(answer))
-    assert.equal(outcome.steps.evaluate, answer.launched ? "slot_taken" : "done")
-    assert.equal(outcome.failed, answer.ok ? 0 : 1)
+    await recordStep(ctx.env, "evaluate", { ok: true, result: "done", now: new Date(clock.now - MINUTE) })
+    const token = { serial: 1 }
+    await updateStatus(ctx.env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: token } }))
+    const log = []
+    const offered = []
+    const impls = fakes(log)
+    impls.consumeContinuation = async (env, options) => { offered.push(options.token); return { state } }
+    const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls })
+    assert.deepEqual(offered, [token], state)
+    assert.equal(outcome.steps.evaluate, ran ? "done" : "skipped", state)
+    assert.equal((await readStatus(ctx.env)).loop.evaluation_continuation, undefined, "a token is offered once")
   }
-  // An issued continuation kicks once even when the triage run itself failed: the evaluation it deferred is still owed its turn.
-  const impls = fakes([], { over: { triage: { result: { ok: false, result: "timeout", launched: true, continuation: { state: "issued", token: {} } } } } })
-  const calls = []
-  impls.kick = async (env, options) => { calls.push(options); throw new Error("PRIVATE kick") }
-  await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"), { force: true })
-  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
-  assert.deepEqual(calls, [{ continuation: true, scope: { deskRoot: ctx.desk, personPrefix: "" } }], "one kick; a kick that fails is not retried")
+  // A different token that took its place meanwhile is not this worker's to remove.
+  await updateStatus(ctx.env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: { serial: 1 } } }))
+  const impls = fakes([])
+  impls.consumeContinuation = async (env) => {
+    await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: { serial: 2 } } }))
+    return { state: "unknown_token" }
+  }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls })
+  assert.deepEqual((await readStatus(ctx.env)).loop.evaluation_continuation, { serial: 2 })
 }))

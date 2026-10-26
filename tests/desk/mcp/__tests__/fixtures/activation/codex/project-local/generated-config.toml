@@ -2,7 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@3.2.2 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@3.2.4 mode=project-local owner=desk-activation
 [[hooks.SessionEnd]]
 
 [[hooks.SessionEnd.hooks]]

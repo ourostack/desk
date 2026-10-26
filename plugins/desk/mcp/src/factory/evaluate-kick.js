@@ -18,18 +18,10 @@
 // drains back to back, one worker after another, until nothing the runner can run today is left. Every run stays
 // inside the daily ceiling (`MAX_HEADLESS_JOBS_PER_DAY`), the 3-attempt limit and one attempt per job per UTC day. The ceiling is the
 // shared launch ledger's (`headless-ledger.js`): the day is spent for the kick when the evaluator's own count reached it, or when the
-// witnessed shared quota leaves no evaluation launch now (spent, or held back for triage's unused windows).
-//
-// The kick also starts the worker when improvement triage is due with no evaluation request waiting (`triageKickDue`): the
-// shared ledger's witness leaves a triage launch now, the last triage step found cards waiting for a review,
-// its runner was not unavailable on this host, the step's last pass did not fail and its last agent run did not fail (a failing triage
-// is retried by the next session-start worker, never by a kick), and the step last ran at least `TRIAGE_KICK_GAP_MS` ago. No request no longer
-// means no worker when triage is due. A triage-only worker generation kicks once more when it ends with a fresh evaluation
-// continuation (`kickLoop` with `continuation`), so the evaluation it deferred starts without another turn; that kick skips
-// only the due check, never the switches, the state folder or a running worker.
+// witnessed shared quota leaves no evaluation launch now (spent, or held back for the ledger's unused triage windows).
 //
 // It starts nothing in a headless factory session, with the loop switched off (`DESK_FACTORY_LOOP`), without factory
-// state, with no request waiting and no triage due, or while a loop worker holds its lock and is younger than the worker's own hard
+// state, with no request waiting, or while a loop worker holds its lock and is younger than the worker's own hard
 // stop. The kick changes no budget rule: the worker it starts runs the same evaluator step, under the same daily cap,
 // sign-in probe and billing rules (`disabled_would_bill` stays the person's decision), and a busy worker answers
 // `busy` as before. Answers are codes only.
@@ -44,7 +36,7 @@ import { fileURLToPath } from "node:url"
 
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
-import { evaluationQuotaOpen, quotaFor, validWitness } from "./headless-ledger.js"
+import { evaluationQuotaOpen } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, updateStatus } from "./outbox.js"
 import { contextEvaluationDue } from "./context-run.js"
@@ -69,7 +61,7 @@ const isObject = (value) => typeof value === "object" && value !== null && !Arra
 const tally = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
 const PREFIX = /^(?:|desks\/(?!\.{1,2}$)[^/\\]+)$/u
 
-/** An explicit caller scope, or the scope the verified launcher carried into its worker. No context means no triage hint. */
+/** An explicit caller scope, or the scope the verified launcher carried into its worker, or null. */
 export function loopScopeFor(env, scope) {
   if (scope === undefined) {
     try { scope = JSON.parse(env[LOOP_SCOPE_ENV]) } catch { return null }
@@ -78,21 +70,6 @@ export function loopScopeFor(env, scope) {
     typeof scope.personPrefix === "string" && PREFIX.test(scope.personPrefix)
     ? { deskRoot: path.resolve(scope.deskRoot), personPrefix: scope.personPrefix } : null
 }
-const scopeKey = (scope) => JSON.stringify([scope.deskRoot, scope.personPrefix])
-
-// A missing observation is not healthy. Readable old history only asks for one fresh observation of the positively resolved
-// active scope. A requested-but-unobserved pass keeps the normal retry gap, so a busy/failed spawn never loses the opportunity.
-function needsObservation(status, scope, now) {
-  if (scope === null) return false
-  const scopes = status?.triage_by_desk
-  if (scopes !== undefined && (!isObject(scopes) || scopes[scopeKey(scope)] !== undefined)) return false
-  if (!isObject(status?.triage) && !(isObject(scopes) && Object.keys(scopes).length > 0)) return false
-  const requested = status?.triage_reobserve
-  if (requested !== undefined && !isObject(requested)) return false
-  const last = requested?.[scopeKey(scope)]
-  return last === undefined || (typeof last === "string" && Number.isFinite(Date.parse(last)) && now - Date.parse(last) >= TRIAGE_KICK_GAP_MS)
-}
-
 /**
  * `evaluateDue(status, now, { newWorkAt, kick }) -> boolean`: whether the evaluator step is due. The loop worker asks without `kick`: the step's
  * gap (`dueStep`) or a request newer than its last run, or the queue draining (see the header). The kick (`kick: true`) asks the same, except
@@ -105,7 +82,7 @@ export function evaluateDue(status, now, { newWorkAt = null, kick = false } = {}
   if (Number.isNaN(ranAt) || (Number.isFinite(newWorkAt) && newWorkAt > ranAt)) return dueStep(status, "evaluate", now, { newWorkAt })
   const today = new Date(now).toISOString().slice(0, 10)
   const headless = isObject(evaluator.headless) ? evaluator.headless : {}
-  // Spent by the evaluator's own count, or by the shared launch ledger's witnessed quota (triage's protected windows included).
+  // Spent by the evaluator's own count, or by the shared launch ledger's witnessed quota (its protected triage windows included).
   const spent = (headless.day === today && tally(headless.jobs) >= MAX_HEADLESS_JOBS_PER_DAY) || !evaluationQuotaOpen(status, now)
   // Only a step that accepted a job's labels drains on: a run that timed out, spent its budget, failed or was rejected waits out the gap.
   if (record.last_result === "ran" && tally(evaluator.accepted_last_step) > 0 && tally(evaluator.ready_now) > 0 && !spent) return true
@@ -114,62 +91,12 @@ export function evaluateDue(status, now, { newWorkAt = null, kick = false } = {}
   return runnable && !spent && dueStep(status, "evaluate", now)
 }
 
-const HOUR_MS = 60 * 60 * 1000
-/** The shortest time between two kicks for triage: a triage step that could not launch is not asked again at every turn's end. */
-export const TRIAGE_KICK_GAP_MS = HOUR_MS
-// The triage step's runner states in which no run can start until the host or the person changes something (`triage-step.js`).
-const TRIAGE_RUNNER_UNAVAILABLE = new Set(["runtime_unavailable", "unsupported_host", "scope_unqualified", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "headless_session"])
-const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10)
-// How far the clock may read behind the witnessed clock, as the ledger allows.
-const CLOCK_SKEW_MS = 5 * 60 * 1000
-
-/**
- * `triageQuotaFor(status, nowMs) -> state`: what the shared ledger's high-water witness (`status.loop.agent_launch_highwater`) says about
- * one triage launch at `nowMs`, without the ledger's lock: `ok`, `unwitnessed` (no witness yet: the reservation migrates or refuses),
- * `witness_invalid`, `clock_regressed`, or a quota code (`quota_exhausted`, `window_used`, `triage_cooldown`). Only a reservation is
- * authoritative; this only spares preparing a run that cannot start.
- */
-export function triageQuotaFor(status, nowMs) {
-  const witness = isObject(status?.loop) ? status.loop.agent_launch_highwater : undefined
-  if (witness === undefined) return "unwitnessed"
-  if (!validWitness(witness)) return "witness_invalid"
-  if (witness.max_clock_ms > nowMs + CLOCK_SKEW_MS || witness.max_day > dayOf(nowMs + CLOCK_SKEW_MS)) return "clock_regressed"
-  const at = Math.max(nowMs, witness.max_clock_ms)
-  const later = dayOf(at) > witness.max_day
-  const ledger = { day: later ? dayOf(at) : witness.max_day, spent: later ? 0 : witness.spent_at_max_day, windows: later ? [0, 0, 0, 0] : witness.windows, last_triage_at: witness.last_triage_at }
-  return quotaFor(ledger, "triage", at).state
-}
-
-/**
- * `triageKickDue(status, now) -> boolean`: whether improvement triage alone makes the end of a turn start the loop worker (see the header).
- * Never before the triage step has run once on this machine (the session-start worker runs it first), so a machine whose worker cannot
- * reach the step is not kicked at every turn's end. Never while the step's last pass failed or its last agent run failed
- * (`status.triage.ok`, `status.triage.run.failures_in_a_row`): the next session-start worker retries, so a failure is not kicked every hour.
- */
-export function triageKickDue(status, now, scope = null) {
-  if (scope === null || !isObject(status?.triage_by_desk)) return false
-  const nowMs = new Date(now).getTime()
-  const observed = status.triage_by_desk[scopeKey(scope)]
-  const triage = isObject(observed) ? observed : null
-  const ranAt = Date.parse(triage?.at)
-  if (triage === null || Number.isNaN(ranAt) || nowMs - ranAt < TRIAGE_KICK_GAP_MS) return false
-  if (triage.result === "no_consenting_store" || triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
-  const eligible = Number.isSafeInteger(triage.eligible) && triage.eligible > 0
-  // Quota can stop a first scoped pass before selection. Its complete scan is only a hint to classify work once quota opens.
-  const unclassified = triage.ok === true && triage.eligible === null && triage.result === "not_due" &&
-    ["quota_exhausted", "window_used", "triage_cooldown", "window_protected"].includes(triage.ledger) &&
-    triage.coverage?.scan === "complete" && Number.isSafeInteger(triage.coverage.unreviewed) && triage.coverage.unreviewed > 0
-  if (TRIAGE_RUNNER_UNAVAILABLE.has(triage.runner?.state) || !(eligible || unclassified)) return false
-  return ["ok", "unwitnessed"].includes(triageQuotaFor(status, nowMs))
-}
-
 /**
  * `evaluationKickDue(env, { now, readStatusImpl }) -> { due, reason }`: whether the end of this turn should start the loop worker, as the header
- * says, or, with `continuation`, whether anything but the due check stops the one kick a triage-only worker owes its deferred evaluation.
- * `reason` is `due`, `continuation`, `headless_session`, `disabled`, `no_factory_state`, `no_requests` (no request waits and triage is
- * not due), `worker_running` or `not_due`. It never throws: anything it cannot read is `unreadable`, which starts nothing.
+ * says. `reason` is `due`, `headless_session`, `disabled`, `no_factory_state`, `no_requests` (no request waits and no context
+ * evaluation is due), `worker_running` or `not_due`. It never throws: anything it cannot read is `unreadable`, which starts nothing.
  */
-export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl = readStatus, continuation = false, scope } = {}) {
+export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl = readStatus, scope } = {}) {
   if (isHeadlessFactorySession(env)) return { due: false, reason: "headless_session" }
   if (!isLoopEnabled(env)) return { due: false, reason: "disabled" }
   try {
@@ -177,14 +104,8 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
     if (root === null) return { due: false, reason: "no_factory_state" }
     const active = loopScopeFor(env, scope)
     const context = active === null ? {} : { scope: active }
-    if (continuation) {
-      if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-      return { due: true, reason: "continuation", ...context }
-    }
     const newest = await newestRequestAt(env)
     const status = await readStatusImpl(env)
-    const triage = triageKickDue(status, now, active)
-    const reobserve = needsObservation(status, active, now)
     let contextDue = false
     let contextHeld = null
     try {
@@ -198,10 +119,10 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
       } catch { contextHeld = "context_status_error" }
     }
     const diagnostic = contextHeld === null ? {} : { context_held: contextHeld }
-    if (newest === null && !triage && !reobserve && !contextDue) return { due: false, reason: "no_requests", ...diagnostic }
+    if (newest === null && !contextDue) return { due: false, reason: "no_requests", ...diagnostic }
     if (await workerRunning(root, now)) return { due: false, reason: "worker_running", ...diagnostic }
-    const due = triage || reobserve || contextDue || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
-    return { due, reason: reobserve ? "triage_reobserve" : due ? "due" : "not_due", ...context, ...diagnostic, ...(reobserve ? { reobserve: true } : {}) }
+    const due = contextDue || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
+    return { due, reason: due ? "due" : "not_due", ...context, ...diagnostic }
   } catch {
     return { due: false, reason: "unreadable" }
   }
@@ -223,26 +144,14 @@ async function workerRunning(root, now) {
 }
 
 /**
- * `kickLoop(env, { now, spawn, execPath, readStatusImpl, continuation }) -> { kicked, reason }`: starts the loop launcher detached, with ignored
+ * `kickLoop(env, { now, spawn, execPath, readStatusImpl, scope }) -> { kicked, reason }`: starts the loop launcher detached, with ignored
  * stdio and this process's environment, when `evaluationKickDue` says so, and returns at once. A launcher that cannot be started is
- * `spawn_failed`; nothing retries it. `continuation` (true) is the one kick a triage-only worker owes its deferred evaluation. `spawn` and
- * `execPath` are seams for tests.
+ * `spawn_failed`; nothing retries it. `spawn` and `execPath` are seams for tests.
  */
-export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execPath = process.execPath, readStatusImpl = readStatus, continuation = false, scope, updateStatusImpl = updateStatus } = {}) {
-  const { due, reason, scope: active, reobserve, context_held } = await evaluationKickDue(env, { now, readStatusImpl, continuation, scope })
+export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execPath = process.execPath, readStatusImpl = readStatus, scope } = {}) {
+  const { due, reason, scope: active, context_held } = await evaluationKickDue(env, { now, readStatusImpl, scope })
   const diagnostic = context_held === undefined ? {} : { context_held }
   if (!due) return { kicked: false, reason, ...diagnostic }
-  if (reobserve) {
-    let requested = false
-    try {
-      await updateStatusImpl(env, (status) => {
-        if (!needsObservation(status, active, now)) return status
-        requested = true
-        return { ...status, triage_reobserve: { ...status.triage_reobserve, [scopeKey(active)]: new Date(now).toISOString() } }
-      })
-    } catch { return { kicked: false, reason: "unreadable", ...diagnostic } }
-    if (!requested) return { kicked: false, reason: "not_due", ...diagnostic }
-  }
   try {
     const args = active === undefined ? [] : ["--desk", active.deskRoot, "--person-prefix", active.personPrefix]
     const child = await spawn(execPath, [LOOP_START_SCRIPT, ...args], { detached: true, stdio: "ignore", windowsHide: true, env })

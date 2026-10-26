@@ -60,8 +60,6 @@ function parseArgs(argv) {
 // Each entry is a real bug, not a weakened check. Key: "<host>:<check id>" or "*:<check id>".
 // Parity gaps use "parity:<parity id>".
 const KNOWN = {
-  "copilot:desk_status.ready": "Copilot's Desk server crashes natively (exit signal SIGSEGV, after \"crash handlers installed\") while it is still becoming ready, in about 1 of 3 Copilot runs on a loaded Mac (4 of 12 runs on 2026-10-25, none of 15 Claude Code runs, none on Linux or Windows CI). The session then has no Desk tools.",
-  "copilot:git.sync_end_pushes_or_records": "Follows copilot:desk_status.ready: when the Copilot server crashes before its first tidy, the desk is left with an untracked .state/ folder.",
   "*:hook.session_start.no_flood": "On a loaded Mac the Desk session start context sometimes passes 10,000 characters (Claude Code 10,502 in 1 of 3 runs, usually about 9,200; Copilot 10,830 in 1 of 3, usually about 9,500): past 10,000 Claude Code shows the agent only a 2 KB preview. The foundation alone is most of the budget, so any extra pre-check line tips it over.",
   "copilot:hook.session_start.runs": "On a loaded Mac, 1 of 3 Copilot runs took 5.5 s for Desk's sessionStart hook, over the 5 s timeoutSec in hooks/copilot-hooks.json, so Copilot would cut it off and the session would start without its boot direction.",
   "parity:hooks.plain-language.copilot_has_every_claude_event": "Plain Language injects its contract into every Claude Code subagent through SubagentStart, but plugins/plain-language/hooks/copilot-hooks.json registers only sessionStart, so Copilot subagents start without it.",
@@ -70,8 +68,6 @@ const KNOWN = {
   "parity:speed.first_meaning_recall_ms": "Copilot's first meaning-based recall comes later than Claude Code's on macOS: p50 38.8 s against 24.0 s and 29.6 s against 17.4 s in two 3-repeat runs, mostly because its Desk server becomes ready later (see speed.desk_ready_ms).",
   "parity:reliability.hook.session_start.runs": "Follows copilot:hook.session_start.runs: the Copilot sessionStart hook can pass its 5 s timeout on a loaded machine.",
   "parity:reliability.hook.session_start.no_flood": "Follows *:hook.session_start.no_flood, which happens on both hosts.",
-  "parity:reliability.desk_status.ready": "Follows copilot:desk_status.ready (the Copilot server's native crash).",
-  "parity:reliability.git.sync_end_pushes_or_records": "Follows copilot:git.sync_end_pushes_or_records.",
   "parity:reliability.copilot_not_worse": "Copilot fails more checks than Claude Code only through the known Copilot failures above.",
   "parity:speed.desk_server_cold_start_ms": "On a loaded Mac (load average about 50) the Copilot server's cold start was slower in 2 of 5 runs (p50 660 ms against 280 ms, 1.9 s against 0.6 s) and even in the others; Linux and Windows CI show no gap.",
   "parity:speed.desk_ready_ms": "On current main a Copilot session's Desk server reaches full readiness (desk_status ready with its root and search details loaded) about 2 s later than Claude Code's: p50 5.4 s against 3.5 s over 3 repeats on macOS, 7.7 s against 4.0 s on Windows CI. Copilot's server resolves its desk through the session record its sessionStart hook writes; the cause is not yet found.",

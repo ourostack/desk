@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.4 — 2026-10-26
+
+The factory's triage runner is removed. It was meant to keep a route recommendation on every open improvement card from a headless agent, but it never qualified on a real machine, so it reviewed nothing, kept local state growing and showed a session-start finding asking you to qualify it again. That finding is gone, and the end of a turn no longer starts the loop worker for it. The `triage` and `triage-qualify` commands of `mcp/scripts/factory.js` are removed with it. `curator` still triages improvement cards in a normal session. The store's triage validator and the shared launch ledger are unchanged, and nothing on your machine is deleted. See [the factory roadmap](../../docs/roadmap/factory.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.3 — 2026-10-26
+
+Fix the Desk MCP server crashing at startup (SIGSEGV on macOS) in about one Copilot session in three on a busy Mac, which left the session with no Desk tools. The admission worker loaded the SQLite native modules to warm them up; when that worker ended before the main thread had loaded them, Node unloaded the addon and the worker's teardown crashed the whole server. The worker no longer loads any native addon.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.2 — 2026-10-26
 
 Removed three dead pieces. The retired `desk:superpowers-integration` skill is gone; every Desk skill and doc already names `desk:using-superpowers-with-desk`, so a standing instruction that still names the old skill should name the new one. The `03-normalize-task-status` migration and its helper are gone, because `task_create` and `task_update` have rejected non-lifecycle statuses since the migration shipped and the desks checked hold only the eight states. The manual `rebuild-index.js` script and two `browser:messaging-assets` npm scripts that pointed at a deleted file are gone as well.
@@ -513,7 +525,7 @@ Ships `desk-mcp@1.4.0-alpha.6`.
 
 Desk's native browser layer is removed, now that real-browser mode runs stock Playwright MCP and the stock Playwright Extension. Gone are the native messaging host and its Go binaries, the Desk browser extension, the browser context broker's native routing, mediation and ownership-lease code, and their setup, build scripts, CI steps and tests. The headless default and the broker's own leases are unchanged. A machine that used the native mode keeps three leftovers Desk no longer touches: the unpacked Desk extension in the browser profile, the `com.ourostack.desk.browser` native-messaging host registration, and the copied runtime under Desk's browser state folder. Remove the extension from the browser's extensions page; the other two are inert without it.
 
-The triage runner's qualification record can now be made, and stays valid, on an installed desk ([`docs/factory-triage-runner.md`](docs/factory-triage-runner.md#how-the-record-comes-to-exist-and-when-it-must-be-redone)). Before, no supported path produced one: the record was keyed on absolute plugin paths and the ambient environment, so every release or shell change broke it, and the installed plugin copy could not even load the runner.
+The triage runner's qualification record can now be made, and stays valid, on an installed desk (`docs/factory-triage-runner.md`, since removed with the runner; see [the factory roadmap](../../docs/roadmap/factory.md)). Before, no supported path produced one: the record was keyed on absolute plugin paths and the ambient environment, so every release or shell change broke it, and the installed plugin copy could not even load the runner.
 
 - `factory.js triage-qualify [--check]` qualifies under the loop worker's lock, or only reports what restore says. The two model sessions are reserved together in the shared launch ledger, just before the first one starts.
 - The loop can qualify by itself at most once a UTC day, when the record is missing or stale for a reason qualifying again can clear, and stops after three failed attempts in a row for the same reason (`auto_suspended`) until the command runs. Successes and ledger refusals never count. A tick reads the launch ledger first, without writing it, and skips with the ledger's `retry_at` when two launches would be refused, so a used window costs no checks and leaves nothing behind.

@@ -281,28 +281,12 @@ test("the doctor's summary has a Loop block from the stored record: counts, unav
   assert.match(sparse, /stale steps: none/u)
 })
 
-test("the Loop block and the boot findings say what triage last did and why its runner cannot start", async () => {
+test("a triage record an earlier Desk left prints no Loop line and no boot finding", async () => {
   const { factorySummary, factoryFindingLines } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
-  const status = { store: STORE, source: "desk", consent: "yes", stores: [], warnings: [], loop: LOOP }
-  assert.doesNotMatch(factorySummary(status), /triage/u, "no triage record, no line")
-  const stale = { ...LOOP, triage: { last_result: "runner_unavailable", runner_state: "scope_unqualified", runner_reason: "install_changed", qualification: "stale", scan: "complete" } }
-  assert.match(factorySummary({ ...status, loop: stale }), /\n  triage: last result runner_unavailable \(runner scope_unqualified: install_changed\)$/mu)
-  assert.deepEqual(factoryFindingLines({ loop: stale }), ["improvement triage is not starting runs on this machine: its runner qualification no longer matches this install, engine or environment (install_changed). Qualify the triage runner again; until then cards are refreshed but not reviewed."])
-  assert.match(factoryFindingLines({ loop: { ...stale, triage: { ...stale.triage, runner_reason: "Bad/x" } } })[0], /\(reason not recorded\)/u)
-  const partial = { ...LOOP, triage: { last_result: "ran", runner_state: "ran", runner_reason: null, qualification: "loaded", scan: "truncated" } }
-  assert.match(factorySummary({ ...status, loop: partial }), /triage: last result ran \(runner ran\); the card scan was cut off at its limit, so the refresh is partial/u)
-  assert.match(factorySummary({ ...status, loop: { ...LOOP, triage: { last_result: 7, runner_state: null } } }), /triage: last result unavailable$/mu)
-  assert.deepEqual(factoryFindingLines({ loop: partial }), [])
-  assert.deepEqual(factoryFindingLines({ loop: { ...LOOP, triage: "x" } }), [])
-  // A triage publication held or waiting for three days is one line, with why; one that is not stuck (only stale, say) is none.
-  assert.deepEqual(factoryFindingLines({ triage_publication: [
-    { store: "example-org/store-a", health: "held", pending: 0, waiting: 2, held: "triage_store_not_ready", held_requests: { triage_route_elsewhere: 2 }, stuck_since: "2026-10-01T08:30:00.000Z" },
-    { store: "example-org/store-b", health: "not_published", pending: 1, waiting: 0, stuck_since: "2026-10-02T00:00:00.000Z" },
-    { store: "example-org/store-c", health: "stale", pending: 0, waiting: 0 },
-  ] }), [
-    "example-org/store-a: triage publication has been held or waiting since 2026-10-01T08:30Z (triage_store_not_ready, triage_route_elsewhere x2); this machine's reviews are not reaching the store's improvement queue until it clears.",
-    "example-org/store-b: triage publication has been held or waiting since 2026-10-02T00:00Z (no reason recorded); this machine's reviews are not reaching the store's improvement queue until it clears.",
-  ])
+  const loop = { ...LOOP, triage: { last_result: "runner_unavailable", runner_state: "scope_unqualified", runner_reason: "engine_unpinned", qualification: "stale" } }
+  const status = { store: STORE, source: "desk", consent: "yes", stores: [], warnings: [], loop }
+  assert.doesNotMatch(factorySummary(status), /triage/u)
+  assert.deepEqual(factoryFindingLines({ loop, triage_publication: [{ store: "example-org/store-a", health: "held", pending: 0, waiting: 2, held: "triage_store_not_ready", stuck_since: "2026-10-01T08:30:00.000Z" }] }), [])
 })
 
 test("the doctor's summary says there is no loop record and never prints zeros for it", async () => {

@@ -30,7 +30,6 @@ import {
   runEvaluateCommand,
   runJobLinkCommand,
   runStatusCommand,
-  runTriageCliCommand,
   runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
@@ -1300,35 +1299,11 @@ test("main writes to stdout and stderr by default", async () => {
   assert.equal(JSON.parse(out[0]).ok, false)
 })
 
-test("triage is a command: it takes only --desk and --person-prefix, prints codes and counts, and exits 1 for a failed step or a bad call", () => scratch(async (env) => {
-  assert.ok(SUPPORTED_COMMANDS.includes("triage"))
-  const desk = path.join(env.HOME, "desk")
-  const run = async (argv, over = {}) => {
-    const out = []
+test("the removed triage commands are unknown subcommands", async () => {
+  for (const command of ["triage", "triage-qualify"]) {
+    assert.equal(SUPPORTED_COMMANDS.includes(command), false)
     const errors = []
-    const code = await main({ argv: ["triage", ...argv], env: { ...env, ...over }, write: (text) => out.push(text), logError: (text) => errors.push(text) })
-    return { code, out, errors }
+    assert.equal(await main({ argv: [command], write: () => assert.fail("prints nothing"), logError: (text) => errors.push(text) }), 1)
+    assert.match(errors[0], /unknown subcommand/u)
   }
-  // No factory state: nothing to do, said in one line of codes.
-  const none = await run(["--desk", desk])
-  assert.equal(none.code, 0)
-  assert.deepEqual(JSON.parse(none.out[0]), { result: "no_factory_state", ok: true, failed: 0, reviewed: null, refused: null, deferred: null, unreviewed: null })
-  assert.ok(none.out[0].endsWith("\n"))
-  assert.doesNotMatch(none.out[0], /desk-factory-cli|\//u)
-  // A headless factory session never runs triage, and says so with a failing exit code.
-  const headless = await run(["--desk", desk], { DESK_FACTORY_HEADLESS: "1" })
-  assert.deepEqual([headless.code, JSON.parse(headless.out[0]).result], [1, "headless_session"])
-  for (const argv of [[], ["--desk", "relative"], ["--desk", desk, "--store", "x/y"], ["--desk", desk, "--person-prefix", "nope"], ["--desk", desk, "--now", "2026-10-12T00:00:00Z"]]) {
-    const bad = await run(argv)
-    assert.equal(bad.code, 1, JSON.stringify(argv))
-    assert.deepEqual(bad.out, [])
-    assert.match(bad.errors[0], /^Usage: factory\.js triage --desk <absolute desk root> \[--person-prefix desks\/<alias>\]\n$/u)
-  }
-  // With state and no consenting store the step runs under the worker's lock and reports why it did nothing; the seams reach it.
-  await factoryStateRoot(env)
-  const kicks = []
-  const quiet = await runTriageCliCommand({ argv: ["--desk", desk], env, pluginVersion: "9.9.9", impls: {}, clock: Date.now, kick: async () => { kicks.push(1) } })
-  assert.deepEqual(quiet, { result: "no_consenting_store", ok: true, failed: 0, reviewed: null, refused: null, deferred: null, unreviewed: null })
-  assert.deepEqual(kicks, [])
-  assert.equal((await run(["--desk", desk])).code, 0)
-}))
+})

@@ -114,12 +114,8 @@
 // (a `capture_` code other than `capture_check_unavailable`, which is the store's own check failing and is stale like a conflict, or `path` for the pull request that carried it) never quarantines facts: those go again as a stale-class retry, and the
 // record waits a week. Its bookkeeping is `status.capture[store]` and nothing else.
 
-// Triage batches (`triage-outbox.js`, `triage-publish.js`) travel the same way, as `triage/<batch>.json` files appended after the batch is taken, at most eight a
-// flush. They go only from an account with push permission on the store, only while the store's `triage.json` holds exactly `{"triage":1}`, and only as
-// added files: a batch whose exact bytes are on the default branch is delivered, and one whose path holds other bytes is replaced by a fresh batch, never
-// sent as a change. A refusal that names triage (a `triage_` code, or any code that is not a stale one on the pull request that carried a batch) never
-// quarantines facts and never marks a batch delivered: the facts go again as a stale-class retry, and the batches wait a day. Their bookkeeping is the
-// protected `triage-outbox/<store-slug>/` folder and the summary `status.triage_publication[store]`.
+// An earlier Desk also sent triage batches as `triage/<batch>.json`. A refusal code that names triage (`triage_`) on an intake pull request it sent
+// never quarantines facts: the pull request reads as stale, and the facts go again.
 
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
@@ -193,7 +189,6 @@ import {
 import { refreshAndon } from "./andon-watch.js"
 import { carriedAccountFault } from "./flush-health.js"
 import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, prepareCaptureContext, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
-import { namesTriage, planTriage, prepareTriage, recordTriageError, saveTriageRefused, saveTriageSent, triageOnBranch } from "./triage-outbox.js"
 import { isTriagePath } from "./triage-schema.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { labelBinding, releaseReboundLabels, withdrawLabels } from "./label-binding.js"
@@ -710,13 +705,11 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr, triagePr }) {
+async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr }) {
   const rejected = new Set()
   const refused = new Set()
   // The first refusal that names the capture record, never a reason to quarantine facts: its pull request is a stale one (the facts go again).
   let captureRefused = null
-  // The first refusal that names triage (`namesTriage`): the same rule, for the pull request that carried a triage batch.
-  let triageRefused = null
   const contextRefusals = []
   let checkUnavailable = false
   let stale = 0
@@ -750,8 +743,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
     const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
     captureRefused ??= named[0] ?? null
     if (pr.number === recordedPr && codes.includes(CHECK_UNAVAILABLE)) checkUnavailable = true
-    const namedTriage = codes.filter((candidate) => !named.includes(candidate) && namesTriage(candidate, { onTriagePr: pr.number === triagePr, stale: STALE_INTAKE_CODES }))
-    triageRefused ??= namedTriage[0] ?? null
+    const namedTriage = codes.filter((candidate) => !named.includes(candidate) && candidate.startsWith("triage_"))
     codes = codes.filter((candidate) => !named.includes(candidate) && !namedTriage.includes(candidate))
     if (codes.length === 0 && named.length === 0 && namedTriage.length === 0 && namedContext.length === 0) continue
     // Stale only when every code says so; any data code rejects the files, and quarantine names the first one.
@@ -779,7 +771,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       rejected.add(name)
     }
   }
-  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable, triageRefused, contextRefusals }
+  return { rejected, refused, stale, unmatched, through: highest, captureRefused, checkUnavailable, contextRefusals }
 }
 
 function treeEntries(json) {
@@ -827,15 +819,14 @@ async function labelsOnBranch(client, repo, treeSha, paths, listing) {
   return blobs
 }
 
-/** `(item) -> sha | undefined | UNKNOWN`: what a tree holds at an item's published path, read through `factsOnBranch`, `labelsOnBranch`, `captureOnBranch` and `triageOnBranch` with one listing; `.facts` is the facts listing itself. */
+/** `(item) -> sha | undefined | UNKNOWN`: what a tree holds at an item's published path, read through `factsOnBranch`, `labelsOnBranch` and `captureOnBranch` with one listing; `.facts` is the facts listing itself. */
 async function treeLookup(client, repo, treeSha, items) {
   const listing = newListing()
   const facts = await factsOnBranch(client, repo, treeSha, listing)
   const labels = await labelsOnBranch(client, repo, treeSha, items.filter((item) => item.labels).map((item) => item.path), listing)
   const captures = items.some((item) => item.capture) ? await captureOnBranch((sha) => readTree(client, repo, requireSha(sha), listing), treeSha) : new Map()
-  const triage = items.some((item) => item.triage) ? await triageOnBranch((sha) => readTree(client, repo, requireSha(sha), listing), treeSha) : new Map()
   const contexts = items.some((item) => item.context) ? await contextOnBranch((sha) => readTree(client, repo, requireSha(sha), listing), treeSha) : new Map()
-  const at = (item) => (item.context ? contexts.get(item.path) : item.triage ? triage.get(item.path) : item.capture ? captures.get(item.path) : item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
+  const at = (item) => (item.context ? contexts.get(item.path) : item.capture ? captures.get(item.path) : item.labels ? labels.get(item.path) : facts.get(item.path.slice("facts/".length))) ?? (listing.truncated ? UNKNOWN : undefined)
   at.facts = facts
   return at
 }
@@ -949,23 +940,6 @@ async function deliver(env, context) {
   // The capture record (`capture-flush.js`): due from local state alone, so a flush with nothing else to do still ends without a network call when it is not.
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
-  // Triage batches (`triage-outbox.js`): what waits is read from local state and Git alone, so a flush with no triage work still ends without a network call.
-  // Nothing in the triage code may keep facts from going: an error there (never a `Stop`, which is the flush's own) holds triage for a day as
-  // `triage_error`, and the flush goes on as if there were no triage.
-  const triageSafely = async (fallback, body) => {
-    try {
-      return await body()
-    } catch (error) {
-      if (error instanceof Stop) throw error
-      try {
-        await recordTriageError(env, store, now())
-      } catch {
-        // The triage state cannot be written either: the next flush finds the same error.
-      }
-      return fallback
-    }
-  }
-  const triage = await triageSafely({ work: false, state: {}, candidates: [], held: {}, attest: [], coverageDue: false }, () => planTriage(env, { store, now: now(), status }))
   const contextSafely = async (fallback, body) => {
     try { return await body() } catch (error) {
       if (error instanceof Stop) throw error
@@ -976,7 +950,7 @@ async function deliver(env, context) {
     }
   }
   const contextJobs = await contextSafely([], () => listTaskContextJobs(env, store))
-  if (!triage.work && !capture.work && contextJobs.length === 0 && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
+  if (!capture.work && contextJobs.length === 0 && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -1242,7 +1216,7 @@ async function deliver(env, context) {
   progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
   let retract = away.filter((item) => !heldSessions.has(item.session) && !priorRefused.has(item.name))
   // Frozen and refused names never send the flush online; only work that changes the store, or a batch that may still be open, does.
-  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work && !triage.work && !contextPlan.work) return { result: "nothing_pending" }
+  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work && !contextPlan.work) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -1280,7 +1254,7 @@ async function deliver(env, context) {
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
   const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr, triagePr: triage.state.pr })
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
@@ -1327,22 +1301,7 @@ async function deliver(env, context) {
     if (sentOnMain) await saveSettled(env, store, sentItem)
     else await saveDropped(env, store, now(), { confirmed: sentItem !== null })
   }
-  // Triage batches: a refusal that named them holds them for a day; otherwise the store's readiness, the account's permission and the default branch decide (`prepareTriage`).
-  let triageItems = []
-  if (rejections.triageRefused !== null) await triageSafely(null, () => saveTriageRefused(env, store, rejections.triageRefused, now()))
-  else {
-    triageItems = (await triageSafely({ items: [] }, () => prepareTriage(env, {
-      store, plan: triage, client, ref: base.sha, direct: deliveryRoute(account, infoAnswer.json) === "direct", consent: record, status, now: now(),
-      visibility: (repos) => resolveVisibility(env, client, account, repos, nowIso, new Set(repos.map((repo) => repo.toLowerCase()))),
-      // The job IDs a triage row may point at: those `toPublished` gave the facts this machine delivered here, exactly as delivered.
-      publishedJobs: () => new Set([...bytesByName].filter(([name, bytes]) => delivered.blobs[name] === gitBlobSha(bytes)).flatMap(([, bytes]) => JSON.parse(bytes.toString("utf8")).jobs.map((job) => job.job))),
-      readMain: async () => {
-        const listing = newListing()
-        return { blobs: await triageOnBranch((sha) => readTree(client, store, requireSha(sha), listing), base.tree), unknown: listing.truncated }
-      },
-    }))).items
-  }
-  const extras = [...(captureItem === null ? [] : [captureItem]), ...triageItems]
+  const extras = captureItem === null ? [] : [captureItem]
   let contextAccountingFailed = false
   for (const refusal of rejections.contextRefusals) {
     const saved = await contextSafely(false, async () => {
@@ -1392,7 +1351,7 @@ async function deliver(env, context) {
     return result
   }
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
-  // The record and each triage batch are one more changed path, and the store's gate refuses more than 500: they take their places inside the limit, and never displace facts in a batch below it.
+  // The record is one more changed path, and the store's gate refuses more than 500: it takes its place inside the limit, and never displaces facts in a batch below it.
   const takenAll = takeBatch([...deletes, ...remaining], { maxFiles: maxFiles - extras.length, maxBytes: maxBytes - extras.reduce((sum, item) => sum + item.bytes.length, 0) })
   const takenDeletes = takenAll.filter((item) => item.retract)
   const taken = takenAll.filter((item) => !item.retract)
@@ -1423,7 +1382,6 @@ async function deliver(env, context) {
   const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + extras.length + contextBatch.filter((item) => !item.retract).length, retracted: takenDeletes.length + contextBatch.filter((item) => item.retract).length })
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
   if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
-  if (triageItems.length > 0) await triageSafely(null, () => saveTriageSent(env, store, triageItems, pr.number, now()))
   if (contextBatch.length > 0) await contextSafely(null, () => saveContextSent(env, store, contextBatch, pr.number))
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting" && !item.unbound))
