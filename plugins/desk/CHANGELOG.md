@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.5 — 2026-10-26
+
+Finish the session-end hooks inside the host's timeout on a busy machine. Both session-end hooks (`hooks/factory-end.cjs` and `hooks/sync-end.cjs`) now read the host's payload, hand it to a detached copy of themselves and exit, so the session's marker and the unpushed-commits check still happen but no longer count against the hook's time. Before, a loaded Mac took 3.6 to 4.4 s for one of them, past Copilot's 3 s limit, and Copilot cut it off. A detached worker stops itself after 60 s. The turn-end (Stop) hook is unchanged, because it can still return a delivery correction.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.4 — 2026-10-26
 
 The factory's triage runner is removed. It was meant to keep a route recommendation on every open improvement card from a headless agent, but it never qualified on a real machine, so it reviewed nothing, kept local state growing and showed a session-start finding asking you to qualify it again. That finding is gone, and the end of a turn no longer starts the loop worker for it. The `triage` and `triage-qualify` commands of `mcp/scripts/factory.js` are removed with it. `curator` still triages improvement cards in a normal session. The store's triage validator and the shared launch ledger are unchanged, and nothing on your machine is deleted. See [the factory roadmap](../../docs/roadmap/factory.md).
