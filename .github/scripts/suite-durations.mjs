@@ -57,7 +57,7 @@ export function refreshTable(folders, testsRoot = defaultTests, previous = { fil
     else if (previous.files?.[file] !== undefined) files[file] = previous.files[file]
   }
   return {
-    note: "Seconds each Windows suite test file took in CI (standard-user shard results), the median over the source runs. Refresh with: node .github/scripts/suite-durations.mjs refresh <downloaded shard artifact folders>. A file missing here gets defaultSeconds.",
+    note: "Seconds each Windows suite test file took in CI (standard-user shard results, three files at a time per shard), the median over the source runs. Refresh with: node .github/scripts/suite-durations.mjs refresh <downloaded shard artifact folders>. A file missing here gets defaultSeconds.",
     generated: new Date().toISOString().slice(0, 10),
     inputs: inputs.length,
     // The mean of the per-file medians, not their median: most files take a second or two, but a new file that is slow is far likelier than a new file that is faster than typical, and a heavy guess only costs a little balance.
