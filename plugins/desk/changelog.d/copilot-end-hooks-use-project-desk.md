@@ -1,0 +1,1 @@
+On Copilot, the session-end hooks now use the desk the session opened, like the server. When Copilot opened a folder that is a desk, the unpushed-commits check and the factory's session marker could name a different desk (for example the one in the home folder).
