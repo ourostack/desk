@@ -31,14 +31,14 @@ import { TOOL_NAMES } from "../tool-names.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
-// Existing resolver sources, from guesses to explicit intent. Both kinds of
-// host-project evidence share one priority; neither alone proves a replacement
-// explicit association.
-// Weakest first, in the shared resolver's order (util/paths.js): a project folder that is itself a desk outranks the saved binding and $DESK.
+// Resolver sources, weakest first, in the shared resolver's order (util/paths.js). The host's project folder, when it is a desk,
+// outranks the saved binding and $DESK; a bare launch folder (`hint`, reported as "host-project" too) stays below them, so losing an
+// association never reselects it. Neither kind of folder replaces another of its kind.
 const ROOT_SOURCE_PRIORITY = Object.freeze([
-  "home_fallback", "overlay_home_fallback", "env:DESK",
+  "home_fallback", "overlay_home_fallback", "launch-folder", "env:DESK",
   "activation-config", "host-project", "host-session-root", "explicit-root",
 ])
+const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "launch-folder" : root.source)
 // Every field desk_doctor reads off `input`: both are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
 // (the module server.js registers for this tool name) — `deskDoctor` is the
@@ -387,11 +387,11 @@ export function createDeskSession(deps) {
     // Keep the previous resolved intent through refusals, until renewed or
     // replaced by an association of at least its strength.
     if (resolvedInputs && resolvedInputs.root.root !== inputs.root.root) {
-      const previousPriority = ROOT_SOURCE_PRIORITY.indexOf(resolvedInputs.root.source)
-      const incomingPriority = ROOT_SOURCE_PRIORITY.indexOf(inputs.root.source)
-      // A home guess never replaces an established root, a weaker source never replaces a stronger one, and one project folder never replaces another.
+      const previousPriority = rootRank(resolvedInputs.root)
+      const incomingPriority = rootRank(inputs.root)
+      // A home guess never replaces an established root, a weaker source never replaces a stronger one, and one folder never replaces another of its kind.
       if (incomingPriority <= 1 || incomingPriority < previousPriority ||
-          inputs.root.source === "host-project" && resolvedInputs.root.source === "host-project") {
+          inputs.root.source === "host-project" && incomingPriority === previousPriority) {
         forgetDesk()
         context.resolutionFailed = true
         return rootOutcome({

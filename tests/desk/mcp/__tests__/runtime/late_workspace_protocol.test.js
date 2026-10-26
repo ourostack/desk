@@ -55,7 +55,9 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   const a = desk(path.join(home, "desk"), person)
   const b = desk(path.join(base, "b"), person)
   const cwd = capturedFolder ? a : path.join(base, "code")
-  if (!capturedFolder) mkdirSync(cwd)
+  // The folder Copilot records for the session. A captured launch folder is the server's working folder only; the host's own project folder is elsewhere and is not a desk, because a recorded folder that is a desk outranks a saved association.
+  const recordedFolder = path.join(base, "code")
+  mkdirSync(recordedFolder)
   const env = {
     ...process.env, HOME: home, XDG_STATE_HOME: path.join(base, "state"),
     XDG_CACHE_HOME: path.join(base, "cache"), XDG_CONFIG_HOME: path.join(base, "config"),
@@ -164,10 +166,10 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   assert.equal(handle.admission.snapshot().state, "ready", JSON.stringify(handle.admission.snapshot()))
   const call = (name, args = {}) => rpc("tools/call", { name, arguments: args })
   const config = path.join(base, "binding.json")
-  const associate = (root, extra) => {
+  const associate = (root, extra, folder = recordedFolder) => {
     binding(config, root, extra)
     assert.equal(recordCopilotSession({
-      sessionId: env.COPILOT_AGENT_SESSION_ID, folder: cwd, activationConfig: config, env,
+      sessionId: env.COPILOT_AGENT_SESSION_ID, folder, activationConfig: config, env,
     }), true)
   }
   const card = (root) => path.join(root, ...(person ? ["desks", person] : []), "work", "one", "task.md")
@@ -299,7 +301,7 @@ test("removed context does not redirect a bound session back to a fallback", asy
 })
 
 test("a mutation cannot join destination proof sampled before its request", async (t) => {
-  const f = await fixture(t)
+  const f = await fixture(t, { capturedFolder: true })
   f.associate(f.b)
   assertWritten(await f.call("task_update", update))
   await f.handle.admission.idle({ waitMs: 15000 })
@@ -339,10 +341,10 @@ test("a mutation cannot join destination proof sampled before its request", asyn
 })
 
 for (const failure of ["removed", "untrusted", "unreadable"]) {
-  test(`${failure} saved association cannot reselect the home-folder desk`, async (t) => {
-    const f = await fixture(t)
+  test(`${failure} saved association cannot reselect the captured launch desk`, async (t) => {
+    const f = await fixture(t, { capturedFolder: true })
     assert.equal(f.handle.session.context.root.root, f.a)
-    assert.equal(f.handle.session.context.root.source, "home_fallback")
+    assert.equal(f.handle.session.context.root.source, "host-project")
     f.associate(f.b)
     assertWritten(await f.call("task_update", update))
     assert.equal(f.handle.session.context.root.root, f.b)
@@ -431,14 +433,15 @@ test("a recorded session folder that is itself a desk wins even over an invalid 
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
 })
 
-test("a session folder that is itself a desk keeps its own desk when a saved association names another", async (t) => {
-  const f = await fixture(t, { capturedFolder: true })
-  assert.equal(f.handle.session.context.root.root, f.a)
-  assert.equal(f.handle.session.context.root.source, "host-project")
-  f.associate(f.b)
+test("a recorded session folder that is itself a desk keeps its desk when a saved association names another", async (t) => {
+  const f = await fixture(t)
+  assert.equal(recordCopilotSession({ sessionId: f.env.COPILOT_AGENT_SESSION_ID, folder: f.b, env: f.env }), true)
   assertWritten(await f.call("task_update", update))
-  assert.equal(f.handle.session.context.root.root, f.a)
+  assert.equal(f.handle.session.context.root.root, f.b)
   assert.equal(f.handle.session.context.root.source, "host-project")
-  assert.match(readFileSync(f.card(f.a), "utf8"), /status: processing/u)
-  assert.equal(readFileSync(f.card(f.b), "utf8"), text)
+  f.associate(f.a, undefined, f.b)
+  assertWritten(await f.call("task_update", update))
+  assert.equal(f.handle.session.context.root.root, f.b)
+  assert.equal(f.handle.session.context.root.source, "host-project")
+  assert.equal(readFileSync(f.card(f.a), "utf8"), text)
 })

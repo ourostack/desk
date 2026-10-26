@@ -1025,9 +1025,21 @@ test("losing the established context does not select another fallback on repeate
   assert.equal(payload(await session.callTool({ name: "task_update" })).tool, "task_update")
 })
 
+// "launch-folder" stands for the resolver's bare launch folder: source "host-project" with `hint: true`.
+const rootOf = (root, source) => source === "launch-folder" ? { root, source: "host-project", hint: true } : { root, source }
+
 test("root replacement requires intent at least as strong, not merely another folder", async (t) => {
   for (const [previous, incoming, allowed] of [
     ["host-project", "host-project", false],
+    ["env:DESK", "host-project", true],
+    ["activation-config", "host-project", true],
+    ["host-project", "activation-config", false],
+    // A bare launch folder (`hint`) ranks below the saved binding and $DESK, and never replaces another launch folder.
+    ["activation-config", "launch-folder", false],
+    ["env:DESK", "launch-folder", false],
+    ["launch-folder", "launch-folder", false],
+    ["launch-folder", "activation-config", true],
+    ["home_fallback", "launch-folder", true],
     ["activation-config", "env:DESK", false],
     ["activation-config", "host-session-root", true],
     ["host-session-root", "explicit-root", true],
@@ -1038,7 +1050,7 @@ test("root replacement requires intent at least as strong, not merely another fo
     const { session, base, runtime } = await makeSession(t, {
       resolveInputs: async () => ({
         ...inputs({ root: path.join(base, changed ? "b" : "a") }),
-        root: { root: path.join(base, changed ? "b" : "a"), source: changed ? incoming : previous },
+        root: rootOf(path.join(base, changed ? "b" : "a"), changed ? incoming : previous),
       }),
     })
     await session.start()

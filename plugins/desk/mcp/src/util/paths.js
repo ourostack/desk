@@ -170,11 +170,13 @@ export function resolveDeskRootWithSource({
   }
 
   // A bare launch folder, with no project folder from the host, is weaker
-  // evidence: it can replace only the home-folder guesses.
+  // evidence: it can replace only the home-folder guesses. It reports the same
+  // source as the host's project folder; `hint` lets the server's
+  // root-replacement guard rank it below the saved binding and $DESK.
   if (hasText(projectRootHint)) {
     const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })
-    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", hint: true, tried }
   }
 
   // Home-folder fallbacks. A session that loads a work overlay tries only that
