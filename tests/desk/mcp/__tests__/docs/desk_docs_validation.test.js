@@ -129,7 +129,7 @@ test("healthy-path validation allows host-native activation language for all sup
   }
 })
 
-test("privacy validation requires embeddings, snapshots, derivative data, and privacy risk", () => {
+test("privacy validation requires embeddings, derivative data, and privacy risk", () => {
   const errors = []
   const docs = ["plugins/desk/README.md", "plugins/desk/mcp/README.md"]
   docsValidator.validatePrivacyNotes(errors, {
@@ -140,7 +140,7 @@ test("privacy validation requires embeddings, snapshots, derivative data, and pr
   })
 
   assert.deepEqual(errors, [
-    "plugins/desk/mcp/README.md must state that embeddings and snapshots are derivative data and may carry privacy risk",
+    "plugins/desk/mcp/README.md must state that embeddings are derivative data and may carry privacy risk",
   ])
 })
 
@@ -733,10 +733,7 @@ test("validateAll rejects docs stripped of required host and artifact coverage",
     "Copilot root flattened bundle",
     "Ouroboros autonomous-agent bundle",
     "Generic stdio MCP-only fallback",
-    "Vector pack publication",
-    "Snapshot warm boot restore",
     "Redaction cleanup",
-    "Publication policy approval",
   ]) {
     assert.ok(
       errors.some((error) => error.includes(label)),

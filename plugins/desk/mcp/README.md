@@ -203,10 +203,9 @@ This path provides MCP tools only; there is no worker activation, default agent 
 
 - `@modelcontextprotocol/sdk` — MCP server framework
 - `better-sqlite3` — local SQLite for the search index
-- `sqlite-vec` — vector search extension
 - `gray-matter` — YAML frontmatter parser
 
-`sqlite-vec` and `better-sqlite3` are native deps. Healthy plugin activation restores the committed production runtime pack into a writable cache.
+`better-sqlite3` is a native dependency. Healthy plugin activation restores the committed production runtime pack into a writable cache. The pack still carries `sqlite-vec`, which only the admission worker's warm-up loads; it goes with the next pack rebuild.
 
 Desk validates the committed runtime support matrix before loading production dependencies. If the host's Node ABI is unsupported, Desk searches only bounded local Node locations (the active executable, `PATH`, and standard NVM, Volta, asdf, and mise locations) and performs at most one guarded stdio-preserving handoff to a compatible runtime. It never installs, downloads, or reaches the network during startup. If no healthy local path exists, a dependency-free diagnostic MCP remains live with `desk_status` and `desk_doctor`; all mutation tools fail closed with the same diagnosis and offline remediation instead of crashing the host. A missing or corrupt pack for a supported Node is found during admission instead, after the handshake, and is retried in place.
 
@@ -220,13 +219,9 @@ Direct development checkouts can still run `npm install` when intentionally work
 
 Meaning-based search needs no setup. The model's two files (about 30 MB) are downloaded once, at a pinned revision with pinned SHA-256 hashes, into `$DESK/.state/embedding-model/`. Without a network on the first run, `desk_status` says the model could not load, exact-word search keeps working, and Desk tries again a minute later at the next desk change. Ollama and the `DESK_EMBED_*` / `OLLAMA_*` settings are no longer used.
 
-## Shared Workspace Artifacts
+## Redaction ledger
 
-Vector packs and index snapshots under `$DESK/artifacts/` and the plugin's `artifacts/` belong to the old shared index. This build does not read them; `docs/roadmap/search.md` lists them with the other removed search capabilities.
-
-## Artifact privacy
-
-Embeddings and snapshots are derivative data and may carry privacy risk. Vector packs store document-side embedding data, and snapshots may preserve searchable index state, so artifact publication is explicit, policy-checked, and separate from ordinary MCP startup.
+The plugin's `artifacts/tombstones/tombstones.jsonl` lists documents, by path and content hash, that search must never index. Section embeddings are derivative data and may carry privacy risk, so they stay in the desk's `.state/` folder, out of Git. Vector packs, index snapshots and their publication policy were removed; `docs/roadmap/search.md` lists them with the other removed search capabilities.
 
 ## Tests
 

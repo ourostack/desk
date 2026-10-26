@@ -11,7 +11,6 @@ export const activationManifestSchema = {
     "mcp_servers",
     "desk_root",
     "desk_runtime",
-    "artifacts",
     "host_support",
     "permissions",
   ],

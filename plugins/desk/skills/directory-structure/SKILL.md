@@ -12,11 +12,7 @@ $DESK/
   .gitignore                            # includes .state/, .machine-local.yml and ~$* (Office lock files)
   .machine-local.yml                    # gitignored: per-machine local_path overrides (see repo-handling)
   AGENTS.md                             # operator preferences that compose with every session's instructions
-  artifacts/                            # committed vector packs, snapshots, and publication policy
-    publication-policy.json
-    publication-policy.schema.json
-    vector-packs/<embedding-spec-id>/
-    snapshots/<embedding-spec-id>/
+  artifacts/                            # optional: search vector packs and snapshots from older Desk builds; Desk no longer reads or writes them
   _meta/
     friction.md                         # append-only friction backlog for this operator
     operator-rules.md                   # optional: longer operator rules that AGENTS.md points to
@@ -84,7 +80,6 @@ The agent chooses every track and task name itself, from the outcome, without as
 - **task directories** are created when new work starts (`start-task`), never for another round of an existing job (`task-lifecycle` "One job is one task").
 - **repo workspaces** are created when worker begins work on a specific repo within a task.
 - **track root stays readable.** never dump planning artifacts, design docs, flow diagrams, or binaries directly at track root — use `_planning/`. "What may sit where" below lists what belongs.
-- **repo-shared embedding artifacts live at `$DESK/artifacts/`, never `.state/`.** `.state/` is local and ignored; `artifacts/vector-packs/` and `artifacts/snapshots/` are committed only when the repo's publication policy explicitly approves them.
 - **PR-surface artifacts live at `<task>/<repo>/`, not inside an iteration's `artifacts/`.** the PR description, draft top-level PR comments, and other PR-surface artifacts span every iteration of the same PR (initial-impl → review-pass-N → pre-merge-polish → pr-feedback → pr-self-review) and are rewritten in place over time. they belong alongside other task-level surfaces like `integration-smoke.md`. the `<iteration>/artifacts/` directory is for iteration-bounded outputs only (diff snapshots, raw findings, evaluator logs). test: "is this artifact rewritten across multiple iterations of the same PR?" — yes → task-level (`<task>/<repo>/pr-description.md`); no → iteration-level (`<task>/<repo>/<iteration>/artifacts/`).
 - **ad-hoc operator-facing tooling lives in the desk, not the product repo.** smoke scripts, repro harnesses, exploration notebooks, quick-check utilities — these live in `$DESK/<track>/<task>/<RepoName>/...`, NOT in the product repo. the product repo is only for artifacts that go through production review and ship. heuristic: if reviewers on the product PR wouldn't want to see this file, it belongs on the desk. when a brief leaves the destination open, the agent decides the destination itself (the desk by default for desk-owned content such as these tools), says where it put the file in one line, and never asks.
 

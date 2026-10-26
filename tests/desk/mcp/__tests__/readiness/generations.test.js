@@ -4,7 +4,6 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { openDb, closeDb, getMeta, setMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
-import { openSnapshot } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
   RETAINED_LEXICAL_GENERATIONS, commitLexicalGeneration, generationContent, readGenerationContent, withActiveLexicalGeneration,
@@ -154,15 +153,9 @@ test("each generation records its writer, and only the newest generations are ke
   const db = openDb(root)
   try {
     const writer = { version: "3.2.0-alpha.342", build: "b".repeat(64), controller: "c".repeat(64) }
-    const empty = openSnapshot(root)
-    try {
-      assert.equal(empty.generation, null)
-      assert.equal(empty.writer, null)
-    } finally { empty.db.close() }
+    assert.equal(getMeta(db, "index_writer"), null)
     commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
     assert.deepEqual(JSON.parse(getMeta(db, "index_writer")), { journal_id: eventCursor.journal_id, ...writer })
-    const written = openSnapshot(root)
-    try { assert.deepEqual(written.writer, writer, "a search snapshot reads the writer of its generation") } finally { written.db.close() }
     commitLexicalGeneration({ db, documents: [], identities, writer })
     assert.equal(getMeta(db, "index_writer"), null, "a generation without a journal names no writer")
     commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
@@ -310,18 +303,4 @@ test("a stored generation's content is unknown when its row is gone or its docum
     db.prepare("UPDATE lexical_generations SET documents = ? WHERE id = ?").run("{}", id)
     assert.equal(readGenerationContent(db, id), null)
   } finally { closeDb(db) }
-})
-
-test("the active index reads as nothing before any generation is committed", async () => {
-  const { readActiveIndex, readCommittedContent } = await import("../../../../../plugins/desk/mcp/src/db/status-read.js")
-  const { commitLexicalGeneration } = await generationModule()
-  const root = await mkTempRoot("desk-generation-active-")
-  const db = openDb(root)
-  try { runMigrations(db) } finally { closeDb(db) }
-  assert.equal(readActiveIndex(root), null)
-  const writer = openDb(root)
-  let id
-  try { id = commitLexicalGeneration({ db: writer, documents: [], eventCursor, identities }) } finally { closeDb(writer) }
-  assert.deepEqual(readActiveIndex(root), { generation: id, writer: null })
-  assert.match(readCommittedContent(root, id), /^sha256:/)
 })

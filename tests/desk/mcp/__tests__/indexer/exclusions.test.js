@@ -1,26 +1,15 @@
-// Unit 19a: red contract for gitignore and sensitive-path exclusion before
-// indexing, embedding, or artifact publication can collect document text.
+// Gitignore and sensitive-path exclusion before indexing can collect document text.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { closeDb, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { discover } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
-const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
-const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
-const policySchemaPath = path.join(
-  deskPluginRoot,
-  "artifacts",
-  "publication-policy.schema.json",
-)
 const SENSITIVE_ACTIVE_PATHS = Object.freeze([
   "trackA/secrets/task.md",
   "trackA/credentials/task.md",
@@ -42,83 +31,6 @@ async function writeFile(root, rel, body) {
   const abs = path.join(root, rel)
   await fs.mkdir(path.dirname(abs), { recursive: true })
   await fs.writeFile(abs, body, "utf8")
-}
-
-async function loadExclusionsModule() {
-  return import("../../../../../plugins/desk/mcp/src/indexer/exclusions.js")
-}
-
-async function loadVectorPackModule() {
-  return import("../../../../../plugins/desk/mcp/src/indexer/vector-packs.js")
-}
-
-async function loadSnapshotModule() {
-  return import("../../../../../plugins/desk/mcp/src/snapshots/manifest.js")
-}
-
-async function writePolicySchemaFixture(pluginRoot) {
-  const artifactsRoot = path.join(pluginRoot, "artifacts")
-  await fs.mkdir(artifactsRoot, { recursive: true })
-  await fs.copyFile(policySchemaPath, path.join(artifactsRoot, "publication-policy.schema.json"))
-}
-
-async function fileHashes(root) {
-  const hashes = {}
-  async function walk(current) {
-    let entries
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true })
-    } catch (error) {
-      if (error.code === "ENOENT") return
-      throw error
-    }
-    for (const entry of entries) {
-      const abs = path.join(current, entry.name)
-      if (entry.isDirectory()) {
-        await walk(abs)
-      } else if (entry.isFile()) {
-        hashes[path.relative(root, abs).split(path.sep).join("/")] =
-          await fs.readFile(abs, "utf8")
-      }
-    }
-  }
-  await walk(root)
-  return Object.fromEntries(Object.entries(hashes).sort(([left], [right]) => left.localeCompare(right)))
-}
-
-function embedding(seed = 1) {
-  return Array.from(
-    { length: ACTIVE_EMBEDDING_SPEC.dimension },
-    (_, index) => ((seed + index) % 23) / 23,
-  )
-}
-
-function approvedPublicationPolicy() {
-  return {
-    schema_version: 1,
-    default_publication: "deny",
-    repo_visibility: "public",
-    sensitive_repo: true,
-    approved_artifact_types: ["snapshot", "vector-pack"],
-    approval_required: true,
-    approvals: [
-      {
-        scope: "repo",
-        artifact_type: "vector-pack",
-        approved_by: "unit-test-reviewer",
-        approved_at: "2026-06-15T00:00:00.000Z",
-        reason: "explicit vector-pack approval for test fixture",
-      },
-      {
-        scope: "repo",
-        artifact_type: "snapshot",
-        approved_by: "unit-test-reviewer",
-        approved_at: "2026-06-15T00:00:00.000Z",
-        reason: "explicit snapshot approval for test fixture",
-      },
-    ],
-    updated_at: "2026-06-15T00:00:00.000Z",
-  }
 }
 
 function publicErrorShape(value, seen = new Set()) {
@@ -148,6 +60,10 @@ function assertPublicErrorDoesNotLeak(error) {
   const serialized = JSON.stringify(publicErrorShape(error))
   assert.doesNotMatch(serialized, /GITIGNORED_SECRET_PAYLOAD|SENSITIVE_PATH_PAYLOAD/u)
   assert.doesNotMatch(serialized, /ignored-track|secrets|credentials|api-keys|private-key/u)
+}
+
+async function loadExclusionsModule() {
+  return import("../../../../../plugins/desk/mcp/src/indexer/exclusions.js")
 }
 
 test("discover excludes gitignored markdown before indexing", async () => {
@@ -364,36 +280,17 @@ test("discover keeps ordinary archive recall while excluding archived sensitive 
   )
 })
 
-test("rebuildIndex never stores or embeds excluded document text", async () => {
+test("rebuildIndex never stores excluded document text", async () => {
   const root = await tmpRoot()
   await writeFile(root, ".gitignore", "ignored-track/**\n")
-  await writeFile(root, "visible-track/task-1/task.md", "# Visible\n\npublic vector text")
+  await writeFile(root, "visible-track/task-1/task.md", "# Visible\n\npublic text")
   await writeFile(root, "ignored-track/leaked-task/task.md", "# Ignored\n\nGITIGNORED_SECRET_PAYLOAD")
   await writeFile(root, "visible-track/secrets/task.md", "# Sensitive\n\nSENSITIVE_PATH_PAYLOAD")
 
-  const prompts = []
-  const fetch = async (_url, request) => {
-    prompts.push(JSON.parse(request.body).prompt)
-    return {
-      ok: true,
-      json: async () => ({ embedding: embedding(prompts.length) }),
-    }
-  }
-
-  const summary = await rebuildIndex(root, {
-    embed: { fetch },
-  })
-
-  assert.equal(summary.docs_indexed, 1)
-  assert.equal(prompts.length, 1)
-  assert.equal(
-    prompts.some((prompt) => /GITIGNORED_SECRET_PAYLOAD|SENSITIVE_PATH_PAYLOAD/u.test(prompt)),
-    false,
-    "excluded document text must not be sent to embedding fetch",
-  )
-
-  const db = openDb(root)
+  const db = openDb(root, { dbPath: ":memory:" })
   try {
+    const summary = await rebuildIndex(root, { db })
+    assert.equal(summary.docs_indexed, 1)
     const rows = db.prepare("SELECT path FROM docs ORDER BY path").all()
     assert.deepEqual(rows.map((row) => row.path), ["visible-track/task-1/task.md"])
     const chunks = db.prepare("SELECT text FROM chunks ORDER BY id").all()
@@ -406,87 +303,8 @@ test("rebuildIndex never stores or embeds excluded document text", async () => {
     closeDb(db)
   }
 })
-
-test("artifact publication guard rejects excluded inputs without leaking content", async () => {
-  const { assertArtifactInputsAllowed, loadExclusionRules } = await loadExclusionsModule()
-  const root = await tmpRoot()
-  await writeFile(root, ".gitignore", "ignored-track/**\n")
-
-  const rules = await loadExclusionRules({ deskRoot: root })
-
-  await assert.rejects(
-    () => assertArtifactInputsAllowed({
-      deskRoot: root,
-      artifact_type: "vector-pack",
-      docs: [
-        {
-          path: "visible-track/task-1/task.md",
-          body: "public body",
-        },
-        {
-          path: "ignored-track/leaked-task/task.md",
-          body: "GITIGNORED_SECRET_PAYLOAD",
-        },
-        {
-          path: "visible-track/secrets/task.md",
-          body: "SENSITIVE_PATH_PAYLOAD",
-        },
-      ],
-      rules,
-    }),
-    (error) => {
-      assert.equal(error.code, "artifact_input_excluded")
-      assert.equal(error.artifact_type, "vector-pack")
-      assert.equal(error.excluded_count, 2)
-      assert.deepEqual([...error.reasons].sort(), ["gitignore", "sensitive_path"])
-      assertPublicErrorDoesNotLeak(error)
-      return true
-    },
-  )
-})
-
-test("artifact publication guard honors nested gitignore files and negated rules", async () => {
-  const { assertArtifactInputsAllowed } = await loadExclusionsModule()
-  const root = await tmpRoot()
-  await writeFile(
-    root,
-    "trackA/.gitignore",
-    "local-ignored/\n/anchored-local\n!local-ignored/reincluded/task.md\n!public/task.md\n",
-  )
-
-  assert.deepEqual(
-    await assertArtifactInputsAllowed({
-      deskRoot: root,
-      artifact_type: "snapshot",
-      docs: [{ path: "trackA/local-ignored/reincluded/task.md", body: "public body" }],
-    }),
-    { allowed: true },
-  )
-
-  await assert.rejects(
-    () => assertArtifactInputsAllowed({
-      deskRoot: root,
-      artifact_type: "snapshot",
-      docs: [
-        { path: "trackA/local-ignored/private/task.md", body: "fixture secret" },
-        { path: "trackA/anchored-local/leaked/task.md", body: "fixture secret" },
-        { path: "trackA/_archive/.hidden.md", body: "fixture secret" },
-      ],
-    }),
-    (error) => {
-      assert.equal(error.code, "artifact_input_excluded")
-      assert.equal(error.artifact_type, "snapshot")
-      assert.equal(error.excluded_count, 3)
-      assert.deepEqual([...error.reasons].sort(), ["gitignore", "hidden_path"])
-      assertPublicErrorDoesNotLeak(error)
-      return true
-    },
-  )
-})
-
-test("exclusion helpers cover path globs and benign artifact inputs", async () => {
+test("exclusion helpers cover path globs", async () => {
   const {
-    assertArtifactInputsAllowed,
     exclusionForPath,
     hasGitignoreNegation,
     loadExclusionRules,
@@ -515,45 +333,6 @@ test("exclusion helpers cover path globs and benign artifact inputs", async () =
       gitignore: [null, { baseDir: "trackA", negated: true }, { pattern: null }],
     }).excluded,
     false,
-  )
-  for (const docs of [
-    undefined,
-    [],
-    "not-an-array",
-    [null],
-    ["not-a-doc"],
-    [[]],
-    [{ body: "GITIGNORED_SECRET_PAYLOAD" }],
-    [{ path: "" }],
-    [{ path: "   " }],
-    [{ path: "/absolute/task.md" }],
-    [{ path: "C:\\absolute\\task.md" }],
-  ]) {
-    await assert.rejects(
-      () => assertArtifactInputsAllowed({
-        deskRoot: root,
-        artifact_type: "snapshot",
-        docs,
-      }),
-      (error) => {
-        assert.equal(error.code, "artifact_input_unknown")
-        assert.equal(error.artifact_type, "snapshot")
-        assertPublicErrorDoesNotLeak(error)
-        return true
-      },
-    )
-  }
-  await assert.rejects(
-    () => assertArtifactInputsAllowed({
-      artifact_type: "snapshot",
-      docs: [{ path: "visible-track/task-1/task.md", body: "public body" }],
-    }),
-    (error) => {
-      assert.equal(error.code, "artifact_input_unknown")
-      assert.equal(error.artifact_type, "snapshot")
-      assertPublicErrorDoesNotLeak(error)
-      return true
-    },
   )
   assert.equal(exclusionForPath(null, rules).excluded, false)
   assert.equal(exclusionForPath("visible-track/task-1/task.md").excluded, false)
@@ -620,125 +399,4 @@ test("exclusion helpers cover path globs and benign artifact inputs", async () =
     false,
   )
   assert.equal(exclusionForPath("trackA/deep/task.md", rules).excluded, false)
-  assert.deepEqual(
-    await assertArtifactInputsAllowed({
-      deskRoot: root,
-      artifact_type: "snapshot",
-      docs: [{ path: "visible-track/task-1/task.md", body: "public body" }],
-      rules,
-    }),
-    { allowed: true },
-  )
-})
-
-async function assertArtifactWriterRejectsExcludedSourceDocs({ artifactType, write }) {
-  const deskRoot = await tmpRoot("desk-exclusions-writer-desk-")
-  const pluginRoot = await tmpRoot("desk-exclusions-writer-plugin-")
-  const artifactsRoot = path.join(pluginRoot, "artifacts")
-  await writeFile(deskRoot, ".gitignore", "ignored-track/**\n")
-  await writePolicySchemaFixture(pluginRoot)
-  const before = await fileHashes(artifactsRoot)
-
-  const sourceDocs = [
-    {
-      path: "visible-track/task-1/task.md",
-      body: "public body",
-    },
-    {
-      path: "ignored-track/leaked-task/task.md",
-      body: "GITIGNORED_SECRET_PAYLOAD",
-    },
-    {
-      path: "visible-track/secrets/task.md",
-      body: "SENSITIVE_PATH_PAYLOAD",
-    },
-  ]
-
-  await assert.rejects(
-    () => write({
-      pluginRoot,
-      deskRoot,
-      policy: approvedPublicationPolicy(),
-      sourceDocs,
-    }),
-    (error) => {
-      assert.equal(error.code, "artifact_input_excluded")
-      assert.equal(error.artifact_type, artifactType)
-      assertPublicErrorDoesNotLeak(error)
-      return true
-    },
-  )
-
-  assert.deepEqual(await fileHashes(artifactsRoot), before)
-}
-
-async function assertArtifactWriterRejectsUnknownSourceContext({ artifactType, write }) {
-  const pluginRoot = await tmpRoot("desk-exclusions-writer-plugin-")
-  const artifactsRoot = path.join(pluginRoot, "artifacts")
-  await writePolicySchemaFixture(pluginRoot)
-  const before = await fileHashes(artifactsRoot)
-
-  await assert.rejects(
-    () => write({
-      pluginRoot,
-      policy: approvedPublicationPolicy(),
-      sourceDocs: [{ path: "visible-track/task-1/task.md", body: "public body" }],
-    }),
-    (error) => {
-      assert.equal(error.code, "artifact_input_unknown")
-      assert.equal(error.artifact_type, artifactType)
-      assertPublicErrorDoesNotLeak(error)
-      return true
-    },
-  )
-
-  assert.deepEqual(await fileHashes(artifactsRoot), before)
-}
-
-test("vector-pack writer rejects excluded source docs before writing bytes", async () => {
-  const { writeVectorPackArtifact } = await loadVectorPackModule()
-  await assertArtifactWriterRejectsExcludedSourceDocs({
-    artifactType: "vector-pack",
-    write: (args) => writeVectorPackArtifact({
-      ...args,
-      packId: "excluded-pack",
-      packBytes: "",
-      manifestBytes: "{}\n",
-      checksumBytes: "sha256:excluded  excluded-pack.jsonl\n",
-    }),
-  })
-  await assertArtifactWriterRejectsUnknownSourceContext({
-    artifactType: "vector-pack",
-    write: (args) => writeVectorPackArtifact({
-      ...args,
-      packId: "unknown-source-pack",
-      packBytes: "",
-      manifestBytes: "{}\n",
-      checksumBytes: "sha256:unknown  unknown-source-pack.jsonl\n",
-    }),
-  })
-})
-
-test("snapshot writer rejects excluded source docs before writing bytes", async () => {
-  const { writeSnapshotArtifact } = await loadSnapshotModule()
-  await assertArtifactWriterRejectsExcludedSourceDocs({
-    artifactType: "snapshot",
-    write: (args) => writeSnapshotArtifact({
-      ...args,
-      snapshotId: "excluded-snapshot",
-      snapshotBytes: "sqlite bytes",
-      manifestBytes: "{}\n",
-      checksumBytes: "sha256:excluded  excluded-snapshot.sqlite.zst\n",
-    }),
-  })
-  await assertArtifactWriterRejectsUnknownSourceContext({
-    artifactType: "snapshot",
-    write: (args) => writeSnapshotArtifact({
-      ...args,
-      snapshotId: "unknown-source-snapshot",
-      snapshotBytes: "sqlite bytes",
-      manifestBytes: "{}\n",
-      checksumBytes: "sha256:unknown  unknown-source-snapshot.sqlite.zst\n",
-    }),
-  })
 })

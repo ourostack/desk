@@ -21,9 +21,6 @@ test("startup admits and registers before background convergence without indexin
       homeDir: root,
       readinessPolicy: { write_authority: "person" },
       runtimeImporter: async () => ({
-        ensureIndex() {
-          throw new Error("ensureIndex must not run during admission")
-        },
         async admitControlPlane({ deskRoot, person, policy }) {
           events.push("admit")
           assert.equal(deskRoot, root)

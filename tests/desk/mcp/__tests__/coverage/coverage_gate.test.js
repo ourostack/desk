@@ -723,14 +723,14 @@ test("coverage runner falls back to origin/main and then main", async () => {
       "main": "base-main",
     },
     diffs: {
-      "base-main..HEAD": "plugins/desk/mcp/src/server-helpers.js\n",
+      "base-main..HEAD": "plugins/desk/mcp/src/package-metadata.js\n",
     },
   })
   assert.ok(collectChangedFiles({
     repoRoot,
     spawn: localMain.spawn,
     env: {},
-  }).includes("plugins/desk/mcp/src/server-helpers.js"))
+  }).includes("plugins/desk/mcp/src/package-metadata.js"))
   assert.deepEqual(
     localMain.calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
     ["origin/main", "main"],

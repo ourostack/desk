@@ -104,17 +104,6 @@ function validManifest(overrides = {}) {
       lexical: "required",
       semantic: "background",
     },
-    artifacts: {
-      embeddings: {
-        shared: true,
-        spec_id: "nomic-embed-text-v1_5-desk-md-h2-paragraph-v2-unicode-whitespace-v1-768",
-        vector_packs: "read-and-import",
-      },
-      snapshots: {
-        restore: "newest-compatible",
-        stale_reconcile: "incremental",
-      },
-    },
     host_support: [
       {
         host: "copilot-root",
@@ -250,7 +239,6 @@ test("activation schema exports the supported version and required top-level fie
   assert.deepEqual(
     [...activationManifestSchema.required].sort(),
     [
-      "artifacts",
       "dependencies",
       "desk_root",
       "desk_runtime",
@@ -426,17 +414,6 @@ test("activation validation fails closed for contract type and enum fields", asy
       precedence: ["activation", "ambient"],
       opt_out_modes: ["manual-only", "surprise-me"],
     },
-    artifacts: {
-      embeddings: {
-        ...validManifest().artifacts.embeddings,
-        spec_id: 42,
-        vector_packs: "write-through",
-      },
-      snapshots: {
-        restore: "newest-compatible",
-        stale_reconcile: "overwrite",
-      },
-    },
     host_support: [
       {
         ...validManifest().host_support[0],
@@ -486,9 +463,6 @@ test("activation validation fails closed for contract type and enum fields", asy
     /desk_root\.policy.*invalid_desk_root_policy/i,
     /desk_root\.precedence.*invalid_desk_root_precedence/i,
     /desk_root\.opt_out_modes.*invalid_opt_out_mode/i,
-    /artifacts\.embeddings\.vector_packs.*invalid_vector_pack_policy/i,
-    /artifacts\.embeddings\.spec_id.*invalid_embedding_spec/i,
-    /artifacts\.snapshots\.stale_reconcile.*invalid_snapshot_reconcile/i,
     /host_support\[0\]\.host.*invalid_host_id/i,
     /host_support\[0\]\.status.*invalid_host_status/i,
     /host_support\[0\]\.dependency_resolution.*invalid_dependency_resolution/i,
@@ -656,26 +630,6 @@ test("activation validation requires MCP, root, artifact, host, and permission p
         /desk_runtime\.lexical.*activation_policy_invalid/i,
         /desk_runtime\.semantic.*activation_policy_invalid/i,
       ],
-    },
-    {
-      name: "embedding artifact policy",
-      manifest: validManifest({
-        artifacts: {
-          embeddings: { shared: true, spec_id: undefined, vector_packs: "read-and-import" },
-          snapshots: validManifest().artifacts.snapshots,
-        },
-      }),
-      patterns: [/artifacts\.embeddings\.spec_id/],
-    },
-    {
-      name: "snapshot artifact policy",
-      manifest: validManifest({
-        artifacts: {
-          embeddings: validManifest().artifacts.embeddings,
-          snapshots: { restore: "whatever", stale_reconcile: undefined },
-        },
-      }),
-      patterns: [/artifacts\.snapshots\.restore.*newest-compatible/i, /artifacts\.snapshots\.stale_reconcile/],
     },
     {
       name: "host support fallback fields",
@@ -999,16 +953,6 @@ test("activation validation reports defensive structural errors", async () => {
       mcp_servers: [{ ...validManifest().mcp_servers[0], required: false }],
     })),
     [/mcp_servers\[0\]\.required.*missing_required_mcp/i],
-  )
-
-  assertInvalid(
-    validateActivationManifest(validManifest({
-      artifacts: {
-        embeddings: { ...validManifest().artifacts.embeddings, shared: false },
-        snapshots: validManifest().artifacts.snapshots,
-      },
-    })),
-    [/artifacts\.embeddings\.shared.*missing_shared_embeddings/i],
   )
 
   assertInvalid(

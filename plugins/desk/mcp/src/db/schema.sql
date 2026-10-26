@@ -1,9 +1,7 @@
--- desk MCP indexer schema. Created on first run at <root>/.state/desk-index.sqlite.
--- W6 Unit 4: full schema + FTS5 + sqlite-vec virtual tables wired up.
+-- desk MCP search index schema. The search engine (src/search/engine.js) keeps it in memory.
 
 -- ---------------------------------------------------------------------------
--- meta: single-row table that tracks index-wide state (last_indexed_at etc.).
--- Used by the boot-time staleness check.
+-- meta: key-value state of the change journal's generations (readiness/generations.js).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -55,6 +53,7 @@ CREATE TABLE IF NOT EXISTS docs (
 CREATE INDEX IF NOT EXISTS idx_docs_track ON docs(track);
 CREATE INDEX IF NOT EXISTS idx_docs_kind ON docs(kind);
 CREATE INDEX IF NOT EXISTS idx_docs_status ON docs(status);
+CREATE INDEX IF NOT EXISTS idx_docs_is_archived ON docs(is_archived);
 CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at);
 
 -- ---------------------------------------------------------------------------
@@ -64,11 +63,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
   chunk_index INTEGER NOT NULL,             -- 0-based position within doc
-  chunk_key TEXT,
-  text_hash TEXT,
-  embedding_spec_id TEXT,
-  chunker_id TEXT,
-  normalization_id TEXT,
+  text_hash TEXT,                           -- keys the section's vector (indexer/text-hash.js)
   text TEXT NOT NULL,
   heading TEXT,                             -- nearest preceding heading, if any
   start_offset INTEGER,                     -- byte offset into doc
@@ -76,21 +71,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id);
-
--- ---------------------------------------------------------------------------
--- embedding_specs: versioned embedding/chunker identity metadata.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS embedding_specs (
-  id TEXT PRIMARY KEY,
-  model TEXT NOT NULL,
-  model_revision TEXT NOT NULL,
-  dimension INTEGER NOT NULL,
-  chunker_id TEXT NOT NULL,
-  normalization_id TEXT NOT NULL,
-  is_active INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_embedding_specs_is_active ON embedding_specs(is_active);
+CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash);
 
 -- ---------------------------------------------------------------------------
 -- refs_graph: directed edges between docs (e.g., task.md → its planning.md,
@@ -130,60 +111,3 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
   INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
 END;
-
--- ---------------------------------------------------------------------------
--- chunk_vecs: sqlite-vec virtual table for dense embeddings. 768-dim,
--- matching nomic-embed-text-v1.5's output. Synced manually from the indexer
--- (vec0 virtual tables don't support triggers).
--- ---------------------------------------------------------------------------
-CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vecs USING vec0(
-  chunk_id INTEGER PRIMARY KEY,
-  embedding FLOAT[768]
-);
-
--- ---------------------------------------------------------------------------
--- text_vectors: one embedding per section text, keyed by the vector space
--- (the embedding settings that make vectors comparable) and the section's
--- text_hash. Re-indexing a document gives its sections new row numbers but
--- leaves these rows alone, so unchanged text is never embedded again.
--- chunk_vecs above is kept only for older Desk builds that still read it.
--- A text the embedding model refused as too long even when shortened has a
--- row with no embedding, so it counts as covered and is not sent again.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS text_vectors (
-  vector_space TEXT NOT NULL,
-  text_hash TEXT NOT NULL,
-  embedding BLOB,                           -- NULL when the text was skipped as too long
-  kept_chars INTEGER,                       -- characters embedded when the text was shortened; NULL for the whole text
-  unused_since INTEGER,                     -- ms since epoch when no section had this text; NULL while in use
-  PRIMARY KEY (vector_space, text_hash)
-);
--- Cleanup finds the marked rows without reading every embedding.
-CREATE INDEX IF NOT EXISTS idx_text_vectors_unused ON text_vectors(unused_since) WHERE unused_since IS NOT NULL;
-
--- ---------------------------------------------------------------------------
--- chunk_embedding_failures: stable tombstones for chunks that the active
--- embedding provider rejected for chunk-local reasons (for example context
--- length). These rows prevent every startup/search from retrying known
--- unembeddable chunks while still letting text changes or spec changes retry.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS chunk_embedding_failures (
-  chunk_key TEXT NOT NULL,
-  text_hash TEXT NOT NULL,
-  embedding_spec_id TEXT NOT NULL,
-  chunker_id TEXT NOT NULL,
-  normalization_id TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  message TEXT,
-  failed_at TEXT NOT NULL,
-  PRIMARY KEY (
-    chunk_key,
-    text_hash,
-    embedding_spec_id,
-    chunker_id,
-    normalization_id
-  )
-);
-
-CREATE INDEX IF NOT EXISTS idx_chunk_embedding_failures_spec
-  ON chunk_embedding_failures(embedding_spec_id, chunker_id, normalization_id);

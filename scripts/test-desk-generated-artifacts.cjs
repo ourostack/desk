@@ -16,18 +16,6 @@ const defaultPublishedRuntimePackTargets = Object.freeze([
   Object.freeze({ platform: "linux", arch: "x64", nodeAbi: "127" }),
   Object.freeze({ platform: "win32", arch: "x64", nodeAbi: "137" }),
 ]);
-const defaultProductionNotesPath = path.join(
-  "desk",
-  "tasks",
-  "2026-06-14-1335-doing-desk-dependency-activation",
-  "production-artifacts.md",
-);
-const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
-const productionCurrentDocumentHashField = "current_document_tree_hash";
-const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
-const snapshotSourceScopePaths = Object.freeze(readJson(
-  path.join(defaultMcpRoot, "config", "artifact-source-scope.json"),
-).source_paths);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -47,20 +35,6 @@ function sha256(bytes) {
 
 async function loadRuntimeDeps(mcpRoot = defaultMcpRoot) {
   return import(pathToFileURL(path.join(mcpRoot, "src", "runtime", "runtime-deps.js")).href);
-}
-
-async function loadProductionArtifactModules(mcpRoot = defaultMcpRoot) {
-  const [spec, artifactScripts, policy] = await Promise.all([
-    import(pathToFileURL(path.join(mcpRoot, "src", "indexer", "spec.js")).href),
-    import(pathToFileURL(path.join(mcpRoot, "src", "artifacts", "artifact-scripts.js")).href),
-    import(pathToFileURL(path.join(mcpRoot, "src", "artifacts", "policy.js")).href),
-  ]);
-  return {
-    activeEmbeddingSpec: spec.ACTIVE_EMBEDDING_SPEC,
-    evaluateArtifactPublication: policy.evaluateArtifactPublication,
-    loadPublicationPolicy: policy.loadPublicationPolicy,
-    validateArtifacts: artifactScripts.validateArtifacts,
-  };
 }
 
 function publishedRuntimePackTargets(options = {}) {
@@ -371,523 +345,9 @@ function verifyPublishedRuntimeDependencyPack({ expectation, existsSync = fs.exi
   };
 }
 
-async function productionSharedArtifactExpectation(options = {}) {
-  const repoRoot = options.repoRoot ?? defaultRepoRoot;
-  const mcpRoot = options.mcpRoot ?? path.join(repoRoot, "plugins", "desk", "mcp");
-  const pluginRoot = options.pluginRoot ?? path.join(repoRoot, "plugins", "desk");
-  const deskRoot = options.deskRoot ?? path.join(repoRoot, "desk");
-  const defaultModules = await loadProductionArtifactModules(mcpRoot);
-  const modules = {
-    ...defaultModules,
-    ...(options.productionArtifactModules ?? {}),
-  };
-  const embeddingSpecId = options.embeddingSpecId ?? modules.activeEmbeddingSpec.id;
-  const relativeVectorPackDir = normalizePath(path.join(
-    "plugins",
-    "desk",
-    "artifacts",
-    "vector-packs",
-    embeddingSpecId,
-  ));
-  const relativeSnapshotDir = normalizePath(path.join(
-    "plugins",
-    "desk",
-    "artifacts",
-    "snapshots",
-    embeddingSpecId,
-  ));
-  return {
-    repoRoot,
-    mcpRoot,
-    pluginRoot,
-    deskRoot,
-    modules,
-    embeddingSpecId,
-    vectorPackDir: path.join(pluginRoot, "artifacts", "vector-packs", embeddingSpecId),
-    snapshotDir: path.join(pluginRoot, "artifacts", "snapshots", embeddingSpecId),
-    relativeVectorPackDir,
-    relativeSnapshotDir,
-    policyPath: path.join(pluginRoot, "artifacts", "publication-policy.json"),
-    notesPath: options.notesPath ?? path.join(repoRoot, defaultProductionNotesPath),
-    relativeNotesPath: normalizePath(defaultProductionNotesPath),
-  };
-}
-
-async function verifyProductionSharedArtifacts({
-  expectation,
-  existsSync = fs.existsSync,
-  spawn = spawnSync,
-} = {}) {
-  const errors = [];
-  const vectorPackFiles = primaryArtifactFiles({
-    dir: expectation.vectorPackDir,
-    suffix: ".jsonl",
-  });
-  const snapshotFiles = primaryArtifactFiles({
-    dir: expectation.snapshotDir,
-    suffix: ".sqlite.zst",
-  });
-
-  verifyProductionNotes({ expectation, errors, existsSync, spawn });
-  await verifyPublicationPolicyApprovals({ expectation, errors, existsSync });
-  verifyPrimaryArtifactSet({
-    errors,
-    files: vectorPackFiles,
-    label: "production vector pack",
-    dirRepoPath: expectation.relativeVectorPackDir,
-    primarySuffix: ".jsonl",
-    expectation,
-    existsSync,
-    spawn,
-  });
-  verifyPrimaryArtifactSet({
-    errors,
-    files: snapshotFiles,
-    label: "production snapshot",
-    dirRepoPath: expectation.relativeSnapshotDir,
-    primarySuffix: ".sqlite.zst",
-    expectation,
-    existsSync,
-    spawn,
-  });
-
-  let validation = { vector_packs: { count: vectorPackFiles.length, artifacts: [] }, snapshots: { count: snapshotFiles.length, artifacts: [] } };
-  try {
-    validation = await expectation.modules.validateArtifacts({
-      pluginRoot: expectation.pluginRoot,
-      mcpRoot: expectation.mcpRoot,
-    });
-  } catch (error) {
-    errors.push(`production shared artifact validation failed: ${formatErrorMessage(error)}`);
-  }
-
-  const expectedHashes = verifyProductionHashes({ expectation, errors, existsSync });
-  verifyFreshnessManifests({
-    errors,
-    expectation,
-    expectedHashes,
-    vectorPackFiles,
-    snapshotFiles,
-  });
-  propagateValidationFreshness({
-    artifacts: validation.vector_packs?.artifacts,
-    errors,
-    idField: "pack_id",
-    label: "production vector pack",
-  });
-  propagateValidationFreshness({
-    artifacts: validation.snapshots?.artifacts,
-    errors,
-    idField: "snapshot_id",
-    label: "production snapshot",
-  });
-
-  return {
-    ok: errors.length === 0,
-    errors,
-    vector_packs: {
-      count: vectorPackFiles.length,
-      files: vectorPackFiles.map((filePath) => relativeToRepo(expectation.repoRoot, filePath)),
-      validation: validation.vector_packs,
-    },
-    snapshots: {
-      count: snapshotFiles.length,
-      files: snapshotFiles.map((filePath) => relativeToRepo(expectation.repoRoot, filePath)),
-      validation: validation.snapshots,
-    },
-  };
-}
-
-function propagateValidationFreshness({ artifacts, errors, idField, label }) {
-  for (const artifact of artifacts ?? []) {
-    if (artifact.freshness === undefined) continue;
-    const artifactId = artifact[idField] ?? "<unknown>";
-    if (artifact.freshness.artifact_source_scope !== "fresh") {
-      errors.push(`${label} ${artifactId} artifact_source_scope_hash is stale`);
-    }
-    if (artifact.freshness.document_tree !== "fresh") {
-      errors.push(`${label} ${artifactId} document_tree_hash is stale`);
-    }
-  }
-}
-
-function primaryArtifactFiles({ dir, suffix }) {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(suffix))
-      .map((entry) => path.join(dir, entry.name))
-      .sort();
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-function verifyProductionNotes({ expectation, errors, existsSync, spawn }) {
-  if (!existsSync(expectation.notesPath)) {
-    errors.push(`production-artifacts.md verification notes missing: ${expectation.relativeNotesPath}`);
-    return;
-  }
-  const repoPath = relativeToRepo(expectation.repoRoot, expectation.notesPath);
-  if (!gitTracksFile({ repoRoot: expectation.repoRoot, repoPath, spawn })) {
-    errors.push(`production-artifacts.md verification notes must be tracked by git: ${repoPath}`);
-  }
-  const body = fs.readFileSync(expectation.notesPath, "utf8").toLowerCase();
-  for (const required of [
-    "node scripts/test-desk-generated-artifacts.cjs",
-    "artifact:vector-pack:build",
-    "artifact:snapshot:build",
-    "artifact:validate",
-    productionCurrentSourceHashField,
-    productionCurrentDocumentHashField,
-    "publication-policy",
-    "approval",
-    "tombstone",
-    "exclusion",
-  ]) {
-    if (!body.includes(required)) {
-      errors.push(`production-artifacts.md must mention ${required}`);
-    }
-  }
-}
-
-async function verifyPublicationPolicyApprovals({ expectation, errors, existsSync }) {
-  if (!existsSync(expectation.policyPath)) {
-    errors.push("production artifact publication policy missing: plugins/desk/artifacts/publication-policy.json");
-    return;
-  }
-  const loaded = await expectation.modules.loadPublicationPolicy({ pluginRoot: expectation.pluginRoot });
-  if (!loaded.valid) {
-    errors.push(...loaded.diagnostics);
-    return;
-  }
-  const policy = loaded.policy;
-  for (const artifactType of productionArtifactTypes) {
-    const decision = expectation.modules.evaluateArtifactPublication({
-      policy,
-      artifact_type: artifactType,
-      operation: "publish",
-    });
-    if (!decision.allowed) {
-      errors.push(`production artifact publication policy must approve ${artifactType}: ${decision.reason}`);
-    }
-  }
-  if (policy.approval_required !== true) {
-    errors.push("production artifact publication policy must require explicit approval");
-  }
-}
-
-function verifyPrimaryArtifactSet({
-  errors,
-  files,
-  label,
-  dirRepoPath,
-  primarySuffix,
-  expectation,
-  existsSync,
-  spawn,
-}) {
-  if (files.length === 0) {
-    errors.push(`${label} artifact missing under ${dirRepoPath}`);
-    return;
-  }
-  for (const primaryPath of files) {
-    for (const filePath of [
-      primaryPath,
-      sidecarPath(primaryPath, primarySuffix, ".manifest.json"),
-      sidecarPath(primaryPath, primarySuffix, ".sha256"),
-    ]) {
-      const repoPath = relativeToRepo(expectation.repoRoot, filePath);
-      if (!existsSync(filePath)) {
-        errors.push(`${label} sidecar missing: ${repoPath}`);
-        continue;
-      }
-      if (!gitTracksFile({ repoRoot: expectation.repoRoot, repoPath, spawn })) {
-        errors.push(`${label} artifact must be tracked by git: ${repoPath}`);
-      }
-    }
-    verifyProductionArtifactChecksum({
-      errors,
-      label: `${label} ${path.basename(primaryPath)}`,
-      primaryPath,
-      checksumPath: sidecarPath(primaryPath, primarySuffix, ".sha256"),
-      existsSync,
-      repoRoot: expectation.repoRoot,
-      primaryRepoPath: relativeToRepo(expectation.repoRoot, primaryPath),
-      checksumRepoPath: relativeToRepo(
-        expectation.repoRoot,
-        sidecarPath(primaryPath, primarySuffix, ".sha256"),
-      ),
-      spawn,
-    });
-  }
-}
-
-function verifyProductionArtifactChecksum({
-  errors,
-  label,
-  primaryPath,
-  checksumPath,
-  existsSync,
-  repoRoot,
-  primaryRepoPath,
-  checksumRepoPath,
-  spawn,
-}) {
-  if (!existsSync(primaryPath) || !existsSync(checksumPath)) return;
-  if (
-    workingTreeDiffersFromTracked({ repoRoot, repoPath: primaryRepoPath, spawn }) ||
-    workingTreeDiffersFromTracked({ repoRoot, repoPath: checksumRepoPath, spawn })
-  ) {
-    errors.push(`${label} working tree must match tracked artifact bytes`);
-  }
-  const primaryBytes =
-    readTrackedFileBytes({ repoRoot, repoPath: primaryRepoPath, spawn }) ??
-    fs.readFileSync(primaryPath);
-  const checksumBytes =
-    readTrackedFileBytes({ repoRoot, repoPath: checksumRepoPath, spawn }) ??
-    fs.readFileSync(checksumPath);
-  const checksum = readProductionArtifactChecksumBytes(checksumBytes, errors, label);
-  if (!checksum) return;
-  const artifactSha = `sha256:${sha256(primaryBytes)}`;
-  if (checksum !== artifactSha) {
-    errors.push(`${label} checksum must match artifact bytes`);
-  }
-}
-
-function readProductionArtifactChecksumBytes(bytes, errors, label) {
-  const match = bytes.toString("utf8").match(/^\s*(sha256:[a-f0-9]{64}|[a-f0-9]{64})\b/u);
-  if (!match) {
-    errors.push(`${label} checksum must start with a sha256 digest`);
-    return undefined;
-  }
-  return match[1].startsWith("sha256:") ? match[1] : `sha256:${match[1]}`;
-}
-
-function readTrackedFileBytes({ repoRoot, repoPath, spawn }) {
-  const result = spawn("git", ["show", `:${repoPath}`], {
-    cwd: repoRoot,
-    encoding: "buffer",
-    maxBuffer: 100 * 1024 * 1024,
-  });
-  if ((result.status ?? 1) !== 0) return undefined;
-  if (Buffer.isBuffer(result.stdout)) {
-    return result.stdout.length > 0 ? result.stdout : undefined;
-  }
-  if (typeof result.stdout === "string" && result.stdout.length > 0) {
-    return Buffer.from(result.stdout, "utf8");
-  }
-  return undefined;
-}
-
-function workingTreeDiffersFromTracked({ repoRoot, repoPath, spawn }) {
-  const result = spawn("git", ["diff", "--quiet", "--", repoPath], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  return result.status === 1;
-}
-
-function verifyProductionHashes({ expectation, errors, existsSync }) {
-  const expectedArtifactSourceScopeHash = artifactSourceScopeHash(expectation.mcpRoot);
-  const out = {
-    artifactSourceScopeHash: expectedArtifactSourceScopeHash,
-    documentTreeHash: null,
-  };
-  if (!existsSync(expectation.notesPath)) return out;
-  const notes = fs.readFileSync(expectation.notesPath, "utf8");
-  const notedSourceHash = hashFieldFromNotes({
-    notes,
-    field: productionCurrentSourceHashField,
-    errors,
-  });
-  const notedDocumentTreeHash = hashFieldFromNotes({
-    notes,
-    field: productionCurrentDocumentHashField,
-    errors,
-  });
-  if (!notedSourceHash) {
-    errors.push(`production-artifacts.md must record ${productionCurrentSourceHashField} as sha256:<hex>`);
-  } else if (notedSourceHash !== expectedArtifactSourceScopeHash) {
-    errors.push(`production-artifacts.md ${productionCurrentSourceHashField} must match current source scope`);
-  }
-  if (!notedDocumentTreeHash) {
-    errors.push(`production-artifacts.md must record ${productionCurrentDocumentHashField} as sha256:<hex>`);
-  } else {
-    out.documentTreeHash = notedDocumentTreeHash;
-  }
-  return out;
-}
-
-function hashFieldFromNotes({ notes, field, errors }) {
-  const lineMatches = [...notes.matchAll(new RegExp(
-    `^\\s*(?:[-*]\\s*)?${escapeRegExp(field)}\\s*:\\s*([^\\r\\n]*)$`,
-    "gimu",
-  ))];
-  if (lineMatches.length > 1) {
-    errors.push(`production-artifacts.md must record exactly one ${field}`);
-    return undefined;
-  }
-  const value = lineMatches[0]?.[1]?.trim().toLowerCase();
-  return /^sha256:[a-f0-9]{64}$/u.test(value) ? value : undefined;
-}
-
-function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorPackFiles, snapshotFiles }) {
-  for (const packPath of vectorPackFiles) {
-    const manifestPath = sidecarPath(packPath, ".jsonl", ".manifest.json");
-    const manifest = readJsonIfPresent(manifestPath, errors, "production vector pack manifest");
-    if (manifest === undefined) continue;
-    verifyFreshnessFields({
-      errors,
-      label: `production vector pack ${path.basename(packPath)}`,
-      manifest,
-      expectedHashes,
-    });
-    verifyCurrentRepresentedDocuments({
-      errors,
-      expectation,
-      label: `production vector pack ${path.basename(packPath)}`,
-      manifest,
-      expectedHashes,
-    });
-  }
-  for (const snapshotPath of snapshotFiles) {
-    const manifestPath = sidecarPath(snapshotPath, ".sqlite.zst", ".manifest.json");
-    const manifest = readJsonIfPresent(manifestPath, errors, "production snapshot manifest");
-    if (manifest === undefined) continue;
-    verifyFreshnessFields({
-      errors,
-      label: `production snapshot ${path.basename(snapshotPath)}`,
-      manifest,
-      expectedHashes,
-    });
-    verifyCurrentRepresentedDocuments({
-      errors,
-      expectation,
-      label: `production snapshot ${path.basename(snapshotPath)}`,
-      manifest,
-      expectedHashes,
-    });
-  }
-}
-
-function verifyFreshnessFields({ errors, label, manifest, expectedHashes }) {
-  if (
-    !Array.isArray(manifest.source_paths) ||
-    manifest.source_paths.length !== snapshotSourceScopePaths.length ||
-    manifest.source_paths.some((sourcePath, index) => sourcePath !== snapshotSourceScopePaths[index])
-  ) {
-    errors.push(`${label} source_paths must match canonical source scope`);
-  }
-  if (manifest.artifact_source_scope_hash !== expectedHashes.artifactSourceScopeHash) {
-    errors.push(`${label} artifact_source_scope_hash must match current source scope`);
-  }
-  if (
-    expectedHashes.documentTreeHash &&
-    manifest.document_tree_hash !== expectedHashes.documentTreeHash
-  ) {
-    errors.push(`${label} document_tree_hash must match production-artifacts.md`);
-  }
-}
-
-function verifyCurrentRepresentedDocuments({ errors, expectation, label, manifest, expectedHashes }) {
-  if (!Array.isArray(manifest.represented_documents) || manifest.represented_documents.length === 0) {
-    errors.push(`${label} represented_documents must be a non-empty array`);
-    return;
-  }
-  const currentDocs = [];
-  for (const doc of manifest.represented_documents) {
-    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-      errors.push(`${label} represented document must be an object`);
-      continue;
-    }
-    const docPath = normalizedRelativeDocPath(doc.path);
-    if (!docPath) {
-      errors.push(`${label} represented document path must be a normalized relative path`);
-      continue;
-    }
-    const currentPath = path.join(expectation.deskRoot, docPath);
-    const currentBytes = readFileIfPresent(currentPath);
-    if (currentBytes === undefined) {
-      errors.push(`${label} represented document ${docPath} must exist in current repo desk`);
-      continue;
-    }
-    const currentHash = `sha256:${sha256(currentBytes)}`;
-    currentDocs.push({ path: docPath, hash: currentHash });
-    const manifestHash = canonicalSha(doc.hash);
-    if (manifestHash !== currentHash) {
-      errors.push(`${label} represented document ${docPath} hash must match current repo document (manifest ${manifestHash}, current ${currentHash})`);
-    }
-  }
-  if (expectedHashes.documentTreeHash && currentDocs.length > 0) {
-    const currentTreeHash = documentTreeHash(currentDocs);
-    if (currentTreeHash !== expectedHashes.documentTreeHash) {
-      errors.push(`${label} current repo document tree must match production-artifacts.md ${productionCurrentDocumentHashField}`);
-    }
-  }
-}
-
-function normalizedRelativeDocPath(value) {
-  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
-    return undefined;
-  }
-  if (path.isAbsolute(value) || value.includes("\\") || value.includes("\0")) {
-    return undefined;
-  }
-  const normalized = normalizePath(path.posix.normalize(value));
-  const segments = value.split("/");
-  if (
-    normalized !== value ||
-    normalized === "." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../") ||
-    segments.some((segment) => (
-      segment === "" ||
-      segment === "." ||
-      segment === ".." ||
-      /^[a-z]:$/iu.test(segment)
-    ))
-  ) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function artifactSourceScopeHash(mcpRoot) {
-  const hash = createHash("sha256");
-  for (const repoPath of snapshotSourceScopePaths) {
-    const relFromMcp = repoPath.replace(/^plugins\/desk\/mcp\//u, "");
-    hash.update(`${repoPath}\0`);
-    hash.update(readFileIfPresent(path.join(mcpRoot, relFromMcp)) ?? Buffer.alloc(0));
-    hash.update("\0");
-  }
-  return `sha256:${hash.digest("hex")}`;
-}
-
-function documentTreeHash(docs) {
-  const hash = createHash("sha256");
-  for (const doc of [...docs].sort((left, right) => String(left.path).localeCompare(String(right.path)))) {
-    hash.update(`${normalizePath(doc.path)}\0${canonicalSha(doc.hash)}\0`);
-  }
-  return `sha256:${hash.digest("hex")}`;
-}
-
-function canonicalSha(value) {
-  return String(value).startsWith("sha256:") ? String(value) : `sha256:${value}`;
-}
-
-function sidecarPath(primaryPath, primarySuffix, sidecarSuffix) {
-  return primaryPath.replace(new RegExp(`${escapeRegExp(primarySuffix)}$`, "u"), sidecarSuffix);
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
 async function verifyGeneratedArtifacts(options = {}) {
   const repoRoot = options.repoRoot ?? defaultRepoRoot;
   const mcpRoot = options.mcpRoot ?? path.join(repoRoot, "plugins", "desk", "mcp");
-  const pluginRoot = options.pluginRoot ?? path.join(repoRoot, "plugins", "desk");
   const exists = options.existsSync ?? fs.existsSync;
   const spawn = options.spawn ?? spawnSync;
   const io = options.io ?? {
@@ -899,12 +359,6 @@ async function verifyGeneratedArtifacts(options = {}) {
     repoRoot,
     mcpRoot,
   });
-  const productionSharedExpectation = await productionSharedArtifactExpectation({
-    ...options,
-    repoRoot,
-    mcpRoot,
-    pluginRoot,
-  });
   const errors = [];
   const verifications = expectations.map((expectation) => verifyPublishedRuntimeDependencyPack({
     expectation,
@@ -914,17 +368,7 @@ async function verifyGeneratedArtifacts(options = {}) {
   for (const verification of verifications) {
     errors.push(...verification.errors);
   }
-  const productionSharedArtifacts = await verifyProductionSharedArtifacts({
-    expectation: productionSharedExpectation,
-    existsSync: exists,
-    spawn,
-  });
-  errors.push(...productionSharedArtifacts.errors);
-  const labels = [
-    ...expectations.map((expectation) => expectation.relativePackDir),
-    productionSharedExpectation.relativeVectorPackDir,
-    productionSharedExpectation.relativeSnapshotDir,
-  ].join(", ");
+  const labels = expectations.map((expectation) => expectation.relativePackDir).join(", ");
 
   if (errors.length > 0) {
     io.stderr.write(`Desk generated artifact verification failed for ${labels}\n`);
@@ -939,8 +383,6 @@ async function verifyGeneratedArtifacts(options = {}) {
     ok: errors.length === 0,
     errors,
     expectations,
-    productionSharedExpectation,
-    productionSharedArtifacts,
     verifications,
   };
 }
@@ -978,37 +420,24 @@ startCli({ isMain: require.main === module });
 
 module.exports = {
   __generatedArtifactVerifierInternalsForTests: {
-    canonicalSha,
     formatErrorMessage,
     gitTracksFile,
     packageRootFromArchiveEntry,
     parseArchiveJson,
-    primaryArtifactFiles,
-    propagateValidationFreshness,
     readJsonIfPresent,
-    readTrackedFileBytes,
     validatePublishedArchiveShape,
-    verifyProductionArtifactChecksum,
-    verifyFreshnessFields,
   },
   defaultMcpRoot,
   defaultPublishedRuntimePackTargets,
-  defaultProductionNotesPath,
   defaultRepoRoot,
-  artifactSourceScopePaths: snapshotSourceScopePaths,
-  artifactSourceScopeHash,
-  documentTreeHash,
   extractTarGzContents,
   gitTracksFile,
-  loadProductionArtifactModules,
   loadRuntimeDeps,
-  productionSharedArtifactExpectation,
   productionRuntimePackExpectations,
   productionRuntimePackExpectation,
   publishedRuntimePackTargets,
   runCli,
   startCli,
   verifyGeneratedArtifacts,
-  verifyProductionSharedArtifacts,
   verifyPublishedRuntimeDependencyPack,
 };

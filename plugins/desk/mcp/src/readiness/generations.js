@@ -1,23 +1,29 @@
 import { createHash, randomUUID } from "node:crypto"
 import { getMeta, setMeta } from "../db/init.js"
-import { stableStringify } from "./identity.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
-import { INDEX_WRITER_KEY, indexWriterRecord } from "./index-writer.js"
+
+// Only the change journal (journal.js) and its tests still use these generations; they go with it.
+
+const INDEX_WRITER_KEY = "index_writer"
+
+// Which Desk build wrote the generation, named by the journal it was written with.
+function indexWriterRecord(writer, eventCursor) {
+  return JSON.stringify({ journal_id: eventCursor.journal_id, version: writer.version, build: writer.build, controller: writer.controller })
+}
+
+function stableStringify(value) {
+  return JSON.stringify(sortValue(value))
+}
+
+function sortValue(value) {
+  if (Array.isArray(value)) return value.map(sortValue)
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortValue(value[key])]))
+  }
+  return value
+}
 
 // Each commit adds a generation row holding the whole document list, and builds sharing a desk commit often. Older rows are kept only so a compaction that is still running can find the generation it started from.
 export const RETAINED_LEXICAL_GENERATIONS = 8
-
-// Mirrors the identities committed by the canonical indexer, not the event cursor.
-export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "desk-lexical-required-v1" }) {
-  return {
-    schema_version: 1,
-    chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
-    normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
-    embedding_spec: stableStringify(ACTIVE_EMBEDDING_SPEC),
-    tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
-    policy_identity: policyIdentity,
-  }
-}
 
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
 // Network work (including embedding) belongs after this function returns.

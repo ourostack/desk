@@ -1343,8 +1343,8 @@ test("organizationFindings tolerates a card whose bytes open and read fine but w
 
 test("loose_file never flags the shared artifacts/ folder at the desk root", async () => {
   const root = await mkTempRoot()
-  await writeFile(root, "artifacts/publication-policy.json", "{}\n")
-  await writeFile(root, "artifacts/vector-packs/spec/pack.bin", "")
+  await writeFile(root, "artifacts/report.json", "{}\n")
+  await writeFile(root, "artifacts/exports/data.bin", "")
   const findings = organizationFindings(root, { now: NOW })
   assert.deepEqual(findings, [])
 })

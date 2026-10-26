@@ -7,8 +7,6 @@ const activation = () => JSON.parse(readFileSync(new URL("../../../../../plugins
 
 for (const [field, mutate] of [
   ["mcp_servers[0]", (manifest) => { manifest.mcp_servers = [null] }],
-  ["artifacts.embeddings", (manifest) => { manifest.artifacts.embeddings = null }],
-  ["artifacts.snapshots", (manifest) => { manifest.artifacts.snapshots = null }],
   ["host_support[0]", (manifest) => { manifest.host_support = [null] }],
 ]) {
   test(`activation validation rejects null ${field} with its object diagnostic and no partial value`, () => {

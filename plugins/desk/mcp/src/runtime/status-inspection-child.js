@@ -1,11 +1,8 @@
-import { inspectLocalDb, inspectStatusIndex } from "../db/status-read.js"
 import { serializeError } from "./admission-worker.js"
 import { rootStatus } from "./status-root.js"
 
-export function inspectStatusInputs({ deskRoot, phase = "local", rootContext }) {
+export function inspectStatusInputs({ deskRoot, phase = "root", rootContext }) {
   if (phase === "root") return rootStatus(deskRoot, rootContext)
-  if (phase === "local") return inspectLocalDb(deskRoot)
-  if (phase === "index") return inspectStatusIndex(deskRoot)
   throw new TypeError(`unknown status inspection phase: ${phase}`)
 }
 

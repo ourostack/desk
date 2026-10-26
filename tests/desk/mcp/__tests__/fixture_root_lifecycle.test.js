@@ -19,15 +19,13 @@ import { fileURLToPath } from "node:url"
 // A file that dies before it loads reports `# tests 1` / `# fail 1` and creates no
 // fixture at all, so residue-free is vacuously true for it. Every case below
 // therefore demands positive evidence that real tests executed — at least one
-// passing test — and then an unambiguously clean run, or the exact declared
-// alternative for a consumer that is red for a separately owned reason.
+// passing test — and then an unambiguously clean run.
 
 // The fixture owners below are relative to tests/desk/mcp, the folder that holds the tests.
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 const FIXTURE_OWNERS = [
   ["__tests__/indexer/index.test.js", "desk-idx-"],
-  ["__tests__/indexer/vector_rebuild.test.js", "desk-vector-rebuild-"],
   ["__tests__/indexer/exclusions.test.js", "desk-exclusions-"],
   ["__tests__/indexer/discover.test.js", "desk-discover-"],
   ["__tests__/indexer/person_discover.test.js", "desk-person-discover-"],
@@ -36,42 +34,11 @@ const FIXTURE_OWNERS = [
   ["__tests__/tools/person_write_prefix.test.js", "desk-write-outside-"],
   ["__tests__/db/init.test.js", "desk-init-"],
   ["__tests__/util/path_containment.test.js", "desk-containment-"],
-  ["__tests__/artifacts/redaction_cleanup.test.js", "desk-redaction-cleanup-plugin-"],
-  ["__tests__/artifacts/publication_policy.test.js", "desk-publication-policy-desk-"],
-  ["__tests__/integration/dependency_activation_flow.test.js", "desk-dependency-flow-snapshot-"],
-  ["__tests__/indexer/vector_packs.test.js", "desk-vector-pack-"],
-  ["__tests__/snapshots/manifest.test.js", "desk-snapshot-manifest-"],
-  ["__tests__/snapshots/restore.test.js", "desk-snapshot-restore-plugin-"],
-  ["__tests__/snapshots/fallback_reconcile.test.js", "desk-snapshot-fallback-desk-"],
 ]
-
-// A consumer that is red for a separately owned reason stays in the lifecycle
-// witness — lifecycle has to hold on the failure path too — but a clean run is
-// always accepted first, so repairing the declared defect can never turn this
-// witness red. The declaration is only an alternative to a clean run, and it is
-// matched exactly: the failure count, the failing subtests, the cancellation state
-// and the cause. Anything beyond what is declared is somebody's regression, not a
-// known defect, and is rejected here. The pack failure itself belongs to its own
-// consumer gate, not to this one.
-const DECLARED_FAILURES = new Map([
-  [
-    "__tests__/integration/dependency_activation_flow.test.js",
-    {
-      owner: "runtime pack pinned behind its lock, owned separately",
-      subtests: ["cold start restores the committed production snapshot without rebuild or embeddings"],
-      cancelled: 0,
-      cause: /stale_snapshot_reconciled/u,
-    },
-  ],
-])
 
 function tapCount(stdout, key) {
   const found = stdout.match(new RegExp(`^# ${key} (\\d+)$`, "mu"))
   return found ? Number(found[1]) : undefined
-}
-
-function failingSubtests(stdout) {
-  return [...stdout.matchAll(/^\s*not ok \d+ - (.+?)\s*$/gmu)].map((match) => match[1])
 }
 
 function runInPrivateTemp(args, sandbox, timeout) {
@@ -106,33 +73,12 @@ for (const [relPath, prefix] of FIXTURE_OWNERS) {
       const evidence = result.stderr || result.stdout
       const passed = tapCount(result.stdout, "pass")
       const failed = tapCount(result.stdout, "fail")
-      const cancelled = tapCount(result.stdout, "cancelled")
       assert.ok(
         passed >= 1,
         `${relPath} never ran a passing test, so an empty temp dir proves nothing: ${evidence}`,
       )
 
-      const declared = DECLARED_FAILURES.get(relPath)
-      if (result.status === 0 && failed === 0) {
-        // Clean is accepted for every consumer, declared or not — a declared defect
-        // that has since been repaired lands here and stays green.
-      } else {
-        assert.ok(declared, `${relPath} reported failures: ${evidence}`)
-
-        const failing = failingSubtests(result.stdout)
-        assert.equal(failing.length, failed, `${relPath} failure count and TAP lines disagree: ${evidence}`)
-        assert.deepEqual(
-          [...failing].sort(),
-          [...declared.subtests].sort(),
-          `${relPath} failed beyond its declaration (${declared.owner}): ${evidence}`,
-        )
-        assert.equal(cancelled, declared.cancelled, `${relPath} cancellation state is undeclared: ${evidence}`)
-        assert.match(
-          result.stdout,
-          declared.cause,
-          `${relPath} failed for a cause other than the declared one: ${evidence}`,
-        )
-      }
+      assert.ok(result.status === 0 && failed === 0, `${relPath} reported failures: ${evidence}`)
 
       const kept = new Set([sameKind, unrelated].map((dir) => path.basename(dir)))
       const residue = readdirSync(sandbox).filter((entry) => !kept.has(entry))

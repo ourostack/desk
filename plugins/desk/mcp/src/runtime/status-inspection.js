@@ -9,10 +9,9 @@ export function waitForStatusInspection(signal) {
   return ownedInspections.get(signal)?.wait() ?? Promise.resolve()
 }
 
-// SQLite and sqlite-vec cannot safely share a worker thread on our supported
-// Windows native runtime. This disposable child owns only read-only inspection;
-// the session's single status run owns its lifetime, not each tools/call.
-export function inspectStatusDb(deskRoot, { signal, phase = "local", spawn = fork } = {}) {
+// The child once read the on-disk index, which SQLite could not do safely on a worker thread on Windows. It now reads only
+// the desk root, so a later change can drop the child. The session's single status run owns its lifetime, not each tools/call.
+export function inspectStatusDb(deskRoot, { signal, phase = "root", spawn = fork } = {}) {
   const reader = createStatusInspection(deskRoot, { signal, spawn })
   return reader.inspect(phase).finally(() => reader.close())
 }

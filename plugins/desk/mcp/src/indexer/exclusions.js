@@ -19,7 +19,7 @@ const SENSITIVE_SEGMENTS = new Set([
 ])
 const SENSITIVE_NAME_RE = /(?:^|[-_.])(api[-_]?key|credential|credentials|private[-_]?key|secret|secrets)(?:[-_.]|$)/u
 
-export async function loadExclusionRules({ deskRoot } = {}) {
+export async function loadExclusionRules({ deskRoot }) {
   if (!deskRoot) return { gitignore: [] }
   const gitignore = []
   await collectGitignoreRules(deskRoot, "", gitignore)
@@ -42,64 +42,9 @@ export function exclusionForPath(relPath, rules = {}) {
   return { excluded: false, reason: null }
 }
 
-export function hasGitignoreNegation(rules = {}) {
+export function hasGitignoreNegation(rules) {
   return (rules.gitignore ?? [])
     .some((rule) => normalizeGitignoreRule(rule).negated)
-}
-
-export async function assertArtifactInputsAllowed({
-  deskRoot,
-  artifact_type,
-  docs = [],
-  rules,
-} = {}) {
-  if (!Array.isArray(docs) || docs.length === 0) {
-    throw artifactInputUnknownError(artifact_type)
-  }
-  if (typeof deskRoot !== "string" || deskRoot.trim() === "") {
-    throw artifactInputUnknownError(artifact_type)
-  }
-  for (const doc of docs) {
-    if (!hasKnownRelativeDocPath(doc)) {
-      throw artifactInputUnknownError(artifact_type)
-    }
-  }
-  const resolvedRules = rules ?? await loadExclusionRules({ deskRoot })
-  const reasons = new Set()
-  let excludedCount = 0
-  for (const doc of docs) {
-    const decision = exclusionForPath(doc.path, resolvedRules)
-    if (!decision.excluded) continue
-    excludedCount += 1
-    reasons.add(decision.reason)
-  }
-  if (excludedCount === 0) return { allowed: true }
-
-  const error = new Error("artifact input includes excluded documents")
-  error.code = "artifact_input_excluded"
-  error.artifact_type = artifact_type
-  error.excluded_count = excludedCount
-  error.reasons = reasons
-  throw error
-}
-
-function artifactInputUnknownError(artifact_type) {
-  const error = new Error("artifact input source documents are required")
-  error.code = "artifact_input_unknown"
-  error.artifact_type = artifact_type
-  return error
-}
-
-function hasKnownRelativeDocPath(doc) {
-  if (doc == null) return false
-  if (typeof doc !== "object") return false
-  if (Array.isArray(doc)) return false
-  if (typeof doc.path !== "string") return false
-  const rawPath = doc.path.trim()
-  if (rawPath === "") return false
-  if (path.isAbsolute(rawPath)) return false
-  if (path.win32.isAbsolute(rawPath)) return false
-  return true
 }
 
 async function collectGitignoreRules(deskRoot, baseDir, out) {
@@ -150,7 +95,7 @@ async function readGitignoreAtBase(deskRoot, baseDir) {
   }
 }
 
-function parseGitignore(raw, baseDir = "") {
+function parseGitignore(raw, baseDir) {
   return raw
     .split(/\r?\n/u)
     .map((line) => line.trim())

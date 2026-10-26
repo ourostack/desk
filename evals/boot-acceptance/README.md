@@ -209,15 +209,7 @@ no-ops when no store has `contribute: true` -- true for every fixture by
 construction. Checked directly: no run's isolated `.local/state/
 ouroboros-skills/desk/factory/outbox/*/consent` was ever written to `yes`.
 
-**Not yet injectable.** A slow-or-hung *readiness controller* (as opposed to
-the sync failure this harness injects) needs a hand-crafted owner-record
-file matching `readiness/owner-record.js`'s schema, sitting under the
-readiness cache directory keyed by a hash of the fixture root plus the
-lexical/semantic contract in effect at boot -- doable, but not built here.
-The `slow-or-failing-status` scenario instead injects a sync failure (an
-`origin` that doesn't exist), which is deterministic, fast, and exercises a
-real Step-2 failure path without needing to reverse-engineer that binary
-format.
+**Not yet injectable.** A slow or hung search start (as opposed to the sync failure this harness injects) is not built here. The `slow-or-failing-status` scenario instead injects a sync failure (an `origin` that doesn't exist), which is deterministic, fast, and exercises a real Step-2 failure path.
 
 ## Credential reads
 

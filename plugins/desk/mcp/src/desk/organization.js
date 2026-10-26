@@ -119,7 +119,7 @@ const STALE_MS = 30 * 24 * 60 * 60 * 1000
 const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"])
 
 // Plain (non-underscore) folders a desk root may hold besides tracks: the
-// shared `artifacts/` folder (vector packs, snapshots, publication policy).
+// shared `artifacts/` folder, which operators use for exports and reports.
 const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts"])
 
 // Desk-root-level loose entries shaped like scratch a tool session dropped

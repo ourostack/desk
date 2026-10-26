@@ -1,6 +1,6 @@
 // When a process started, as the operating system reports it: together with its PID this names one process, so a PID that a later process reuses is never mistaken for the process that recorded it.
 //
-// Desk records its own start time in a readiness controller's owner.json when it is elected. Another session compares it with the start time of whatever process now has that PID: a different start time means the recorded owner has ended (see owner-record.js).
+// Desk records its own start time in a readiness controller's owner.json when it is elected. Another session compares it with the start time of whatever process now has that PID: a different start time means the recorded owner has ended.
 //
 // The value is an opaque string, compared only for equality and read the same way on every read:
 // - Linux: `linux:<boot id>:<start ticks>`, from /proc/<pid>/stat field 22 (clock ticks after boot) and the kernel's boot id, which is stable where /proc/stat's boot time can shift by a second;
@@ -48,7 +48,7 @@ async function linuxStart(pid, { read = readFile } = {}) {
   try {
     boot = (await read("/proc/sys/kernel/random/boot_id", "utf8")).trim() || boot
   } catch {
-    // A kernel without a boot id: the ticks alone still tell processes of this boot apart, and owner-record.js rejects owners from an earlier boot by time.
+    // A kernel without a boot id: the ticks alone still tell processes of this boot apart.
   }
   return `linux:${boot}:${ticks}`
 }

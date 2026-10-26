@@ -8,7 +8,7 @@ import Database from "better-sqlite3"
 import { main } from "../../../../../plugins/desk/mcp/index.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 
-const [seam, marker, phase = "inspectLocalDb"] = process.argv.slice(2)
+const [seam, marker, phase = "rootStatus"] = process.argv.slice(2)
 // Written whole, by rename, so a reader never sees an empty or partial marker.
 const record = (value) => {
   writeFileSync(`${marker}.${process.pid}`, JSON.stringify(value))

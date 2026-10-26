@@ -8,7 +8,7 @@ import * as path from "node:path"
 import { openDb, closeDb } from "../db/init.js"
 import { rebuildIndex } from "../indexer/index.js"
 import { createDiscoverCache, useForNextDiscover } from "../indexer/discover.js"
-import { resolveEnsureIndexOptions } from "../server-helpers.js"
+import { deskPluginRoot } from "../package-metadata.js"
 import { indexedSearch, indexedTimeline, makeSnippet, passesScope } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 import { loadEmbedder, MODEL } from "./embedder.js"
@@ -133,7 +133,7 @@ export function createSearchEngine(options) {
       /* istanbul ignore next -- the platform split */
       const root = process.platform === "win32" ? realpathSync.native(deskRoot) : deskRoot
       const handle = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
-        noteChange(filename == null ? null : String(filename).replaceAll("\\", "/"))
+        noteChange(filename == null ? null : String(filename))
       })
       handle.on?.("error", () => { watcherFailed = true })
       return handle
@@ -142,7 +142,9 @@ export function createSearchEngine(options) {
       return null
     }
   }
-  function noteChange(rel) {
+  // `changed` is a desk-relative path with either separator, or null when the change cannot be placed (the whole desk is read again).
+  function noteChange(changed) {
+    const rel = typeof changed === "string" ? changed.replaceAll("\\", "/") : null
     if (rel === null) {
       fullScan = true
     } else if (IGNORED.has(rel.split("/")[0])) {
@@ -176,9 +178,8 @@ export function createSearchEngine(options) {
       otherPaths = new Set()
       fullScan = false
       try {
-        const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
         useForNextDiscover(deskRoot, discoverCache, full || await movesFiles(others) ? null : files)
-        const run = rebuildIndex(deskRoot, { db, skipEmbed: true, vectorCleanup: false, tombstones })
+        const run = rebuildIndex(deskRoot, { db, tombstones: { pluginRoot: deskPluginRoot() } })
         useForNextDiscover(null)
         await run
         built = true
@@ -262,10 +263,7 @@ export function createSearchEngine(options) {
     await current()
     if (request.kind === "thread") return indexedThread({ deskRoot, db, input: request })
     const backend = request.kind === "timeline" ? indexedTimeline : indexedSearch
-    const result = await backend({ deskRoot, db, input: request, opts: { ...request.opts, now: request.now, lexicalOnly: true } })
-    // These tools search exact words only; the fields about meaning-based search do not apply to them.
-    const { semantic_unavailable, semantic_note, semantic_diagnostic, ...rest } = result
-    return rest
+    return backend({ deskRoot, db, input: request, opts: { now: request.now } })
   }
 
   function sections() {
@@ -292,7 +290,7 @@ export function createSearchEngine(options) {
   }
 
   async function exactWords(text, scope, limit) {
-    const { results } = await indexedSearch({ deskRoot, db, input: { query: text, scope: scope ?? "all", limit }, opts: { lexicalOnly: true } })
+    const { results } = await indexedSearch({ deskRoot, db, input: { query: text, scope: scope ?? "all", limit } })
     return results.map(({ score_breakdown, ...result }) => ({ ...result, match: "exact_words" }))
   }
 
@@ -363,9 +361,11 @@ export function createSearchEngine(options) {
     status: async () => ({ state: "READY", convergence: { status: "ready" }, search: searchStatus() }),
     beginConvergence: () => { refresh().catch(() => {}); return Promise.resolve({ started: true }) },
     barrier: async ({ capability } = {}) => ({ capability, current: true, certain: true }),
-    recordChange: async ({ path: rel }) => { noteChange(typeof rel === "string" ? rel.replaceAll("\\", "/") : null); return { recorded: true } },
+    recordChange: async ({ path: rel }) => { noteChange(rel); return { recorded: true } },
     markUncertain: async () => { markChanged() },
     onExit: () => () => {},
+    // What a Desk write calls with each path it changed, so the next search reads it again.
+    noteChange,
     // What the search tools call.
     lexical,
     async semantic(request) {

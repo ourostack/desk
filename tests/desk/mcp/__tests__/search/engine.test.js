@@ -4,7 +4,6 @@ import { EventEmitter } from "node:events"
 import { existsSync, promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { configureRuntimeArtifacts } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import { loadEmbedder } from "../../../../../plugins/desk/mcp/src/search/embedder.js"
 import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
@@ -225,6 +224,9 @@ test("a changed Markdown file is reread on its own; a folder, a vanished folder 
   await writeFile(deskRoot, "more/task-g/task.md", "# Plants\n\nmoss\n")
   await engine.recordChange({ path: "more\\task-g\\task.md" })
   assert.deepEqual(await hits("moss"), ["more/task-g/task.md"])
+  await writeFile(deskRoot, "more/task-h/task.md", "# Plants\n\nlichen\n")
+  engine.noteChange("more\\task-h\\task.md")
+  assert.deepEqual(await hits("lichen"), ["more/task-h/task.md"], "noteChange is the call a Desk write makes")
   await fs.rm(path.join(deskRoot, "food"), { recursive: true })
   await writeFile(deskRoot, "deps/node_modules/x/task.md", SOUP)
   await fs.mkdir(path.join(deskRoot, "cars", "task-z", "task.md"), { recursive: true })
@@ -261,8 +263,9 @@ test("a desk that cannot be read fails the search that needed it, and a backgrou
   const deskRoot = await desk({ "cars/task-a/task.md": CAR })
   const pluginRoot = await mkTempDeskRoot()
   await writeFile(pluginRoot, "artifacts/tombstones/tombstones.jsonl", "not json\n")
-  configureRuntimeArtifacts({ pluginRoot })
-  t.after(() => configureRuntimeArtifacts())
+  const before = process.env.DESK_PLUGIN_ROOT
+  process.env.DESK_PLUGIN_ROOT = pluginRoot
+  t.after(() => { if (before === undefined) delete process.env.DESK_PLUGIN_ROOT; else process.env.DESK_PLUGIN_ROOT = before })
   const engine = engineFor(t, deskRoot, { semantic: "unsupported" })
   assert.deepEqual(await engine.beginConvergence(), { started: true })
   await engine.settled()

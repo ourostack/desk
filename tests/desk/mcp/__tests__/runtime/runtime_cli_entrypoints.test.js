@@ -14,9 +14,6 @@ import {
   generateRuntimeSupportMatrixCli,
 } from "../../../../../plugins/desk/mcp/scripts/generate-runtime-support-matrix.js"
 import {
-  validateArtifactsCli,
-} from "../../../../../plugins/desk/mcp/scripts/validate-artifacts.js"
-import {
   runRuntimeSupportMatrixVerifier,
   verifyRuntimeSupportMatrixCli,
 } from "../../../../../plugins/desk/mcp/scripts/verify-runtime-support-matrix.js"
@@ -54,62 +51,26 @@ function makeRuntimeFixture() {
   return mcpRoot
 }
 
-test("runtime support matrix CLI functions are importable and preserve command outcomes", async () => {
+test("runtime support matrix CLI functions are importable and preserve command outcomes", () => {
   const mcpRoot = makeRuntimeFixture()
   try {
     const matrixPath = generateRuntimeSupportMatrixCli({ mcpRoot })
     assert.equal(JSON.parse(readFileSync(matrixPath, "utf8")).targets.length, 1)
     assert.equal(verifyRuntimeSupportMatrixCli({ mcpRoot }), 0)
-    assert.equal(await validateArtifactsCli({
-      artifactArgv: ["--help"],
-      mcpRoot,
-    }), 0)
 
     writeFileSync(matrixPath, "{}\n", "utf8")
     assert.equal(verifyRuntimeSupportMatrixCli({ mcpRoot }), 1)
-    assert.equal(await validateArtifactsCli({
-      artifactArgv: ["--help"],
-      mcpRoot,
-    }), 1)
   } finally {
     rmSync(mcpRoot, { recursive: true, force: true })
   }
 })
 
-test("runtime support matrix CLI defaults operate on the installed MCP root", async () => {
+test("runtime support matrix CLI defaults operate on the installed MCP root", () => {
   const matrixPath = generateRuntimeSupportMatrixCli()
   assert.equal(verifyRuntimeSupportMatrixCli(), 0)
   const previousExitCode = process.exitCode
   runRuntimeSupportMatrixVerifier()
   assert.equal(process.exitCode, 0)
   process.exitCode = previousExitCode
-  assert.equal(await validateArtifactsCli({ artifactArgv: ["--help"] }), 0)
   assert.equal(JSON.parse(readFileSync(matrixPath, "utf8")).schema_version, 1)
-})
-
-test("artifact validation still runs when support-matrix verification fails", async () => {
-  const mcpRoot = makeRuntimeFixture()
-  const errors = []
-  let artifactArgv
-  try {
-    assert.equal(await validateArtifactsCli({
-      artifactArgv: ["--root", "fixture"],
-      mcpRoot,
-      supportVerifier: () => ({
-        ok: false,
-        errors: ["support matrix failed"],
-      }),
-      artifactValidator: async ({ argv }) => {
-        artifactArgv = argv
-        return 0
-      },
-      io: {
-        error: (message) => errors.push(message),
-      },
-    }), 1)
-    assert.deepEqual(artifactArgv, ["--root", "fixture"])
-    assert.deepEqual(errors, ["support matrix failed"])
-  } finally {
-    rmSync(mcpRoot, { recursive: true, force: true })
-  }
 })
