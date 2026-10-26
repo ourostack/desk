@@ -14,7 +14,7 @@ This repository is the home of **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2
 
 **Install, one line per host:**
 
-- **Copilot CLI:** add the plugin `copilot:github:ourostack/desk:plugins/desk@main` through Agency; Desk brings Superpowers and Plain Language with it.
+- **Copilot CLI:** `agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot`, then start Copilot with `agency copilot`. Desk brings Superpowers and Plain Language with it.
 - **Claude Code:** `claude plugin marketplace add ourostack/desk && claude plugin install desk@ourostack`.
 
 ## Plugins
