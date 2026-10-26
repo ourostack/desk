@@ -219,7 +219,9 @@ export async function main({
   const launcher = launcherMode(args)
   const plainEnv = { ...env }
   let frontDoor = null
+  let handshakeMs = null
   const session = createDeskSession({
+    handshakeMs: () => handshakeMs,
     args,
     env,
     authorityProviders,
@@ -284,6 +286,7 @@ export async function main({
     serverIcons: hosted && hasText(env.DESK_MCP_ICON_URL) ? [{ src: env.DESK_MCP_ICON_URL }] : undefined,
     callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : (call) => session.callTool(call),
     onHandshake: () => {
+      handshakeMs = Math.round(performance.now())
       kick()
       startHostedSync()
     },

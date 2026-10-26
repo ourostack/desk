@@ -1269,6 +1269,8 @@ export function createDeskSession(deps) {
         exceptions: context.exceptions,
         launcher: launcher === null ? null : { code: launcher.code, reason: launcher.reason, mode: launcher.mode },
         last_start: lastStartPath({ stateDir: deskStateDir, root: context.root?.root ?? null }),
+        // Milliseconds from this process's start to its first tools/list answer, or null before it: the host's wait for Desk's tools.
+        handshake_ms: deps.handshakeMs?.() ?? null,
       },
     }
   }
