@@ -107,6 +107,23 @@ async function freshHostStatus(t, pauseAt) {
   }
 }
 
+test("the server re-admits as soon as the Copilot session record appears, without waiting for the retry backoff", async (t) => {
+  const f = await freshHostStatus(t, null)
+  const settle = async (ms) => {
+    const end = Date.now() + ms
+    while (Date.now() < end) await new Promise((resolve) => setImmediate(resolve))
+  }
+  // The watch's first check (no record yet) reads the disk; let it finish and schedule the next one.
+  await settle(200)
+  f.publish()
+  // Only the record watch's 200 ms check is due; the first retry would come at 1000 ms.
+  t.mock.timers.tick(200)
+  const until = Date.now() + 10000
+  while (f.handle.session.context.root?.root !== f.workspace && Date.now() < until) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(f.handle.session.context.root?.root, f.workspace)
+  assert.equal(f.handle.session.context.root?.source, "host-project")
+})
+
 test("fresh own-host evidence does not project stale setup while root verification is pending", async (t) => {
   const f = await freshHostStatus(t, "resolution")
   f.publish()

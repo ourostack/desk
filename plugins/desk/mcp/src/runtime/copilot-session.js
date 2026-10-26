@@ -2,13 +2,14 @@
 //
 // Copilot passes its MCP servers no session folder (live-checked on Copilot CLI 1.0.89): the server's working folder is the plugin's own, `roots/list` answers an empty list, and `PWD` is only whatever shell launched Copilot. The one per-session value in the server's environment is COPILOT_AGENT_SESSION_ID. The `sessionStart` hook receives that same id as `sessionId`, together with the session's folder as `cwd`. So the hook records the folder (and the saved desk binding it saw, which Copilot also keeps out of the server's environment) in a small file keyed by the id, and the server reads that file every time it resolves its root.
 //
-// Ordering. Copilot starts the server before it fires `sessionStart`, so the server's first resolution finds no record and degrades to `no_desk_root`. Desk's admission re-resolves the root on every `desk_status`, before every gated tool call and on its own retry schedule, so the first call after the hook has run binds, with no restart.
+// Ordering. Copilot starts the server before it fires `sessionStart`, so the server's first resolution finds no record and degrades to `no_desk_root`. Desk's admission re-resolves the root on every `desk_status`, before every gated tool call and on its own retry schedule, so the first call after the hook has run binds, with no restart. The server also watches for the record (`watchCopilotSessionRecord`) and re-admits as soon as it appears, instead of waiting for the next retry.
 // Concurrent sessions. Each session id has its own file, written to a temporary name and renamed into place, so a reader sees the old record or the new one and one session never reads another's.
 // A stale record. The folder is only a hint for `hostProjectRoot`, which binds only a folder that is a desk right now. A saved binding remains explicit even when its file disappears: the shared resolver reports that failure instead of selecting another desk. Records no session has rewritten for 30 days are pruned the next time any session records one.
 //
 // The hook side never throws: a session must start whether or not the record could be written.
 
 import { createHash } from "node:crypto"
+import { promises as fsPromises } from "node:fs"
 import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -95,6 +96,43 @@ export function readCopilotSession({ env = process.env, stateDir = resolveDeskSt
   if (!hasText(record.folder) || !path.isAbsolute(record.folder)) return null
   const binding = record.activation_config
   return { folder: record.folder, activationConfig: hasText(binding) && path.isAbsolute(binding) ? binding : null }
+}
+
+/**
+ * Calls `onRecord()` once when this session's record appears, checking every `intervalMs` for at most `limitMs`. Copilot starts the server before its sessionStart hook writes the record, so the first admission finds no root and the next attempt would wait for the retry backoff (1, 2, then 5 s); this lets admission start again as soon as the hook has written it.
+ * Does nothing without a session id. A record that already exists when it starts is reported too, because the first admission may have resolved just before it was written. The checks are asynchronous and never block the thread that answers the host. Returns a function that stops it.
+ */
+export function watchCopilotSessionRecord({ env = process.env, stateDir = resolveDeskStateDir({ env }), onRecord, intervalMs = 200, limitMs = 120000, access = fsPromises.access, now = Date.now } = {}) {
+  const sessionId = env?.[COPILOT_SESSION_ENV]
+  if (!hasText(sessionId)) return () => {}
+  const file = copilotSessionFile(stateDir, sessionId)
+  const until = now() + limitMs
+  let timer = null
+  let stopped = false
+  const check = async () => {
+    timer = null
+    let found = false
+    try {
+      await access(file)
+      found = true
+    } catch {
+      // Not written yet.
+    }
+    if (stopped) return
+    if (found) {
+      stopped = true
+      onRecord()
+      return
+    }
+    if (now() >= until) return
+    timer = setTimeout(check, intervalMs)
+    timer.unref?.()
+  }
+  check()
+  return () => {
+    stopped = true
+    if (timer !== null) clearTimeout(timer)
+  }
 }
 
 /**

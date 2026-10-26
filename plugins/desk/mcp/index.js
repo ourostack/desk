@@ -32,8 +32,9 @@ import {
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
 import { deskVersion } from "./src/package-metadata.js"
-import { runInWorker } from "./src/runtime/admission-worker.js"
+import { createResolveRunner, runInWorker } from "./src/runtime/admission-worker.js"
 import { importInChunks } from "./src/runtime/chunked-import.js"
+import { watchCopilotSessionRecord } from "./src/runtime/copilot-session.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
 import { startFrontDoor } from "./src/runtime/front-door.js"
 import { hostedInstructions, isHosted, withHostedStartup } from "./src/runtime/hosted.js"
@@ -218,6 +219,8 @@ export async function main({
 
   const launcher = launcherMode(args)
   const plainEnv = { ...env }
+  // The shipped worker keeps one resolve worker up between jobs; an injected offload (tests) runs every job itself.
+  const resolveRunner = offload === runInWorker ? createResolveRunner() : { run: offload, close() {} }
   let frontDoor = null
   let handshakeMs = null
   const session = createDeskSession({
@@ -234,7 +237,7 @@ export async function main({
     notifyToolsChanged: () => frontDoor?.notifyToolsChanged(),
     launcher,
     // Root and activation resolution read files: they run on the admission worker, never on the thread that answers the host.
-    resolveInputs: () => offload({
+    resolveInputs: () => resolveRunner.run({
       kind: "resolve",
       input: { args, env: plainEnv, cwd, homeDir, injectedReadinessPolicy },
     }),
@@ -251,10 +254,19 @@ export async function main({
     }),
   })
   let kicked = false
+  let stopRecordWatch = () => {}
   const kick = () => {
     if (kicked) return
     kicked = true
     session.start()
+    // Copilot writes the session record only after starting this server: re-admit as soon as it appears, once the attempt that is running has finished.
+    stopRecordWatch = watchCopilotSessionRecord({
+      env,
+      stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }),
+      onRecord: () => {
+        session.admission.idle({ waitMs: 60000 }).then(() => session.admission.refresh({ waitMs: 0 })).catch(() => {})
+      },
+    })
   }
   // A hosted Desk (DESK_HOSTED) has no session-start hook: its initialize answer carries the startup instructions, and once the first tools/list is answered it pulls the desk the way session start does.
   const hosted = isHosted(env)
@@ -298,6 +310,7 @@ export async function main({
   const removeCrashHandlers = crashHandlers ? installCrashHandlers({ session, stderr }) : () => {}
   const closed = frontDoor.closed.then(async () => {
     clearTimeout(kickoff)
+    stopRecordWatch()
     let deadline
     let timedOut = false
     try {
@@ -310,6 +323,7 @@ export async function main({
     } finally {
       clearTimeout(deadline)
       removeCrashHandlers()
+      resolveRunner.close()
     }
     if (timedOut) {
       stderr.write(`[desk-mcp] shutdown timed out after ${SHUTDOWN_TIMEOUT_MS} ms; controller close did not finish; exiting with failure\n`)

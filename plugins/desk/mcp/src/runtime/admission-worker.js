@@ -1,6 +1,6 @@
 // Admission work that can block, run on a worker thread so the thread that answers the host never waits for it.
 //
-// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, and restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
+// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, and restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock). A runtime job runs in a fresh worker; resolve jobs share one worker that stays up between them (`createResolveRunner`). A result is plain data, and errors come back as plain objects with their code and fields.
 //
 // The worker imports only dependency-free modules and never loads a native addon: a worker that ended with better-sqlite3 or sqlite-vec loaded on it crashed the whole server (SIGSEGV in the worker's teardown on macOS, 0xC0000005 on Windows). It never imports index.js, which would start Desk inside the worker.
 
@@ -96,10 +96,10 @@ export function runAdmissionJob(job, { onPhase } = {}) {
   return run(job.input, { onPhase })
 }
 
-/** The worker side: answer one job on `port`. Does nothing outside a Desk admission worker, so importing this module elsewhere is harmless. */
+/** The worker side: answer one job on `port`, or every job when the worker is persistent. Does nothing outside a Desk admission worker, so importing this module elsewhere is harmless. */
 export function attachAdmissionWorker(port, data) {
   if (!port || data?.deskAdmissionWorker !== true) return false
-  port.once("message", (job) => {
+  port[data.persistent === true ? "on" : "once"]("message", (job) => {
     let reply
     try {
       // A phase goes to the thread that answers the host as soon as it is posted, even while this thread then blocks on a lock wait.
@@ -134,6 +134,50 @@ export function runInWorker(job, { createWorker = (url, options) => new Worker(u
     worker.once("exit", (code) => finish(reject, new Error(`the admission worker exited (code ${code}) before answering`)))
     worker.postMessage(job)
   })
+}
+
+/**
+ * Runs resolve jobs on one worker that stays up between jobs. A ready session revalidates its inputs on every desk_status, and starting a worker thread for each took 40 to 60 ms on a busy Mac (more under heavier load), past the 50 ms desk_status waits, so the first status of a session often had to say the destination was still being verified. The job itself takes about a millisecond.
+ * One job at a time: a job that arrives while one is running gets a fresh worker of its own, so a read that never returns holds up only its own job. The worker never keeps the process alive, and one that fails or exits is replaced on the next job.
+ */
+export function createResolveRunner({ createWorker = (url, options) => new Worker(url, options), fresh = runInWorker } = {}) {
+  let worker = null
+  let pending = null
+  const start = () => {
+    const started = createWorker(new URL(import.meta.url), { workerData: { deskAdmissionWorker: true, persistent: true } })
+    started.unref()
+    const settle = (outcome) => {
+      const waiting = pending
+      pending = null
+      if (waiting !== null) outcome(waiting)
+    }
+    const lost = (error) => {
+      if (worker === started) worker = null
+      settle((waiting) => waiting.reject(error))
+    }
+    started.on("message", (reply) => {
+      if (reply.phase !== undefined) return
+      settle((waiting) => reply.ok ? waiting.resolve(reply.value) : waiting.reject(reviveError(reply.error)))
+    })
+    started.once("error", lost)
+    started.once("exit", (code) => lost(new Error(`the admission worker exited (code ${code}) before answering`)))
+    return started
+  }
+  return {
+    run(job) {
+      if (pending !== null) return fresh(job)
+      worker ??= start()
+      return new Promise((resolve, reject) => {
+        pending = { resolve, reject }
+        worker.postMessage(job)
+      })
+    },
+    close() {
+      const running = worker
+      worker = null
+      running?.terminate()
+    },
+  }
 }
 
 /** An error as plain data that survives postMessage: name, message and its own fields (code, path, tried, and an activation failure's envelope). */
