@@ -410,13 +410,13 @@ export function unreadAlarms(loop, signals = {}) {
 // The step
 
 /**
- * `runMeasureStep(env, { deskRoot, personPrefix = "", now, attempted = [], ...seams }) -> { ok, result, counts }`. `attempted` names the steps the
- * worker ran in this run. Results: `measured` (ok); `headless_session` (nothing written, nothing recorded); `status_unavailable` and `status_write_failed` (nothing
+ * `runMeasureStep(env, { deskRoot, personPrefix = "", now, attempted = [], alarms = true, ...seams }) -> { ok, result, counts }`. `attempted` names the steps the
+ * worker ran in this run; `alarms: false` (a desk that is not the person's own) opens no alarm card. Results: `measured` (ok); `headless_session` (nothing written, nothing recorded); `status_unavailable` and `status_write_failed` (nothing
  * recorded); `alarm_write_failed`, `observe_failed` and `step_not_recorded` (not ok; the record was written). Seams, for tests: `writeCardCommitted`,
  * `observe`, `readStatusImpl`, `updateStatusImpl`, `readCardsImpl`, `recordStepImpl`, `pluginVersion`. It throws only for an invalid `deskRoot` or `now`.
  */
 export async function runMeasureStep(env, {
-  deskRoot, personPrefix = "", now, attempted = [],
+  deskRoot, personPrefix = "", now, attempted = [], alarms = true,
   writeCardCommitted = writeCardCommittedDefault, observe = observeConditions, readStatusImpl = readStatus, updateStatusImpl = updateStatus,
   readCardsImpl = readCardsDefault, recordStepImpl = recordStep, pluginVersion: version,
 }) {
@@ -443,7 +443,8 @@ export async function runMeasureStep(env, {
   }
 
   const signals = { ...built.signals, attempted: attempted.filter((name) => STEPS.includes(name)) }
-  const holding = loopAlarms(built.loop, signals)
+  // Loop alarms are this machine's findings: they open cards only in the person's own desk (`route-desk.js`).
+  const holding = alarms ? loopAlarms(built.loop, signals) : []
   const open = new Set((built.cards ?? []).filter((card) => card.source === "loop_alarm" && !card.state.startsWith("closed_")).map((card) => card.key))
   let writeFailed = false
   for (const { name } of holding) {

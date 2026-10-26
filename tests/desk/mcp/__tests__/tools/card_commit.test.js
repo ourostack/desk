@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { writeCardCommitted, cardCommitMessage, stagingAllowed, stageAndCommitFile, COMMIT_CODES } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
+import { commitPaths, YIELD_ENV } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
 const ROOT = "/desk"
 const CARDS = "/desk/_meta/improvement"
@@ -227,4 +228,57 @@ test("on a real repository a card left uncommitted by a failed commit is committ
   assert.deepEqual(git("show", "--name-only", "--format=", "HEAD").split("\n").filter(Boolean).sort(), [`_meta/improvement/${NAME}`, `_meta/improvement/${second}`])
   assert.match(git("status", "--short"), /\?\? _meta\/improvement\/notes\.txt/)
   assert.equal(pushes.length, 1)
+})
+
+// Runs `body` as one of Desk's background writers, then restores the environment.
+async function asBackgroundWriter(body) {
+  const before = process.env[YIELD_ENV]
+  process.env[YIELD_ENV] = "1"
+  try {
+    return await body()
+  } finally {
+    if (before === undefined) delete process.env[YIELD_ENV]
+    else process.env[YIELD_ENV] = before
+  }
+}
+
+test("a background writer that finds the index lock held stages nothing and defers the card to a later write", async () => {
+  const base = await mkTempRoot("card-commit-yield-")
+  const lock = path.join(base, "index.lock")
+  await fs.writeFile(lock, "")
+  const git = fakeGit({ untracked: [`_meta/improvement/${NAME}`] })
+  const spawn = (cmd, args) => args.includes("--git-path") ? { status: 0, stdout: `${lock}\n`, stderr: "" } : git.spawn(cmd, args)
+  const out = await asBackgroundWriter(() => run({ spawn, calls: git.calls }))
+  assert.equal(out.commit, "deferred")
+  assert.ok(COMMIT_CODES.includes(out.commit))
+  assert.deepEqual(out.pushes, [])
+  assert.equal(git.calls.some((call) => call[0] === "add" || call[0] === "commit"), false)
+  // A person's write in the same state commits: it does not check the lock first, and Git's own lock is retried (below).
+  assert.equal((await run({ spawn, calls: git.calls })).commit, "committed")
+})
+
+test("a person's commit waits out a briefly held lock, and a background writer's does not", () => {
+  const lockError = { status: 128, stdout: "", stderr: "fatal: Unable to create '/desk/.git/index.lock': File exists.\n" }
+  const script = (failures) => {
+    let commits = 0
+    const spawn = (cmd, args) => {
+      if (args.includes("symbolic-ref")) return { status: 0, stdout: "main\n", stderr: "" }
+      commits += 1
+      return commits <= failures ? lockError : { status: 0, stdout: "", stderr: "" }
+    }
+    return { spawn, commits: () => commits }
+  }
+  const person = script(2)
+  assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, true)
+  assert.equal(person.commits(), 3)
+  const background = script(2)
+  const before = process.env[YIELD_ENV]
+  process.env[YIELD_ENV] = "1"
+  try {
+    assert.equal(commitPaths("/desk", ["a.md"], "m", background.spawn).ok, false)
+  } finally {
+    if (before === undefined) delete process.env[YIELD_ENV]
+    else process.env[YIELD_ENV] = before
+  }
+  assert.equal(background.commits(), 1)
 })

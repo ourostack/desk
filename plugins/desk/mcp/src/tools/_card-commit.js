@@ -6,7 +6,7 @@
 
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, indexLockHeld, stagePaths, commitPaths, yieldsGitLock } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -14,7 +14,7 @@ const CARD_FOLDER = "improvement"
 const VERB = /^[a-z][a-z_]{0,23}$/u
 
 /** What `writeCardCommitted` reports as `commit`: one stable code, never text from Git. */
-export const COMMIT_CODES = Object.freeze(["committed", "no_files", "unsafe_path", "not_git", "no_change", "stage_failed", "commit_failed"])
+export const COMMIT_CODES = Object.freeze(["committed", "no_files", "unsafe_path", "not_git", "no_change", "stage_failed", "commit_failed", "deferred"])
 
 /**
  * On a Git desk, a friction file is staged only when it held no unstaged changes before the write, so a dirty or
@@ -104,7 +104,9 @@ function reportedPaths(deskRoot, folder, result) {
  * starts with `.improvement` (the lock and temp files): a reported path outside the folder or relative gives
  * `unsafe_path` and nothing is staged. A desk that is not a Git repository gives `not_git`: the card file stays on
  * disk, uncommitted, and no push is scheduled. A Git failure gives `stage_failed` or `commit_failed` and never loses the
- * card; the next write commits it.
+ * card; the next write commits it. A background writer (`yieldsGitLock`) that finds another Git process holding the desk's
+ * index lock stages nothing and gives `deferred`, so a person's write in the same desk is never held up; the next write
+ * commits the card.
  */
 export async function writeCardCommitted({ deskRoot, personPrefix = "", write, message, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const folder = posix(path.join(personPrefix, "_meta", CARD_FOLDER))
@@ -119,6 +121,7 @@ export async function writeCardCommitted({ deskRoot, personPrefix = "", write, m
   const stage = dirty.filter((rel) => isCardOutput(folder, rel, reported))
   const leftAlone = dirty.length - stage.length
   if (stage.length === 0) return { result, commit: reported.length === 0 ? "no_files" : "no_change", left_alone: leftAlone }
+  if (yieldsGitLock() && indexLockHeld(deskRoot, spawnGit)) return { result, commit: "deferred", left_alone: leftAlone }
   if (!stagePaths(deskRoot, stage, spawnGit).ok) return { result, commit: "stage_failed", left_alone: leftAlone }
   if (!commitPaths(deskRoot, stage, typeof message === "function" ? message(result) : message, spawnGit).ok) return { result, commit: "commit_failed", left_alone: leftAlone }
   schedulePush({ root: deskRoot })

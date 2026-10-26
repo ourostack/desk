@@ -11,7 +11,7 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -46,8 +46,45 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
   return `Desk did not write: the desk checkout is on branch \`${found}\`, and Desk writes only on \`${expected}\`. Switch the checkout to \`${expected}\` and try again.`
 }
 
+// Another Git process (often Desk's own background loop committing an improvement card) can hold the desk's index or a ref lock
+// for a moment. A person's write then waits for it, retrying for up to LOCK_WAIT_MS, instead of failing. Desk's background
+// writers run with DESK_GIT_YIELD=1 (hooks/loop-start.cjs) and never wait: they give way, and their card is committed by a later write.
+const LOCK_WAIT_MS = 3000
+const LOCK_RETRY_MS = 50
+const LOCK_HELD = /Unable to create '[^']*\.lock'|\.lock': File exists|cannot lock ref/u
+export const YIELD_ENV = "DESK_GIT_YIELD"
+
+/** True when this process is one of Desk's background writers, which give way to a person's writes. */
+export function yieldsGitLock(env = process.env) {
+  return env?.[YIELD_ENV] === "1"
+}
+
+function lockHeld(result) {
+  return result?.status !== 0 && LOCK_HELD.test(String(result?.stderr ?? ""))
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
 function run(spawnGit, root, args, extra = {}) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
+  const once = () => spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
+  let result = once()
+  if (yieldsGitLock()) return result
+  const deadline = Date.now() + LOCK_WAIT_MS
+  while (lockHeld(result) && Date.now() < deadline) {
+    sleepSync(LOCK_RETRY_MS)
+    result = once()
+  }
+  return result
+}
+
+/** True when another Git process holds `root`'s index lock right now. False when Git cannot say. */
+export function indexLockHeld(root, spawnGit) {
+  const result = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  if (result?.status !== 0) return false
+  const lock = String(result.stdout).trim()
+  return lock !== "" && existsSync(path.resolve(root, lock))
 }
 
 /** True when `result` (a `spawnSync`-shaped return value) is `spawnGit` reporting its own timeout kill. */

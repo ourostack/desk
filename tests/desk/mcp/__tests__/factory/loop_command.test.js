@@ -22,8 +22,9 @@ const MINUTE = 60 * 1000
 
 async function scratch(run, { consent = true } = {}) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-loop-worker-")))
-  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") })
   const desk = path.join(base, "desk-for-test")
+  // The person's own desk ($DESK), so the steps that write this machine's findings run in it.
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin"), DESK: desk })
   await fs.mkdir(desk)
   if (consent) await setConsent(env, { store: STORE, contribute: true, account: "someone" })
   try {
@@ -101,6 +102,21 @@ test("the steps run in exactly this order, each with the desk, the person and a 
   assert.deepEqual(Object.keys(status.loop.steps).sort(), ["evaluate", "measure", "mirror", "reconcile", "route", "verify"])
   assert.equal(status.loop.steps.route.last_result, "routed")
   assert.equal(status.loop.steps.route.runs, 1, "the route pair records once")
+}))
+
+test("in a desk that is not the person's own, the route step does not run or record and measure opens no alarm card", () => scratch(async (ctx) => {
+  const other = path.join(ctx.base, "project-desk")
+  await fs.mkdir(other)
+  const log = []
+  const outcome = await run({ ...ctx, desk: other }, log)
+  assert.deepEqual(names(log), ["triage", "evaluate", "mirror", "reconcile", "verify", "measure"])
+  assert.equal(outcome.steps.route, "not_own_desk")
+  assert.equal(Object.fromEntries(log).measure.alarms, false)
+  assert.equal((await readStatus(ctx.env)).loop.steps.route, undefined, "the own desk's next run is not held by the route step's gap")
+  const own = []
+  await run(ctx, own)
+  assert.deepEqual(names(own).slice(0, 2), ["routeIssues", "routeLocal"])
+  assert.equal(Object.fromEntries(own).measure.alarms, true)
 }))
 
 test("a step that throws records a failure and the next step still runs, with nothing of the error kept", () => scratch(async (ctx) => {
