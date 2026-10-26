@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.21 — 2026-10-26
+
+Every child brief now asks for visual proof, and every return lists it. The Superpowers mapper adds a visual-proof sentence to `briefRules` ([`mcp/src/activation/superpowers-context.js`](mcp/src/activation/superpowers-context.js)): when the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), the child saves bounded screenshots into its own `evidence/<brief name>/` folder beside its brief, so children whose briefs share a folder never overwrite each other's files, and returns an Evidence list beside Resources. [`work-orchestration`](skills/work-orchestration/SKILL.md) carries the same sentence for briefs the root writes itself, and has the root check Evidence on integration and send back visual work that arrives without visuals. Before, briefs for "look into" or "deep-dive" work said nothing about screenshots, so children returned none. A test keeps the mapper's sentence and the skill's the same.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.20 — 2026-10-26
 
 The Desk version line in the plugin manifests and the marketplace no longer sits beside a description, so a release no longer makes an open pull request that edits a description conflict.
