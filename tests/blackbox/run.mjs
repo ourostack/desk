@@ -143,6 +143,8 @@ function serverLaunch(world, serverName) {
     // Claude Code starts plugin servers in the project folder with the plugin root in the environment.
     cwd = config.cwd && config.cwd !== "." ? path.resolve(world.desk, config.cwd) : world.desk
     env.CLAUDE_PLUGIN_ROOT = desk
+    env.CLAUDE_PROJECT_DIR = world.desk
+    if (world.pluginData) env.CLAUDE_PLUGIN_DATA = world.pluginData
     env.CLAUDECODE = "1"
   }
   return { command: config.command, args: (config.args ?? []).map((arg) => expand(arg, vars)), cwd, env }
@@ -160,6 +162,7 @@ function hookEnv(world, pluginRoot) {
   } else {
     env.CLAUDE_PLUGIN_ROOT = pluginRoot
     env.CLAUDE_PROJECT_DIR = world.desk
+    if (world.pluginData) env.CLAUDE_PLUGIN_DATA = world.pluginData
     env.CLAUDECODE = "1"
   }
   return env
@@ -247,6 +250,15 @@ async function hostSession(options, host, repeat, shared) {
   console.log(`[${host} #${repeat}] installing and building the desk in ${root}`)
   world.plugins = installPlugins({ host, home, pluginsSource: options.plugins })
   Object.assign(world, makeDesk({ root, env }))
+  if (host === "claude") {
+    // Claude Code passes its plugin data folder and the project folder to the server and hooks. This person also has a saved
+    // binding to a different desk, so a session opened in the project desk must still bind the project desk, as Copilot does.
+    const savedDesk = path.join(root, "saved-desk")
+    for (const dir of ["_meta", "_archive"]) fs.mkdirSync(path.join(savedDesk, dir), { recursive: true })
+    world.pluginData = path.join(claudeConfigDir(home), "plugins", "data", "desk-ourostack")
+    fs.mkdirSync(world.pluginData, { recursive: true })
+    fs.writeFileSync(path.join(world.pluginData, "desk.activation.json"), JSON.stringify({ schema_version: 1, desk: { root: savedDesk } }))
+  }
 
   // Warm caches a person would already have after their first day: the downloaded search model and browser driver.
   const stateDir = deskStateDir(home)
