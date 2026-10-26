@@ -2,14 +2,34 @@
 //
 // Each case starts index.js over stdio with a temporary HOME, a temporary desk that is a Git clone of a temporary origin, and a lexical-only activation config. It asserts the handshake completes within 3 s with the full tool list, then that desk_status settles on the expected state, that reads and writes are gated the way that state allows, and that safe repairs happen with their one-line report.
 
-import { test } from "node:test"
+import { before, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
+import { mkTempRoot } from "../_temp_roots.js"
 import {
   HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
+
+// The cases below test admission conditions, not unpacking Desk's runtime, so they share one runtime cache that is built once
+// before them, the way a person's sessions share ~/.cache. With a new cache per case, every case first unpacked the runtime pack
+// and copied the source mirror; on a Windows runner that alone sometimes passed the 20 s a case waits for its state, so the case
+// failed still "admitting" in phase "building". The three cases at the end that test a cold restore and the publication lock
+// keep a cache of their own.
+let sharedRuntimeCache
+before(async () => {
+  sharedRuntimeCache = path.join(await mkTempRoot("desk-admission-runtime-"), "runtime-cache")
+  const fixture = { ...(await makeGitDesk()), runtimeCache: sharedRuntimeCache }
+  const session = await startDesk(fixture, { args: ["--activation-config", writeActivation(fixture)] })
+  try {
+    // Building the cache is setup here, so it gets the time a cold machine needs; the cases keep their own deadlines.
+    assert.equal((await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 120000 })).state, "ready")
+  } finally {
+    await session.close()
+  }
+})
+const warmGitDesk = async () => ({ ...(await makeGitDesk()), runtimeCache: sharedRuntimeCache })
 
 
 function assertHandshake(session) {
@@ -45,7 +65,7 @@ async function assertWritesRefused(session, code) {
 // ---- conditions that stop admission before the desk is readable ----
 
 test("a --root that does not exist: handshake, then degraded:root_unavailable with a fix", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   await withDesk(t, fixture, { args: ["--root", path.join(fixture.root, "missing-desk")] }, async (session) => {
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "degraded:root_unavailable")
@@ -60,7 +80,7 @@ test("a --root that does not exist: handshake, then degraded:root_unavailable wi
 })
 
 test("a malformed activation config: handshake, then degraded:activation_config_invalid", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = path.join(fixture.root, "broken.activation.json")
   writeFile(configPath, "{not json")
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
@@ -72,7 +92,7 @@ test("a malformed activation config: handshake, then degraded:activation_config_
 })
 
 test("an invalid readiness policy: handshake, then degraded:activation_policy_invalid", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture, { semantic: "sometimes" })
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
     const status = await session.statusUntil(settled)
@@ -82,7 +102,7 @@ test("an invalid readiness policy: handshake, then degraded:activation_policy_in
 })
 
 test("invalid write authority: reads serve, writes refuse with degraded:authority_invalid", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture, { semantic: "unsupported", write_authority: "person" })
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
     const status = await session.statusUntil(settled)
@@ -96,7 +116,7 @@ test("invalid write authority: reads serve, writes refuse with degraded:authorit
 
 
 test("a clean detached HEAD on a remote branch is switched back to the state branch, keeping untracked files", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "checkout", "--detach", "origin/feature")
   const detachedSha = git(fixture.desk, "rev-parse", "HEAD")
@@ -116,7 +136,7 @@ test("a clean detached HEAD on a remote branch is switched back to the state bra
 })
 
 test("a detached HEAD with a local-only commit is not repaired: reads serve, writes refuse", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "checkout", "--detach")
   writeFile(path.join(fixture.desk, "ops", "local.md"), "local only\n")
@@ -135,7 +155,7 @@ test("a detached HEAD with a local-only commit is not repaired: reads serve, wri
 })
 
 test("a detached HEAD with a tracked edit is not repaired", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "checkout", "--detach", "origin/feature")
   writeFile(path.join(fixture.desk, "_meta", "friction.md"), "# Friction\n\nedited\n")
@@ -148,7 +168,7 @@ test("a detached HEAD with a tracked edit is not repaired", async (t) => {
 })
 
 test("a rebase in progress is not repaired", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "checkout", "--detach", "origin/feature")
   mkdirSync(path.join(fixture.desk, ".git", "rebase-merge"), { recursive: true })
@@ -160,7 +180,7 @@ test("a rebase in progress is not repaired", async (t) => {
 })
 
 test("another branch that is clean and equal to its upstream is switched back to the state branch", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "switch", "--track", "origin/feature")
   const sha = git(fixture.desk, "rev-parse", "HEAD")
@@ -173,7 +193,7 @@ test("another branch that is clean and equal to its upstream is switched back to
 })
 
 test("another branch with local commits stays put: degraded:state_branch_mismatch, read-only", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "switch", "--track", "origin/feature")
   writeFile(path.join(fixture.desk, "ops", "more.md"), "more\n")
@@ -189,7 +209,7 @@ test("another branch with local commits stays put: degraded:state_branch_mismatc
 })
 
 test("a pushed branch with no upstream waits for desk_doctor's switch_state_branch repair", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "switch", "-c", "review-copy", "origin/feature", "--no-track")
   await withDesk(t, fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] }, async (session) => {
@@ -206,7 +226,7 @@ test("a pushed branch with no upstream waits for desk_doctor's switch_state_bran
 })
 
 test("the state branch can come from the activation config instead of the flag", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture, { semantic: "unsupported" }, { state_branch: "main" })
   git(fixture.desk, "checkout", "--detach", "origin/feature")
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
@@ -219,7 +239,7 @@ test("the state branch can come from the activation config instead of the flag",
 // ---- the controller rendezvous ignores XDG_RUNTIME_DIR ----
 
 test("--degraded with an integrity code starts connected and refuses every data tool", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   await withDesk(t, fixture, { args: ["--root", fixture.desk, "--degraded", "lifecycle_conflict", "--degraded-reason", "two providers claim worker"] }, async (session) => {
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "degraded:lifecycle_conflict")
@@ -233,7 +253,7 @@ test("--degraded with an integrity code starts connected and refuses every data 
 })
 
 test("--degraded with a crew-state code serves reads and refuses writes; with --state-branch, Desk's own check takes over", async (t) => {
-  const fixture = await makeGitDesk()
+  const fixture = await warmGitDesk()
   const configPath = writeActivation(fixture)
   await withDesk(t, fixture, { args: ["--activation-config", configPath, "--degraded", "identity_unavailable", "--degraded-reason", "gh is not signed in"] }, async (session) => {
     const status = await session.statusUntil(settled)
@@ -241,7 +261,7 @@ test("--degraded with a crew-state code serves reads and refuses writes; with --
     await assertReadsServeDirectly(session)
     await assertWritesRefused(session, "identity_unavailable")
   })
-  const handedOff = await makeGitDesk()
+  const handedOff = await warmGitDesk()
   const handedOffConfig = writeActivation(handedOff)
   git(handedOff.desk, "checkout", "--detach", "origin/feature")
   await withDesk(t, handedOff, { args: ["--activation-config", handedOffConfig, "--degraded", "crew_state_unavailable", "--state-branch", "main"] }, async (session) => {

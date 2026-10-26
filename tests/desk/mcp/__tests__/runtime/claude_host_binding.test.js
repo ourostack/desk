@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+// A session that has just closed can still hold a fixture file for a moment on Windows, and the synchronous removal does not retry that refusal.
+import { removeTree } from "../_remove_tree.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -219,7 +221,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
     assert.equal(runtimeLoads, 1)
   } finally {
     await desk.close()
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 
@@ -256,7 +258,7 @@ test("a ready status whose runtime detail misses its budget says so, names the a
     assert.equal(detailed.root.valid, true)
   } finally {
     await desk.close()
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 
@@ -275,7 +277,7 @@ test("main reports a wrong explicit root as degraded:root_unavailable, never as 
     assert.equal(started.snapshot.state, "degraded:root_unavailable")
     assert.match(started.snapshot.diagnostic.observed.message, /--root path does not exist/u)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 
@@ -332,7 +334,7 @@ test("a saved binding to a missing folder degrades to root_unavailable, binds no
     assert.equal(runtimeLoads, 1)
   } finally {
     await desk.close()
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 
@@ -356,7 +358,7 @@ test("a $DESK naming a missing folder degrades to root_unavailable with a DESK f
     assert.match(started.snapshot.fix, /The DESK environment variable names/u)
     assert.match(started.snapshot.fix, /correct the explicit destination/u)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 
@@ -383,7 +385,7 @@ test("an empty ~/desk is not a desk: with no binding, main serves setup mode ins
     ])
   } finally {
     await desk.close()
-    rmSync(fixture.root, { recursive: true, force: true })
+    await removeTree(fixture.root)
   }
 })
 

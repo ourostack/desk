@@ -1,13 +1,13 @@
 // Keeps the shard duration table (suite-durations.json) honest.
 // Usage:
 //   node suite-durations.mjs refresh <folder>... [--tests-root <folder>] [--table <file>]   take the median of the per-file times in every results.json found under the folders into the table
-//   node suite-durations.mjs check [--tests-root <folder>] [--table <file>] [--strict]       fail when the table names a test file that no longer exists; --strict also fails for a test file the table lacks
+//   node suite-durations.mjs check [--tests-root <folder>] [--table <file>] [--strict]       fail on an entry that is not a positive number; --strict also fails for a test file the table lacks (an entry for a file that is gone only warns)
 // The folders are what `gh run download <run> -p "windows-standard-shard-*"` produces. Use several runs: the median ignores a single slow one.
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
-import { assignShards, defaultTablePath } from "./suite-shards.mjs"
+import { assignShards, defaultTablePath, WINDOWS_SHARDS } from "./suite-shards.mjs"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const defaultTests = path.resolve(here, "..", "..", "tests", "desk", "mcp", "__tests__")
@@ -77,14 +77,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (command === "refresh") {
     const table = refreshTable(positional.map((p) => path.resolve(p)), testsRoot, previous)
     fs.writeFileSync(tablePath, JSON.stringify(table, null, 1) + "\n")
-    const plan = assignShards(suiteFiles(testsRoot), 8, table)
-    console.log(`wrote ${Object.keys(table.files).length} files from ${table.inputs} results files; default ${table.defaultSeconds}s; 8-shard plan (minutes): ${plan.map((s) => Math.round(s.seconds / 60)).join(" ")}`)
+    const plan = assignShards(suiteFiles(testsRoot), WINDOWS_SHARDS, table)
+    console.log(`wrote ${Object.keys(table.files).length} files from ${table.inputs} results files; default ${table.defaultSeconds}s; ${WINDOWS_SHARDS}-shard plan (minutes): ${plan.map((s) => Math.round(s.seconds / 60)).join(" ")}`)
   } else if (command === "check") {
     const { stale, unlisted, invalid } = checkTable(previous, testsRoot)
-    for (const f of stale) console.log(`::error::${f}: in the duration table but not a test file; run refresh to drop it`)
+    for (const f of stale) console.log(`::warning::${f}: in the duration table but not a test file; harmless, and the next refresh drops it`)
     for (const f of invalid) console.log(`::error::${f}: not a positive number of seconds`)
     for (const f of unlisted) console.log(`::${args.includes("--strict") ? "error" : "warning"}::${f}: not in the duration table, so it gets the default weight`)
-    process.exit(stale.length + invalid.length + (args.includes("--strict") ? unlisted.length : 0) > 0 ? 1 : 0)
+    process.exit(invalid.length + (args.includes("--strict") ? unlisted.length : 0) > 0 ? 1 : 0)
   } else {
     console.log("usage: suite-durations.mjs refresh <folder>... | check [--strict]")
     process.exit(2)

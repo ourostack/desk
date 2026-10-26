@@ -234,6 +234,7 @@ jobs:
 
   # The offline evaluation's own unit tests (evals/offline/__tests__, 907 tests, pure Node, no agent runs). They took about five
   # minutes in one process, so Node splits the files across four runners. No coverage gate applies: they are not Desk MCP code.
+  # They run only when the change touches what they read (see the first step); most pull requests change neither.
   offline-eval-tests:
     name: offline eval tests (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -250,7 +251,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The tests read only evals/offline, the scripts/skill-evals.cjs bridge and its contract test, and the MCP package's installed
+      # dependencies, so a change that touches none of those skips them and the job still succeeds for the CI gate. A pull request
+      # is compared with its base (the merge commit's first parent); a push with the commit before it; a dispatch runs everything.
+      - name: Decide whether this change can affect the offline eval tests
+        id: scope
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'push' && github.event.before || '' }}
+        run: >-
+          node .github/scripts/changed-scope.mjs "$BASE" evals/ scripts/skill-evals.cjs scripts/test-skill-evals.cjs
+          plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json
+          .github/workflows/desk-mcp-tests.yml .github/scripts/changed-scope.mjs >> "$GITHUB_OUTPUT"
+
       - name: Set up Node
+        if: steps.scope.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -258,11 +272,13 @@ jobs:
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       - name: Install dependencies
+        if: steps.scope.outputs.run == 'true'
         working-directory: plugins/desk/mcp
         run: npm ci
 
       # A throwaway HOME keeps the tests off the runner's real one.
       - name: Run the offline eval unit tests
+        if: steps.scope.outputs.run == 'true'
         env:
           SHARD: ${{ matrix.shard }}
         run: |

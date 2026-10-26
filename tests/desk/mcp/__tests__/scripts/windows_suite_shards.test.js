@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
-const { assignShards, shardFiles, loadDurations, defaultTablePath } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
+const { assignShards, shardFiles, loadDurations, defaultTablePath, WINDOWS_SHARDS } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
 const { checkTable, refreshTable } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
 const { suiteFiles } = await import(pathToFileURL(path.join(scripts, "suite-files.mjs")).href)
 const require = createRequire(import.meta.url)
@@ -63,9 +63,9 @@ test("with no table every file weighs the same, so the split is even by count", 
   assert.deepEqual(plan.map((s) => s.files.length).sort(), [2, 2, 3, 3])
 })
 
-test("the checked-in table plans eight shards inside the budget: none over 30 minutes and none far above the mean", () => {
+test("the checked-in table plans the workflow's shards inside the budget: none over 30 minutes and none far above the mean", () => {
   const real = loadDurations()
-  const plan = assignShards(suiteFiles(testsRoot), 8, real)
+  const plan = assignShards(suiteFiles(testsRoot), WINDOWS_SHARDS, real)
   const mean = plan.reduce((n, s) => n + s.seconds, 0) / plan.length
   const worst = Math.max(...plan.map((s) => s.seconds))
   assert.ok(worst <= 30 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
@@ -74,10 +74,9 @@ test("the checked-in table plans eight shards inside the budget: none over 30 mi
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
 })
 
-test("the checked-in table names no test file that is gone and has only positive numbers", () => {
-  const { stale, invalid } = checkTable(JSON.parse(readFileSync(defaultTablePath, "utf8")), testsRoot)
-  assert.deepEqual(stale, [], "stale entries: run node .github/scripts/suite-durations.mjs refresh <results folders>")
-  assert.deepEqual(invalid, [])
+// An entry for a test file that is gone is harmless (the plan only looks up files that exist, and a refresh drops it), so deleting a test needs no edit to this table.
+test("the checked-in table has only positive numbers", () => {
+  assert.deepEqual(checkTable(JSON.parse(readFileSync(defaultTablePath, "utf8")), testsRoot).invalid, [])
 })
 
 test("checkTable names stale, unlisted and invalid entries", () => {
@@ -129,7 +128,7 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   const text = readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8")
   const workflow = load(text)
   const shards = workflow.jobs["windows-suite"].strategy.matrix.shard
-  assert.deepEqual(shards, Array.from({ length: shards.length }, (_, i) => i + 1))
+  assert.deepEqual(shards, Array.from({ length: WINDOWS_SHARDS }, (_, i) => i + 1))
   const totals = [...text.matchAll(/matrix\.shard \}\}\/(\d+)/gu)].map((m) => Number(m[1]))
   assert.ok(totals.length >= 3)
   for (const total of totals) assert.equal(total, shards.length)

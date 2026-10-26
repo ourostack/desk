@@ -1,6 +1,7 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
 // A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
-// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--tests-root <folder>] [--durations <table.json>]
+// Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--repeat <n>] [--tests-root <folder>] [--durations <table.json>]
+// --repeat runs each file n times in a row (for measuring how often a file fails); the file's result is its first failing run, or its last run, with every run's outcome in `runs`.
 // Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
@@ -109,11 +110,17 @@ const probeAcl = async () => {
 const aclProbe = args.includes("--probe-acl") ? await probeAcl() : null
 console.log("acl probe:", JSON.stringify(aclProbe))
 
+const repeat = Math.max(1, Number(arg("--repeat", "1")) || 1)
 const results = []
 for (const file of mine) {
-  const result = await runFile(file)
+  const runs = []
+  for (let i = 0; i < repeat; i += 1) runs.push(await runFile(file))
+  const result = { ...(runs.find((r) => r.exitCode !== 0) ?? runs.at(-1)), ...(repeat > 1 ? { runs: runs.map(({ exitCode, timedOut, ms, fail, failedTests }) => ({ exitCode, timedOut, ms, fail, failedTests })) } : {}) }
   results.push(result)
+  if (repeat > 1) console.log(`        ${result.file}: ${runs.filter((r) => r.exitCode === 0).length} of ${repeat} runs passed`)
   console.log(`${result.timedOut ? "TIMEOUT" : result.exitCode === 0 ? "ok     " : "FAIL   "} ${result.file} pass=${result.pass} fail=${result.fail} ${result.ms}ms`)
+  // The failure itself goes in the log too: a full rerun replaces the run's artifacts, and with them the earlier attempt's results.json.
+  for (const f of result.failures) console.log(`        not ok: ${f.name}\n          ${f.error.replace(/\s+/gu, " ").slice(0, 800)}\n          at ${f.stack}`)
 }
 fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, aclProbe, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)
