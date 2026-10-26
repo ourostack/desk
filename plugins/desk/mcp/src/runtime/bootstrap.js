@@ -99,6 +99,9 @@ export async function importRuntimeServer({
     sourceIdentity,
   })
   const runtimeServer = await import(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
+  runtimeServer.configureRuntimeArtifacts?.({
+    pluginRoot: path.resolve(mcpRoot, ".."),
+  })
   return {
     ...runtimeServer,
     _deskRuntime: {
