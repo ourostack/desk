@@ -40,4 +40,4 @@ function limitWorker(ms = WORKER_LIMIT_MS) {
   setTimeout(() => process.exit(0), ms).unref();
 }
 
-module.exports = { startDetached, limitWorker, WORKER_LIMIT_MS };
+module.exports = { startDetached, limitWorker };
