@@ -258,18 +258,19 @@ test("an incomplete sibling scan holds routing instead of silently selecting the
   assert.equal(saved.log_path, marker.log_path)
 }))
 
-test("a Copilot session opened in another desk records that desk, as the server binds it", () => scratch(async (ctx) => {
+test("a Copilot session records the desk of the folder the server records, over CLAUDE_PROJECT_DIR", () => scratch(async (ctx) => {
   await session(ctx, "copilot-cli")
   const project = path.join(ctx.base, "project")
   await fs.mkdir(path.join(project, "_meta"), { recursive: true })
   await fs.mkdir(path.join(project, "_archive"))
-  const env = { ...ctx.env }
+  // Copilot also gives hooks CLAUDE_PROJECT_DIR; here it names the home-folder desk, not the folder the server records.
+  const env = { ...ctx.env, CLAUDE_PROJECT_DIR: ctx.desk }
   delete env.DESK
   const pluginRoot = path.join(ctx.base, "plugins/desk")
   await fs.mkdir(pluginRoot, { recursive: true })
   assert.equal(await runHook({ host: "copilot", payload: { sessionId: ID, cwd: project, stopReason: "end_turn" }, env, pluginRoot, launch: async () => {} }), "written")
   const [saved] = await listMarkers(env)
-  assert.equal(saved.desk_root, project, "the home-folder desk is only a fallback")
+  assert.equal(saved.desk_root, project)
 }))
 
 test("stop refuses a symlinked finalize directory rather than starting another directory's jobs", () => scratch(async (ctx) => {

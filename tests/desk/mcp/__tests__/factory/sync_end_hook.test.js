@@ -74,7 +74,7 @@ test("wrong host, wrong event and an unresolvable desk root never throw and neve
   assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: ctx.desk, hook_event_name: "SessionEnd" }, env: noDeskEnv }), "unavailable")
 }))
 
-test("a Copilot session opened in another desk checks that desk, as the server binds it", () => scratch(async (ctx) => {
+test("a Copilot session checks the desk of the folder the server records, over CLAUDE_PROJECT_DIR", () => scratch(async (ctx) => {
   await mkDeskRepo(ctx)
   const project = path.join(ctx.base, "project")
   await fs.mkdir(path.join(project, "_meta"), { recursive: true })
@@ -85,10 +85,12 @@ test("a Copilot session opened in another desk checks that desk, as the server b
   git(project, ["remote", "add", "origin", originDir])
   git(project, ["push", "-q", "-u", "origin", "HEAD:main"])
   await writeAndCommit(project, "more.md", "more\n", "more")
-  const env = { ...ctx.env }
+  // Copilot also gives hooks CLAUDE_PROJECT_DIR; here it names another desk, which has nothing to push, while the payload's folder,
+  // the one the server records for the session, has a commit to push.
+  const env = { ...ctx.env, CLAUDE_PROJECT_DIR: ctx.desk }
   delete env.DESK
-  // The home-folder desk has nothing to push; the project desk has.
   assert.equal(await runHook({ host: "copilot", payload: { cwd: project, reason: "complete" }, env }), "unpushed")
+  // Claude Code's own project folder still decides for Claude Code.
   assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: project, hook_event_name: "SessionEnd" }, env }), "clean")
 }))
 
