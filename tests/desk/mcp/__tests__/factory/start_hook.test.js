@@ -406,7 +406,7 @@ for (const host of ["claude", "copilot"]) {
     if (host === "copilot") {
       const home = hookEnv.COPILOT_HOME || path.join(hookEnv.HOME, ".copilot")
       await fs.mkdir(home, { recursive: true })
-      await fs.writeFile(path.join(home, "settings.json"), JSON.stringify({ memory: false, includeCoAuthoredBy: false }))
+      await fs.writeFile(path.join(home, "settings.json"), JSON.stringify({ memory: false, includeCoAuthoredBy: false, askUser: false }))
     }
     const silent = await overridesFor(base, { calls })
     const quietRun = runHook(host, bootFixtureEnv(hookEnv, silent), desk)
