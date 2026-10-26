@@ -1,6 +1,6 @@
 # Boot roadmap
 
-The session boot (`plugins/desk/mcp/scripts/session-boot.js`) now checks only what the first reply needs. On a desk with 80 open tasks it went from about 45 s to about 4 s. The checks below were removed from a boot that names no task, or cut short. Bring one back only when a real session needs it, and record which session.
+The session boot (`plugins/desk/mcp/scripts/session-boot.js`) now checks only what the first reply needs. On a desk with 80 open tasks it went from 48 to 50 s to 4 to 8 s, measured on a heavily loaded Mac. The checks below were removed from a boot that names no task, or cut short. Bring one back only when a real session needs it, and record which session.
 
 | Removed or cut check | Problem it would solve |
 | --- | --- |
