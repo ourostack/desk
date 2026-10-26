@@ -60,8 +60,13 @@ function parseArgs(argv) {
 // Each entry is a real bug, not a weakened check. Key: "<host>:<check id>" or "*:<check id>".
 // Parity gaps use "parity:<parity id>".
 const KNOWN = {
+  "claude:hook.session_start.no_flood": "On a loaded Mac, 1 of 3 Claude Code runs gave a Desk session start context of 10,502 characters (usually about 9,200): past 10,000 Claude Code shows the agent only a 2 KB preview. The foundation alone is most of the budget, so any extra pre-check line tips it over.",
+  "copilot:hook.session_start.runs": "On a loaded Mac, 1 of 3 Copilot runs took 5.5 s for Desk's sessionStart hook, over the 5 s timeoutSec in hooks/copilot-hooks.json, so Copilot would cut it off and the session would start without its boot direction.",
   "parity:hooks.plain-language.copilot_has_every_claude_event": "Plain Language injects its contract into every Claude Code subagent through SubagentStart, but plugins/plain-language/hooks/copilot-hooks.json registers only sessionStart, so Copilot subagents start without it.",
   "parity:speed.desk_session_start_hook_ms": "Copilot's Desk sessionStart hook does more than Claude Code's (it records the session folder for the server and checks Copilot's settings), and on Windows Copilot starts it through PowerShell: p50 1.4 s against 0.8 s on Windows CI; on macOS the two vary run to run between 0.9 and 2.8 s.",
+  "parity:speed.boot_ms": "The boot script under Copilot's environment is slower than under Claude Code's on macOS: p50 8.1 s against 2.4 s, and 4.5 s against 2.3 s, in two 3-repeat runs (one other run was even).",
+  "parity:speed.first_meaning_recall_ms": "Copilot's first meaning-based recall comes later than Claude Code's on macOS: p50 38.8 s against 24.0 s and 29.6 s against 17.4 s in two 3-repeat runs, mostly because its Desk server becomes ready later (see speed.desk_ready_ms).",
+  "parity:reliability.hook.session_start.runs": "Follows copilot:hook.session_start.runs: the Copilot sessionStart hook can pass its 5 s timeout on a loaded machine.",
   "parity:speed.desk_ready_ms": "On current main a Copilot session's Desk server reaches full readiness (desk_status ready with its root and search details loaded) about 2 s later than Claude Code's: p50 5.4 s against 3.5 s over 3 repeats on macOS, 7.7 s against 4.0 s on Windows CI. Copilot's server resolves its desk through the session record its sessionStart hook writes; the cause is not yet found.",
 }
 
