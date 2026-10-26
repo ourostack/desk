@@ -48,6 +48,8 @@ function upstreamVersion(upstream) {
   throw new Error("upstream declares no semantic version in .claude-plugin/plugin.json or package.json");
 }
 
+// Upstream's version only when it is above the shipped one; otherwise the next patch, so a refresh always ships a higher
+// version, including after a packaging-only release put the shipped version ahead of upstream.
 function chooseSuperpowersVersion(current, upstream) {
   return compareVersions(upstream, current) > 0 ? upstream : nextPatch(current);
 }

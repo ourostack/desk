@@ -77,6 +77,8 @@ function filesNaming(version, files) {
   assert.equal(chooseSuperpowersVersion("6.3.0", "6.4.2"), "6.4.2");
   assert.equal(chooseSuperpowersVersion("6.4.2", "6.4.2"), "6.4.3");
   assert.equal(chooseSuperpowersVersion("6.4.3", "6.4.2"), "6.4.4");
+  // A packaging-only release can put the shipped version ahead of upstream; when upstream then reaches it, the refresh still moves up.
+  assert.equal(chooseSuperpowersVersion("6.4.3", "6.4.3"), "6.4.4");
   assert.equal(nextAlpha("3.2.0-alpha.9"), "3.2.0-alpha.10");
   assert.throws(() => nextAlpha("3.2.0"), /Desk version 3.2.0 is not an alpha release/u);
 }
