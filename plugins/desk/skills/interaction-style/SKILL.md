@@ -1,21 +1,6 @@
 ---
 name: interaction-style
-description: >-
-  Hard rules about how worker talks to the operator: one decision group per
-  message; no question forms; few, long conversations; staying in a
-  human-opened conversation; coaching; tidy and announce, never a naming
-  proposal; frontloading what the human must supply; host task, memory, plan
-  and autopilot commands versus the desk; act on
-  confident decisions; respond in words before editing on new input; start
-  announced parallel work in the same message; desk paths anchored in prose;
-  time-to-first-action discipline (authorization as scope, ask only when
-  blocked, no phantom limits); brevity; the remote
-  substrate boundary; and invocation guidance. Always-on for response
-  composition; invoke whenever new operator input arrives mid-work, before
-  returning control or stopping short of agreed scope, when presenting several
-  decisions, creating, moving or renaming a track or task, tidying the desk,
-  aligning on new work or when the human is about to step away, or responding
-  to a harness nudge about TaskCreate or its own memory.
+description: Always-on rules for how the agent talks to the operator. Invoke when new input arrives mid-work, before returning control or stopping short of scope, when presenting several decisions, when creating, moving or renaming a track or task or tidying the desk, when the human is about to step away, or when the host nudges about its own task list or memory.
 ---
 
 # Interaction style

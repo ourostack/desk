@@ -1,6 +1,6 @@
 ---
 name: directory-structure
-description: Canonical layout of `$DESK/` — tracks, tasks, repo workspaces, reserved `_` directories, what may sit at the desk and track roots, naming conventions, renames, and rules for where planning/doing docs go. Use when creating a new track or task directory, placing a planning/doing doc or report, renaming or moving a task or track, or auditing or tidying a desk that looks disorganized.
+description: The `$DESK/` layout (tracks, tasks, reserved `_` folders, naming, where planning and doing docs go). Use when creating, placing, renaming or moving a track, task or doc, or tidying a disorganized desk.
 ---
 
 # Directory structure

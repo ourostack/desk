@@ -1,6 +1,6 @@
 ---
 name: first-run-bootstrap
-description: Bootstrap a new Desk or upgrade an existing V1 Desk in place. Fresh bootstrap may discover, clone, create, bind, or skip a workspace; V1 upgrade preserves the existing workspace and durable state, records rollback evidence, replaces declarations with the reviewed V2 chain, verifies readiness, and resumes work.
+description: Set up a new desk, or upgrade a V1 desk in place. Use when no desk is bound or the boot finds a V1 workspace.
 ---
 
 # First-run bootstrap

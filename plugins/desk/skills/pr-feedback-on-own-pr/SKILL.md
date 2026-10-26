@@ -1,6 +1,6 @@
 ---
 name: pr-feedback-on-own-pr
-description: Process explicitly requested feedback on the operator's PR, retain thread/state evidence and send remediation to the selected implementation owner. Not for another author's PR or unrequested feedback loops.
+description: Work through requested review feedback on the operator's own pull request and route fixes to the implementation owner. Not for another author's PR.
 ---
 
 # pr-feedback-on-own-pr

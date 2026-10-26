@@ -1,6 +1,6 @@
 ---
 name: git-hygiene
-description: Keep the code repos the agent touches synced and never leave state behind. Use at session start, before starting work in a code repo, after every ref change, when a required check fails or previous validation proof may be reused, before every push, and when a task, iteration, delegated assignment or session ends.
+description: Keep code repos synced and leave no state behind. Use before work in a repo, after every ref change, when a required check fails or validation proof may be reused, before every push, and when work ends.
 ---
 
 # Git hygiene

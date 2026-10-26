@@ -351,14 +351,18 @@ function checkObserverSources({ repoRoot, errors, checked }) {
 
 function checkHumanizePackaging({ repoRoot, errors, checked }) {
   checked.push("humanize-skill");
-  const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "humanize");
+  // The vendored humanize guidance lives beside operator-voice-comments, which owns the voice rules, with its MIT license.
+  const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "operator-voice-comments");
   const standaloneSkillRoot = path.join(repoRoot, "skills", "humanize");
   const manifest = readJsonIfPresent(repoRoot, "manifest.json") ?? { skills: [] };
 
-  for (const file of ["SKILL.md", "LICENSE"]) {
+  for (const file of ["human-voice.md", "LICENSE-humanize"]) {
     if (!fs.existsSync(path.join(deskSkillRoot, file))) {
       errors.push(`humanize-skill Desk bundle missing ${file}`);
     }
+  }
+  if (fs.existsSync(path.join(repoRoot, "plugins", "desk", "skills", "humanize"))) {
+    errors.push("humanize-skill is listed as a separate Desk skill again");
   }
   if (fs.existsSync(standaloneSkillRoot)) {
     errors.push("humanize-skill remains in the standalone skill catalog");

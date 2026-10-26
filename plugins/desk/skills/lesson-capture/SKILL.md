@@ -1,6 +1,6 @@
 ---
 name: lesson-capture
-description: Agent-driven post-task lesson mining. Triggered when a task transitions to `done` (or after a non-trivial iteration). Reads the iteration's `planning.md`, `doing.md`, `feedback.md`, and artifacts; mines for patterns / mistakes / anti-patterns that surfaced during the work; proposes targeted updates to relevant skill bodies. Sister to `friction-management` — friction-management is operator-driven encoding from explicit friction entries; lesson-capture is agent-driven encoding from the work's own evidence. Use when an agent wants to self-learn from its own completed work without the operator having to surface friction explicitly.
+description: After a task reaches `done` or a non-trivial iteration, mine its records for lessons and propose targeted skill updates.
 ---
 
 # lesson-capture

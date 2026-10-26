@@ -1,6 +1,6 @@
 ---
 name: online-evaluation
-description: Evaluate a real Desk work item's outcome, flow, review burden and resource consumption at an agreed endpoint or observation horizon. Use for a work-item evaluation or retrospective, not for every tool call. Composes canonical Desk records, the factory's report for the finished job and existing independent outcome evidence. Does not own the lifecycle, start another implementation loop, run an offline benchmark, grant collection consent or rank people.
+description: Evaluate a finished Desk work item's outcome, flow, review burden and cost at an agreed endpoint. Use for a work-item evaluation or retrospective, not for every tool call.
 ---
 
 # Online evaluation

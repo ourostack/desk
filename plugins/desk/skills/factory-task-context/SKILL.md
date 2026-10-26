@@ -1,6 +1,6 @@
 ---
 name: factory-task-context
-description: Independently explain a task's observed work and prerequisite waiting, or privacy-review that proposed public explanation, from a bounded Factory brief. Never performs the task or publishes its own judgment.
+description: For a Factory task-context run only. Explain a task's observed work and waiting, or privacy-review that explanation, from a bounded Factory brief.
 ---
 
 # Factory task context

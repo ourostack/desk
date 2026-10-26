@@ -1,14 +1,6 @@
 ---
 name: start-task
-description: >-
-  Start a new task in the workspace from an operator description or from work
-  the agent recognizes as task-shaped. Names the task from its outcome, routes
-  it to the track whose scope line fits (or creates a new track with a scope
-  line), and writes the task card, with no naming or filing question to the
-  human. Use when the operator says "start a new task: <description>", "work
-  on X", "I need to do Y", "track this", "this is worth tracking", or when an
-  agent recognizes mid-conversation that it's working on something
-  task-worthy ("I'm investigating Z; this is a real task").
+description: Start a new task from the operator's description or from work you recognize as task-shaped. Names it, routes it to a track and writes the card without a naming question. Use for 'start a task', 'track this' or 'work on X'.
 ---
 
 # Start a task

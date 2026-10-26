@@ -1,6 +1,6 @@
 ---
 name: pr-surface-hygiene
-description: Authoring and audit rules for PR descriptions and comments. Use before drafting or publishing a PR surface, including a draft from the selected Superpowers implementation owner.
+description: Rules for writing and auditing PR descriptions and comments. Use before drafting or publishing either.
 ---
 
 # PR surface hygiene

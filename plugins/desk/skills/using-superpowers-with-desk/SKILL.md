@@ -1,6 +1,6 @@
 ---
 name: using-superpowers-with-desk
-description: Use for any new or resumed engineering work on a Desk, before invoking brainstorming or another Superpowers skill. Select the pristine provider entry from the task's existing approval and map its artifacts. Also use at material redesign; never start a second lifecycle or approval round.
+description: Use for any new or resumed engineering work, before brainstorming or another Superpowers skill, and at material redesign. Picks the Superpowers entry from the task's approval; never starts a second lifecycle.
 ---
 
 # Using Superpowers with Desk

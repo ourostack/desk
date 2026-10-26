@@ -1,6 +1,6 @@
 ---
 name: curator
-description: Within an authorized maintenance task, take an improvement card with `improvement_next` and carry it to a shipped countermeasure; handle open andon issues first. Also invoke when the operator explicitly asks to process the friction backlog. Do NOT invoke merely because a helper fails during ordinary work, when another controller owns repair, for appending friction, answering backlog questions, or discussing friction abstractly.
+description: Within an authorized maintenance task, take an improvement card with `improvement_next` and carry it to a shipped countermeasure, open andon issues first; or process the friction backlog when the operator asks. Not because a helper failed during other work.
 ---
 
 # Curator

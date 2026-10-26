@@ -1338,8 +1338,8 @@ contract("session start syncs the desk quietly and says why", () => {
     if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat|--autostash/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
   }
 });
-contract("session start and status list active tasks from desk_status, never a script or a glob", () => {
-  for (const file of [sessionStart, "plugins/desk/skills/status/SKILL.md"]) {
+contract("session start lists active tasks from desk_status, never a script or a glob", () => {
+  for (const file of [sessionStart]) {
     const skill = text(file);
     assert.doesNotMatch(skill, /active-tasks\.js/u, `${file} still runs the listing script`);
     assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);

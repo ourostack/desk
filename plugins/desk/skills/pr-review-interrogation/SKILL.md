@@ -1,6 +1,6 @@
 ---
 name: pr-review-interrogation
-description: Invoke ONLY when reviewing a PR (self or external) that adds a new abstraction / helper / pattern, OR when answering a provenance question about code in a diff ("where did X come from", "is X new", "what does this PR change about Y"). Triggered by phrases like "why did we add this helper", "is this new in the PR", "where did this field come from", "why does this PR need this". Also auto-invoked by `pr-self-review` Phase 2 / Phase 4 when a finding concerns a new abstraction or a provenance claim. Do NOT invoke for generic code review that does not involve challenging a design premise or tracing where something came from, for routine nit / style findings, or for architectural conversations that have no PR in scope.
+description: Challenge a new abstraction, helper or pattern in a PR, or answer where code in a diff came from ('is this new?', 'why did we add this?'). Not for routine style findings.
 ---
 
 # pr-review-interrogation

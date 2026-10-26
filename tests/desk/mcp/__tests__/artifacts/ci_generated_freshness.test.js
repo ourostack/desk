@@ -125,8 +125,8 @@ const hostManifestFixtureFiles = [
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/hooks/claude-session-start.cjs",
-  "plugins/desk/skills/humanize/LICENSE",
-  "plugins/desk/skills/humanize/SKILL.md",
+  "plugins/desk/skills/operator-voice-comments/LICENSE-humanize",
+  "plugins/desk/skills/operator-voice-comments/human-voice.md",
   "plugins/desk/skills/session-start/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/plugin.json",
@@ -1418,7 +1418,7 @@ test("root host verifier rejects a revived output style", async () => {
 test("root host verifier detects missing bundled humanize files and a revived standalone export", async () => {
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
-    for (const file of ["SKILL.md", "LICENSE"]) rmSync(path.join(root, "plugins/desk/skills/humanize", file))
+    for (const file of ["human-voice.md", "LICENSE-humanize"]) rmSync(path.join(root, "plugins/desk/skills/operator-voice-comments", file))
     writeText(root, "skills/humanize/SKILL.md", "fixture standalone copy\n")
     // An optional loose-skill catalog that exports humanize again.
     writeJson(root, "manifest.json", { skills: [{ name: "humanize" }] })
@@ -1427,7 +1427,7 @@ test("root host verifier detects missing bundled humanize files and a revived st
     })
     assert.equal(result.ok, false)
     for (const message of [
-      "Desk bundle missing SKILL.md", "Desk bundle missing LICENSE",
+      "Desk bundle missing human-voice.md", "Desk bundle missing LICENSE-humanize",
       "remains in the standalone skill catalog", "remains exported from the standalone manifest",
     ]) assert.ok(result.errors.includes(`humanize-skill ${message}`), result.errors.join("\n"))
   })

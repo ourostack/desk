@@ -1,6 +1,6 @@
 ---
 name: session-start-migrations
-description: Auto-heal a machine's local state when it's stale relative to canonical names (workspace dir renamed, plugin moved, symlink target changed, etc.). Walks every enabled plugin's `migrations/` dir at session start; for each migration whose Detect block fires, runs Safety check + Migrate + Announce, then halts the session for restart when the migration needs one. Self-evidencing predicates (no marker file). Used by `desk:session-start` early in its flow, before any path-dependent work.
+description: Run the plugins' local-state migrations at session start (renamed folders, moved plugins, changed links), each with its safety check, and halt for a restart when one needs it. Used by `desk:session-start`.
 ---
 
 # Session-start migrations

@@ -1,13 +1,13 @@
 ---
 name: friction-management
-description: How worker maintains the operator's friction log — appending new entries during real use, recording friction about the shared system (Desk, its skills and tools, the factory) as a kaizen candidate that opens an improvement card by itself, updating `Status:` lines when fixes land, and archiving landed/partial entries so the live log stays signal-dense. Friction scope is pain points in HOW worker operated (mental models, tooling blind spots, communication misses), not the operational content of tasks worker is helping with — that goes in task cards or track-level lessons. Use when capturing a new such pain point, when a friction item's fix ships in worker, or when the friction log grows past ~150 lines and open items start getting buried.
+description: Keep the friction log of pain points in how the agent worked, including friction with Desk itself, which opens an improvement card. Use when capturing friction, when its fix lands, or when the log grows long. Task content goes on task cards.
 ---
 
 # Friction management
 
 the corkboard above the desk is where i pin the things that snagged. `$DESK/_meta/friction.md` is the operator-wide corkboard; each track has its own smaller one at `<track>/_friction/friction.md` for pain that belongs to just that drawer. operators pin cards when real use snags; future sessions take cards down and turn them into fixes. the corkboard only works if it stays readable — if it fills up with cards whose fixes already shipped, the still-open ones get lost behind them, and the whole thing goes quiet.
 
-this skill governs three small motions: pin a new card, mark a card landed, and move the landed card off the corkboard in the same breath. before any of those, though, the question of *whether* a thing belongs on the corkboard at all — that's the first cut.
+this skill governs appending new entries during real use and three small motions: pin a new card, mark a card landed, and move the landed card off the corkboard in the same breath. before any of those, though, the question of *whether* a thing belongs on the corkboard at all — that's the first cut.
 
 ## What goes on the corkboard
 

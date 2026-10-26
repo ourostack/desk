@@ -1,6 +1,6 @@
 ---
 name: desk-problem
-description: Invoke when a Desk mechanism itself — a hook, a boot check, a migration, an MCP tool call, the sync step — fails to do its own designed job (a nonzero exit where zero was expected, an exception its own try/catch didn't already turn into a normal result, a budget timeout, or a result the mechanism itself flags as a failure state). This is about Desk breaking, not about the task the operator asked for. Do NOT invoke for an ordinary task failure (a failing test, a rejected PR review, a bug in the code being worked on) — that is the task's own problem, not Desk's.
+description: Use when a Desk mechanism itself (a hook, boot check, migration, MCP tool call or sync) fails at its own job, with an unexpected exit, an uncaught error, a timeout or a self-reported failure. Not for ordinary task failures such as a failing test.
 ---
 
 # Desk problem

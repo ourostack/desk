@@ -1,6 +1,6 @@
 ---
 name: independent-review
-description: Coordinate an independent reviewer of the current candidate, finding disposition and re-review while leaving all implementation with the selected Superpowers owner.
+description: Coordinate an independent reviewer of the current candidate, the disposition of its findings and re-review, leaving all fixes with the one Superpowers implementation owner.
 ---
 
 # Independent review

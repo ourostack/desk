@@ -1,6 +1,6 @@
 ---
 name: archive-workflow
-description: Move terminal-state tasks (and fully-terminal tracks) into _archive/ directories to keep the active workspace readable while preserving history. Use when a task transitions to `done` or `cancelled`, or when checking whether a track's tasks are all terminal so the track itself can be archived.
+description: Move done or cancelled tasks, and tracks whose tasks are all terminal, into `_archive/`. Use when a task reaches `done` or `cancelled`.
 ---
 
 # Archive workflow

@@ -1,6 +1,6 @@
 ---
 name: task-lifecycle
-description: The 8-state task lifecycle machine — one job as one task, states, valid transitions, the state-change protocol, and handling of adopted tasks with pre-completed planning. Use whenever a task changes state, when checking whether a proposed transition is valid, or when deciding whether new work is a new task or another iteration of an existing one.
+description: The task state machine (states, valid transitions, the state-change protocol, one job as one task). Use when a task changes state, or to decide whether new work is a new task or another iteration.
 ---
 
 # Task lifecycle

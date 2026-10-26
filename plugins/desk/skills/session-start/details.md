@@ -138,7 +138,7 @@ crew workspace: P desks (you: <alias> → desks/<alias>) · peers: <a>, <b>
 
 omit this line entirely in single-desk (OFF) mode — no crew roster, no banner, byte-identical to today's output.
 
-if the operator picks a task to resume → hand off to the `session-resumption` skill. if the operator says "start new" → follow the `dual-input` skill. if the operator wants the fuller dashboard → invoke the `status` skill.
+if the operator picks a task to resume → hand off to the `session-resumption` skill. if the operator says "start new" → follow the `start-task` skill. if the operator wants the fuller dashboard → use "Status on request" in `SKILL.md`.
 
 ### Skill-routing prompts
 

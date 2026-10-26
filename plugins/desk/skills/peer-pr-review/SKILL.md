@@ -1,6 +1,6 @@
 ---
 name: peer-pr-review
-description: Invoke ONLY when the operator hands worker a PR URL or ID and asks to review it — phrases like "review this", "let's review", "review Doris's PR", "review PR <id>". The PR is authored by someone else (not the operator). Do NOT invoke for the operator's own PRs (those use pr-self-review or pr-feedback-on-own-pr), for hypothetical PRs, or for general code-review questions divorced from a specific PR.
+description: Review someone else's pull request when the operator gives you its link or number and asks for a review. Not for the operator's own PRs.
 ---
 
 # peer-pr-review

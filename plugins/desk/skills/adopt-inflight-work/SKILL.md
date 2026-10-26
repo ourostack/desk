@@ -1,6 +1,6 @@
 ---
 name: adopt-inflight-work
-description: Six-part flow for bringing existing in-flight work (planning bundles, doing docs, prior-agent output, migrated project state) under worker's management. Use when the operator says "adopt this", "this is now yours", or picks Option 3 in the first-run bootstrap.
+description: Bring existing in-flight work (planning or doing docs, another agent's output) under the desk. Use when the operator says 'adopt this' or 'this is now yours', or chooses adoption at first-run bootstrap.
 ---
 
 # Adopt in-flight work

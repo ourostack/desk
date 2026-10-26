@@ -1,6 +1,6 @@
 ---
 name: repo-handling
-description: Find or set up local clones for code repos referenced by a task card. Handles the multi-computer workflow where operators create task cards on one machine and resume on another with different directory layouts. Probes the current working directory, its parent, and common conventions before falling back to a two-option clone/provide flow. Also manages machine-local overrides, large-repo fallbacks, a repo-knowledge auto-loader, and the rules for reading other people's repositories and clones (read-only, never rearranged).
+description: Find or set up local clones of a task's repos across machines with different folder layouts, and the rules for reading other people's repos. Use when a task needs a repo locally.
 ---
 
 # Repo handling
@@ -195,7 +195,7 @@ Keep a list in `$DESK/_meta/large-repos.md` per operator, so worker can warn on 
 
 ## Fan PR lookups across `repos[]`
 
-Every non-terminal task card declares a `repos[]` array. Session probes (`session-start`) and status queries (`status`) need to surface PR state across **every** repo the task touches — not just the entry whose PR ID is already cached.
+Every non-terminal task card declares a `repos[]` array. Session probes and status queries (`session-start`) need to surface PR state across **every** repo the task touches — not just the entry whose PR ID is already cached.
 
 For each active task card, iterate every entry in `repos[]` and run the appropriate hosting-platform PR list call scoped to the current user. For GitHub repos:
 
@@ -205,7 +205,7 @@ gh pr list --repo <org>/<repo-name> --author @me --state open --json number,titl
 
 (overlay users: non-GitHub work-item trackers use their own REST endpoints instead — consumer overlays extend this fan-out.)
 
-Cache the returned PR metadata on the task-scan output for downstream consumers (status skill, session-start skill-routing prompts). Do NOT update task-card frontmatter on every fan-out — the cached list is ephemeral per session; only persist to the card when the operator confirms a new PR is the task's PR.
+Cache the returned PR metadata on the task-scan output for downstream consumers (the status answer and skill-routing prompts in `session-start`). Do NOT update task-card frontmatter on every fan-out — the cached list is ephemeral per session; only persist to the card when the operator confirms a new PR is the task's PR.
 
 ## Repo-knowledge auto-loader
 

@@ -1,6 +1,5 @@
 // activeTasks — the read-only active-task listing desk_status serves as
-// `active_tasks`, which desk:session-start and desk:status render in their
-// status blocks, with every name redacted.
+// `active_tasks`, which desk:session-start renders in its status blocks, with every name redacted.
 //
 // Why it exists: the session-start scan used to glob task cards by hand and
 // echo each folder name, and a folder named after a prompt that held a

@@ -1,6 +1,6 @@
 ---
 name: preflight-actions
-description: Invoke ONLY when worker is about to take a live/shared-state action (send / schedule / post / publish / file / apply / deploy / change shared config) AND one condition holds — (a) more than one judgment substitution from the literal ask; (b) tooling cannot deliver the named shape and worker would substitute; (c) the action comes from research rather than an action mandate; OR (d) it would unilaterally mutate a partner-operated live surface without an established delegation/SOP/contribution path. Also invoke when the operator asks to widen the agent's permissions or to stop being prompted. Triggered by asks like "schedule", "post", "apply", "stage", "deploy", "allow this", or "stop asking me". Do NOT invoke for routine authorized actions through established contribution paths, hypothetical discussions, or read-only work.
+description: Use before a live or shared-state action (send, post, schedule, publish, deploy, change shared config) that substitutes judgment for the literal ask, comes from research rather than a mandate, or changes a partner's surface without a contribution path. Also when asked to widen the agent's permissions or stop prompts.
 ---
 
 # Preflight actions

@@ -1,20 +1,6 @@
 ---
 name: evidence-discipline
-description: >-
-  Invoke before giving a recommendation or claim that depends on external,
-  mutable or unverified facts (a system's current behavior, a product, policy
-  or market, an inherited handoff or another agent's claim), when curated
-  records and current sources disagree, when the answer you have arrived at is
-  complex or may answer an easier adjacent question, before quoting any
-  duration, cost or scope estimate, and before acting on assumed-but-unverified
-  evidence: supervised wrappers, explicit tool warnings, outcome messages,
-  orchestration wrappers, auth transfer, durability claims, process cleanup,
-  precedent claims, or test coverage. Also invoke when writing factual claims
-  into a pull request, task card, handoff or subagent brief, for the citation
-  procedure. Not needed for a routine status read directly from its source.
-  Also invoke when a visual would help verify a state or a milestone claims a
-  rendered, installed, merged or rollout state. Covers citation, primary
-  sources, evidence precedence, fixtures and visual proof.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Covers citation, primary sources and visual proof. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline

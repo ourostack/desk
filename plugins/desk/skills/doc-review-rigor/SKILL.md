@@ -1,13 +1,6 @@
 ---
 name: doc-review-rigor
-description: >-
-  A shared, surface-agnostic method for evaluating a document's substance: test
-  the claims it rests on, ground them in the team's reference material, separate
-  verified facts from author inferences and decisions, and produce findings the
-  operator drives. Use from the review step of the surface skill you arrived
-  from, or when the operator asks for substance: what jumps out, review the
-  claims, is this grounded, poke holes in this. Evaluation only; it does not
-  find, open, or deliver feedback to a surface, and is not for code PRs.
+description: Evaluate a document's substance by testing its claims against primary and team sources and separating fact, inference and decision. Use when asked to review a document's claims or poke holes in it. Not for code PRs.
 ---
 
 # Doc review rigor
