@@ -28,7 +28,7 @@
       "name": "superpowers",
       "source": "./plugins/superpowers",
       "description": "Superpowers 6.4.2, vendored from upstream as V2's engineering method.",
-      "version": "6.4.4",
+      "version": "7.0.1",
       "category": "workflow",
       "tags": ["engineering", "planning", "test-driven-development"]
     },
