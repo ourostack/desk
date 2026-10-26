@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.25 — 2026-10-26
+
+`desk_search`, `desk_recall` and the other search tools now find lessons recorded with `lesson_add`. Since lessons moved into AGENTS.md, search did not index that file, so a lesson written a moment earlier could not be found. Search now indexes the AGENTS.md that session start prints, the desk's own and a person's `desks/<alias>/AGENTS.md`, as kind `instructions`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.24 — 2026-10-26
 
 `lesson_add` now puts a correction where something loads it, and its reply says whether the lesson is in effect. Before, it wrote `_meta/tips/<topic>.md`, which nothing read, so agents told people a lesson was kept when no session would ever see it. The call now needs a `scope`:
