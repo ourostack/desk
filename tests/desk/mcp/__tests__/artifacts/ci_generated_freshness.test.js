@@ -62,8 +62,8 @@ test("the artifact archive reader ignores directory headers and preserves their 
 })
 
 const requiredPackageScripts = {
-  "activation:support-matrix:generate": "node scripts/generate-support-matrix.js",
-  "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
+  "activation:support-matrix:generate": "node ../../../tools/desk-build/scripts/generate-support-matrix.js",
+  "activation:copilot-bundle:generate": "node ../../../tools/desk-build/scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
 }
@@ -381,9 +381,9 @@ function scriptExists(scriptPath) {
 }
 
 function packageScriptTargetPath(command) {
-  const match = command.match(/^node\s+scripts\/(.+\.(?:js|cjs))(?:\s+--verify)?$/u)
-  assert.ok(match, `package script command must run a local JS script: ${command}`)
-  return path.join(mcpRoot, "scripts", match[1])
+  const match = command.match(/^node\s+((?:\.\.\/)*[\w./-]+\.(?:js|cjs))(?:\s+--verify)?$/u)
+  assert.ok(match, `package script command must run a repository JS script: ${command}`)
+  return path.join(mcpRoot, match[1])
 }
 
 function stripJsComments(source) {
@@ -785,7 +785,7 @@ test("root host-manifest verifier catches stale generated host-facing files", as
 })
 
 test("root host verifier selects an explicit legacy configuration across both native metadata checks", async () => {
-  const { buildCopilotBundle } = await import("../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js")
+  const { buildCopilotBundle } = await import("../../../../../tools/desk-build/activation/copilot-bundle.js")
   const { validateActivationManifest } = await import("../../../../../plugins/desk/mcp/src/activation/validate.js")
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {

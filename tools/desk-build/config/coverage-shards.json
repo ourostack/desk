@@ -387,7 +387,6 @@
     "tests/desk/mcp/__tests__/scripts/superpowers_upstream_pr.test.js": 1.4,
     "tests/desk/mcp/__tests__/scripts/upstream_sources.test.js": 6,
     "tests/desk/mcp/__tests__/scripts/validate_skills.test.js": 0.7,
-    "tests/desk/mcp/__tests__/scripts/windows_suite_cap.test.js": 0.4,
     "tests/desk/mcp/__tests__/scripts/windows_suite_gate.test.js": 34.9,
     "tests/desk/mcp/__tests__/scripts/windows_suite_shards.test.js": 4.5,
     "tests/desk/mcp/__tests__/search/direct_lexical.test.js": 0.9,

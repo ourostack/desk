@@ -12,7 +12,7 @@ import {
   resolveBundleRepoRoot,
   runCopilotBundleGenerator,
   validateCopilotPackagingContract,
-} from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+} from "../../../../../tools/desk-build/activation/copilot-bundle.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -322,15 +322,15 @@ test("Copilot root packaging declares a generated flattened dependency closure",
 
 test("generated Copilot flattened bundle producer derives the authored three-root closure without writing the committed artifact", () => {
   assertFileExists(...copilotBundlePath.split("/"))
-  assertFileExists("plugins", "desk", "mcp", "scripts", "generate-copilot-bundle.js")
+  assertFileExists("tools", "desk-build", "scripts", "generate-copilot-bundle.js")
 
   const packageJson = loadJson("plugins", "desk", "mcp", "package.json")
   assert.equal(
     packageJson.scripts["activation:copilot-bundle:generate"],
-    "node scripts/generate-copilot-bundle.js",
+    "node ../../../tools/desk-build/scripts/generate-copilot-bundle.js",
   )
   assert.match(
-    readText("plugins", "desk", "mcp", "scripts", "generate-copilot-bundle.js"),
+    readText("tools", "desk-build", "scripts", "generate-copilot-bundle.js"),
     /runCopilotBundleGenerator/u,
     "the package-scripted entrypoint must still call the producer that regenerates the committed bundle (T19's exclusive write)",
   )

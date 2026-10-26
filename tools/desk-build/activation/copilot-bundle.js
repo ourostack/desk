@@ -4,12 +4,12 @@ import {
 } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { selectEngineeringMethod } from "./validate.js"
+import { selectEngineeringMethod } from "../../../plugins/desk/mcp/src/activation/validate.js"
 
 export const COPILOT_BUNDLE_SCHEMA_VERSION = 1
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const defaultRepoRoot = path.resolve(moduleDir, "..", "..", "..", "..", "..")
+const defaultRepoRoot = path.resolve(moduleDir, "..", "..", "..")
 const activationManifestPath = "plugins/desk/activation/desk.activation.json"
 const deskPluginPath = "plugins/desk/plugin.json"
 const plainLanguagePluginPath = "plugins/plain-language/plugin.json"

@@ -2,7 +2,7 @@ import { createRequire, register } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { isMigrationDetectChild } from "../../../../plugins/desk/mcp/src/coverage/detect-child.js";
+import { isMigrationDetectChild } from "../../../../tools/desk-build/coverage/detect-child.js";
 
 const repository = fileURLToPath(new URL("../../../../", import.meta.url));
 const packageRoot = process.env.OFFLINE_COVERAGE_PACKAGE_ROOT || path.join(repository, "plugins/desk/mcp");

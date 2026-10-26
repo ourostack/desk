@@ -65,7 +65,7 @@ test("npm test and the coverage runner both preload the setup, so a test file th
   const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
   const pkg = JSON.parse(await fsPromises.readFile(path.join(mcpRoot, "package.json"), "utf8"))
   assert.match(pkg.scripts.test, /^node --import \.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/_isolated_env\.mjs --test /u)
-  assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /defaultTestRoot, "_isolated_env\.mjs"/u)
+  assert.match(await fsPromises.readFile(path.join(mcpRoot, "..", "..", "..", "tools", "desk-build", "coverage", "runner.js"), "utf8"), /defaultTestRoot, "_isolated_env\.mjs"/u)
 })
 
 test("a factory test file run on its own with node --test never reads the machine's recorded factory consent", async () => {

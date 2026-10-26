@@ -19,13 +19,14 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
+const toolRoot = path.join(repoRoot, "tools", "desk-build")
 
 async function loadGate() {
-  return import("../../../../../plugins/desk/mcp/src/coverage/gate.js")
+  return import("../../../../../tools/desk-build/coverage/gate.js")
 }
 
 async function loadRunner() {
-  return import("../../../../../plugins/desk/mcp/src/coverage/runner.js")
+  return import("../../../../../tools/desk-build/coverage/runner.js")
 }
 
 function makeTempDir() {
@@ -297,7 +298,7 @@ test("coverage command parity rejects CI/local drift", async () => {
       "package.json",
       JSON.stringify({
         scripts: {
-          "test:coverage": "node scripts/run-coverage.js",
+          "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js",
         },
       }, null, 2),
     )
@@ -388,7 +389,7 @@ test("coverage command parity rejects CI/local drift", async () => {
       workflowPath: goodWorkflowPath,
     })
     assert.equal(badPackage.ok, false)
-    assert.match(badPackage.issues.join("\n"), /node scripts\/run-coverage\.js/i)
+    assert.match(badPackage.issues.join("\n"), /node \.\.\/\.\.\/\.\.\/tools\/desk-build\/scripts\/run-coverage\.js/i)
 
     const missingRootScriptPathFilter = writeFixture(
       tmp,
@@ -503,7 +504,7 @@ test("coverage runner discovers changed files from git state and falls back from
       if (key === "rev-parse --abbrev-ref --symbolic-full-name @{upstream}") {
         return { status: 1, stdout: "", stderr: "no upstream\n" }
       }
-      if (key === "diff --name-only --diff-filter=AM base-main..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base-main..HEAD") {
         return {
           status: 0,
           stdout: [
@@ -516,10 +517,10 @@ test("coverage runner discovers changed files from git state and falls back from
           stderr: "",
         }
       }
-      if (key === "diff --name-only --diff-filter=AM") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM") {
         return { status: 0, stdout: "plugins/desk/mcp/src/coverage/runner.js\n", stderr: "" }
       }
-      if (key === "diff --cached --name-only --diff-filter=AM") {
+      if (key === "diff --cached --name-only --no-renames --diff-filter=AM") {
         return { status: 0, stdout: "plugins/desk/mcp/scripts/run-coverage.js\n", stderr: "" }
       }
       if (key === "ls-files --others --exclude-standard") {
@@ -554,6 +555,42 @@ test("coverage runner discovers changed files from git state and falls back from
     assert.deepEqual(
       normalizePaths(collectChangedCoverageFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       included.sort(),
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test("coverage runner reports a moved file at its new path, committed, staged or unstaged", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const tmp = makeTempDir()
+  try {
+    const git = (...args) => {
+      const result = spawnSync("git", args, { cwd: tmp, encoding: "utf8" })
+      assert.equal(result.status, 0, result.stderr)
+      return result.stdout.trim()
+    }
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "T")
+    git("config", "commit.gpgsign", "false")
+    // Enough shared content that Git's rename detection pairs each move with its source.
+    const body = Array.from({ length: 40 }, (_, line) => `export const value${line} = ${line}\n`).join("")
+    for (const name of ["committed", "staged", "unstaged"]) writeFixture(tmp, `old/${name}.js`, body)
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    const base = git("rev-parse", "HEAD")
+    mkdirSync(path.join(tmp, "new"))
+    git("mv", "old/committed.js", "new/committed.js")
+    git("commit", "-q", "-m", "move")
+    git("mv", "old/staged.js", "new/staged.js")
+    // An unstaged move shows as a deletion plus an untracked file, so it is the ls-files call that reports it.
+    writeFileSync(path.join(tmp, "new", "unstaged.js"), body)
+    rmSync(path.join(tmp, "old", "unstaged.js"))
+
+    assert.deepEqual(
+      normalizePaths(collectChangedFiles({ repoRoot: tmp, env: { DESK_COVERAGE_BASE_REF: base } })).sort(),
+      ["new/committed.js", "new/staged.js", "new/unstaged.js"],
     )
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -895,7 +932,7 @@ test("coverage runner filters documented exclusions before maintained instrument
     const packageJsonPath = writeFixture(
       fixtureRoot,
       "plugins/desk/mcp/package.json",
-      JSON.stringify({ scripts: { "test:coverage": "node scripts/run-coverage.js" } }),
+      JSON.stringify({ scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" } }),
     )
     const workflowPath = writeFixture(
       fixtureRoot,
@@ -937,7 +974,7 @@ test("coverage runner filters documented exclusions before maintained instrument
         }
       }
       if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-      if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         return {
           status: 0,
           stdout: [
@@ -997,7 +1034,7 @@ test("coverage runner returns child status, coverage failures, and success codes
     const packageJsonPath = writeFixture(
       fixtureRoot,
       "plugins/desk/mcp/package.json",
-      JSON.stringify({ scripts: { "test:coverage": "node scripts/run-coverage.js" } }),
+      JSON.stringify({ scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" } }),
     )
     const workflowPath = writeFixture(
       fixtureRoot,
@@ -1031,7 +1068,7 @@ test("coverage runner returns child status, coverage failures, and success codes
         return { status: testStatus, stdout: "test output", stderr: "" }
       }
       if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-      if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         return { status: 0, stdout: "plugins/desk/mcp/src/coverage/gate.js\n", stderr: "" }
       }
       return { status: 0, stdout: "", stderr: "" }
@@ -1143,7 +1180,7 @@ test("coverage runner default wiring uses repo paths, temp files, and stdio", as
       }
     }
     if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-    if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+    if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
       return {
         status: 0,
         stdout: [
@@ -1176,7 +1213,7 @@ test("coverage runner and entrypoint refuse recursive execution without claiming
   process.env.DESK_COVERAGE_RUNNER_CHILD = "1"
   try {
     assert.equal(runCoverageCommand(), 1)
-    await import(`${pathToFileURL(path.join(mcpRoot, "scripts", "run-coverage.js")).href}?child-refusal=${Date.now()}`)
+    await import(`${pathToFileURL(path.join(toolRoot, "scripts", "run-coverage.js")).href}?child-refusal=${Date.now()}`)
     assert.equal(process.exitCode, 1)
     assert.equal(diagnostics.length, 3)
     assert.ok(diagnostics.every(text => text.includes("no coverage was measured")))
@@ -1272,19 +1309,19 @@ test("coverage required-file discovery admits the offline evaluation implementat
 })
 
 test("coverage runner exists and delegates to the coverage gate", () => {
-  const runnerPath = path.join(mcpRoot, "scripts", "run-coverage.js")
-  const runnerModulePath = path.join(mcpRoot, "src", "coverage", "runner.js")
+  const runnerPath = path.join(toolRoot, "scripts", "run-coverage.js")
+  const runnerModulePath = path.join(toolRoot, "coverage", "runner.js")
 
   assert.ok(
     existsSync(runnerPath),
-    "scripts/run-coverage.js must exist as the non-recursive local coverage entrypoint",
+    "tools/desk-build/scripts/run-coverage.js must exist as the non-recursive local coverage entrypoint",
   )
 
   const runner = readFileSync(runnerPath, "utf8")
   const runnerModule = readFileSync(runnerModulePath, "utf8")
   assert.match(
     runner,
-    /from\s+["'][^"']*src\/coverage\/runner\.js["']/,
+    /from\s+["'][^"']*coverage\/runner\.js["']/,
     "coverage runner script must delegate to the tested runner module",
   )
   assert.match(
@@ -1321,7 +1358,7 @@ test("Desk MCP package exposes the local test:coverage command contract", () => 
 
   assert.equal(
     packageJson.scripts?.["test:coverage"],
-    "node scripts/run-coverage.js",
+    "node ../../../tools/desk-build/scripts/run-coverage.js",
   )
 })
 

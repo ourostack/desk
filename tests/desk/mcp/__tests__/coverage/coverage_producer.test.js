@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import processOnSpawn from "process-on-spawn"
 import { fileURLToPath } from "node:url"
-import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
+import { runCoverageCommand } from "../../../../../tools/desk-build/coverage/runner.js"
 
 const realRepoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 
@@ -66,7 +66,7 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
   }))
   const packageJsonPath = writeSource("plugins/desk/mcp/package.json", JSON.stringify({
     type: "module",
-    scripts: { "test:coverage": "node scripts/run-coverage.js" },
+    scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
   }))
   const workflowPath = writeSource(".github/workflows/desk-mcp-tests.yml", [
     "on:",
@@ -394,7 +394,7 @@ test("an existing offline implementation without its own tests is measured and f
 })
 
 // The exclusions the repository actually ships, read from the maintained configuration rather than restated, so removing or re-adding an entry there is felt here.
-const maintainedExclusions = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/config/coverage-gate.json", import.meta.url), "utf8")).exclusions
+const maintainedExclusions = JSON.parse(readFileSync(new URL("../../../../../tools/desk-build/config/coverage-gate.json", import.meta.url), "utf8")).exclusions
 // The entry this change made obsolete, retained verbatim as the demonstrated cause rather than as a live exclusion.
 const obsoleteBridgeExclusion = {
   path: "scripts/skill-evals.cjs",

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 
-const COVERAGE_SCRIPT = "node scripts/run-coverage.js"
+const COVERAGE_SCRIPT = "node ../../../tools/desk-build/scripts/run-coverage.js"
 const REQUIRED_WORKFLOW_PATH_FILTER = "scripts/*.cjs"
 const REQUIRED_WORKFLOW_EVENTS = ["pull_request", "push"]
 // A pull_request trigger with any of these can skip a pull request, so a required check from it could stop reporting.
@@ -130,6 +130,9 @@ export function collectCoverageRequiredFiles({ repoRoot }) {
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "src"), ".js")
       .filter(isProductionJs),
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "scripts"), ".js")
+      .filter(isProductionJs),
+    // The Desk build tools run only in CI, from outside the shipped plugin, and keep the same bar.
+    ...collectFiles(path.join(repoRoot, "tools", "desk-build"), ".js")
       .filter(isProductionJs),
     ...collectFiles(path.join(repoRoot, "scripts"), ".cjs")
       .filter(isProductionCjs),

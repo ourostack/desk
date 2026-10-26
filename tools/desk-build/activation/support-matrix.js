@@ -4,7 +4,7 @@ import {
 } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { renameWithRetry } from "../util/rename-retry.js"
+import { renameWithRetry } from "../../../plugins/desk/mcp/src/util/rename-retry.js"
 
 const SUPPORT_MATRIX_SCHEMA_VERSION = 1
 
@@ -33,7 +33,7 @@ const UNSUPPORTED_PRIMITIVES = new Set([
   "transitive-dependency-resolution",
 ])
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const defaultRepoRoot = path.resolve(moduleDir, "..", "..", "..", "..", "..")
+const defaultRepoRoot = path.resolve(moduleDir, "..", "..", "..")
 const defaultManifestPath = "plugins/desk/activation/desk.activation.json"
 const defaultEvidencePath = "plugins/desk/activation/host-capability-evidence.md"
 const defaultOutputPath = "plugins/desk/activation/support-matrix.json"

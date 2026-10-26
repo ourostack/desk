@@ -17,7 +17,7 @@ const RETRIED = [
   "runtime/stale-desk-refresh.js",
   "runtime/signoff-listed.js",
   "factory/filer-launch.js",
-  "activation/support-matrix.js",
+  "../../../../tools/desk-build/activation/support-matrix.js",
 ]
 
 const ALLOWED = {

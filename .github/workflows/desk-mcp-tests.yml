@@ -31,6 +31,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "tools/unused-code/**"
+      - "tools/desk-build/**"
       - "plugins/desk/mcp/**"
       - "tests/**"
       - "plugins/desk/activation/**"
@@ -159,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Twelve
-        # shards bring every shard down to about the longest single test file (config/coverage-shards.json).
+        # shards bring every shard down to about the longest single test file (tools/desk-build/config/coverage-shards.json).
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - name: Check out repository

@@ -7,9 +7,9 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import TestExclude from "test-exclude"
-import { DETECT_CHILD_SOURCE } from "../../../../../plugins/desk/mcp/src/coverage/detect-child.js"
+import { DETECT_CHILD_SOURCE } from "../../../../../tools/desk-build/coverage/detect-child.js"
 import { parseMigration, pendingMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
-import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
+import { runCoverageCommand } from "../../../../../tools/desk-build/coverage/runner.js"
 
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const sourceFile = "plugins/desk/mcp/src/covered.js"
@@ -45,7 +45,7 @@ function runFixture(t, summary, options = {}) {
     exclusions: options.exclusions ?? [],
   }))
   const packageJsonPath = write("plugins/desk/mcp/package.json", JSON.stringify({
-    scripts: { "test:coverage": "node scripts/run-coverage.js" },
+    scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
   }))
   const workflowPath = write(".github/workflows/desk-mcp-tests.yml", [
     "on:",
@@ -115,7 +115,7 @@ function runFixture(t, summary, options = {}) {
       if (args.join(" ") === "merge-base origin/main HEAD") {
         return { status: 0, stdout: "base\n", stderr: "" }
       }
-      if (args.join(" ") === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (args.join(" ") === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         const changedFiles = options.changedFiles ?? [sourceFile, ...(options.additionalFiles ?? [])]
         return { status: 0, stdout: changedFiles.join("\n"), stderr: "" }
       }
@@ -256,7 +256,7 @@ test("the offline registration helper registers neither hook for a migration Det
   const helperDir = "evals/offline/__tests__/helpers"
   const copy = relative => put(relative, readFileSync(path.join(repoRoot, relative), "utf8"))
   const helper = copy(`${helperDir}/register-coverage.mjs`)
-  copy("plugins/desk/mcp/src/coverage/detect-child.js")
+  copy("tools/desk-build/coverage/detect-child.js")
   const recorder = name => `import { appendFileSync } from "node:fs"\nexport function initialize() { appendFileSync(${JSON.stringify(marker)}, "${name}\\n") }\n`
   put(`${helperDir}/coverage-format.mjs`, recorder("format"))
   put("pkg/package.json", JSON.stringify({ name: "fake-package-root", type: "module" }))

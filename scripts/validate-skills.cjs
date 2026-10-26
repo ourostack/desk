@@ -7,8 +7,8 @@ const { spawnSync: defaultSpawnSync } = require("node:child_process");
 
 const maxSkillDescriptionLength = 1024;
 const requiredDeskMcpPackageScripts = {
-  "activation:support-matrix:generate": "node scripts/generate-support-matrix.js",
-  "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
+  "activation:support-matrix:generate": "node ../../../tools/desk-build/scripts/generate-support-matrix.js",
+  "activation:copilot-bundle:generate": "node ../../../tools/desk-build/scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
 };
@@ -229,7 +229,7 @@ function validateDeskMcpPackageScripts(options = {}) {
     if (packageJson.scripts?.[scriptName] !== command) {
       throw new Error(`desk MCP package script ${scriptName} must be ${command}`);
     }
-    const targetPath = path.join("plugins", "desk", "mcp", command.replace(/^node\s+scripts\//u, "scripts/"));
+    const targetPath = path.join("plugins", "desk", "mcp", command.replace(/^node\s+/u, ""));
     if (!exists(targetPath, options)) {
       throw new Error(`desk MCP package script ${scriptName} target is missing: ${targetPath}`);
     }

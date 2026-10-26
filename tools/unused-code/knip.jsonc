@@ -77,6 +77,11 @@
       "project": ["**/*.{js,cjs}"],
       "includeEntryExports": true
     },
+    // The Desk build and CI tools, kept outside the shipped plugin. The plugins/desk/mcp package scripts run the entries.
+    "tools/desk-build": {
+      "entry": ["scripts/*.js"],
+      "project": ["**/*.js"]
+    },
     "plugins/desk/mcp": {
       "entry": [
         "bootstrap.cjs",
@@ -87,7 +92,7 @@
       ],
       "project": ["**/*.{js,cjs,mjs}"],
       "ignoreDependencies": [
-        // nyc and the ESM coverage loader run the coverage gate: scripts/run-coverage.js starts nyc as a child process and the loader is passed by name (--import), so no import statement names either.
+        // nyc and the ESM coverage loader are installed here for the coverage gate in tools/desk-build, which resolves them from this package's node_modules; no code in this package names them.
         "nyc",
         "@istanbuljs/esm-loader-hook",
         // Source of the vendored tables in src/util/unicode-16. It is kept as a dev dependency so the tables can be reproduced (src/util/unicode-16/README.md); no code imports it.

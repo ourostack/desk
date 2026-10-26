@@ -1,4 +1,4 @@
-// Test reporter for coverage shards: records how long each test file ran, keyed by its repository-relative path, so the shard weights in config/coverage-shards.json can be refreshed from real CI timings.
+// Test reporter for coverage shards: records how long each test file ran, keyed by its repository-relative path, so the shard weights in tools/desk-build/config/coverage-shards.json can be refreshed from real CI timings.
 //
 // The coverage runner passes it alongside the TAP reporter, with its destination set to the shard's timings.json. The runner reports each file as a top-level test that encloses the file's own tests and its process startup, so a file's time is the longest top-level duration reported for it.
 
