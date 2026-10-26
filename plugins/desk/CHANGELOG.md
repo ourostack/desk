@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.11 — 2026-10-26
+
+Make the first `desk_status` of a session name its desk sooner, on Copilot above all. Copilot starts the Desk server before its `sessionStart` hook records the session folder, and the server used to notice the record only at its next retry (1, 2, then 5 s later); it now watches for the record and admits the session as soon as it appears. A ready session re-checks its destination on every `desk_status`, and that check started a new worker thread each time, which took 40 to 60 ms on a busy Mac, past the 50 ms `desk_status` waits, so the answer often said the destination was still being verified and named no root. Those checks now share one worker that stays up between them and answer in about a millisecond.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.10 — 2026-10-26
 
 Desk is stable, and the README, plugin descriptions and docs now say so instead of calling it an opt-in alpha or a preview. The repository README gives one install line for each host, Copilot CLI first. Version numbers, release stage names and earlier changelog entries are unchanged.
