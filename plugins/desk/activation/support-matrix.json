@@ -25,26 +25,6 @@
       "fallback_behavior": "launch foreground with `claude --agent desk:worker`; ship flattened bundle when transitive dependencies are unavailable"
     },
     {
-      "host_id": "codex",
-      "surface": "Codex source package and owned activation adapter",
-      "disposition": "supported-flattened",
-      "source_paths": [
-        "plugins/desk/.codex-plugin/plugin.json",
-        "plugins/desk/mcp/src/activation/adapters/codex.js",
-        "plugins/desk/mcp/src/activation/codex-smoke.js",
-        "tests/desk/mcp/__tests__/activation/codex_smoke.test.js",
-        "plugins/desk/agents/worker.toml",
-        "plugins/desk/agents/observer.toml",
-        "plugins/superpowers/.codex-plugin/plugin.json",
-        "plugins/plain-language/.codex-plugin/plugin.json"
-      ],
-      "evidence_command_or_doc": "node --test tests/desk/mcp/__tests__/activation/codex_activation.test.js; node --test tests/desk/mcp/__tests__/activation/codex_smoke.test.js; alpha runtime qualification required",
-      "unsupported_primitives": [
-        "codex-desktop-scriptable-activation-smoke"
-      ],
-      "fallback_behavior": "Codex Desktop lacks a stable scriptable activation-smoke primitive; use temp-profile Codex CLI `codex exec --json` smoke plus owned global/project activation artifacts, with experimental app-server protocol evidence as the fallback when Desktop automation is needed"
-    },
-    {
       "host_id": "copilot-root",
       "surface": "Root Copilot source package and selected provider adapter",
       "disposition": "supported-flattened",

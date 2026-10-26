@@ -12,11 +12,9 @@ import {
   MAX_FUNCTION_NAME_LENGTH,
   RESERVED_MCP_SERVER_NAMES,
   SERVER_NAME_PATTERN,
-  checkHardCodedServerNames,
   checkHostDeclarationParity,
   checkServerName,
   collectMcpDeclarations,
-  hardCodedServerNames,
   launcherEntryFiles,
   validateMcpDeclarations,
 } from "./_contracts/mcp-declarations.js"
@@ -36,7 +34,7 @@ test("acquired Desk has no generic root MCP file for Agency legacy reinjection",
 
 test("native engine manifests resolve the retained payload without changing Copilot's MCP definition", () => {
   const pluginRoot = path.join(repoRoot, "plugins", "desk")
-  for (const manifestFile of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+  for (const manifestFile of [".claude-plugin/plugin.json"]) {
     const manifest = JSON.parse(readFileSync(path.join(pluginRoot, manifestFile), "utf8"))
     assert.equal(manifest.name, "desk")
     assert.equal(manifest.mcpServers, "./.mcp.claude-codex.json", manifestFile)
@@ -67,7 +65,6 @@ test("every MCP server name Desk declares, on every host and plugin, passes the 
     "plugins/desk/.mcp.claude-codex.json",
     "plugins/desk/.mcp.copilot.json",
     "plugins/desk/activation/desk.activation.json",
-    "plugins/desk/.codex-plugin/plugin.json",
   ]) {
     assert.ok(sources.includes(expected), `${expected} is not among the scanned declarations: ${sources.join(", ")}`)
   }
@@ -77,7 +74,7 @@ test("every MCP server name Desk declares, on every host and plugin, passes the 
   assert.deepEqual(errors, [])
 })
 
-test("the Claude, Codex and Copilot declarations name the same servers and launch the same entry files", () => {
+test("the Claude and Copilot declarations name the same servers and launch the same entry files", () => {
   const read = (file) => collectMcpDeclarations({ repoRoot }).find((entry) => entry.source === file)
   const claude = read("plugins/desk/.mcp.claude-codex.json")
   const copilot = read("plugins/desk/.mcp.copilot.json")
@@ -136,7 +133,7 @@ test("the host tool-name forms are both measured: Copilot's server-tool and Clau
 test("validateMcpDeclarations reports each bad name with its source, and asks for tool names it does not know", () => {
   const declarations = [
     { source: "a/.mcp.json", host: "claude", names: ["web", "desk"] },
-    { source: "b/plugin.json", host: "codex", names: ["Bad_Name"] },
+    { source: "b/plugin.json", host: "copilot", names: ["Bad_Name"] },
     { source: "c/.mcp.json", host: "claude", names: ["mystery"] },
   ]
   const errors = validateMcpDeclarations({ declarations, toolNames: { web: ["x"], desk: ["x"], Bad_Name: ["x"] } })
@@ -187,7 +184,7 @@ test("collectMcpDeclarations reads plugin manifests with inline servers, string 
     mkdirSync(path.join(root, "plugins", "bare"), { recursive: true })
     writeFileSync(path.join(root, "plugins", "inline", "plugin.json"), JSON.stringify({ mcpServers: { web: {}, ok: {} } }))
     writeFileSync(path.join(root, "plugins", "dangling", "plugin.json"), JSON.stringify({ mcpServers: "./missing.json" }))
-    writeFileSync(path.join(root, "plugins", "bare", "plugin.json"), JSON.stringify({ name: "bare", activation: { codex: null, copilot: {} } }))
+    writeFileSync(path.join(root, "plugins", "bare", "plugin.json"), JSON.stringify({ name: "bare", activation: { claude: null, copilot: {} } }))
     mkdirSync(path.join(root, "plugins", "sparse", "activation"), { recursive: true })
     writeFileSync(path.join(root, "plugins", "sparse", ".mcp.json"), "{}")
     writeFileSync(path.join(root, "plugins", "sparse", "plugin.json"), JSON.stringify({ mcpServers: "./.mcp.json" }))
@@ -216,23 +213,7 @@ test("collectMcpDeclarations reads plugin manifests with inline servers, string 
   }
 })
 
-// ---- #144 review nits: the Codex adapter's own server names, and tool lists keyed by plugin ----
-
-test("the server names the Codex adapter spells out in code are declared by a manifest", () => {
-  const source = "plugins/desk/mcp/src/activation/adapters/codex.js"
-  const names = hardCodedServerNames(readFileSync(path.join(repoRoot, source), "utf8"))
-  assert.ok(names.includes("desk"), `the adapter's hard-coded names were not found: ${names.join(", ")}`)
-  const declared = [...new Set(collectMcpDeclarations({ repoRoot }).flatMap((entry) => entry.names))]
-  assert.deepEqual(checkHardCodedServerNames({ source, names, declared }), [])
-})
-
-test("hardCodedServerNames reads TOML tables and path arrays, and a name no declaration holds is reported with its source", () => {
-  assert.deepEqual(hardCodedServerNames('[plugins."x".mcp_servers.alpha]\n[mcp_servers.beta]\nconst p = ["mcp_servers", "gamma"]\nmcp_servers = []'), ["alpha", "beta", "gamma"])
-  assert.deepEqual(hardCodedServerNames("nothing here"), [])
-  const errors = checkHardCodedServerNames({ source: "adapter.js", names: ["desk", "gone"], declared: ["desk", "desk-web"] })
-  assert.equal(errors.length, 1)
-  assert.match(errors[0], /^adapter\.js hard-codes the MCP server "gone".*declared: desk, desk-web/u)
-})
+// ---- #144 review nits: tool lists keyed by plugin ----
 
 test("a tool list is read by <plugin>/<server> before the bare server name, so two plugins can share a server name", () => {
   const declarations = [

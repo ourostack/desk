@@ -426,7 +426,8 @@ for (const suffix of [".", " "]) {
       // This cell fails, rather than waives, if this filesystem cannot make
       // the distinct object: there would be no qualified ambiguity fixture.
       assert.ok((await fs.readdir(root)).includes("source" + suffix))
-      assert.notEqual((await fs.lstat(exact)).ino, (await fs.lstat(neighbor)).ino)
+      // As bigints: an NTFS file id can pass 2^53, where two neighbouring ids read as Numbers are the same value.
+      assert.notEqual((await fs.lstat(exact, { bigint: true })).ino, (await fs.lstat(neighbor, { bigint: true })).ino)
       for (const [src, dest] of [[ambiguous, dst], [neighbor, dst + suffix]]) {
         await assert.rejects(moveArchive(src, dest, () => assert.fail("unsupported path reached READY callback")),
           /unsupported Windows archive path/)

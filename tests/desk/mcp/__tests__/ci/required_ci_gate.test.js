@@ -1,4 +1,4 @@
-// Main's ruleset (.github/rulesets/main-requires-ci.json) requires three checks. A required check that never reports blocks a
+// Main's ruleset (.github/rulesets/main-requires-ci.json, a copy of the live ruleset) requires four checks. A required check that never reports blocks a
 // pull request forever, so each one must come from a workflow that runs on every pull request, and the "CI gate" job must wait
 // for every other job in its workflow.
 import { test } from "node:test"
@@ -17,7 +17,7 @@ const required = ruleset.rules.find((rule) => rule.type === "required_status_che
 
 test("every required check is a plain job name in a workflow that runs on every pull request", () => {
   const names = new Map()
-  for (const file of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
+  for (const file of ["desk-mcp-tests.yml", "validate-skills.yml", "desk-windows-suite.yml"]) {
     const { on, jobs } = workflow(file)
     assert.ok("pull_request" in on, `${file} runs on pull requests`)
     // Any of these can leave a pull request without the check, which would then block it for good.
@@ -39,7 +39,7 @@ test("every required check is a plain job name in a workflow that runs on every 
       }
     }
   }
-  assert.deepEqual(required.map((check) => check.context).sort(), ["CI gate", "Claude Code plugin load", "Validate skills"])
+  assert.deepEqual(required.map((check) => check.context).sort(), ["CI gate", "Claude Code plugin load", "Validate skills", "Windows suite"])
   for (const { context, integration_id: source } of required) {
     assert.ok(names.has(context), `${context} is a job name`)
     assert.equal(source, 15368, `${context} must come from GitHub Actions`)

@@ -74,7 +74,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     XDG_RUNTIME_DIR: path.join(base, "runtime"),
     COPILOT_AGENT_SESSION_ID: `status-process-${process.pid}`,
   }
-  for (const name of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CODEX_HOME"]) delete env[name]
+  for (const name of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) delete env[name]
   assert.equal(recordCopilotSession({ sessionId: env.COPILOT_AGENT_SESSION_ID, folder: cwd, activationConfig: config, env }), true)
   const child = fork(fileURLToPath(new URL("./_status_process.js", import.meta.url)), [seam, marker, phase], {
     cwd, env, execArgv: [], stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true,

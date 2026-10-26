@@ -92,10 +92,6 @@ function sameJson(left, right) {
   return stableStringify(left) === stableStringify(right);
 }
 
-function normalizeNewlines(value) {
-  return value.replaceAll("\r\n", "\n");
-}
-
 function countOccurrences(value, phrase) {
   return value.split(phrase).length - 1;
 }
@@ -180,55 +176,6 @@ async function checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked
   });
   if (contractErrors.length > 0) {
     errors.push(`copilot-plugin-metadata drift: ${contractErrors.join("; ")}`);
-  }
-}
-
-function checkCodexPlugin({ repoRoot, methodId, errors, checked }) {
-  checked.push("codex-plugin");
-  const activation = readJson(repoRoot, activationManifestPath);
-  const deskPlugin = readJson(repoRoot, "plugins/desk/.codex-plugin/plugin.json");
-  const methodPlugin = readJson(repoRoot, `plugins/${methodId}/.codex-plugin/plugin.json`);
-  const methodLabel = methodId === "superpowers" ? "Superpowers" : "Work Suite";
-  const plainLanguagePlugin = readJson(repoRoot, "plugins/plain-language/.codex-plugin/plugin.json");
-  const methodLock = findActivationDependency(activation, methodId)?.lock?.version;
-  const plainLanguageLock = findActivationDependency(activation, "plain-language")?.lock?.version;
-  const codex = deskPlugin.activation?.codex;
-
-  if (deskPlugin.version !== activation.version) {
-    errors.push("codex-plugin Desk version drift");
-  }
-  if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.claude-codex.json") {
-    errors.push("codex-plugin Desk surfaces drift");
-  }
-  if (codex?.defaultMode !== "global-personal") {
-    errors.push("codex-plugin default activation mode drift");
-  }
-  if (!sameJson(codex?.optOutModes, ["project-local", "manual-only"])) {
-    errors.push("codex-plugin opt-out modes drift");
-  }
-  if (codex?.targets?.["desk:worker"]?.source !== "agents/worker.toml") {
-    errors.push("codex-plugin desk:worker source drift");
-  }
-  if (codex?.targets?.["desk:worker"]?.default !== true) {
-    errors.push("codex-plugin desk:worker default drift");
-  }
-  if (codex?.mcpServers?.desk?.manualRegistration !== false) {
-    errors.push("codex-plugin Desk MCP manual-registration drift");
-  }
-  if (!sameJson(codex?.manualSetupSteps ?? [], [])) {
-    errors.push("codex-plugin manual setup steps drift");
-  }
-  if (codex?.dependencies?.[methodId]?.version !== methodPlugin.version) {
-    errors.push(`codex-plugin ${methodLabel} dependency version drift`);
-  }
-  if (methodPlugin.version !== methodLock) {
-    errors.push(`codex-plugin ${methodLabel} provider lock drift`);
-  }
-  if (codex?.dependencies?.["plain-language"]?.version !== plainLanguagePlugin.version) {
-    errors.push("codex-plugin Plain Language dependency version drift");
-  }
-  if (plainLanguagePlugin.version !== plainLanguageLock) {
-    errors.push("codex-plugin Plain Language provider lock drift");
   }
 }
 
@@ -318,21 +265,13 @@ function parseFrontmatter(text) {
     }));
 }
 
-function tomlStringValue(text, key) {
-  const match = text.match(new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "mu"));
-  return match?.[1];
-}
-
 function checkWorkerSources({ repoRoot, errors, checked }) {
   checked.push("worker-sources");
   const claudeWorker = readText(repoRoot, "plugins/desk/agents/worker.md");
-  const codexWorker = readText(repoRoot, "plugins/desk/agents/worker.toml");
   const copilotWorker = readText(repoRoot, "plugins/desk/agents/worker.agent.md");
   const plainLanguage = readText(repoRoot, "plugins/plain-language/skills/plain-language/SKILL.md");
-  const codexAdapter = readText(repoRoot, "plugins/desk/mcp/src/activation/adapters/codex.js");
   const workerFacts = [
     ["claude", parseFrontmatter(claudeWorker).name],
-    ["codex", tomlStringValue(codexWorker, "name")],
     ["copilot", parseFrontmatter(copilotWorker).name],
   ];
 
@@ -343,7 +282,6 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
   for (const [host, body] of [
     ["claude", claudeWorker],
-    ["codex", codexWorker],
     ["copilot", copilotWorker],
   ]) {
     if (!body.includes("I'm **worker**") || !body.includes("$DESK")) {
@@ -356,14 +294,13 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   // The bodies carry identity and context only; each rule lives in its owning foundation or skill.
   for (const [surface, body] of [
     ["claude", claudeWorker],
-    ["codex-subagent", codexWorker],
     ["copilot", copilotWorker],
   ]) {
     if (!body.includes("using-desk")) {
       errors.push(`worker-sources ${surface} using-desk activation drift`);
     }
   }
-  // Restated rules in the bodies and the Codex block are rejected by scripts/test-desk-contracts.cjs, which names each owner.
+  // Restated rules in the bodies are rejected by scripts/test-desk-contracts.cjs, which names each owner.
   // Plain Language owns the hard-wrap rule; Desk no longer ships a principles file.
   if (!plainLanguage.includes("Never hard-wrap authored prose") || !plainLanguage.includes("changed in the current task")) {
     errors.push("worker-sources plain-language no-hard-wrap rule drift");
@@ -371,19 +308,11 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   if (fs.existsSync(path.join(repoRoot, "plugins/desk/principles.md"))) {
     errors.push("worker-sources retired principles file present");
   }
-  // No Codex hook loads Plain Language or Superpowers' using-superpowers, so the owned block points at both skills.
-  if (!codexAdapter.includes("apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
-    errors.push("worker-sources codex activation Plain Language pointer drift");
-  }
-  if (!codexAdapter.includes("follow `superpowers:using-superpowers` for when to invoke a skill")) {
-    errors.push("worker-sources codex activation Superpowers pointer drift");
-  }
 }
 
 // observer is worker's sibling: registered on every host worker is, never the default, identity only.
 const observerSources = Object.freeze({
   claude: "agents/observer.md",
-  codex: "agents/observer.toml",
   copilot: "agents/observer.agent.md",
 });
 
@@ -392,7 +321,7 @@ function checkObserverSources({ repoRoot, errors, checked }) {
   for (const [host, source] of Object.entries(observerSources)) {
     const file = `plugins/desk/${source}`;
     const body = fs.existsSync(path.join(repoRoot, file)) ? readText(repoRoot, file) : "";
-    const name = host === "codex" ? tomlStringValue(body, "name") : parseFrontmatter(body).name;
+    const name = parseFrontmatter(body).name;
     if (name !== "observer") {
       errors.push(`observer-sources ${host} observer name drift`);
     }
@@ -411,7 +340,6 @@ function checkObserverSources({ repoRoot, errors, checked }) {
   }
   for (const [host, targets] of [
     ["claude", activation.host_activation?.claude?.targets],
-    ["codex", readJson(repoRoot, "plugins/desk/.codex-plugin/plugin.json").activation?.codex?.targets],
     ["copilot", readJson(repoRoot, "plugins/desk/plugin.json").activation?.copilot?.targets],
   ]) {
     const observer = targets?.["desk:observer"];
@@ -519,34 +447,8 @@ function effectiveCopilotStartup(repoRoot) {
   }
 }
 
-function codexActivationInput(manifest, mode) {
-  return {
-    manifest,
-    mode,
-    existingConfig: [
-      "# user-authored Codex config",
-      "model = \"gpt-5.4\"",
-      "approval_policy = \"on-request\"",
-      "",
-    ].join("\n"),
-    existingInstructions: [
-      "# user-authored Codex guidance",
-      "Keep repo-local rules intact.",
-      "",
-    ].join("\n"),
-    pluginRoot: "plugins/desk",
-    deskRoot: mode === "project-local" ? ".desk" : "~/desk",
-    runtimeCacheDir: mode === "project-local"
-      ? ".codex/desk-runtime-cache"
-      : "~/.cache/ouroboros-skills/desk",
-  };
-}
-
 async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   checked.push("startup-composition");
-  const { materializeCodexActivation } = await import(pathToFileURL(
-    path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
-  ).href);
   const manifest = readJson(repoRoot, activationManifestPath);
   const activationTarget = manifest.provides.activation_targets.find((target) => (
     target.id === "desk:worker"
@@ -557,16 +459,9 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   })) {
     errors.push("startup-composition desk:worker startup contract drift");
   }
-  const startups = [
-    ["claude", effectiveClaudeStartup(repoRoot)],
-    [
-      "codex",
-      materializeCodexActivation(codexActivationInput(manifest, "global-personal"))
-        .generatedInstructions,
-    ],
-  ];
+  const startups = [["claude", effectiveClaudeStartup(repoRoot)]];
   try {
-    startups.splice(1, 0, ["copilot", effectiveCopilotStartup(repoRoot)]);
+    startups.push(["copilot", effectiveCopilotStartup(repoRoot)]);
   } catch (error) {
     errors.push(`startup-composition copilot hook execution failed: ${error.message}`);
   }
@@ -577,8 +472,6 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   const installedRfc = {
     claude: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
     copilot: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
-    // The Codex fixtures materialize from the relative plugin root "plugins/desk".
-    codex: "plugins/desk/docs/agentic-engineering-v2-rfc.md",
   };
   for (const [host, startup] of startups) {
     const foundationCount = countOccurrences(startup, foundation);
@@ -626,35 +519,6 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   }
 }
 
-async function expectedCodexFixtures({ repoRoot, mcpRoot }) {
-  const { materializeCodexActivation } = await import(pathToFileURL(
-    path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
-  ).href);
-  const manifest = readJson(repoRoot, activationManifestPath);
-  return {
-    "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml":
-      materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedConfig,
-    "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md":
-      materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedInstructions,
-    "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml":
-      materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedConfig,
-    "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md":
-      materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedInstructions,
-    "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml":
-      materializeCodexActivation(codexActivationInput(manifest, "manual-only")).generatedConfig,
-  };
-}
-
-async function checkCodexFixtures({ repoRoot, mcpRoot, errors, checked }) {
-  checked.push("codex-fixtures");
-  const expected = await expectedCodexFixtures({ repoRoot, mcpRoot });
-  for (const [relativePath, content] of Object.entries(expected)) {
-    if (normalizeNewlines(readText(repoRoot, relativePath)) !== normalizeNewlines(content)) {
-      errors.push(`codex-fixtures drift: ${relativePath}`);
-    }
-  }
-}
-
 async function verifyDeskHostManifests(options = {}) {
   const repoRoot = options.repoRoot ?? defaultRepoRoot;
   const mcpRoot = options.mcpRoot ?? path.join(repoRoot, "plugins", "desk", "mcp");
@@ -673,7 +537,6 @@ async function verifyDeskHostManifests(options = {}) {
     const methodId = selectEngineeringMethod(activation.provides.activation_targets.find((target) => target.id === "desk:worker").depends_on);
     checkSupportMatrix({ repoRoot, errors, checked });
     await checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked });
-    checkCodexPlugin({ repoRoot, methodId, errors, checked });
     checkClaudePlugin({ repoRoot, methodId, errors, checked });
     checked.push("factory-hooks");
     errors.push(...validateFactoryHooks(readJson(repoRoot, "plugins/desk/hooks/hooks.json"), readJson(repoRoot, "plugins/desk/hooks/copilot-hooks.json")));
@@ -681,7 +544,6 @@ async function verifyDeskHostManifests(options = {}) {
     checkObserverSources({ repoRoot, errors, checked });
     checkHumanizePackaging({ repoRoot, errors, checked });
     await checkStartupComposition({ repoRoot, mcpRoot, errors, checked });
-    await checkCodexFixtures({ repoRoot, mcpRoot, errors, checked });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   }

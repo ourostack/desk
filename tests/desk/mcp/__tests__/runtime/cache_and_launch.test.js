@@ -232,10 +232,6 @@ function manifestCases(pluginRoot = deskPluginRoot) {
       sourcePath: path.join(pluginRoot, "plugin.json"),
     },
     {
-      id: "codex plugin.json",
-      sourcePath: path.join(pluginRoot, ".codex-plugin/plugin.json"),
-    },
-    {
       id: "claude plugin.json",
       sourcePath: path.join(pluginRoot, ".claude-plugin/plugin.json"),
     },
@@ -259,14 +255,6 @@ function declarationCases(pluginRoot = deskPluginRoot) {
       expandTokens: ["COPILOT_PLUGIN_ROOT"],
       resolveRelativeCwdFromConfig: false,
       resolveServer: () => mcpServerFromManifest(path.join(pluginRoot, "plugin.json"), { pluginRoot }),
-    },
-    {
-      id: "codex plugin.json",
-      sourcePath: path.join(pluginRoot, ".codex-plugin/plugin.json"),
-      configBaseDir: pluginRoot,
-      expandTokens: [],
-      resolveRelativeCwdFromConfig: true,
-      resolveServer: () => mcpServerFromManifest(path.join(pluginRoot, ".codex-plugin/plugin.json"), { pluginRoot }),
     },
     {
       id: "claude plugin.json",

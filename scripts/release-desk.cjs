@@ -24,17 +24,11 @@ const DESK_VERSION_FILES = [
   ".claude-plugin/marketplace.json",
   "plugins/desk/plugin.json",
   "plugins/desk/.claude-plugin/plugin.json",
-  "plugins/desk/.codex-plugin/plugin.json",
   "plugins/desk/agency.json",
   "plugins/desk/activation/desk.activation.json",
   "plugins/desk/activation/copilot-root.flattened-bundle.json",
   "tests/desk/mcp/__tests__/activation/copilot_packaging.test.js",
   "tests/desk/mcp/__tests__/release/release_coupling.test.js",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
 ];
 
 function escapeRegExp(text) {

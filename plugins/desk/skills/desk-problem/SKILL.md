@@ -63,7 +63,7 @@ Use the same `broke / means / fix / file / tell` block above: `broke` names the 
 Structured fields only, mirroring `kaizen-file.js`'s `publicCard` shape:
 
 - **Title:** `<mechanism id>: <short, generic symptom>`, normalized the same way `normalizeTitle` does.
-- **Body fields:** mechanism id; Desk version; host (`claude`/`codex`/`copilot`, never an account or org name); the raw error text, only if it passes the same credential/path/email scrub `kaizen-file.js`'s `isGeneric`/`PRIVATE_TEXT` already run — otherwise a generic placeholder; what the deterministic fix attempted and its result; the fingerprint marker (`<!-- desk-problem-fingerprint: <hex> -->`).
+- **Body fields:** mechanism id; Desk version; host (`claude`/`copilot`, never an account or org name); the raw error text, only if it passes the same credential/path/email scrub `kaizen-file.js`'s `isGeneric`/`PRIVATE_TEXT` already run — otherwise a generic placeholder; what the deterministic fix attempted and its result; the fingerprint marker (`<!-- desk-problem-fingerprint: <hex> -->`).
 - **Forbidden, always:** operator name or email, any machine path, any task or track name, session transcripts, anything credential-shaped. A desk-relative path (`<track>/<task>/planning.md`) is reduced to a count and category before it ever reaches a rendered issue body — only Desk's own reserved names (`_meta`, `_friction`, `_planning`, `.gitignore`) survive verbatim, and only as a bare two-segment path.
 - **Label:** `desk-problem`, plus `bug`.
 

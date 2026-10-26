@@ -108,21 +108,18 @@ test("markdown parsing preserves headings and fenced command context", () => {
   assert.equal(records[7].headingPath.join(" > "), "Root > Troubleshooting")
 })
 
-test("healthy-path command validation covers Codex and Claude manual setup escapes", () => {
-  assertFails("Run `codex mcp add desk` after activation.", "codex mcp add")
+test("healthy-path command validation covers Claude manual setup escapes", () => {
   assertFails("/plugin install desk@ourostack", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
   assertFails("/plugin install work-suite@ourostack", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
   assertFails("Claude Code requires you to install `work-suite` explicitly.", "manual Desk/Work Suite plugin dependency installation")
-  assertFails("Paste the worker default block into your Codex instructions.", "AGENTS/worker copy or append")
+  assertFails("Append the worker-default instruction block to AGENTS.md.", "AGENTS/worker copy or append")
 
-  assertPasses("Do not run `codex mcp add` for the healthy path.")
   assertPasses("/plugin install desk@ourostack", ["Troubleshooting"], { inFence: true })
   assertPasses("Copied agent files are not part of the healthy path.")
 })
 
 test("healthy-path validation allows host-native activation language for all supported host families", () => {
   for (const text of [
-    "Codex uses global-personal activation by default, with project-local and manual-only opt-outs.",
     "Claude uses host-native dependency resolution or a flattened Desk + Work Suite bundle.",
     "Copilot-compatible hosts load the generated flattened bundle metadata.",
     "Ouroboros bundles Desk + Work Suite into the autonomous-agent bundle and binds $DESK in the preamble.",
@@ -696,14 +693,14 @@ test("validator fixture self-tests cover artifact privacy and publication policy
   const selfTestErrors = []
   docsValidator.validateValidatorFixtures(selfTestErrors, {
     failingFixtures: [{
-      text: "Do not run `codex mcp add` for the healthy path.",
-      expected: "codex mcp add",
+      text: "Copied agent files are not part of the healthy path.",
+      expected: "AGENTS/worker copy or append",
     }],
     passingFixtures: [{
       text: "Run `npm install`.",
     }],
   })
-  assert.match(selfTestErrors.join("\n"), /expected "Do not run `codex mcp add`/)
+  assert.match(selfTestErrors.join("\n"), /expected "Copied agent files are not part of the healthy path."/)
   assert.match(selfTestErrors.join("\n"), /expected "Run `npm install`."/)
 
   for (const text of [
@@ -732,7 +729,6 @@ test("validateAll rejects docs stripped of required host and artifact coverage",
   })
 
   for (const label of [
-    "Codex global personal activation",
     "Claude native dependency activation",
     "Copilot root flattened bundle",
     "Ouroboros autonomous-agent bundle",
@@ -755,9 +751,9 @@ test("topic coverage reports missing terms without accepting command-body false 
     requirements: [{
       label: "Fixture host coverage",
       docs: ["fixture.md"],
-      terms: ["codex", "global-personal", "manual-only"],
+      terms: ["copilot", "flattened", "manual-only"],
     }],
-    readFile: () => "Codex uses global-personal activation.",
+    readFile: () => "Copilot loads the flattened bundle."
   })
 
   assert.deepEqual(errors, [

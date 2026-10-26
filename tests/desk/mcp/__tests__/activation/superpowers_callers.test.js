@@ -2,7 +2,6 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
-import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, repoRoot), "utf8")
@@ -12,7 +11,6 @@ const excludedProviderPattern = new RegExp(["robo", "rev"].join(""), "iu")
 const normalWorkerSurfaces = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.agent.md",
-  "plugins/desk/agents/worker.toml",
 ]
 
 test("using-desk alone selects the sole method through the Desk adapter and native Superpowers review", () => {
@@ -59,8 +57,6 @@ const retiredWorkerDirectives = [
   ["plugins/desk/agents/worker.agent.md", /Verify Desk, Work Suite, Plain Language/u],
   ["plugins/desk/agents/worker.agent.md", /use `work-ideator` to agree/u],
   ["plugins/desk/agents/worker.agent.md", /^\| `(?:work-ideator|work-planner|work-doer|work-merger|autopilot|stay-in-turn|inch-worm)` \|/mu],
-  ["plugins/desk/agents/worker.toml", /The work-suite plugin registers risk-scaled workflow skills/u],
-  ["plugins/desk/agents/worker.toml", /^- `work-ideator`, `work-planner`, `work-doer`, `work-merger`/mu],
 ]
 for (const [file, directive] of retiredWorkerDirectives) {
   test(`${file} removes its specific retired directive ${directive.source}`, () => {
@@ -70,7 +66,6 @@ for (const [file, directive] of retiredWorkerDirectives) {
 
 for (const [file, retiredDirective] of [
   ["plugins/desk/skills/work-orchestration/SKILL.md", /New engineering work enters `work-ideator`|`work-doer` → `work-merger`/u],
-  ["plugins/desk/skills/codex-onboarding/SKILL.md", /`work-suite@<marketplace-name>` enabled|Desk and Work Suite are installed/u],
 ]) {
   test(`${file} routes active choreography through the Desk adapter`, () => {
     const text = read(file)
@@ -188,36 +183,6 @@ test("work accounting is automatic factory capture, not a manual ledger skill to
   assert.doesNotMatch(read(adapter), /work-measurement-ledger|work-measurement\/|desk_work_ledger/u)
   assert.equal(existsSync(new URL("plugins/desk/skills/work-measurement-ledger/SKILL.md", repoRoot)), false, "the manual ledger skill must not ship")
 })
-
-for (const mode of ["global-personal", "project-local"]) {
-  test(`${mode} owned instructions contain no active retired lifecycle dispatch`, () => {
-    const golden = read(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
-    const owned = golden.split("# BEGIN desk activation:")[1]?.split("# END desk activation")[0]
-    assert.ok(owned)
-    assert.doesNotMatch(owned, /\b(?:use|invoke|run|dispatch to)\s+(?:the\s+)?(?:Work Suite(?: skills)?|`?work-(?:ideator|planner|doer|merger))/iu)
-  })
-  test(`the ${mode} owned block and golden fixture select the same alpha lifecycle`, () => {
-    const input = {
-      manifest: json("plugins/desk/activation/desk.activation.json"),
-      mode,
-      existingConfig: '# user-authored Codex config\nmodel = "gpt-5.4"\napproval_policy = "on-request"\n',
-      existingInstructions: "# user-authored Codex guidance\nKeep repo-local rules intact.\n",
-      pluginRoot: "plugins/desk",
-      deskRoot: mode === "project-local" ? ".desk" : "~/desk",
-      runtimeCacheDir: mode === "project-local" ? ".codex/desk-runtime-cache" : "~/.cache/ouroboros-skills/desk",
-    }
-    const rendered = materializeCodexActivation(input).generatedInstructions
-    const golden = read(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
-    assert.equal(golden, rendered)
-    // Method entry arrives once, through the injected using-desk foundation; the owned line adds no second copy.
-    assert.doesNotMatch(golden, /Selected engineering lifecycle/u)
-    assert.equal(golden.split("desk:using-superpowers-with-desk").length - 1, 1)
-    assert.match(golden, /follow `superpowers:using-superpowers` for when to invoke a skill/u)
-    assert.match(golden, /superpowers:requesting-code-review/u)
-    assert.doesNotMatch(golden, /desk:independent-review/u)
-    assert.doesNotMatch(golden, excludedProviderPattern)
-  })
-}
 
 test("activation background disclosure names the selected provider without upgrading unsupported capability", () => {
   const background = json("plugins/desk/activation/desk.activation.json").host_activation.claude.backgroundSessionInheritance

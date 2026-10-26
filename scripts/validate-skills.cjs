@@ -5,9 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync: defaultSpawnSync } = require("node:child_process");
 
-const maxCodexSkillDescriptionLength = 1024;
-const maxCodexDefaultPromptCount = 3;
-const maxCodexDefaultPromptLength = 128;
+const maxSkillDescriptionLength = 1024;
 const requiredDeskMcpPackageScripts = {
   "activation:support-matrix:generate": "node scripts/generate-support-matrix.js",
   "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
@@ -48,10 +46,6 @@ function stat(filePath, options = {}) {
 
 function hasText(value) {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function frontmatterBlock(body) {
@@ -189,67 +183,6 @@ function satisfiesVersion(version, requirement) {
 }
 
 function validatePluginMetadata(options = {}) {
-  const pluginsDir = "plugins";
-  const pluginNames = readDir(pluginsDir, options)
-    .filter((name) => stat(path.join(pluginsDir, name), options).isDirectory())
-    .sort();
-
-  for (const name of pluginNames) {
-    const claudePath = path.join(pluginsDir, name, ".claude-plugin", "plugin.json");
-    const codexPath = path.join(pluginsDir, name, ".codex-plugin", "plugin.json");
-    if (!exists(claudePath, options) || !exists(codexPath, options)) {
-      continue;
-    }
-    const claude = readJson(claudePath, options);
-    const codex = readJson(codexPath, options);
-    if (claude.name !== codex.name) {
-      throw new Error(`${name}: Claude plugin name ${claude.name} does not match Codex plugin name ${codex.name}`);
-    }
-    if (claude.version !== codex.version) {
-      throw new Error(`${name}: Claude plugin version ${claude.version} does not match Codex plugin version ${codex.version}`);
-    }
-    const defaultPrompts = codex.interface?.defaultPrompt ?? [];
-    if (!Array.isArray(defaultPrompts)) {
-      throw new Error(`${name}: Codex interface.defaultPrompt must be an array`);
-    }
-    if (defaultPrompts.length > maxCodexDefaultPromptCount) {
-      throw new Error(`${name}: Codex interface.defaultPrompt must contain at most ${maxCodexDefaultPromptCount} prompts`);
-    }
-    for (const [index, prompt] of defaultPrompts.entries()) {
-      if (typeof prompt !== "string") {
-        throw new Error(`${name}: Codex interface.defaultPrompt[${index}] must be a string`);
-      }
-      if (prompt.length > maxCodexDefaultPromptLength) {
-        throw new Error(`${name}: Codex interface.defaultPrompt[${index}] exceeds ${maxCodexDefaultPromptLength} characters`);
-      }
-    }
-    if (hasText(codex.skills)) {
-      const skillsDir = path.join(pluginsDir, name, codex.skills.replace(/^\.\//u, ""));
-      for (const skillName of readDir(skillsDir, options)) {
-        const skillPath = path.join(skillsDir, skillName, "SKILL.md");
-        if (!exists(skillPath, options)) {
-          continue;
-        }
-        const frontmatter = frontmatterBlock(readText(skillPath, options));
-        if (!frontmatter) {
-          throw new Error(`${name}/${skillName}: missing YAML frontmatter`);
-        }
-        let description;
-        try {
-          description = frontmatterScalar(frontmatter, "description");
-        } catch (error) {
-          throw new Error(`${name}/${skillName}: ${error.message}`);
-        }
-        if (!hasText(description)) {
-          throw new Error(`${name}/${skillName}: frontmatter description is required`);
-        }
-        if (description.length > maxCodexSkillDescriptionLength) {
-          throw new Error(`${name}/${skillName}: frontmatter description exceeds ${maxCodexSkillDescriptionLength} characters`);
-        }
-      }
-    }
-  }
-
   const marketplacePath = path.join(".claude-plugin", "marketplace.json");
   const marketplace = readJson(marketplacePath, options);
   for (const plugin of marketplace.plugins ?? []) {
@@ -286,54 +219,6 @@ function validatePluginMetadata(options = {}) {
       }
       if (version !== undefined && !satisfiesVersion(marketplaceVersions.get(name), version)) {
         throw new Error(`${plugin.name}: ${pluginPath} requires ${name} ${version}, but the marketplace ships ${marketplaceVersions.get(name)}`);
-      }
-    }
-  }
-
-  const codexPluginNames = pluginNames
-    .filter((name) => exists(path.join(pluginsDir, name, ".codex-plugin", "plugin.json"), options));
-  const codexMarketplacePath = path.join(".agents", "plugins", "marketplace.json");
-  if (codexPluginNames.length > 0) {
-    if (!exists(codexMarketplacePath, options)) {
-      throw new Error(`Codex marketplace is missing ${codexMarketplacePath}`);
-    }
-    const codexMarketplace = readJson(codexMarketplacePath, options);
-    if (!hasText(codexMarketplace.name)) {
-      throw new Error("Codex marketplace name is required for plugin cache namespace checks");
-    }
-    if (!Array.isArray(codexMarketplace.plugins)) {
-      throw new Error("Codex marketplace plugins must be an array");
-    }
-
-    const codexEntries = new Map();
-    for (const plugin of codexMarketplace.plugins) {
-      if (!hasText(plugin?.name)) {
-        continue;
-      }
-      if (codexEntries.has(plugin.name)) {
-        throw new Error(`${plugin.name}: duplicate Codex marketplace plugin entry`);
-      }
-      codexEntries.set(plugin.name, plugin);
-    }
-
-    for (const name of codexPluginNames) {
-      const plugin = codexEntries.get(name);
-      if (!plugin) {
-        throw new Error(`${name}: Codex marketplace missing plugin entry`);
-      }
-      if (!isObject(plugin.source) || !hasText(plugin.source.path)) {
-        throw new Error(`${name}: Codex marketplace source.path is required`);
-      }
-      if (plugin.source.source !== "local") {
-        throw new Error(`${name}: Codex marketplace source.source must be local`);
-      }
-      const pluginPath = path.posix.join(plugin.source.path, ".codex-plugin", "plugin.json");
-      if (!exists(pluginPath, options)) {
-        throw new Error(`${name}: Codex marketplace source is missing ${pluginPath}`);
-      }
-      const manifest = readJson(pluginPath, options);
-      if (name !== manifest.name) {
-        throw new Error(`${name}: Codex marketplace name does not match ${pluginPath} name ${manifest.name}`);
       }
     }
   }
@@ -396,14 +281,6 @@ function runDeskFreshnessChecks(options = {}) {
   if ((generatedArtifactResult.status ?? 1) !== 0) {
     throw new Error("desk generated artifact freshness tests failed");
   }
-
-  const codexCacheAuditResult = spawnSync(process.execPath, ["scripts/test-codex-plugin-cache-audit.cjs"], {
-    cwd: repoRoot,
-    stdio: childStdio,
-  });
-  if ((codexCacheAuditResult.status ?? 1) !== 0) {
-    throw new Error("codex plugin cache audit tests failed");
-  }
 }
 
 function listSkillFiles(dir, options, out) {
@@ -433,7 +310,7 @@ function listSkillFiles(dir, options, out) {
 // in the Copilot CLI and other Agent Skills runtimes. The authoring rubric for
 // writing tight descriptions lives in the skill-management skill.
 function validateSkillDescriptionLimits(options = {}) {
-  const maxLen = maxCodexSkillDescriptionLength;
+  const maxLen = maxSkillDescriptionLength;
   const maxNameLen = 64;
   const files = [];
   for (const root of ["skills", "plugins"]) {

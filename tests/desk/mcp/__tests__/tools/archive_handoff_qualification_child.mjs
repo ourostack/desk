@@ -197,7 +197,7 @@ export function git(root, ...args) {
 export function envFor(base, root) {
   const env = { ...process.env, DESK: root, XDG_STATE_HOME: path.join(base, "state") }
   // Same fixture-context exclusions as factory/_session_helpers.js. Never strip preloads.
-  for (const name of ["DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CODEX_HOME", "DESK_PERSON", "CLAUDE_CONFIG_DIR"])
+  for (const name of ["DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON", "CLAUDE_CONFIG_DIR"])
     delete env[name]
   return env
 }

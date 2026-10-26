@@ -9,7 +9,6 @@ const skillPath = path.join(repoRoot, "plugins", "desk", "skills", "content-rout
 const workerPaths = [
   "worker.md",
   "worker.agent.md",
-  "worker.toml",
 ].map((file) => path.join(repoRoot, "plugins", "desk", "agents", file))
 
 test("content routing sends product contracts to the product repository", () => {

@@ -795,11 +795,10 @@ export async function openPullRequests({ stores, runner, now, deadline }) {
 
 const DEFAULT_BUDGET_MS = 45000
 const SYNC_BUDGET_MS = 25000
-const AGENT_HOSTS = Object.freeze(["claude", "copilot", "codex"])
+const AGENT_HOSTS = Object.freeze(["claude", "copilot"])
 
 const HOST_ENV = Object.freeze({
   claude: ["CLAUDECODE", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR"],
-  codex: ["CODEX_HOME", "CODEX_SANDBOX", "CODEX_THREAD_ID"],
   copilot: ["COPILOT_AGENT_SESSION_ID", "COPILOT_CLI", "GITHUB_COPILOT_CLI"],
 })
 

@@ -809,7 +809,7 @@ function fixMissingScope(tidy) {
   gitIn(tidy.desk, "add", "--", path.relative(tidy.desk, path.join(tidy.own, rel)));
 }
 
-const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_IDENTITY", "DESK_TOOLS_ROOT", "DESK_TOOLS_PERSON", "DESK_PLUGIN_ROOT"];
+const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "DESK", "DESK_PERSON", "DESK_IDENTITY", "DESK_TOOLS_ROOT", "DESK_TOOLS_PERSON", "DESK_PLUGIN_ROOT"];
 
 // A single-owner hub's `_meta/desks.md` is a cross-desk routing registry, not a crew roster. Synthetic; only its shape
 // (headings and columns) follows a real hub.

@@ -201,7 +201,7 @@ export function resolveDeskRootWithSource({
 // The home-folder desks of work overlays loaded in the same Agency session as
 // this Desk: the overlay declares its name and sits beside Desk, or inside a
 // numbered source root in the same session container. Anywhere else (a plain
-// install, Claude Code, Codex, a checkout) there are none.
+// install, Claude Code, a checkout) there are none.
 export function loadedOverlayHomeDesks({ deskPluginRoot = MODULE_PLUGIN_ROOT, homeDir = os.homedir() } = {}) {
   if (!hasText(deskPluginRoot)) return []
   const pluginParents = agencySessionPluginParents(deskPluginRoot)
@@ -259,14 +259,10 @@ export function claudeBindingPath(env = process.env) {
 }
 
 // The activation config a host session uses: an explicit path, then
-// $DESK_ACTIVATION_CONFIG, then Codex's and Claude's host-owned bindings.
+// $DESK_ACTIVATION_CONFIG, then Claude's host-owned binding.
 export function resolveActivationConfigPath({ explicit, env = process.env } = {}) {
   if (hasText(explicit)) return explicit
   if (hasText(env.DESK_ACTIVATION_CONFIG)) return env.DESK_ACTIVATION_CONFIG
-  if (hasText(env.CODEX_HOME)) {
-    const candidate = path.join(env.CODEX_HOME, "desk.activation.json")
-    if (existsSync(candidate)) return candidate
-  }
   const claudeBinding = claudeBindingPath(env)
   if (claudeBinding !== null && existsSync(claudeBinding)) return claudeBinding
   return null

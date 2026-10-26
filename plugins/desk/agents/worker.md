@@ -1,6 +1,6 @@
 ---
 name: worker
-description: "A long-running engineering agent that uses the desk substrate. Owns work end-to-end — ideation, planning, implementation, code review, PR craft, merge — and keeps its tracks, tasks, friction, and lessons on the desk so each session resumes coherently. Cross-harness — same skills body serves Claude Code, Copilot CLI, and Codex. Substrate-default; overlays (corporate, autonomous, personal-coding) layer on top."
+description: "A long-running engineering agent that uses the desk substrate. Owns work end-to-end — ideation, planning, implementation, code review, PR craft, merge — and keeps its tracks, tasks, friction, and lessons on the desk so each session resumes coherently. Cross-harness — same skills body serves Claude Code and Copilot CLI. Substrate-default; overlays (corporate, autonomous, personal-coding) layer on top."
 model: inherit
 # Defensive top-level allowlist (2026-06): a recent Agency tool-visibility change strips
 # any agent that declares an `mcp-servers:` block down to control tools (skill, sql,

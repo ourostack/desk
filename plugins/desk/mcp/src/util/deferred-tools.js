@@ -5,8 +5,8 @@
 
 // The tool's name depends on the host (round I, Copilot CLI: a Haiku agent knew only the Claude Code name, called `desk-task_update` through the shell,
 // found nothing and left the card unupdated). Claude Code: `mcp__plugin_desk_desk__<name>`, loaded with ToolSearch. Copilot CLI: `desk-<name>` (server
-// `desk`, a hyphen, the tool), called as a tool; its event log shows `"name":"desk-task_update"`. Codex and an unknown host get both names, since
-// the hint cannot tell which applies. `host` is `detectAgentHost`'s answer ("claude", "copilot", "codex" or "unknown").
+// `desk`, a hyphen, the tool), called as a tool; its event log shows `"name":"desk-task_update"`. An unknown host gets both names, since
+// the hint cannot tell which applies. `host` is `detectAgentHost`'s answer ("claude", "copilot" or "unknown").
 
 const CLAUDE_HINT =
   "If your host defers tools, Desk's may be listed by name without being loaded: load the exact ones you need before first use " +
