@@ -424,7 +424,7 @@ export async function indexedSearch({ deskRoot, input, opts, db }) {
     if (!passesFilter(row, filters)) continue
     if (!passesScope(row, scope, "active")) continue
     const { score, breakdown } = combineScore({
-      bm25: bm25ByChunk.get(id) ?? 0,
+      bm25: bm25ByChunk.get(id),
       recency: recencyDecay(row.updated_at, now),
       state: stateBias(row.status),
       pin: isPinned(row.doc_path, pinPrefixes),
@@ -549,12 +549,10 @@ export async function indexedTimeline({ input, opts, db }) {
     ftsRows.forEach((r, i) => bm25ByChunk.set(r.chunk_id, bm25Norm[i]))
 
     const bestByDoc = new Map()
+    // The query above already applied the window and scope.
     for (const [id, row] of hydrated) {
-      if (from && row.updated_at && row.updated_at < from) continue
-      if (to && row.updated_at && row.updated_at > to) continue
-      if (!passesScope(row, scope, "all")) continue
       const { score, breakdown } = combineScore({
-        bm25: bm25ByChunk.get(id) ?? 0,
+        bm25: bm25ByChunk.get(id),
         recency: recencyDecay(row.updated_at, now),
         state: stateBias(row.status),
         pin: false, // timeline doesn't pin

@@ -7,7 +7,7 @@
 // text_hash in the background.
 
 import { openDb, closeDb } from "../db/init.js"
-import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
+import { isTombstoned, loadTombstoneLedger } from "../artifacts/tombstones.js"
 import { discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import { computeRefs } from "./refs.js"
@@ -41,14 +41,8 @@ export async function rebuildIndex(deskRoot, opts = {}) {
   try {
     throwIfAborted(opts.signal)
     const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
-    const ledger = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
-    if (!ledger.valid) {
-      const error = new Error("artifact tombstone ledger is invalid")
-      error.code = "artifact_tombstone_ledger_invalid"
-      error.diagnostics = ledger.diagnostics
-      throw error
-    }
-    const discovered = discoveredRaw.filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
+    const tombstones = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
+    const discovered = discoveredRaw.filter((doc) => !isTombstoned(tombstones, doc))
     summary.docs_tombstoned = discoveredRaw.length - discovered.length
     throwIfAborted(opts.signal)
     const discoveredByPath = new Map(discovered.map((d) => [d.path, d]))

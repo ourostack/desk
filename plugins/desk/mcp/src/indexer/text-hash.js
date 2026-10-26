@@ -5,7 +5,7 @@ import { createHash } from "node:crypto"
 function normalizeChunkText(text) {
   return String(text ?? "")
     .replace(/\r\n?/gu, "\n")
-    .replace(/ /gu, " ")
+    .replace(/\u00a0/gu, " ")
     .split("\n")
     .map((line) => line.trim().replace(/[ \t]+/gu, " "))
     .join("\n")

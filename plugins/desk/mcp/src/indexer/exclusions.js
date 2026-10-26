@@ -19,7 +19,7 @@ const SENSITIVE_SEGMENTS = new Set([
 ])
 const SENSITIVE_NAME_RE = /(?:^|[-_.])(api[-_]?key|credential|credentials|private[-_]?key|secret|secrets)(?:[-_.]|$)/u
 
-export async function loadExclusionRules({ deskRoot } = {}) {
+export async function loadExclusionRules({ deskRoot }) {
   if (!deskRoot) return { gitignore: [] }
   const gitignore = []
   await collectGitignoreRules(deskRoot, "", gitignore)
@@ -42,7 +42,7 @@ export function exclusionForPath(relPath, rules = {}) {
   return { excluded: false, reason: null }
 }
 
-export function hasGitignoreNegation(rules = {}) {
+export function hasGitignoreNegation(rules) {
   return (rules.gitignore ?? [])
     .some((rule) => normalizeGitignoreRule(rule).negated)
 }
@@ -95,7 +95,7 @@ async function readGitignoreAtBase(deskRoot, baseDir) {
   }
 }
 
-function parseGitignore(raw, baseDir = "") {
+function parseGitignore(raw, baseDir) {
   return raw
     .split(/\r?\n/u)
     .map((line) => line.trim())

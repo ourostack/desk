@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
-import { tombstoneDecisionForDoc } from "../../../../../plugins/desk/mcp/src/artifacts/tombstones.js"
+import { isTombstoned } from "../../../../../plugins/desk/mcp/src/artifacts/tombstones.js"
 import { directLexicalSearch } from "../../../../../plugins/desk/mcp/src/search/direct-lexical.js"
 import { indexedSearch } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { mkTempDeskRoot, writeFile, buildFixtureIndex, fixtureDb } from "../tools/_search_helpers.js"
@@ -45,11 +45,10 @@ test("portable tombstones match nested Windows and native document paths without
   const row = redaction("track/private/task.md", "quartz redacted")
   for (const documentPath of ["track\\private\\task.md", path.join("track", "private", "task.md")]) {
     const doc = { path: documentPath, hash: row.document_hash }
-    assert.equal(tombstoneDecisionForDoc({ ledger: { valid: true, rows: [row] }, doc }).tombstoned, true)
+    assert.equal(isTombstoned([row], doc), true)
+    assert.equal(isTombstoned([row], { ...doc, hash: row.document_hash.slice("sha256:".length) }), true, "a bare hex hash matches too")
     assert.equal(doc.path, documentPath)
-    assert.equal(tombstoneDecisionForDoc({
-      ledger: { valid: true, rows: [row] }, doc: { ...doc, hash: "different-content" },
-    }).tombstoned, false, "redaction remains content-specific")
+    assert.equal(isTombstoned([row], { ...doc, hash: "different-content" }), false, "redaction remains content-specific")
   }
 })
 

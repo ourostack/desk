@@ -209,3 +209,39 @@ test("an invalid tombstone ledger stops a rebuild before any document is indexed
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM docs").get().n, 0)
   } finally { closeDb(db) }
 })
+
+test("an edit rewrites only the sections that changed and drops sections that are gone", async () => {
+  const root = await mkRoot()
+  const rel = "trackA/task-1/doing.md"
+  await w(root, rel, "## One\n\nfirst\n\n## Two\n\nsecond\n\n## Three\n\nthird\n")
+  const db = openDb(root, { dbPath: ":memory:" })
+  try {
+    await rebuildIndex(root, { db })
+    const rows = () => db.prepare("SELECT id, chunk_index, text FROM chunks ORDER BY chunk_index").all()
+    const before = rows()
+    assert.equal(before.length, 3)
+
+    // A stale duplicate row for one section, and stored fields that no longer match the file, are all replaced.
+    db.prepare(`INSERT INTO chunks (doc_id, chunk_index, text_hash, text, heading, start_offset, end_offset)
+      SELECT doc_id, chunk_index, text_hash, text, heading, start_offset, end_offset FROM chunks WHERE chunk_index = 0`).run()
+    for (const [index, column, value] of [[1, "text", "tampered"], [2, "heading", "tampered"]]) {
+      db.prepare(`UPDATE chunks SET ${column} = ? WHERE chunk_index = ? AND id = (SELECT MIN(id) FROM chunks WHERE chunk_index = ?)`)
+        .run(value, index, index)
+    }
+    await w(root, rel, "## One\n\nfirst\n\n## Two\n\nsecond\n\n## Three\n\nthird\n\n## Four\n\nfourth\n")
+    let summary = await rebuildIndex(root, { db })
+    assert.equal(summary.docs_indexed, 1)
+    assert.equal(summary.chunks_inserted, 3, "the tampered sections and the new one are written; the first is kept")
+    const after = rows()
+    assert.deepEqual(after.map((row) => row.text.trim().split("\n").at(-1)), ["first", "second", "third", "fourth"])
+    assert.equal(after[0].id, before[0].id, "an unchanged section keeps its row")
+
+    for (const column of ["start_offset", "end_offset"]) {
+      db.prepare(`UPDATE chunks SET ${column} = ${column} + 1 WHERE chunk_index = 0`).run()
+      await w(root, rel, `## One\n\nfirst\n\n## Two\n\nsecond ${column}\n`)
+      summary = await rebuildIndex(root, { db })
+      assert.equal(summary.chunks_inserted, 2, `a changed ${column} rewrites its section`)
+    }
+    assert.equal(rows().length, 2, "sections past the end of the shorter file are removed")
+  } finally { closeDb(db) }
+})

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3"
 import { discover } from "../indexer/discover.js"
 import { chunkBody } from "../indexer/chunk.js"
-import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
+import { isTombstoned, loadTombstoneLedger } from "../artifacts/tombstones.js"
 import { deskPluginRoot } from "../package-metadata.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
 
@@ -11,13 +11,7 @@ import { indexedSearch, indexedTimeline } from "../tools/search.js"
  */
 export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
   signal?.throwIfAborted()
-  const ledger = await loadTombstoneLedger({ pluginRoot: deskPluginRoot() })
-  if (!ledger.valid) {
-    const error = new Error("artifact tombstone ledger is invalid")
-    error.code = "artifact_tombstone_ledger_invalid"
-    error.diagnostics = ledger.diagnostics
-    throw error
-  }
+  const tombstones = await loadTombstoneLedger({ pluginRoot: deskPluginRoot() })
   const documents = await discover(deskRoot, { signal })
   const db = new Database(":memory:")
   try {
@@ -37,7 +31,7 @@ export async function directLexicalSearch({ deskRoot, query, filters, scope, lim
       let id = 0
       for (const doc of documents) {
         signal?.throwIfAborted()
-        if (tombstoneDecisionForDoc({ ledger, doc }).tombstoned) continue
+        if (isTombstoned(tombstones, doc)) continue
         addDoc.run(++id, doc.path, doc.kind, doc.track, doc.task_slug, doc.status,
           doc.updated_at, Number(doc.is_archived), JSON.stringify(doc.frontmatter))
         for (const [index, chunk] of chunkBody(doc.body).entries()) {

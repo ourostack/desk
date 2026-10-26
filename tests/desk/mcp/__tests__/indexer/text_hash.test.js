@@ -12,6 +12,7 @@ test("the text hash ignores line endings and insignificant whitespace", () => {
   assert.equal(chunkTextHash("## Heading\r\n  Alpha   beta  \r\n"), `sha256:${sha256("## Heading\nAlpha beta")}`)
   assert.equal(chunkTextHash("one\n\n\n\ntwo"), `sha256:${sha256("one\n\ntwo")}`)
   assert.notEqual(chunkTextHash("Alpha beta"), chunkTextHash("Alpha gamma"))
+  assert.equal(chunkTextHash("Alpha\u00a0beta"), `sha256:${sha256("Alpha beta")}`, "a non-breaking space counts as a space")
 })
 
 test("the text hash of empty or missing text is the hash of nothing", () => {
