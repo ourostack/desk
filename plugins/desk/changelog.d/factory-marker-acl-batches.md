@@ -1,0 +1,1 @@
+Inspect unchanged macOS marker permissions in bounded native batches while retaining every per-read guard. Reuse a clean result only when the file and its full ancestry stayed unchanged; failed or ACL-bearing inspections never count as verified.

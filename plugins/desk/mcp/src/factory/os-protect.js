@@ -124,6 +124,63 @@ function clearExtendedAclOnce(target, stat, platform, naming) {
   if (clearExtendedAcl(target, platform, naming)) aclFreePaths.set(target, identityKey(stat))
 }
 
+/** Observe ACL-free files in bounded native batches; ordinary leaf and parent guards still run at use. */
+export async function primeAclFreeFiles(files, platform, naming) {
+  if (platform !== "darwin") return
+  let batch = []
+  let bytes = 0
+  const inspect = async () => {
+    if (batch.length === 0) return
+    // A transient ancestor substitution can leave the leaf inode and its change time untouched.
+    const ancestors = new Map()
+    for (const { file } of batch) {
+      let dir = path.dirname(file)
+      while (!ancestors.has(dir)) {
+        const stat = await lstatIfPresent(dir, naming)
+        if (stat === null || !stat.isDirectory()) throw new Error("acl_parent_changed")
+        ancestors.set(dir, identityKey(stat))
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+    }
+    const witnessed = []
+    for (const entry of batch) {
+      const current = await lstatIfPresent(entry.file, naming)
+      if (current !== null && identityKey(current) === identityKey(entry.stat)) witnessed.push(entry)
+    }
+    if (witnessed.length > 0) {
+      const output = childProcess.execFileSync("/bin/ls", ["-ldeq", ...witnessed.map(({ file }) => file)], {
+        encoding: "utf8", timeout: 5000, maxBuffer: 65536,
+      })
+      if (!/^\s*\d+:/mu.test(output)) {
+        const clean = []
+        for (const { file, stat } of witnessed) {
+          const current = await lstatIfPresent(file, naming)
+          if (current !== null && identityKey(current) === identityKey(stat)) clean.push({ file, stat })
+        }
+        let stable = true
+        for (const [dir, identity] of ancestors) {
+          const current = await lstatIfPresent(dir, naming)
+          if (current === null || identityKey(current) !== identity) stable = false
+        }
+        if (stable) for (const { file, stat } of clean) aclFreePaths.set(file, identityKey(stat))
+      }
+    }
+    batch = []
+    bytes = 0
+  }
+  for (const file of new Set(files)) {
+    const stat = await lstatIfPresent(file, naming)
+    if (stat === null || !stat.isFile() || stat.nlink !== 1 || aclFreePaths.get(file) === identityKey(stat)) continue
+    const length = Buffer.byteLength(file)
+    if (batch.length > 0 && (batch.length === 32 || bytes + length > 8192)) await inspect()
+    batch.push({ file, stat })
+    bytes += length
+  }
+  await inspect()
+}
+
 /**
  * Creates (if needed) and verifies one owner-only directory: refuses a
  * symlink or a non-directory, repairs a drifted mode, and clears a macOS
