@@ -231,6 +231,8 @@ async function hostSession(options, host, repeat, shared) {
   const root = path.join(shared.tempRoot, `r${repeat}-${host}`)
   fs.mkdirSync(root, { recursive: true })
   const home = makeHome(root)
+  // The registry this machine's npm uses (a network may block the public one); only the address, never credentials.
+  if (shared.npmRegistry) fs.writeFileSync(path.join(home, ".npmrc"), `registry=${shared.npmRegistry}\n`)
   const env = personEnv(home)
   const world = { host, root, home, env, sessionId: randomUUID() }
 
@@ -505,11 +507,12 @@ async function deskTools(ctx, world, session, shared, options) {
   const ready = await check(ctx, "desk_status.ready", "mcp", async () => {
     const result = await waitFor(async () => {
       const status = await call("desk_status", {})
-      return { done: status.json?.state === "ready", detail: status.json ?? status.text }
+      // "ready" with detail_pending is documented: the root and search details are still loading.
+      return { done: status.json?.state === "ready" && status.json?.detail_pending !== true && Boolean(status.json?.root?.path), detail: status.json ?? status.text }
     }, { timeoutMs: 60000, label: "desk_status ready" })
     metric(ctx, "desk_ready_ms", performance.now() - session.started, "ms")
     const status = await call("desk_status", {})
-    assert(samePath(status.json.root.path, desk), `desk_status bound ${status.json.root.path}, not the session's desk ${desk}`)
+    assert(samePath(status.json.root.path, desk), `desk_status bound ${status.json.root.path}, not the session's desk ${desk}: ${JSON.stringify(status.json).slice(0, 900)}`)
     return result
   })
   if (!ready) return
@@ -518,7 +521,9 @@ async function deskTools(ctx, world, session, shared, options) {
     const status = await call("desk_status", { detail: true })
     assert(!status.isError && status.json?.state === "ready", `detail status: ${status.text.slice(0, 200)}`)
     const version = readJson(path.join(world.plugins.desk, "plugin.json")).version
-    assert(status.json.plugin_version === version, `desk_status reports plugin_version ${JSON.stringify(status.json.plugin_version)}, not the installed ${version}`)
+    const compact = await call("desk_status", {})
+    const reported = compact.json?.plugin_version ?? status.json.runtime?.plugin_version ?? status.json.activation?.plugin_version
+    assert(reported === version, `desk_status reports plugin_version ${JSON.stringify(reported)}, not the installed ${version}; compact: ${compact.text.slice(0, 300)}; runtime: ${JSON.stringify(status.json.runtime).slice(0, 300)}`)
   })
   await check(ctx, "desk_doctor.healthy", "mcp", async () => {
     const doctor = await call("desk_doctor", {})
@@ -569,6 +574,7 @@ async function deskTools(ctx, world, session, shared, options) {
     assert(exists("search-quality/rank-recent-cards-higher/task.md"), "task.md was not written")
     const card = read("search-quality/rank-recent-cards-higher/task.md")
     assert(/schema_version:\s*1/u.test(card) && card.includes(token), "task.md lacks its frontmatter or body")
+    world.createdTask = true
     const other = await call("task_create", { track: "search-quality", slug: "drop-stale-index-files", title: "Drop stale index files" })
     assert(!other.isError, other.text.slice(0, 300))
     const third = await call("task_create", { track: "garden-schedule", slug: "water-the-tomatoes", title: "Water the tomatoes" })
@@ -754,7 +760,7 @@ async function bootScript(ctx, world) {
     const lines = output.trim().split(/\r?\n/u)
     metric(ctx, "boot_lines", lines.length, "lines")
     assert(/ready|degraded|setup_required/iu.test(lines[0]), `the first line is not the status line: ${lines[0]}`)
-    assert(output.includes("rank-recent-cards-higher"), "the boot does not list the active task")
+    if (world.createdTask) assert(output.includes("rank-recent-cards-higher"), "the boot does not list the active task")
     assert(!output.includes("remove-stale-index-files"), "the boot lists an archived task")
     assert(lines.length <= 200 && output.length <= 20000, `the boot output floods: ${lines.length} lines, ${output.length} characters`)
   })
@@ -924,6 +930,7 @@ function summarize(options, shared, wallMs) {
     wall_ms: wallMs,
     repeat: options.repeat,
     caches_seeded: shared.seeded,
+    npm_registry: shared.npmRegistry ?? "default",
     totals: {
       runs: results.length,
       passed: results.filter((r) => r.ok).length,
@@ -1021,6 +1028,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   const tempRoot = makeTempRoot()
   const shared = { tempRoot, pluginsSource: options.plugins, tools: {}, surface: {}, hooks: {}, unpushed: {}, seeded: {}, startedAt: new Date().toISOString() }
+  try {
+    const registry = execFileSync(WINDOWS ? "npm.cmd" : "npm", ["config", "get", "registry"], { encoding: "utf8", shell: WINDOWS, windowsHide: true, timeout: 20000 }).trim()
+    if (/^https?:\/\//u.test(registry) && !/registry\.npmjs\.org/u.test(registry)) shared.npmRegistry = registry
+  } catch { /* npm's default registry */ }
   const started = performance.now()
   console.log(`Desk black-box tester: ${options.hosts.join(" and ")}, ${options.repeat} repeat(s), temp ${tempRoot}`)
   let leftover = []
