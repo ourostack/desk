@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Also before wrapping a command in a poll loop or supervisor, ending processes, copying sign-in state, claiming a precedent or durability, or writing tests, and when the desk's records and a live source disagree. Covers citation, primary sources, operator-stated facts, kept-lesson claims and visual proof. Not needed for a routine status read from its source.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Also before wrapping a command in a poll loop or supervisor, ending processes, copying sign-in state, claiming a precedent or durability, or writing tests, and when the desk's records and a live source disagree. Covers citation, primary sources, operator-stated facts and visual proof. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline
@@ -48,10 +48,6 @@ Secondary sources may locate primary evidence, frame questions or reveal competi
 ## Record what the operator tells you, when they say it
 
 When the operator states a fact (who has access, what was decided, what happened), record it at once on the task card or in the desk, dated and attributed ("Ari, 2026-10-26: the whole team got access together"). It outranks an older second-hand report until a primary source says otherwise; never keep reasoning from the stale report while the note waits.
-
-## A kept lesson is a claim about the future
-
-"That's now a standing lesson" claims that a later session will act on it, so it needs the file or tool that will load it. Record a correction with `lesson_add` and repeat what its reply says (`in_effect` and `message`); a note nothing loads is not kept.
 
 ## Answer the governing question
 

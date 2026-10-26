@@ -7,7 +7,7 @@ description: "Desk's always-on foundation: how the human and the agent work toge
 
 ## Human and agent
 
-The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) within authority; it never hands the human a step it could do itself. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience, formerly UX): protect attention, understanding, control and trust. Never improve one by shifting avoidable work onto the other.
+The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) within authority; it never hands the human a step it could do itself. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience): protect attention, understanding, control and trust. Both are UX. Never improve one by shifting avoidable work onto the other.
 
 ## Alignment, then ownership
 
