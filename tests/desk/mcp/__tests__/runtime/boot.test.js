@@ -1453,7 +1453,7 @@ test("resolveTaskQuery: a phrase that holds exactly one open task's slug or trac
 
 // ── repoStates, openPullRequests ─────────────────────────────────────────
 
-test("repoStates: fetches and reports branch and dirty state for each local repo of an open task, skipping everything else", () => {
+test("repoStates: fetches and reports branch and dirty state for each local repo of an open task, skipping everything else", async () => {
   // A card path is resolved to an absolute path, which on Windows gains a drive letter.
   const clone = (name) => path.resolve("/clones", name)
   const calls = []
@@ -1472,7 +1472,7 @@ test("repoStates: fetches and reports branch and dirty state for each local repo
     { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", clone("clean"))] } },
     { track: "t", slug: "no-repos", desk: null, data: { status: "processing" } },
   ]
-  const { states, pending } = repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
+  const { states, pending } = await repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
   assert.deepEqual(pending, [])
   assert.equal(states.find((state) => state.repo === "gone").local_path, clone("gone"))
   assert.deepEqual(states.map((state) => [state.repo, state.present, state.branch, state.dirty, state.fetched]), [
@@ -1485,10 +1485,10 @@ test("repoStates: fetches and reports branch and dirty state for each local repo
   assert.ok(calls.includes(`-C ${clone("clean")} fetch --quiet origin`))
 })
 
-test("repoStates: a repo past the wall-clock deadline is pending, not fetched", () => {
+test("repoStates: a repo past the wall-clock deadline is pending, not fetched", async () => {
   const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "late", local_path: "/clones/late", mode: "local" }] } }]
   const spawnGit = () => assert.fail("must not run git past the deadline")
-  const { states, pending } = repoStates({ cards, spawnGit, now: () => 100, deadline: 101 })
+  const { states, pending } = await repoStates({ cards, spawnGit, now: () => 100, deadline: 101 })
   assert.deepEqual(states, [])
   assert.match(pending[0], /repo state for late \(t\/s\): boot_budget_exceeded/u)
 })
@@ -1497,10 +1497,34 @@ test("repoStates: the real git defaults read a real clone's branch and dirty sta
   const dir = await mkTempRoot("desk-boot-real-clone-")
   spawnSync("git", ["init", "-q", "-b", "main", dir])
   const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "real", local_path: dir, mode: "local" }] } }]
-  const { states } = repoStates({ cards, now: Date.now, deadline: Date.now() + 60000 })
+  const { states } = await repoStates({ cards, now: Date.now, deadline: Date.now() + 60000 })
   assert.equal(states[0].present, true)
   assert.equal(states[0].branch, "main")
   assert.equal(states[0].fetched, false)
+})
+
+test("repoStates: real fetches run at once and leave the event loop free for the push checks beside them", { skip: process.platform === "win32" }, async () => {
+  // Each origin answers a fetch after a one-second wait; run one after another on the event loop, two would take two
+  // seconds and no timer could fire meanwhile.
+  const repos = []
+  for (const name of ["a", "b"]) {
+    const origin = await mkTempRoot(`desk-boot-slow-origin-${name}-`)
+    spawnSync("git", ["init", "-q", "--bare", origin])
+    const dir = await mkTempRoot(`desk-boot-slow-clone-${name}-`)
+    spawnSync("git", ["init", "-q", "-b", "main", dir])
+    spawnSync("git", ["-C", dir, "remote", "add", "origin", origin])
+    spawnSync("git", ["-C", dir, "config", "remote.origin.uploadpack", "sleep 1; git-upload-pack"])
+    repos.push({ name, local_path: dir, mode: "local" })
+  }
+  const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos } }]
+  let ticks = 0
+  const timer = setInterval(() => { ticks += 1 }, 50)
+  const started = Date.now()
+  const { states } = await repoStates({ cards, now: Date.now, deadline: Date.now() + 60000 })
+  clearInterval(timer)
+  assert.deepEqual(states.map((state) => [state.repo, state.fetched]), [["a", true], ["b", true]])
+  assert.ok(ticks >= 5, `the event loop ran ${ticks} timer ticks during the fetches`)
+  assert.ok(Date.now() - started < 1900, `two one-second fetches took ${Date.now() - started} ms`)
 })
 
 function searchResult(nodes, issueCount = nodes.length) {
@@ -1969,7 +1993,7 @@ test("a relative local_path resolves against the desk root in repoStates and res
   }
   const repos = [{ name: "w", local_path: "clones/w", mode: "local" }, { name: "h", local_path: "~/h", mode: "local" }]
   const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos } }]
-  repoStates({ cards, root: deskRoot, spawnGit, homeDir: "/home/x", now: () => 0, deadline: 60000 })
+  await repoStates({ cards, root: deskRoot, spawnGit, homeDir: "/home/x", now: () => 0, deadline: 60000 })
   assert.deepEqual([...new Set(seen)], [path.join(deskRoot, "clones/w"), path.resolve(deskRoot, "/home/x/h")])
   seen.length = 0
   const runner = async () => ({ code: 1, stdout: "", stderr: "" })
