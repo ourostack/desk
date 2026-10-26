@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.4 — 2026-10-26
+
+The factory's triage runner is removed. It was meant to keep a route recommendation on every open improvement card from a headless agent, but it never qualified on a real machine, so it reviewed nothing, kept local state growing and showed a session-start finding asking you to qualify it again. That finding is gone, and the end of a turn no longer starts the loop worker for it. The `triage` and `triage-qualify` commands of `mcp/scripts/factory.js` are removed with it. `curator` still triages improvement cards in a normal session. The store's triage validator and the shared launch ledger are unchanged, and nothing on your machine is deleted. See [the factory roadmap](../../docs/roadmap/factory.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.3 — 2026-10-26
 
 Fix the Desk MCP server crashing at startup (SIGSEGV on macOS) in about one Copilot session in three on a busy Mac, which left the session with no Desk tools. The admission worker loaded the SQLite native modules to warm them up; when that worker ended before the main thread had loaded them, Node unloaded the addon and the worker's teardown crashed the whole server. The worker no longer loads any native addon.
