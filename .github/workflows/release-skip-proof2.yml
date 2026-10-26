@@ -1,0 +1,86 @@
+---
+name: Release skip proof v2
+'on':
+  push:
+    branches:
+    - user/arimendelow/release-skip-proof2-20261026
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      released: "${{ steps.release.outputs.released }}"
+      summary: "${{ steps.release.outputs.summary }}"
+      sha: "${{ steps.release.outputs.sha }}"
+      base: "${{ steps.release.outputs.base }}"
+    env:
+      SELF_PUSH: "${{ github.event_name == 'push' && github.event.head_commit.author.email
+        == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message,
+        'Release Desk ') }}"
+    steps:
+    - name: Skip the release's own push
+      if: env.SELF_PUSH == 'true'
+      run: 'echo "ran: Skip the release''s own push"'
+    - name: Check out main
+      if: env.SELF_PUSH != 'true'
+      run: 'echo "ran: Check out main"'
+    - name: Set up Node
+      if: env.SELF_PUSH != 'true'
+      run: 'echo "ran: Set up Node"'
+    - name: Install Desk MCP dependencies
+      if: env.SELF_PUSH != 'true'
+      run: 'echo "ran: Install Desk MCP dependencies"'
+    - name: Build and check the release
+      if: env.SELF_PUSH != 'true'
+      id: release
+      run: 'echo "ran: Build and check the release"; echo released=true >> "$GITHUB_OUTPUT"'
+    - name: Hand the checked release commit to the push job
+      if: steps.release.outputs.released == 'true'
+      run: 'echo "ran: Hand the checked release commit to the push job"'
+  push:
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.outputs.released == 'true'
+    outputs:
+      handed_off: "${{ steps.push.outputs.handed_off }}"
+    steps:
+    - name: Check out main
+      run: 'echo "ran: Check out main"'
+    - name: Fetch the checked release commit
+      run: 'echo "ran: Fetch the checked release commit"'
+    - name: Write the deploy key
+      run: 'echo "ran: Write the deploy key"'
+    - name: Verify and push the release
+      id: push
+      run: 'echo "ran: Verify and push the release"'
+  announce:
+    runs-on: ubuntu-latest
+    needs:
+    - build
+    - push
+    if: always() && needs.build.result == 'success' && (needs.push.result == 'success'
+      || needs.push.result == 'skipped') && needs.push.outputs.handed_off != 'true'
+    steps:
+    - name: Check out main
+      run: 'echo "ran: Check out main"'
+    - name: Comment on and label every released pull request that lacks the label
+      run: 'echo "ran: Comment on and label every released pull request that lacks
+        the label"'
+  report:
+    runs-on: ubuntu-latest
+    needs:
+    - build
+    - push
+    - announce
+    if: always() && needs.build.result != 'cancelled' && needs.push.result != 'cancelled'
+      && needs.announce.result != 'cancelled'
+    steps:
+    - name: Report the failed release
+      if: needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result
+        == 'failure'
+      run: 'echo "ran: Report the failed release"'
+    - name: Close the release issue after a successful run
+      if: needs.build.result == 'success' && (needs.push.result == 'success' || needs.push.result
+        == 'skipped') && (needs.announce.result == 'success' || needs.announce.result
+        == 'skipped') && needs.push.outputs.handed_off != 'true'
+      run: 'echo "ran: Close the release issue after a successful run"'
