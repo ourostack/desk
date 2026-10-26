@@ -45,7 +45,7 @@ jobs:
       # Every shard runs at once, in one wave. The organisation is on GitHub Team (60 concurrent jobs), and Windows jobs waited 2 s at the median and 43 s at the 90th percentile for a runner (2026-10-25, 63 jobs), so the old cap of three only turned one wave into four.
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Ten shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 75 minutes of test time in all, so about 7.5 minutes per shard; the longest single file takes about 7.6). More shards would not shorten the run, because no shard can be shorter than that file. A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
+        # Ten shards, balanced by the measured per-file times in .github/scripts/suite-durations.json. Each shard runs three files at once (--jobs 3, each in its own process and home folder): the runner has four cores, and the files mostly wait on Git, PowerShell and the disk. A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - name: Check out repository
@@ -61,11 +61,11 @@ jobs:
         with:
           # The Windows runtime pack is built with Node 24.18.0 (desk-mcp-tests.yml, win32-x64-node-137). Node 24.19.0 and later abort when a better-sqlite3 build made against their headers collects a prepared statement (nodejs/node#65446, WiseLibs/better-sqlite3#1515), so this suite pins the version the pack ships with.
           node-version: "24.18.0"
-          # Only a pull request's first run needs it: main never runs this workflow, so the node_modules cache below starts empty on each pull request, while the npm download cache comes from main's "desk on native Windows" job.
+          # Only needed when the lock changed: the npm download cache then comes from main's "desk on native Windows" job.
           cache: "npm"
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
-      # `npm ci` took 1.5 to 2.7 minutes per shard on Windows. The installed tree is restored whole when the Node version and the committed lock are unchanged, and installed from the lock otherwise (the same key scheme as "desk on native Windows" in desk-mcp-tests.yml).
+      # `npm ci` took 1.5 to 2.7 minutes per shard on Windows. The installed tree is restored whole when the Node version and the committed lock are unchanged, and installed from the lock otherwise. A pull request can only restore a cache saved on main, so windows-suite-dependencies.yml saves this exact key there.
       - name: Restore installed dependencies
         id: node-modules
         uses: actions/cache@v4
@@ -89,7 +89,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/10 --jobs 3 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -99,7 +99,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/10 --jobs 3 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
