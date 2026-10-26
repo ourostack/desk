@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mcpRoot = path.resolve(__dirname, "../../../../../plugins/desk/mcp");
@@ -92,6 +92,25 @@ function makeInstalledPluginFixture(tempRoot) {
     }),
   );
   return { pluginRoot, mcpRoot: runtimeMcpRoot };
+}
+
+// Building an installed plugin copies the plugin and builds its runtime dependency pack, about 30 s a time on Windows. The tests
+// that only read the installed plugin share one, and each of them must leave it exactly as built; a test that changes what is
+// installed beside it builds its own.
+let sharedInstalledRoot = null;
+let sharedInstalled = null;
+let sharedInstalledState = null;
+after(() => {
+  if (sharedInstalledRoot !== null) rmSync(sharedInstalledRoot, { recursive: true, force: true });
+});
+function sharedInstalledPluginFixture(t) {
+  if (sharedInstalled === null) {
+    sharedInstalledRoot = makeUntrackedTempRoot("desk-installed-plugin-");
+    sharedInstalled = makeInstalledPluginFixture(sharedInstalledRoot);
+    sharedInstalledState = snapshotImmutableState(sharedInstalled);
+  }
+  t.after(() => assertImmutableStateUnchanged(sharedInstalledState));
+  return sharedInstalled;
 }
 
 function hasRuntimeDeps(cacheDir) {
@@ -575,9 +594,9 @@ describe("runtime cache and host launch contract", () => {
     }
   });
 
-  it("uses activation-config runtimeCacheDir before DESK_RUNTIME_CACHE_DIR and never writes runtime deps under desk .state", async () => {
+  it("uses activation-config runtimeCacheDir before DESK_RUNTIME_CACHE_DIR and never writes runtime deps under desk .state", async (t) => {
     const tempRoot = makeTempRoot("desk-runtime-cache-config-");
-    const installed = makeInstalledPluginFixture(tempRoot);
+    const installed = sharedInstalledPluginFixture(t);
     const { homeDir, deskRoot } = makeDeskHome(tempRoot);
     const activationCache = ensureDir(path.join(tempRoot, "activation-cache"));
     const envCache = ensureDir(path.join(tempRoot, "env-cache"));
@@ -609,9 +628,8 @@ describe("runtime cache and host launch contract", () => {
   });
 
   it("launches every committed host declaration from a temporary cwd without mutating plugin source/cache directories", async (t) => {
-    const installRoot = makeUntrackedTempRoot("desk-host-launch-install-");
-    try {
-      const installed = makeInstalledPluginFixture(installRoot);
+    const installed = sharedInstalledPluginFixture(t);
+    {
       const before = snapshotImmutableState(installed);
 
       for (const declaration of declarationCases(installed.pluginRoot)) {
@@ -656,14 +674,12 @@ describe("runtime cache and host launch contract", () => {
       }
 
       assertImmutableStateUnchanged(before);
-    } finally {
-      rmSync(installRoot, { recursive: true, force: true });
     }
   });
 
-  it("repairs cached runtime dependencies when the cache marker and dependency artifacts are stale", async () => {
+  it("repairs cached runtime dependencies when the cache marker and dependency artifacts are stale", async (t) => {
     const tempRoot = makeTempRoot("desk-runtime-cache-marker-");
-    const installed = makeInstalledPluginFixture(tempRoot);
+    const installed = sharedInstalledPluginFixture(t);
     const runtimeCacheDir = ensureDir(path.join(tempRoot, "runtime-cache"));
 
     prepareRuntime({ mcpRoot: installed.mcpRoot, env: process.env, runtimeCacheDir });
@@ -687,9 +703,9 @@ describe("runtime cache and host launch contract", () => {
     assert.equal(existsSync(staleRuntimeArtifactPath), false, "stale runtime dependency artifacts should be removed during cache repair");
   });
 
-  it("repairs cached runtime dependencies when a required runtime file is missing despite current metadata", async () => {
+  it("repairs cached runtime dependencies when a required runtime file is missing despite current metadata", async (t) => {
     const tempRoot = makeTempRoot("desk-runtime-cache-required-file-");
-    const installed = makeInstalledPluginFixture(tempRoot);
+    const installed = sharedInstalledPluginFixture(t);
     const runtimeCacheDir = ensureDir(path.join(tempRoot, "runtime-cache"));
 
     prepareRuntime({ mcpRoot: installed.mcpRoot, env: process.env, runtimeCacheDir });
