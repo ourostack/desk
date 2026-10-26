@@ -90,3 +90,26 @@ test("malformed CLI stdin exits zero with no output, well under its own timeout"
   assert.equal(result.stderr, "")
   assert.ok(performance.now() - start < 5000)
 }))
+
+test("the CLI exits at once and leaves a slow unpushed check running detached", () => scratch(async (ctx) => {
+  await mkDeskRepo(ctx)
+  const originDir = path.join(ctx.base, "origin.git")
+  await fs.mkdir(originDir, { recursive: true })
+  git(originDir, ["init", "-q", "--bare"])
+  git(ctx.desk, ["remote", "add", "origin", originDir])
+  git(ctx.desk, ["push", "-q", "-u", "origin", "HEAD:main"])
+  await writeAndCommit(ctx.desk, "more.md", "more\n", "more")
+  // Makes only the worker process slow, as starting Node, loading Desk and running Git is on a loaded machine.
+  const slow = path.join(ctx.base, "slow-worker.cjs")
+  await fs.writeFile(slow, 'if (process.argv.includes("--worker")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000)\n')
+  const env = { ...ctx.env, NODE_OPTIONS: `--require ${JSON.stringify(slow)}` }
+  const started = performance.now()
+  const result = spawnSync(process.execPath, [SCRIPT, "copilot"], { env, input: JSON.stringify({ cwd: ctx.desk, reason: "complete" }), encoding: "utf8", timeout: 5000 })
+  assert.equal(result.status, 0)
+  assert.ok(performance.now() - started < 3000, `the session-end hook took ${Math.round(performance.now() - started)} ms, past Copilot's 3000 ms`)
+  const { readSyncStatus } = await import("../../../../../plugins/desk/mcp/src/runtime/sync-worker.js")
+  assert.notEqual(readSyncStatus({ root: ctx.desk, env: ctx.env })?.blocked, true, "the hook returned before its worker ran the check")
+  const deadline = Date.now() + 30000
+  while (readSyncStatus({ root: ctx.desk, env: ctx.env })?.blocked !== true && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason, "unpushed_at_session_end")
+}))

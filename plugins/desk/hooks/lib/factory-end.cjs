@@ -8,6 +8,7 @@ const { spawn } = require("node:child_process");
 const compatibleNode = (options) => require("../compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..", "..");
 const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+const { limitWorker, startDetached } = require("./detach-worker.cjs");
 const MAX_INPUT = 1024 * 1024;
 
 async function readInput(stream, timeoutMs = 150) {
@@ -151,11 +152,21 @@ async function kickAtTurnEnd(env, start, resolveOnce, scope) {
   } });
 }
 
+// Session end needs no reply from the hook (the delivery check only answers a turn's stop), so its work runs detached and
+// the hook exits at once: on a loaded machine it can take longer than the host's hook timeout (see detach-worker.cjs).
+function sessionEnded(host, payload) {
+  return host === "copilot" ? !Object.hasOwn(payload, "stopReason") && Object.hasOwn(payload, "reason") : payload.hook_event_name === "SessionEnd";
+}
+
 async function runBoundedHook(host, input, entry) {
   if (headless(process.env)) return;
   const deadline = Date.now() + 1500;
   const payload = await readInput(input);
   if (payload === null || Date.now() >= deadline) return;
+  if (sessionEnded(host, payload)) {
+    await startDetached(entry, [host, "--factory-worker", "--detached"], payload);
+    return;
+  }
   // A separate process makes the unchanged deadline effective even during synchronous OS calls.
   await new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, host, "--factory-worker"], {
@@ -185,8 +196,9 @@ async function runBoundedHook(host, input, entry) {
 
 // The command line of the entry file `hooks/factory-end.cjs`, which is the file hosts register and the worker process runs again.
 function main(entry, argv = process.argv, stdin = process.stdin) {
+  if (argv[4] === "--detached") limitWorker();
   const work = argv[3] === "--factory-worker"
-    ? readInput(stdin).then(async (payload) => {
+    ? readInput(stdin, argv[4] === "--detached" ? 5000 : undefined).then(async (payload) => {
       const [_, delivery] = await Promise.all([
         runHook({ host: argv[2], payload }),
         checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" })),
