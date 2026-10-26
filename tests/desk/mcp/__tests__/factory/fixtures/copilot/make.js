@@ -536,6 +536,8 @@ export function buildSessionStore(dbPath, rows = defaultStoreRows()) {
   const db = new DatabaseSync(dbPath)
   try {
     db.exec(STORE_SCHEMA)
+    // One transaction: without it every row is its own commit and disk flush, which on Windows made a 2,000-row store take about 50 s.
+    db.exec("BEGIN")
     const insertSession = db.prepare("INSERT INTO sessions (id, cwd, repository, summary) VALUES (?, ?, ?, ?)")
     for (const session of rows.sessions ?? []) {
       const { id, cwd = null, repository = null, summary = null } = typeof session === "string" ? { id: session } : session
@@ -553,6 +555,7 @@ export function buildSessionStore(dbPath, rows = defaultStoreRows()) {
       if (createdAt.length === 0) insertRef.run(sessionId, type, value)
       else insertTimedRef.run(sessionId, type, value, createdAt[0])
     }
+    db.exec("COMMIT")
   } finally {
     db.close()
   }
