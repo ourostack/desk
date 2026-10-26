@@ -10,6 +10,7 @@ import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/
 import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
 import { TIDY_GIT_TIMEOUT_MS } from "../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js"
 
+// Injected Git runners stand in for workspace tidy's own, so they keep its per-call limit rather than the hooks' 2 s default.
 export const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
 
 export const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js", import.meta.url)
