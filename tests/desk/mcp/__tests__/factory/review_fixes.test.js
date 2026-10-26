@@ -300,10 +300,17 @@ test("I1 pruning refuses to unlink a replaced leaf and propagates protection fai
   await writeMarker(ctx.env, marker)
   const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
   await fs.writeFile(file, "{")
+  const parse = JSON.parse
+  let pruning = false
+  const read = t.mock.method(JSON, "parse", (text, ...args) => {
+    if (text === "{") pruning = true
+    return parse(text, ...args)
+  })
   const lstat = fs.lstat
-  let checks = 0
+  let replaced = false
   const race = t.mock.method(fs, "lstat", async (target, ...args) => {
-    if (target === file && ++checks === 4) {
+    if (target === file && pruning && !replaced) {
+      replaced = true
       await fs.rename(file, path.join(ctx.base, "old-marker"))
       await json(file, marker)
     }
@@ -312,6 +319,7 @@ test("I1 pruning refuses to unlink a replaced leaf and propagates protection fai
   assert.deepEqual(await listMarkers(ctx.env), [])
   assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), marker)
   race.mock.restore()
+  read.mock.restore()
   await fs.chmod(file, 0o644)
   const chmod = fs.chmod
   t.mock.method(fs, "chmod", (target, ...args) => {
