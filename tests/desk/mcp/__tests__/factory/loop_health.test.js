@@ -265,6 +265,14 @@ test("a card open 8 days opens loop_alarm:improvement_age once; the alarm does n
   assert.deepEqual(alarm.evidence, [])
 }))
 
+test("a desk that is not the person's own gets the record but no alarm card", () => scratch(async (ctx) => {
+  await make(ctx, "andon", "ourostack/factory#1", { days: 8 })
+  const out = await measure(ctx, { alarms: false })
+  assert.deepEqual([out.ok, out.result], [true, "measured"])
+  assert.deepEqual((await allCards(ctx)).map((card) => card.key), ["andon:ourostack/factory#1"])
+  assert.deepEqual((await readStatus(ctx.env)).loop.health.improvement.oldest_open_age_days, M(8))
+}))
+
 test("a card open 7 days or less opens no age alarm, and a claimed card past 7 days does", () => scratch(async (ctx) => {
   await make(ctx, "andon", "ourostack/factory#1", { days: 7 })
   const none = await measure(ctx)
