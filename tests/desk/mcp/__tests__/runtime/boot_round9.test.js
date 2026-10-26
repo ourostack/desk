@@ -404,7 +404,7 @@ test("plain-text boot with no named task tells the agent to report every task un
   assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" above/u)
   assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
   // The structured result keeps the field names for JSON consumers.
-  assert.match(NO_TASK_INSTRUCTION, /active_tasks, open_prs and repo_states/u)
+  assert.match(NO_TASK_INSTRUCTION, /active_tasks and open_prs/u)
 })
 
 test("the named task is always shown first with its push route, even when it ranks below the cap", () => {
@@ -424,7 +424,7 @@ test("the named task is always shown first with its push route, even when it ran
   // Ambiguous and unmatched names keep the full capped list.
   const full = formatBootText({ ...result, task: { status: "ambiguous", candidates: [{ track: "ops", slug: "a" }, { track: "ops", slug: "b" }] } })
   assert.equal([...full.matchAll(/^- ops\/(\S+)/gmu)].length, TASKS_SHOWN_CAP)
-  assert.match(full, /\n\.\.\.and 5 more active tasks/u)
+  assert.match(full, new RegExp(`\\n\\.\\.\\.and ${20 - TASKS_SHOWN_CAP} more active tasks`, "u"))
   const unnamed = formatBootText({ ...result, task: null })
   assert.ok(!unnamed.includes("- ops/oldest"), "without a name the oldest task falls under the cap")
   const last = formatBootText({ ...result, task: { status: "resolved", task: { track: "ops", slug: "t19", card: "c" } } })

@@ -75,7 +75,7 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
 const PENDING_PUSH = /^push account for (.+?) \(.*\): boot_budget_exceeded$/u
-const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
+const PENDING_PR = /^open pull requests: (.+)$/u
 
 /**
  * The pending lines as printed, `{ rest, summaries }`: the per-repo and per-store lines that only say boot ran out of time become one line each with a count and the next action; other lines pass through.
@@ -83,7 +83,7 @@ const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
  */
 function collapsePending(pending) {
   const repos = new Set()
-  const stores = new Set()
+  let prs = null
   const pushes = new Set()
   const rest = []
   const summaries = []
@@ -92,19 +92,19 @@ function collapsePending(pending) {
     const store = PENDING_PR.exec(line)
     const push = PENDING_PUSH.exec(line)
     if (repo !== null) repos.add(repo[1])
-    else if (store !== null) stores.add(store[1])
+    else if (store !== null) prs = store[1]
     else if (push !== null) pushes.add(push[1])
     else rest.push(line)
   }
   const plural = (count, one, many) => (count === 1 ? one : many)
   if (repos.size > 0) summaries.push(`Repo state not checked for ${repos.size} ${plural(repos.size, "repo", "repos")} (boot ran out of time); check a repo with git when you work in it.`)
-  if (stores.size > 0) summaries.push(`Open pull requests not checked for ${stores.size} ${plural(stores.size, "repo", "repos")} (boot ran out of time); check with gh pr list when you need them.`)
+  if (prs !== null) summaries.push(`Open pull requests: ${prs}; check a repo with gh pr list when you need it.`)
   if (pushes.size > 0) summaries.push(`Push route not checked for ${pushes.size} ${plural(pushes.size, "repo", "repos")} (boot ran out of time); run gh auth status before you push.`)
   return { rest, summaries }
 }
 
 /** How many active tasks the boot text lists; the rest are counted, never cut mid-sentence. */
-export const TASKS_SHOWN_CAP = 15
+export const TASKS_SHOWN_CAP = 10
 
 const NO_NEXT_STEP = "no next step recorded"
 
@@ -258,8 +258,11 @@ function namedTaskLines(task) {
 // Two instructions name the active-task list. The structured result (`--json`) names it by its field, `active_tasks`;
 // the plain-text boot prints it as the "Active tasks" section, and an agent reading plain text cannot map a field name
 // to a section (boot acceptance rounds F, H and J: "where were we?" reported one task). So the text boot says the section.
-export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new."
-export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it."
+// A boot that names no task checks no repo state and no push route (they cost a network call per repo and matter only
+// once a task is picked), so the instruction says how to get them for the task the operator picks.
+const PICKED_TASK_SENTENCE = " When the operator picks one, run this boot again with `--task \"<its handle>\"` before working on it: that run checks the task's repos and push route."
+export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks and open_prs, then ask which task to resume or whether to start new." + PICKED_TASK_SENTENCE
+export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it." + PICKED_TASK_SENTENCE
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
 export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" above, each with its status and its next step or blocker, then ask what to resume or start."
 // A first message that describes new work is the answer to "resume or start new", and the boot had no line for it: a session ran the

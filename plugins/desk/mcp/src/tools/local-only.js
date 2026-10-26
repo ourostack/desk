@@ -10,12 +10,13 @@
 // What stays possible, by design: an agent can still make a new commit in a repo that really is local-only. That commit
 // is real work in the recorded repo, so accepting it is correct.
 
-import { realpathSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths, commitBranchRefusal } from "../util/git-stage.js"
 import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/paths.js"
+import { readRemotes } from "../util/git-config-file.js"
 
 const GIT_TIMEOUT_MS = 5000
 
@@ -77,6 +78,16 @@ export function withLocalOnlyRecorded(repos, { spawnGit = spawnSync, homeDir = o
   })
 }
 
+// Whether boot can skip asking git about this entry: no folder at its path, or a clone whose config file names a remote.
+// Most recorded clones have a remote, so boot spawns git only for the few it cannot rule out this way.
+function plainlyNotLocalOnly(entry, { homeDir, deskRoot }) {
+  if (entry === null || typeof entry !== "object" || typeof entry.local_path !== "string" || entry.local_path.trim() === "") return false
+  const dir = resolveLocalPath(entry.local_path.trim(), { homeDir, deskRoot })
+  if (!existsSync(dir)) return true
+  const found = readRemotes(dir)
+  return found !== null && Object.keys(found.remotes).length > 0
+}
+
 /**
  * Boot's side of the record: for each open card, add `local_only: true` to any repo entry whose clone it now sees with no
  * remote. Boot only ever adds the mark (the done check re-reads the clone's remotes itself). Returns the cards it
@@ -89,7 +100,7 @@ export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawn
     try {
       let changed = false
       const entries = card.data.repos.map((entry) => {
-        if (entry?.local_only === true || !qualifies(entry, { spawnGit, homeDir, deskRoot })) return entry
+        if (entry?.local_only === true || plainlyNotLocalOnly(entry, { homeDir, deskRoot }) || !qualifies(entry, { spawnGit, homeDir, deskRoot })) return entry
         changed = true
         return { ...entry, local_only: true }
       })

@@ -311,15 +311,30 @@ export async function refreshSignoffStatus(env, deskRoot, { now, scan = unsigned
  * What boot calls: the scan, with the counts recorded. Recording is a convenience: a state folder that cannot be written never
  * hides the list. Returns the scan, or null when the scan itself failed.
  */
-export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries } = {}) {
+// Boot waits this long for the factory's status lock, which another session's factory work can hold, then shows the list
+// without recording the counts: the next boot records them.
+const BOOT_STATUS_WAIT_MS = 1000
+const LOCK_WAIT_OVER = Symbol("lock wait over")
+
+export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries, waitMs = BOOT_STATUS_WAIT_MS } = {}) {
+  // One scan whatever happens to the write: a busy lock must not cost a second walk of every card.
+  let scanned = null
+  const once = (root, options) => (scanned ??= { value: scan(root, options) }).value
+  let timer
   try {
-    return await refreshSignoffStatus(env, deskRoot, { now, scan })
+    const recorded = refreshSignoffStatus(env, deskRoot, { now, scan: once })
+    // Past the wait the write is left to finish on its own and the scan is shown.
+    const waited = new Promise((resolve) => { timer = setTimeout(resolve, waitMs, LOCK_WAIT_OVER) })
+    const result = await Promise.race([recorded, waited])
+    return result === LOCK_WAIT_OVER ? once(deskRoot, { now }) : result
   } catch {
     try {
-      return scan(deskRoot, { now })
+      return once(deskRoot, { now })
     } catch {
       return null
     }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
