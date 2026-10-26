@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.9 — 2026-10-26
+
+Copilot sessions get more of what Claude Code sessions get. Plain Language now reaches every Copilot subagent through Copilot's `subagentStart` hook, as it does on Claude Code through `SubagentStart`. Desk's Copilot session start turns off the `ask_user` question form once when the operator has not chosen (`askUser: false`), as it already did for the AI co-author trailer, so Copilot's worker asks in plain chat like Claude's. Copilot's `sessionStart` hook may now take 10 seconds, the same limit Claude Code's has, instead of 5, so a slow machine no longer cuts it off before the foundation arrives. SETUP.md has a full Copilot CLI section, and the docs name the agent `desk:worker` everywhere and say to start Copilot with `agency copilot --agent desk:worker`, because Copilot has no setting that makes a plugin's agent the default. A Copilot session started without `--agent` is now told at startup to read the worker's instructions and act as the worker; to keep the startup text inside its budget, Copilot's copy of the foundation leaves out the skill's frontmatter.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.8 — 2026-10-26
 
 Skills are leaner. Each skill description now says only when to load the skill, which cuts the skill list every session reads by more than half on both hosts. The `status` skill now lives in `session-start` as "Status on request". The vendored `humanize` guidance is now `human-voice.md` under `operator-voice-comments`, which owns the voice rules. A short `humanize` skill stays and points there, so overlays that call `humanize` by name keep working; it will be removed once those overlays point to `operator-voice-comments`. The observer skills (`evaluate-release`, `factory-evaluator`) and `factory-task-context` now say in one line who they are for.
