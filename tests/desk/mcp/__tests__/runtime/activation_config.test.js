@@ -805,38 +805,12 @@ test("entrypoint startup root resolution uses parsed activation config and canon
     assert.equal(result.root, fixture.activationRoot)
     assert.equal(result.source, "activation-config")
 
-    const codexHome = path.join(fixture.root, "codex-home")
-    const codexConfigPath = path.join(codexHome, "desk.activation.json")
-    mkdirSync(codexHome, { recursive: true })
-    writeActivationConfig(codexConfigPath, fixture.activationRoot)
-    assert.equal(
-      resolveStartupActivationConfigPath({
-        args: {},
-        env: {
-          CODEX_HOME: codexHome,
-        },
-      }),
-      codexConfigPath,
-    )
-    assert.equal(
-      resolveStartupDeskRoot({
-        args: {},
-        env: {
-          CODEX_HOME: codexHome,
-          DESK: fixture.envRoot,
-        },
-        homeDir: fixture.home,
-      }).source,
-      "activation-config",
-    )
-
     const overrideConfigPath = path.join(fixture.root, "override.activation.json")
     writeActivationConfig(overrideConfigPath, fixture.envRoot)
     assert.equal(
       resolveStartupActivationConfigPath({
         args: {},
         env: {
-          CODEX_HOME: codexHome,
           DESK_ACTIVATION_CONFIG: overrideConfigPath,
         },
       }),
@@ -845,9 +819,7 @@ test("entrypoint startup root resolution uses parsed activation config and canon
     assert.equal(
       resolveStartupActivationConfigPath({
         args: {},
-        env: {
-          CODEX_HOME: path.join(fixture.root, "missing-codex-home"),
-        },
+        env: {},
       }),
       null,
     )

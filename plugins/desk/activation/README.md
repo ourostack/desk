@@ -76,12 +76,10 @@ Use this ladder when deciding plugin dependencies: depend on `desk` when you onl
 Zero-setup support has three different evidence states:
 
 - `repo-source-current`: manifests and the source catalog point at the expected Desk, Superpowers and Plain Language files; this is not active-session proof.
-- `installed-cache-current`: the Codex plugin cache contains manifests matching the repository source.
+- `installed-cache-current`: the host's plugin cache contains manifests matching the repository source.
 - `active-session-visible`: the currently running host session has reloaded those manifests and exposes the expected skills, MCP tools, selected activation, and `desk_status`.
 
-The read-only `scripts/audit-codex-plugin-cache.cjs` checks the first two states. It reports `active-session-visible` as not checked until the caller supplies active host MCP tool evidence with `--active-tools` or `--active-tools-file`; `--strict-active` fails when no active snapshot is supplied or required Desk tools are missing. This keeps file/cache freshness, MCP launchability, and active-session visibility separate.
-
-`desk:session-start` carries the startup health guard for every Desk worker: if `desk_status` or the Desk MCP namespace is missing from the active tool surface, the agent treats Desk MCP as absent, explains what MCP-backed desk access provides, and asks whether to fix/reload now or continue without generic reminders. Choosing repair routes to `desk:codex-onboarding` or the host repair checklist; choosing no reminders is an explicit operator preference, not silent local-only fallback. Once `desk_status` is callable, degraded index/vector/snapshot states are runtime repair problems rather than activation absence.
+`desk:session-start` carries the startup health guard for every Desk worker: if `desk_status` or the Desk MCP namespace is missing from the active tool surface, the agent treats Desk MCP as absent, explains what MCP-backed desk access provides, and asks whether to fix/reload now or continue without generic reminders. Choosing repair routes to the host repair checklist; choosing no reminders is an explicit operator preference, not silent local-only fallback. Once `desk_status` is callable, degraded index/vector/snapshot states are runtime repair problems rather than activation absence.
 
 ## Artifact Privacy
 

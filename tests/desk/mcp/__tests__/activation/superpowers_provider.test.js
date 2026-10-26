@@ -35,7 +35,7 @@ test("Superpowers provider is pinned, licensed, and byte-bound through the exist
   const lockedVersion = readJson("plugins/desk/activation/desk.activation.json").dependencies
     .find((dependency) => dependency.id === "superpowers").lock.version
   assert.equal(readJson(".claude-plugin/marketplace.json").plugins.find((plugin) => plugin.name === "superpowers").version, lockedVersion)
-  for (const relativePath of ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+  for (const relativePath of ["plugin.json", ".claude-plugin/plugin.json"]) {
     const manifest = JSON.parse(readFileSync(path.join(pluginRoot, relativePath), "utf8"))
     assert.equal(manifest.name, "superpowers")
     assert.equal(manifest.version, lockedVersion)

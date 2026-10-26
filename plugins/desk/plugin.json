@@ -38,13 +38,13 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.4.2",
+          "version": "6.4.3",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         },
         "plain-language": {
           "path": "../plain-language",
-          "version": "0.2.6",
+          "version": "0.2.7",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         }

@@ -45,7 +45,7 @@ function validManifest(overrides = {}) {
         kind: "plugin",
         version_range: "^1.4.0",
         provenance: {
-          source: "plugins/work-suite/.codex-plugin/plugin.json",
+          source: "plugins/work-suite/.claude-plugin/plugin.json",
           package: "ourostack/work-suite",
         },
         lock: {
@@ -62,9 +62,8 @@ function validManifest(overrides = {}) {
           default: true,
           depends_on: ["desk", "work-suite"],
           entrypoints: {
-            claude: "agents/worker.agent.md",
-            codex: "agents/worker.toml",
-            copilot: "agents/worker.md",
+            claude: "agents/worker.md",
+            copilot: "agents/worker.agent.md",
           },
         },
       ],
@@ -76,7 +75,7 @@ function validManifest(overrides = {}) {
           launch_as: "example:worker",
           inherits: ["desk:worker"],
           entrypoints: {
-            codex: "agents/example-worker.toml",
+            claude: "agents/example-worker.md",
           },
           instructions: {
             identity: "Example Desk worker",
@@ -118,12 +117,12 @@ function validManifest(overrides = {}) {
     },
     host_support: [
       {
-        host: "codex",
+        host: "copilot-root",
         status: "supported",
         dependency_resolution: "flattened",
-        fallback_behavior: "materialize owned global/project activation artifacts",
-        capabilities: ["skills", "mcp", "global-default-agent"],
-        unsupported_primitives: [],
+        fallback_behavior: "load the generated flattened bundle metadata",
+        capabilities: ["skills", "mcp", "agents", "hooks"],
+        unsupported_primitives: ["transitive-dependency-resolution"],
       },
       {
         host: "claude",
@@ -144,7 +143,7 @@ function validManifest(overrides = {}) {
     ],
     permissions: {
       requested_capabilities: ["Read", "Write", "Interactive"],
-      generated_artifacts: ["owned-host-config", "activation-ledger"],
+      generated_artifacts: ["owned-host-config"],
       never_delete: ["desk-root-data"],
     },
   }, overrides)
@@ -196,7 +195,7 @@ function overlayAgent({
   inherits,
   identity,
   addendum,
-  codex = `agents/${id.replace(/:/gu, "-")}.toml`,
+  claude = `agents/${id.replace(/:/gu, "-")}.md`,
 }) {
   return {
     id,
@@ -205,7 +204,7 @@ function overlayAgent({
     launch_as: id,
     inherits,
     entrypoints: {
-      codex,
+      claude,
     },
     instructions: {
       identity,
@@ -441,7 +440,7 @@ test("activation validation fails closed for contract type and enum fields", asy
     host_support: [
       {
         ...validManifest().host_support[0],
-        host: "Codex With Spaces",
+        host: "Copilot With Spaces",
         status: "maybe",
         dependency_resolution: "telepathy",
         fallback_behavior: 42,
@@ -535,7 +534,7 @@ test("activation validation fails closed for contract type and enum fields", asy
   assertInvalid(
     validateActivationManifest(validManifest({
       provides: {
-        activation_targets: [{ ...target, entrypoints: { codex: 42 } }],
+        activation_targets: [{ ...target, entrypoints: { claude: 42 } }],
         overlay_agents: [overlay],
       },
     })),
@@ -683,7 +682,7 @@ test("activation validation requires MCP, root, artifact, host, and permission p
       manifest: validManifest({
         host_support: [
           {
-            host: "codex",
+            host: "copilot-root",
             status: "supported",
             capabilities: ["skills"],
           },
@@ -696,10 +695,10 @@ test("activation validation requires MCP, root, artifact, host, and permission p
       manifest: validManifest({
         host_support: [
           {
-            host: "codex",
+            host: "copilot-root",
             status: "supported",
             dependency_resolution: "flattened",
-            fallback_behavior: "materialize owned global/project activation artifacts",
+            fallback_behavior: "load the generated flattened bundle metadata",
           },
         ],
       }),
@@ -745,71 +744,8 @@ test("activation validation requires MCP, root, artifact, host, and permission p
   }
 })
 
-test("dependency and activation ordering is deterministic", async () => {
-  const { orderActivationDependencies } = await loadActivationContract()
-  const target = validManifest().provides.activation_targets[0]
-  const overlay = validManifest().provides.overlay_agents[0]
-  const ordered = orderActivationDependencies(validManifest({
-    dependencies: [
-      validManifest().dependencies[1],
-      validManifest().dependencies[0],
-    ],
-    provides: {
-      activation_targets: [
-        {
-          ...target,
-          id: "desk:helper",
-          default: false,
-          depends_on: ["desk"],
-        },
-        target,
-      ],
-      overlay_agents: [
-        {
-          ...overlay,
-          id: "zeta:worker",
-          launch_as: "zeta:worker",
-        },
-        {
-          ...overlay,
-          id: "alpha:worker",
-          launch_as: "alpha:worker",
-        },
-      ],
-    },
-  }))
-
-  assert.deepEqual(
-    ordered.map((entry) => entry.id),
-    ["desk", "work-suite", "desk:helper", "desk:worker", "alpha:worker", "zeta:worker"],
-  )
-
-  assert.deepEqual(orderActivationDependencies({}), [])
-  assert.deepEqual(orderActivationDependencies(null), [])
-  assert.deepEqual(
-    orderActivationDependencies({
-      dependencies: {},
-      provides: {
-        activation_targets: {},
-        overlay_agents: {},
-      },
-    }),
-    [],
-  )
-
-  assert.deepEqual(
-    orderActivationDependencies({
-      dependencies: [
-        { id: "zeta-plugin", kind: "plugin" },
-        { id: "alpha-plugin", kind: "plugin" },
-      ],
-    }).map((entry) => entry.id),
-    ["alpha-plugin", "zeta-plugin"],
-  )
-})
-
 test("activation validation accepts multi-level Desk overlay chains", async () => {
-  const { orderActivationDependencies, resolveActivationChain, validateActivationManifest } = await loadActivationContract()
+  const { validateActivationManifest } = await loadActivationContract()
   const manifest = overlayChainManifest()
   const result = validateActivationManifest(manifest)
 
@@ -818,55 +754,12 @@ test("activation validation accepts multi-level Desk overlay chains", async () =
     result.value.provides.overlay_agents.map((overlay) => overlay.id),
     ["ms-desk:worker", "ms-area:worker"],
   )
-  assert.deepEqual(
-    orderActivationDependencies(manifest).map((entry) => entry.id),
-    [
-      "desk",
-      "ms-area-desk",
-      "ms-desk",
-      "work-suite",
-      "desk:worker",
-      "ms-desk:worker",
-      "ms-area:worker",
-    ],
-  )
-  assert.deepEqual(
-    resolveActivationChain(manifest, "ms-area:worker").map((entry) => entry.id),
-    ["desk:worker", "ms-desk:worker", "ms-area:worker"],
-  )
 })
 
 test("activation validation enforces desk:worker and overlay relationship integrity", async () => {
-  const { orderActivationDependencies, resolveActivationChain, validateActivationManifest } = await loadActivationContract()
+  const { validateActivationManifest } = await loadActivationContract()
   const target = validManifest().provides.activation_targets[0]
   const overlay = validManifest().provides.overlay_agents[0]
-
-  assert.throws(
-    () => resolveActivationChain(validManifest(), "missing:worker"),
-    /unknown activation target: missing:worker/u,
-  )
-  assert.throws(
-    () => resolveActivationChain(validManifest({
-      provides: {
-        activation_targets: [target],
-        overlay_agents: [
-          { ...overlay, inherits: ["missing:worker"] },
-        ],
-      },
-    }), "example:worker"),
-    /example:worker inherits unknown target missing:worker/u,
-  )
-  assert.deepEqual(
-    resolveActivationChain(validManifest({
-      provides: {
-        activation_targets: [target],
-        overlay_agents: [
-          { ...overlay, inherits: ["desk:worker", "desk:worker"] },
-        ],
-      },
-    }), "example:worker").map((entry) => entry.id),
-    ["desk:worker", "example:worker"],
-  )
 
   assertInvalid(
     validateActivationManifest(validManifest({
@@ -965,61 +858,6 @@ test("activation validation enforces desk:worker and overlay relationship integr
     })),
     [/overlay inheritance cycle/i],
   )
-  assert.deepEqual(
-    orderActivationDependencies(overlayChainManifest({
-      provides: {
-        overlay_agents: [
-          overlayAgent({
-            id: "ms-desk:worker",
-            dependsOn: ["desk", "work-suite", "ms-desk"],
-            inherits: ["ms-area:worker"],
-            identity: "Microsoft Desk worker",
-            addendum: "Use Microsoft context.",
-          }),
-          overlayAgent({
-            id: "ms-area:worker",
-            dependsOn: ["ms-area-desk"],
-            inherits: ["ms-desk:worker"],
-            identity: "Area Desk worker",
-            addendum: "Use area context.",
-          }),
-        ],
-      },
-    })).map((entry) => entry.id),
-    [
-      "desk",
-      "ms-area-desk",
-      "ms-desk",
-      "work-suite",
-      "desk:worker",
-      "ms-desk:worker",
-      "ms-area:worker",
-    ],
-  )
-  assert.throws(
-    () => resolveActivationChain(overlayChainManifest({
-      provides: {
-        overlay_agents: [
-          overlayAgent({
-            id: "ms-desk:worker",
-            dependsOn: ["desk", "work-suite", "ms-desk"],
-            inherits: ["ms-area:worker"],
-            identity: "Microsoft Desk worker",
-            addendum: "Use Microsoft context.",
-          }),
-          overlayAgent({
-            id: "ms-area:worker",
-            dependsOn: ["ms-area-desk"],
-            inherits: ["ms-desk:worker"],
-            identity: "Area Desk worker",
-            addendum: "Use area context.",
-          }),
-        ],
-      },
-    }), "ms-area:worker"),
-    /overlay inheritance cycle/u,
-  )
-
   assertInvalid(
     validateActivationManifest(overlayChainManifest({
       provides: {

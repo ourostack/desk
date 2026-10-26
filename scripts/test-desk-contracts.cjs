@@ -236,11 +236,10 @@ contract("coverage exclusion list has no campaign additions", () => {
   );
 });
 
-// The three worker bodies carry identity and context only; every rule has one owner elsewhere.
+// The two worker bodies carry identity and context only; every rule has one owner elsewhere.
 const workerBodies = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.agent.md",
-  "plugins/desk/agents/worker.toml",
 ];
 
 // Each rule the bodies used to restate, and the owner that now holds it alone.
@@ -293,24 +292,10 @@ for (const file of workerBodies) {
   });
 }
 
-// The Codex owned block adds activation text around the injected using-desk foundation; it restates no owned rule either.
-for (const mode of ["global-personal", "project-local"]) {
-  contract(`the Codex ${mode} owned block restates no owned rule`, () => {
-    const foundation = text("plugins/desk/skills/using-desk/SKILL.md").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
-    const block = text(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`).split("# BEGIN desk activation:")[1];
-    assert.ok(block && block.includes(foundation), "the owned block injects the using-desk foundation");
-    const owned = block.replace(foundation, "");
-    for (const [pattern, owner] of ownedRules) {
-      assert.doesNotMatch(owned, pattern, `restates a rule owned by ${owner}`);
-    }
-  });
-}
-
-contract("the three worker bodies share one identity and context text", () => {
-  const shared = (body) => body.slice(body.indexOf("I'm **worker**")).split("\n'''", 1)[0].trim();
-  const [claude, copilot, codex] = workerBodies.map((file) => shared(text(file)));
+contract("the two worker bodies share one identity and context text", () => {
+  const shared = (body) => body.slice(body.indexOf("I'm **worker**")).trim();
+  const [claude, copilot] = workerBodies.map((file) => shared(text(file)));
   assert.equal(copilot, claude, "worker.agent.md drifted from worker.md");
-  assert.equal(codex, claude, "worker.toml drifted from worker.md");
 });
 
 // Worker surfaces select Desk + Superpowers + Plain Language only.
@@ -903,11 +888,10 @@ requires(
 );
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
-// classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
+// classifies each step, and never does the work. Its two bodies carry identity only, like worker's.
 const observerBodies = [
   "plugins/desk/agents/observer.md",
   "plugins/desk/agents/observer.agent.md",
-  "plugins/desk/agents/observer.toml",
 ];
 for (const file of observerBodies) {
   contract(`${file} carries identity only`, () => {
@@ -936,22 +920,18 @@ for (const file of observerBodies) {
     assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity fits in 4 KB`);
   });
 }
-contract("the three observer bodies share one identity text", () => {
-  const shared = (body) => body.slice(body.indexOf("I'm **observer**")).split("\n'''", 1)[0].trim();
-  const [claude, copilot, codex] = observerBodies.map((file) => shared(text(file)));
+contract("the two observer bodies share one identity text", () => {
+  const shared = (body) => body.slice(body.indexOf("I'm **observer**")).trim();
+  const [claude, copilot] = observerBodies.map((file) => shared(text(file)));
   assert.equal(copilot, claude, "observer.agent.md drifted from observer.md");
-  assert.equal(codex, claude, "observer.toml drifted from observer.md");
 });
 contract("the observer bodies keep worker's frontmatter and tool shape per host", () => {
   const frontmatterKeys = (body) => body.split(/\r?\n---\r?\n/u, 1)[0].split(/\r?\n/u).filter((line) => /^[A-Za-z-]+:/u.test(line)).map((line) => line.split(":", 1)[0]);
-  const tomlKeys = (body) => body.split(/\r?\n/u).filter((line) => /^[a-z_]+ = /u.test(line)).map((line) => line.split(" ", 1)[0]);
   assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.md")), frontmatterKeys(text("plugins/desk/agents/worker.md")));
   assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.agent.md")), frontmatterKeys(text("plugins/desk/agents/worker.agent.md")));
-  assert.deepEqual(tomlKeys(text("plugins/desk/agents/observer.toml")), tomlKeys(text("plugins/desk/agents/worker.toml")));
   assert.match(text("plugins/desk/agents/observer.md"), /^name: observer$/mu);
   assert.match(text("plugins/desk/agents/observer.md"), /^tools: \["\*"\]$/mu);
   assert.match(text("plugins/desk/agents/observer.agent.md"), /^name: observer$[\s\S]+^target: github-copilot$[\s\S]+^user-invocable: true$/mu);
-  assert.match(text("plugins/desk/agents/observer.toml"), /^name = "observer"$/mu);
 });
 
 // observer's release evaluation (spec §12 milestone 6): cold start on a named host, per-step evidence, one class per

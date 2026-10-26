@@ -16,7 +16,6 @@ const pluginSkill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-langua
 const manifests = [
   "plugins/plain-language/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
-  "plugins/plain-language/.codex-plugin/plugin.json",
 ].map((file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")));
 const rootPlugin = manifests[0];
 const claudePlugin = manifests[1];
@@ -36,7 +35,7 @@ if (skillManifest !== null) {
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.6");
+  assert.equal(manifest.version, "0.2.7");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);

@@ -472,7 +472,6 @@ test("Claude SessionStart with no desk routes to bootstrap instead of offering t
     delete env.DESK
     delete env.CLAUDE_PLUGIN_DATA
     delete env.DESK_ACTIVATION_CONFIG
-    delete env.CODEX_HOME
     const result = spawnSync(process.execPath, [path.join(repoRoot, "plugins", "desk", "hooks", "claude-session-start.cjs")], {
       cwd: repoRoot,
       encoding: "utf8",
@@ -492,14 +491,10 @@ test("Claude SessionStart with no desk routes to bootstrap instead of offering t
 test("Claude-facing manifests stay version-aligned with activation and marketplace metadata", () => {
   const activation = loadJson("plugins", "desk", "activation", "desk.activation.json")
   const deskClaude = loadJson("plugins", "desk", ".claude-plugin", "plugin.json")
-  const deskCodex = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
   const superpowersClaude = loadJson("plugins", "superpowers", ".claude-plugin", "plugin.json")
-  const superpowersCodex = loadJson("plugins", "superpowers", ".codex-plugin", "plugin.json")
 
   assert.equal(deskClaude.version, activation.version)
-  assert.equal(deskClaude.version, deskCodex.version)
   assert.equal(deskClaude.version, marketplacePlugin("desk").version)
-  assert.equal(superpowersClaude.version, superpowersCodex.version)
   assert.equal(superpowersClaude.version, marketplacePlugin("superpowers").version)
   assert.equal(superpowersClaude.version, activation.dependencies.find((dependency) => (
     dependency.id === "superpowers"

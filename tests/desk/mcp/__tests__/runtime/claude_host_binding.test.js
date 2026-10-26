@@ -42,7 +42,7 @@ function makeFixture() {
 // NODE_OPTIONS) but drop the host variables each case sets explicitly.
 function childEnv(values) {
   const env = { ...process.env, ...values }
-  for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
+  for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
     if (!(key in values)) delete env[key]
   }
   return env
@@ -124,7 +124,7 @@ test("a host project that is not a desk is recorded and falls through without fa
   }
 })
 
-test("startup activation config falls back to the Claude plugin data binding after Codex", () => {
+test("startup activation config falls back to the Claude plugin data binding", () => {
   const fixture = makeFixture()
   try {
     const binding = path.join(fixture.pluginData, "desk.activation.json")

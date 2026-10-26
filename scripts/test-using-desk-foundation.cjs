@@ -11,7 +11,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins", "desk");
 const skillPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 const installedRfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
-const maxCodexSkillDescriptionLength = 1024;
+const maxSkillDescriptionLength = 1024;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -99,7 +99,7 @@ function withStartupSandbox(body) {
     fs.writeFileSync(bootFixture, 'module.exports = { checks: [], migrationLine: async () => "", startFactory: async () => false };');
     env.DESK_TEST_BOOT_FIXTURE = bootFixture;
     env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(path.join(repoRoot, "tests/desk/mcp/__tests__/_boot_fixture_preload.cjs"))}`.trim();
-    for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
+    for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
       delete env[key];
     }
     body({ env, fallback, solo, crew, codeRepo, malformed });
@@ -259,8 +259,8 @@ function main() {
   const description = frontmatterScalar(frontmatter, "description");
   assert.ok(description, "using-desk skill must include a description");
   assert.ok(
-    description.length <= maxCodexSkillDescriptionLength,
-    `using-desk description exceeds ${maxCodexSkillDescriptionLength} characters`,
+    description.length <= maxSkillDescriptionLength,
+    `using-desk description exceeds ${maxSkillDescriptionLength} characters`,
   );
 
   const usingDeskSkills = listSkillFiles(path.join(repoRoot, "plugins", "desk", "skills"))

@@ -84,7 +84,6 @@ const requiredHostFreshnessPathFilters = [
   ".gitattributes",
   "plugins/desk/activation/**",
   "plugins/desk/.claude-plugin/plugin.json",
-  "plugins/desk/.codex-plugin/plugin.json",
   "plugins/desk/.mcp.copilot.json",
   "plugins/desk/.mcp.claude-codex.json",
   "plugins/desk/agents/**",
@@ -99,14 +98,12 @@ const requiredHostManifestChecks = [
   "support-matrix",
   "copilot-bundle",
   "copilot-plugin-metadata",
-  "codex-plugin",
   "claude-plugin",
   "factory-hooks",
   "worker-sources",
   "observer-sources",
   "humanize-skill",
   "startup-composition",
-  "codex-fixtures",
 ]
 
 const hostManifestFixtureFiles = [
@@ -114,7 +111,6 @@ const hostManifestFixtureFiles = [
   ".github/workflows/validate-skills.yml",
   "plugins/desk/activation/host-capability-evidence.md",
   "plugins/desk/.claude-plugin/plugin.json",
-  "plugins/desk/.codex-plugin/plugin.json",
   "plugins/desk/.mcp.copilot.json",
   "plugins/desk/.mcp.claude-codex.json",
   "plugins/desk/activation/copilot-root.flattened-bundle.json",
@@ -122,10 +118,8 @@ const hostManifestFixtureFiles = [
   "plugins/desk/activation/support-matrix.json",
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.md",
-  "plugins/desk/agents/worker.toml",
   "plugins/desk/agents/observer.agent.md",
   "plugins/desk/agents/observer.md",
-  "plugins/desk/agents/observer.toml",
   "plugins/desk/docs/agentic-engineering-v2-rfc.md",
   "plugins/desk/hooks/hooks.json",
   "plugins/desk/hooks/copilot-hooks.json",
@@ -135,20 +129,10 @@ const hostManifestFixtureFiles = [
   "plugins/desk/skills/humanize/SKILL.md",
   "plugins/desk/skills/session-start/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
-  "plugins/desk/mcp/src/activation/adapters/codex.js",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-activation-config.json",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-activation-config.json",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
-  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
   "plugins/desk/plugin.json",
   "plugins/superpowers/.claude-plugin/plugin.json",
-  "plugins/superpowers/.codex-plugin/plugin.json",
   "plugins/superpowers/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
-  "plugins/plain-language/.codex-plugin/plugin.json",
   "plugins/plain-language/plugin.json",
   "plugins/plain-language/skills/plain-language/SKILL.md",
   "scripts/validate-skills.cjs",
@@ -176,7 +160,6 @@ function writeJson(root, relativePath, value) {
 // copies its manifests into a fixture repository from here.
 const legacyProviderFiles = [
   "plugins/work-suite/.claude-plugin/plugin.json",
-  "plugins/work-suite/.codex-plugin/plugin.json",
   "plugins/work-suite/plugin.json",
 ]
 
@@ -234,7 +217,6 @@ async function withValidateSkillsFixture({ hostStatus = 0, generatedStatus = 0 }
     for (const script of [
       "scripts/test-git-hygiene-contracts.cjs",
       "scripts/test-using-desk-foundation.cjs",
-      "scripts/test-codex-plugin-cache-audit.cjs",
     ]) {
       writeText(fixtureRoot, script, "#!/usr/bin/env node\nprocess.exit(0)\n")
     }
@@ -835,7 +817,7 @@ test("root host-manifest verifier catches stale generated host-facing files", as
       errorPattern: /support[- ]matrix/u,
       mutate: (fixtureRoot) => {
         const matrix = loadJson("plugins", "desk", "activation", "support-matrix.json")
-        matrix.hosts = matrix.hosts.filter((row) => row.host_id !== "codex")
+        matrix.hosts = matrix.hosts.filter((row) => row.host_id !== "claude")
         writeJson(fixtureRoot, "plugins/desk/activation/support-matrix.json", matrix)
       },
     },
@@ -869,23 +851,14 @@ test("root host-manifest verifier catches stale generated host-facing files", as
       },
     },
     {
-      label: "codex-plugin",
-      errorPattern: /codex[- ]plugin/u,
-      mutate: (fixtureRoot) => {
-        const codex = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
-        codex.activation.codex.targets["desk:worker"].source = "agents/worker.md"
-        writeJson(fixtureRoot, "plugins/desk/.codex-plugin/plugin.json", codex)
-      },
-    },
-    {
       label: "worker-sources",
       errorPattern: /worker[- ]sources/u,
       mutate: (fixtureRoot) => {
         writeText(
           fixtureRoot,
-          "plugins/desk/agents/worker.toml",
-          loadText("plugins", "desk", "agents", "worker.toml")
-            .replace('name = "worker"', 'name = "worker-stale"'),
+          "plugins/desk/agents/worker.md",
+          loadText("plugins", "desk", "agents", "worker.md")
+            .replace("name: worker", "name: worker-stale"),
         )
       },
     },
@@ -894,27 +867,6 @@ test("root host-manifest verifier catches stale generated host-facing files", as
       errorPattern: /humanize[- ]skill/u,
       mutate: (fixtureRoot) => {
         writeJson(fixtureRoot, "manifest.json", { skills: [{ name: "humanize" }] })
-      },
-    },
-    {
-      label: "codex-fixtures",
-      errorPattern: /codex[- ]fixtures/u,
-      mutate: (fixtureRoot) => {
-        writeText(
-          fixtureRoot,
-          "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
-          loadText(
-            "tests",
-            "desk",
-            "mcp",
-            "__tests__",
-            "fixtures",
-            "activation",
-            "codex",
-            "global-personal",
-            "generated-config.toml",
-          ).replace("[plugins.\"desk@ourostack\"]", "[plugins.\"desk-stale@ourostack\"]"),
-        )
       },
     },
   ]
@@ -936,9 +888,8 @@ test("root host-manifest verifier catches stale generated host-facing files", as
   }
 })
 
-test("root host verifier selects an explicit legacy configuration across all three native metadata checks", async () => {
+test("root host verifier selects an explicit legacy configuration across both native metadata checks", async () => {
   const { buildCopilotBundle } = await import("../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js")
-  const { materializeCodexActivation } = await import("../../../../../plugins/desk/mcp/src/activation/adapters/codex.js")
   const { validateActivationManifest } = await import("../../../../../plugins/desk/mcp/src/activation/validate.js")
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
@@ -950,17 +901,17 @@ test("root host verifier selects an explicit legacy configuration across all thr
     const manifest = JSON.parse(legacyText(loadText(...manifestPath.split("/"))))
     const declaration = {
       id: "work-suite", kind: "plugin", version_range: "^4.0.0-alpha.2",
-      provenance: { source: "plugins/work-suite/.codex-plugin/plugin.json", package: "ourostack/work-suite" },
+      provenance: { source: "plugins/work-suite/.claude-plugin/plugin.json", package: "ourostack/work-suite" },
       lock: { version: "4.0.0-alpha.2", integrity: "sha256-work-suite-activation-manifest-v1" },
     }
     manifest.dependencies = manifest.dependencies.map((entry) => entry.id === "work-suite" ? declaration : entry)
-    assert.equal(declaration.provenance.source, "plugins/work-suite/.codex-plugin/plugin.json")
+    assert.equal(declaration.provenance.source, "plugins/work-suite/.claude-plugin/plugin.json")
     assert.equal(declaration.provenance.package, "ourostack/work-suite")
     copyLegacyProviders(root)
-    assert.equal(declaration.lock.version, JSON.parse(readFileSync(path.join(root, "plugins/work-suite/.codex-plugin/plugin.json"), "utf8")).version)
+    assert.equal(declaration.lock.version, JSON.parse(readFileSync(path.join(root, "plugins/work-suite/.claude-plugin/plugin.json"), "utf8")).version)
     assert.equal(validateActivationManifest(manifest).ok, true)
     writeJson(root, manifestPath, manifest)
-    for (const file of ["plugins/desk/plugin.json", "plugins/desk/.codex-plugin/plugin.json", "plugins/desk/.claude-plugin/plugin.json"]) {
+    for (const file of ["plugins/desk/plugin.json", "plugins/desk/.claude-plugin/plugin.json"]) {
       const plugin = JSON.parse(legacyText(loadText(...file.split("/"))))
       if (file.includes(".claude-plugin")) plugin.dependencies[0].version = declaration.version_range
       writeJson(root, file, plugin)
@@ -974,18 +925,6 @@ test("root host verifier selects an explicit legacy configuration across all thr
     writeText(root, "plugins/desk/activation/host-capability-evidence.md", legacyText(
       loadText("plugins", "desk", "activation", "host-capability-evidence.md").replace("; plugins/superpowers/hooks/copilot-hooks.json", ""),
     ))
-    for (const mode of ["global-personal", "project-local", "manual-only"]) {
-      const result = materializeCodexActivation({
-        manifest, mode, pluginRoot: "plugins/desk",
-        deskRoot: mode === "project-local" ? ".desk" : "~/desk",
-        runtimeCacheDir: mode === "project-local" ? ".codex/desk-runtime-cache" : "~/.cache/ouroboros-skills/desk",
-        existingConfig: '# user-authored Codex config\nmodel = "gpt-5.4"\napproval_policy = "on-request"\n',
-        existingInstructions: "# user-authored Codex guidance\nKeep repo-local rules intact.\n",
-      })
-      const directory = `tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}`
-      writeText(root, `${directory}/generated-config.toml`, result.generatedConfig)
-      if (mode !== "manual-only") writeText(root, `${directory}/generated-instructions.md`, result.generatedInstructions)
-    }
     // A hardcoded read of any Superpowers provider is now a real missing-file failure.
     rmSync(path.join(root, "plugins", "superpowers"), { recursive: true })
     const verify = () => verifier.verifyDeskHostManifests({
@@ -996,7 +935,6 @@ test("root host verifier selects an explicit legacy configuration across all thr
     assert.deepEqual(current.checked, requiredHostManifestChecks)
     for (const [file, diagnostic] of [
       ["plugins/work-suite/plugin.json", /Copilot root Work Suite version must match activation lock 4\.0\.0-alpha\.2/u],
-      ["plugins/work-suite/.codex-plugin/plugin.json", /codex-plugin Work Suite provider lock drift/u],
       ["plugins/work-suite/.claude-plugin/plugin.json", /claude-plugin Work Suite provider lock drift/u],
     ]) {
       const before = readFileSync(path.join(root, file), "utf8")
@@ -1015,15 +953,6 @@ test("root host-manifest verifier catches cross-host plugin version drift", asyn
   const hostManifests = loadHostManifestVerifier()
   const staleVersionCases = [
     {
-      label: "codex-desk-version",
-      errorPattern: /codex-plugin Desk version drift/u,
-      mutate: (fixtureRoot) => {
-        const plugin = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
-        plugin.version = "0.0.0"
-        writeJson(fixtureRoot, "plugins/desk/.codex-plugin/plugin.json", plugin)
-      },
-    },
-    {
       label: "claude-desk-version",
       errorPattern: /claude-plugin Desk version drift/u,
       mutate: (fixtureRoot) => {
@@ -1039,15 +968,6 @@ test("root host-manifest verifier catches cross-host plugin version drift", asyn
         const plugin = loadJson("plugins", "desk", "plugin.json")
         plugin.version = "0.0.0"
         writeJson(fixtureRoot, "plugins/desk/plugin.json", plugin)
-      },
-    },
-    {
-      label: "codex-superpowers-lock",
-      errorPattern: /codex-plugin Superpowers (dependency version|provider lock) drift/u,
-      mutate: (fixtureRoot) => {
-        const plugin = loadJson("plugins", "superpowers", ".codex-plugin", "plugin.json")
-        plugin.version = "0.0.0"
-        writeJson(fixtureRoot, "plugins/superpowers/.codex-plugin/plugin.json", plugin)
       },
     },
     {
@@ -1104,11 +1024,6 @@ test("root host-manifest verifier catches worker body drift across host formats"
       label: "claude-worker-body",
       workerPath: "plugins/desk/agents/worker.md",
       errorPattern: /worker-sources claude body drift/u,
-    },
-    {
-      label: "codex-worker-body",
-      workerPath: "plugins/desk/agents/worker.toml",
-      errorPattern: /worker-sources codex body drift/u,
     },
     {
       label: "copilot-worker-body",
@@ -1385,43 +1300,9 @@ test("root host verifier handles empty, sparse and contradictory evidence rows w
   }
 })
 
-test("root host verifier reports every Codex native surface and missing activation diagnostic", async () => {
+test("root host verifier reports native provider lock drift for the Claude manifests", async () => {
   const verifier = loadHostManifestVerifier()
-  for (const missing of [false, true]) {
-    await withHostFreshnessFixture(async (root) => {
-      const plugin = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
-      plugin.version = "0.0.0"
-      plugin.skills = "./wrong/"
-      plugin.mcpServers = "./wrong.json"
-      if (missing) {
-        delete plugin.activation
-      } else {
-        const codex = plugin.activation.codex
-        codex.defaultMode = "wrong"
-        codex.optOutModes = []
-        codex.targets["desk:worker"] = { source: "wrong.toml", default: false }
-        codex.mcpServers.desk.manualRegistration = true
-        codex.manualSetupSteps = ["manual fixture"]
-        for (const dependency of Object.values(codex.dependencies)) dependency.version = "0.0.0"
-      }
-      writeJson(root, "plugins/desk/.codex-plugin/plugin.json", plugin)
-      const result = await verifier.verifyDeskHostManifests({
-        repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
-      })
-      assert.equal(result.ok, false)
-      for (const message of [
-        "Desk version drift", "Desk surfaces drift", "default activation mode drift", "opt-out modes drift",
-        "desk:worker source drift", "desk:worker default drift", "Desk MCP manual-registration drift",
-        "Superpowers dependency version drift", "Plain Language dependency version drift",
-      ]) assert.ok(result.errors.includes(`codex-plugin ${message}`), result.errors.join("\n"))
-      assert.equal(result.errors.includes("codex-plugin manual setup steps drift"), !missing)
-    })
-  }
-})
-
-test("root host verifier reports native provider lock drift for both host families", async () => {
-  const verifier = loadHostManifestVerifier()
-  for (const host of ["codex", "claude"]) {
+  for (const host of ["claude"]) {
     await withHostFreshnessFixture(async (root) => {
       for (const provider of ["superpowers", "plain-language"]) {
         const plugin = loadJson("plugins", provider, `.${host}-plugin`, "plugin.json")
@@ -1470,25 +1351,23 @@ test("root host verifier rejects absent worker metadata and each authored invari
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
     for (const file of [
-      "plugins/desk/agents/worker.md", "plugins/desk/agents/worker.toml", "plugins/desk/agents/worker.agent.md",
+      "plugins/desk/agents/worker.md", "plugins/desk/agents/worker.agent.md",
       "plugins/plain-language/skills/plain-language/SKILL.md",
-      "plugins/desk/mcp/src/activation/adapters/codex.js",
     ]) writeText(root, file, "fixture without worker metadata\n")
     writeText(root, "plugins/desk/principles.md", "a revived principles file\n")
     const result = await verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
     assert.equal(result.ok, false)
-    for (const host of ["claude", "codex", "copilot"]) {
+    for (const host of ["claude", "copilot"]) {
       assert.ok(result.errors.includes(`worker-sources ${host} worker name drift`))
       assert.ok(result.errors.includes(`worker-sources ${host} body drift`))
     }
-    for (const host of ["claude", "codex-subagent", "copilot"]) {
+    for (const host of ["claude", "copilot"]) {
       assert.ok(result.errors.includes(`worker-sources ${host} using-desk activation drift`))
     }
     for (const message of [
       "claude session-start prompt drift", "plain-language no-hard-wrap rule drift", "retired principles file present",
-      "codex activation Plain Language pointer drift", "codex activation Superpowers pointer drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
   })
 })
@@ -1500,29 +1379,24 @@ test("root host verifier catches observer registration and body drift on every h
     claudePlugin.agents = claudePlugin.agents.filter((agent) => agent !== "./agents/observer.md")
     writeJson(root, "plugins/desk/.claude-plugin/plugin.json", claudePlugin)
     const activation = loadJson("plugins", "desk", "activation", "desk.activation.json")
-    activation.provides.activation_targets.find((target) => target.id === "desk:observer").entrypoints.codex = "agents/worker.toml"
+    activation.provides.activation_targets.find((target) => target.id === "desk:observer").entrypoints.claude = "agents/worker.md"
     activation.host_activation.claude.targets["desk:observer"].default = true
     writeJson(root, "plugins/desk/activation/desk.activation.json", activation)
-    const codexPlugin = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
-    delete codexPlugin.activation.codex.targets["desk:observer"]
-    writeJson(root, "plugins/desk/.codex-plugin/plugin.json", codexPlugin)
     const copilotPlugin = loadJson("plugins", "desk", "plugin.json")
     copilotPlugin.activation.copilot.targets["desk:observer"].source = "agents/observer.md"
     writeJson(root, "plugins/desk/plugin.json", copilotPlugin)
     writeText(root, "plugins/desk/agents/observer.md", "fixture without observer metadata\n")
-    writeText(root, "plugins/desk/agents/observer.toml", loadText("plugins", "desk", "agents", "observer.toml").replace('name = "observer"', 'name = "watcher"'))
     rmSync(path.join(root, "plugins", "desk", "agents", "observer.agent.md"))
     const result = await verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
     assert.equal(result.ok, false)
     for (const message of [
-      "claude observer name drift", "claude body drift", "codex observer name drift",
+      "claude observer name drift", "claude body drift",
       "copilot observer name drift", "copilot body drift",
       "claude exposure drift", "activation target drift",
-      "claude activation target drift", "codex activation target drift", "copilot activation target drift",
+      "claude activation target drift", "copilot activation target drift",
     ]) assert.ok(result.errors.includes(`observer-sources ${message}`), result.errors.join("\n"))
-    assert.equal(result.errors.includes("observer-sources codex body drift"), false, result.errors.join("\n"))
   })
 })
 

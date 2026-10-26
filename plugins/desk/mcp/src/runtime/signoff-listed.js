@@ -4,8 +4,8 @@
 // agent that lost the earlier turn in compaction raised them a second time, and the operator was asked twice for one answer. The host
 // gives the boot script its session id in the environment (Claude Code's `CLAUDE_CODE_SESSION_ID`, Copilot's
 // `COPILOT_AGENT_SESSION_ID`), so boot keeps a small session-scoped record of the deliveries it has listed, and a later boot of the same
-// session says they were listed already instead of asking for them again. A host with no session id in the environment (Codex) gets the
-// plain line, as before.
+// session says they were listed already instead of asking for them again. A host with no session id in the environment gets the plain
+// line, as before.
 //
 // Fails open: an unreadable or unwritable record means "not known", never "listed".
 

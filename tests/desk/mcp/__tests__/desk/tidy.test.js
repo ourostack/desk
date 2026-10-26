@@ -1417,7 +1417,7 @@ test("scripts/tidy-status.js runs the command line", () => {
   // Keep the parent's environment (the coverage runner instruments child
   // processes through it), minus every variable that could bind a real desk.
   const env = { ...process.env, HOME: home, DESK: root }
-  for (const key of ["DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON", "DESK_IDENTITY"]) delete env[key]
+  for (const key of ["DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON", "DESK_IDENTITY"]) delete env[key]
   const report = execFileSync(process.execPath, [SCRIPT, "--report"], { encoding: "utf8", env, cwd: home })
   assert.match(report, /Organization findings in it: \d+/)
   const detect = spawnSync(process.execPath, [SCRIPT, "--detect", "--root", soloDesk({ messy: false })], { env, cwd: home })

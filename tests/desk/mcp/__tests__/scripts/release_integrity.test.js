@@ -26,7 +26,7 @@ function writeJson(root, file, value) {
 }
 
 function setVersion(root, plugin, version, { marketplace = true } = {}) {
-  for (const manifest of ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+  for (const manifest of ["plugin.json", ".claude-plugin/plugin.json"]) {
     writeJson(root, `plugins/${plugin}/${manifest}`, { name: plugin, version })
   }
   if (marketplace) {

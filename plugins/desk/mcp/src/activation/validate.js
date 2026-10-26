@@ -16,21 +16,20 @@ const SNAPSHOT_RESTORE_POLICIES = new Set(["newest-compatible"])
 const SNAPSHOT_RECONCILE_POLICIES = new Set(["incremental"])
 const HOST_SUPPORT_STATUSES = new Set(["supported", "degraded", "unsupported"])
 const DEPENDENCY_RESOLUTION_MODES = new Set(["flattened", "native-or-flattened", "manual-host"])
-const HOST_CAPABILITIES = new Set(["skills", "mcp", "global-default-agent", "agents", "hooks"])
+const HOST_CAPABILITIES = new Set(["skills", "mcp", "agents", "hooks"])
 const UNSUPPORTED_PRIMITIVES = new Set([
   "agent-defaults",
   "agent-view-dispatch",
   "background-session-inheritance",
-  "codex-desktop-scriptable-activation-smoke",
   "host-activation",
   "host-native-plugin-install",
   "plugin-dependency-resolution",
   "transitive-dependency-resolution",
 ])
 const REQUESTED_CAPABILITIES = new Set(["Read", "Write", "Interactive"])
-const GENERATED_ARTIFACTS = new Set(["owned-host-config", "activation-ledger"])
+const GENERATED_ARTIFACTS = new Set(["owned-host-config"])
 const NEVER_DELETE = new Set(["desk-root-data"])
-const ENTRYPOINT_HOSTS = new Set(["claude", "codex", "copilot"])
+const ENTRYPOINT_HOSTS = new Set(["claude", "copilot"])
 
 export function selectEngineeringMethod(dependencyIds) {
   if (dependencyIds.includes("superpowers")) {
@@ -83,48 +82,6 @@ export function validateActivationManifest(manifest) {
     value: errors.length === 0 ? manifest : undefined,
     errors,
   }
-}
-
-export function orderActivationDependencies(manifest) {
-  const dependencies = [...arrayOrEmpty(manifest?.dependencies)]
-    .sort((left, right) => dependencyRank(left) - dependencyRank(right) || left.id.localeCompare(right.id))
-  const activationTargets = [...arrayOrEmpty(manifest?.provides?.activation_targets)]
-    .sort((left, right) => left.id.localeCompare(right.id))
-  const overlayAgents = orderOverlayNodes(manifest).map((node) => node.value)
-  return [...dependencies, ...activationTargets, ...overlayAgents]
-}
-
-export function resolveActivationChain(manifest, targetId = "desk:worker") {
-  const graph = collectActivationGraph(manifest)
-  const selected = graph.nodes.get(targetId)
-  if (!selected) {
-    throw new Error(`unknown activation target: ${targetId}`)
-  }
-
-  const chain = []
-  const emitted = new Set()
-  const visiting = []
-
-  function visit(node) {
-    if (emitted.has(node.id)) return
-    if (visiting.includes(node.id)) {
-      throw new Error(`overlay inheritance cycle: ${[...visiting, node.id].join(" -> ")}`)
-    }
-    visiting.push(node.id)
-    for (const inheritedId of node.inherits) {
-      const inherited = graph.nodes.get(inheritedId)
-      if (!inherited) {
-        throw new Error(`${node.id} inherits unknown target ${inheritedId}`)
-      }
-      visit(inherited)
-    }
-    visiting.pop()
-    emitted.add(node.id)
-    chain.push(node.value)
-  }
-
-  visit(selected)
-  return chain
 }
 
 function validateDependencies(dependencies, errors) {
@@ -462,33 +419,6 @@ function collectActivationGraph(manifest) {
   return { nodes }
 }
 
-function orderOverlayNodes(manifest) {
-  const graph = collectActivationGraph(manifest)
-  const ordered = []
-  const emitted = new Set()
-  const visiting = []
-
-  function visit(node) {
-    if (emitted.has(node.id)) return
-    if (visiting.includes(node.id)) return
-    visiting.push(node.id)
-    for (const inheritedId of node.inherits) {
-      const inherited = graph.nodes.get(inheritedId)
-      if (inherited?.kind === "overlay-agent") visit(inherited)
-    }
-    visiting.pop()
-    emitted.add(node.id)
-    ordered.push(node)
-  }
-
-  for (const node of [...graph.nodes.values()]
-    .filter((candidate) => candidate.kind === "overlay-agent")
-    .sort((left, right) => left.id.localeCompare(right.id))) {
-    visit(node)
-  }
-  return ordered
-}
-
 function validateActivationCycles({ targets, overlays }, errors) {
   const graph = collectActivationGraph({
     provides: {
@@ -579,10 +509,6 @@ function validateStringList(value, path, code, message, errors, allowed = undefi
 
 function arrayOrEmpty(value) {
   return Array.isArray(value) ? value : []
-}
-
-function dependencyRank(dependency) {
-  return dependency.kind === "substrate" ? 0 : 1
 }
 
 function isValidId(value) {

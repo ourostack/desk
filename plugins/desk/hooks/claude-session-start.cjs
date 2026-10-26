@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-// desk worker: the SessionStart hook Claude Code and Codex run (hooks.json). It is Node, never a shell script: on Windows
+// desk worker: the SessionStart hook Claude Code runs (hooks.json). It is Node, never a shell script: on Windows
 // a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed,
 // where it exits 1. Foundation plus bounded local boot checks; repairs run detached. MUST always exit 0, because a nonzero
 // SessionStart hook blocks the session from starting. It keeps to Node 16 syntax, and loads Desk's modules with dynamic
