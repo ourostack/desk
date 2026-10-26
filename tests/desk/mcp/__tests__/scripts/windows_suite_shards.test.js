@@ -133,6 +133,8 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   assert.ok(totals.length >= 3)
   for (const total of totals) assert.equal(total, shards.length)
   assert.equal(Number(/windows-suite-verdict\.mjs shard-results (\d+)/u.exec(text)[1]), shards.length)
+  // Both modes run the same number of files at once, so the elevated diagnostic sees what the gate saw.
+  assert.deepEqual([...text.matchAll(/run-suite-files\.mjs --shard \$\{\{ matrix\.shard \}\}\/\d+ --jobs (\d+)/gu)].map((m) => m[1]), ["3", "3"])
   assert.equal(workflow.on.pull_request?.paths, undefined, "a path filter would leave the required Windows suite check missing on a skipped pull request")
   assert.equal(workflow.on.pull_request?.["paths-ignore"], undefined)
 })
@@ -155,6 +157,49 @@ test("the shard runner runs only its own files and reports its predicted load", 
     }
     assert.deepEqual(ran(1), ["a.test.js"])
     assert.deepEqual(ran(2), ["b.test.js", "c.test.js"])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// A pull request can restore a cache saved on main but not one another pull request saved, and main never runs the Windows suite, so main keeps the cache under the suite's exact key.
+test("main keeps the Windows suite's installed dependencies cached under the key the shards restore", () => {
+  const read = (name) => load(readFileSync(path.join(scripts, "..", "workflows", name), "utf8"))
+  const suite = read("desk-windows-suite.yml")
+  const warm = read("windows-suite-dependencies.yml")
+  const step = (job, name) => job.steps.find((s) => s.name === name)
+  const shard = suite.jobs["windows-suite"]
+  const cache = warm.jobs.cache
+  assert.equal(step(cache, "Restore installed dependencies").with.key, step(shard, "Restore installed dependencies").with.key)
+  assert.equal(step(cache, "Restore installed dependencies").with.path, step(shard, "Restore installed dependencies").with.path)
+  assert.equal(step(cache, "Set up Node").with["node-version"], step(shard, "Set up Node").with["node-version"])
+  assert.equal(cache["runs-on"], shard["runs-on"])
+  assert.deepEqual(warm.on.push.branches, ["main"])
+  assert.ok(warm.on.push.paths.includes("plugins/desk/mcp/package-lock.json"))
+  assert.ok("schedule" in warm.on, "a daily run restores a cache GitHub evicted")
+})
+
+test("--jobs runs a shard's files at once and still reports every file, in name order", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-shard-jobs-"))
+  try {
+    const tests = path.join(dir, "tests")
+    const meet = path.join(dir, "meet")
+    mkdirSync(tests)
+    mkdirSync(meet)
+    // Each of a and b waits until the other has started, so they pass only when they run at the same time; c runs after either.
+    const waiter = (me, other) => `import { test } from "node:test"\nimport fs from "node:fs"\nimport path from "node:path"\ntest("${me}", async () => {\n  fs.writeFileSync(path.join(process.env.MEET_DIR, "${me}"), "")\n  const until = Date.now() + 60000\n  while (!fs.existsSync(path.join(process.env.MEET_DIR, "${other}"))) {\n    if (Date.now() > until) throw new Error("${other} never started")\n    await new Promise((resolve) => setTimeout(resolve, 50))\n  }\n})\n`
+    writeFileSync(path.join(tests, "a.test.js"), waiter("a", "b"))
+    writeFileSync(path.join(tests, "b.test.js"), waiter("b", "a"))
+    writeFileSync(path.join(tests, "c.test.js"), `import { test } from "node:test"\ntest("c", () => {})\n`)
+    const durations = path.join(dir, "d.json")
+    writeFileSync(durations, JSON.stringify({ defaultSeconds: 1, files: { "a.test.js": 10, "b.test.js": 10, "c.test.js": 1 } }))
+    const env = { ...process.env, MEET_DIR: meet }
+    delete env.NODE_TEST_CONTEXT
+    const out = path.join(dir, "r.json")
+    const result = spawnSync(process.execPath, [path.join(scripts, "run-suite-files.mjs"), "--shard", "1/1", "--jobs", "2", "--out", out, "--tests-root", tests, "--durations", durations], { encoding: "utf8", env, timeout: 120000 })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const { results } = JSON.parse(readFileSync(out, "utf8"))
+    assert.deepEqual(results.map((r) => [r.file, r.exitCode, r.pass]), [["a.test.js", 0, 1], ["b.test.js", 0, 1], ["c.test.js", 0, 1]])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
