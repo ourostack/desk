@@ -94,17 +94,6 @@ const ageText = (value) => (isPlainObject(value) && value.state === "measured" &
 
 const part = (record, name) => (isPlainObject(record?.[name]) ? record[name] : {})
 
-const loopCode = (value) => (typeof value === "string" && /^[a-z0-9_:-]{1,64}$/u.test(value) ? value : null)
-
-// The triage step's last result from the stored record, with why its runner cannot start when it cannot: codes only, or null without a record.
-function triageText(triage) {
-  if (!isPlainObject(triage)) return null
-  const state = loopCode(triage.runner_state)
-  const reason = loopCode(triage.runner_reason)
-  const why = state === null ? "" : ` (runner ${state}${reason === null ? "" : `: ${reason}`})`
-  return `last result ${loopCode(triage.last_result) ?? "unavailable"}${why}${triage.scan === "truncated" ? "; the card scan was cut off at its limit, so the refresh is partial" : ""}`
-}
-
 /** The "Loop" block: counts and the stale step names from the stored record; with no record it says so and prints no number. */
 function loopLines(loop, now) {
   if (!isPlainObject(loop)) return ["Loop", "  no loop record yet: the loop's measure step has not run on this machine"]
@@ -126,8 +115,6 @@ function loopLines(loop, now) {
   lines.push(`  alarms: andon ${countText(alarms.andon_open)}, store build failing ${countText(alarms.store_build_failing)}, desk problems ${countText(alarms.desk_problems_open)}, loop alarm cards ${countText(alarms.loop_alarms_open)}`)
   lines.push(`  headless evaluator ${state}, ${countText(evaluator.waiting)} waiting, ${countText(evaluator.gave_up)} gave up`)
   lines.push(`  stale steps: ${stale.length === 0 ? "none" : stale.join(", ")}`)
-  const triage = triageText(loop.triage)
-  if (triage !== null) lines.push(`  triage: ${triage}`)
   if (isPlainObject(loop.worker)) {
     const result = typeof loop.worker.last_result === "string" && /^[a-z0-9_:-]{1,64}$/u.test(loop.worker.last_result) ? loop.worker.last_result : "unavailable"
     lines.push(`  loop worker: last result ${result}${result === "disabled" ? " (switched off on this machine)" : ""}`)
@@ -144,7 +131,7 @@ export function reportLink({ env, deskRoot, deskRemote, personPrefix, track, slu
 /**
  * The factory findings that need someone to act, one plain sentence each, as both the doctor's summary and the plain-text boot print them: the
  * orphan pass, local retention, each contributed store whose own capture check keeps failing, this desk's route held now, the ended sessions
- * held because their route cannot be read, a triage runner qualification that went stale, a triage publication held or waiting for three days, and held sessions pruned uncaptured (the boot prefixes each with `Factory: `). Store names, codes
+ * held because their route cannot be read, and held sessions pruned uncaptured (the boot prefixes each with `Factory: `). Store names, codes
  * and counts only, except that a hold names the manifest or plugin folder to fix, with its remedy.
  */
 export function factoryFindingLines(status) {
@@ -159,14 +146,6 @@ export function factoryFindingLines(status) {
   if (status.route_holds !== undefined) {
     lines.push(`${status.route_holds.count} ended ${status.route_holds.count === 1 ? "session is" : "sessions are"} held because the store they route to cannot be read; they are never published until it can.`)
     for (const hold of status.route_holds.reasons) lines.push(`  ${holdText(hold)} (${hold.sessions} ${hold.sessions === 1 ? "session" : "sessions"})`)
-  }
-  // A stale runner record is a normal event (a Desk update, an engine update, another session environment) that still needs the runner qualified again.
-  const triage = isPlainObject(status.loop) && isPlainObject(status.loop.triage) ? status.loop.triage : {}
-  if (triage.qualification === "stale") lines.push(`improvement triage is not starting runs on this machine: its runner qualification no longer matches this install, engine or environment (${loopCode(triage.runner_reason) ?? "reason not recorded"}). Qualify the triage runner again; until then cards are refreshed but not reviewed.`)
-  // A publication that is only stale is routine; one held or waiting for three days is stuck, and nothing else tells the operator.
-  for (const { store, stuck_since: since, held, held_requests: reasons = {} } of (status.triage_publication ?? []).filter((entry) => entry.stuck_since !== undefined)) {
-    const why = [...(held === undefined ? [] : [held]), ...Object.entries(reasons).map(([code, count]) => `${code} x${count}`)]
-    lines.push(`${store}: triage publication has been held or waiting since ${since.slice(0, 16)}Z (${why.length === 0 ? "no reason recorded" : why.join(", ")}); this machine's reviews are not reaching the store's improvement queue until it clears.`)
   }
   if (status.held_pruned !== undefined) lines.push(`${status.held_pruned.count} held ${status.held_pruned.count === 1 ? "session was" : "sessions were"} pruned after 90 days without being captured, the last on ${status.held_pruned.last_at.slice(0, 10)}.`)
   return lines
