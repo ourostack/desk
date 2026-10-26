@@ -1,0 +1,1 @@
+Persist each verified task-card input before starting another identity check. Cold callers can finish a complete multi-command identity unit, while faster callers retain bounded multi-task throughput under the unchanged one-second stage, two-second overall and 500 ms per-Git-call ceilings.
