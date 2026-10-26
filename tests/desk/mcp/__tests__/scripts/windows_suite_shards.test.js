@@ -159,3 +159,20 @@ test("the shard runner runs only its own files and reports its predicted load", 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// A pull request can restore a cache saved on main but not one another pull request saved, and main never runs the Windows suite, so main keeps the cache under the suite's exact key.
+test("main keeps the Windows suite's installed dependencies cached under the key the shards restore", () => {
+  const read = (name) => load(readFileSync(path.join(scripts, "..", "workflows", name), "utf8"))
+  const suite = read("desk-windows-suite.yml")
+  const warm = read("windows-suite-dependencies.yml")
+  const step = (job, name) => job.steps.find((s) => s.name === name)
+  const shard = suite.jobs["windows-suite"]
+  const cache = warm.jobs.cache
+  assert.equal(step(cache, "Restore installed dependencies").with.key, step(shard, "Restore installed dependencies").with.key)
+  assert.equal(step(cache, "Restore installed dependencies").with.path, step(shard, "Restore installed dependencies").with.path)
+  assert.equal(step(cache, "Set up Node").with["node-version"], step(shard, "Set up Node").with["node-version"])
+  assert.equal(cache["runs-on"], shard["runs-on"])
+  assert.deepEqual(warm.on.push.branches, ["main"])
+  assert.ok(warm.on.push.paths.includes("plugins/desk/mcp/package-lock.json"))
+  assert.ok("schedule" in warm.on, "a daily run restores a cache GitHub evicted")
+})

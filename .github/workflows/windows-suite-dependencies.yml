@@ -1,0 +1,58 @@
+name: Windows suite dependencies
+
+# Keeps the Windows suite's installed dependencies cached on main. A pull request can restore a cache saved on main, but
+# not one saved by another pull request, and main never runs the Windows suite itself. The other Windows job on main
+# ("desk on native Windows" in desk-mcp-tests.yml) uses a different Node version and so a different key. Without this,
+# every pull request's first Windows run installed from scratch on all its shards (1.5 to 2.5 minutes each).
+# The key must stay the one desk-windows-suite.yml restores; scripts/windows_suite_shards.test.js checks that.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/desk/mcp/package-lock.json"
+      - ".github/workflows/windows-suite-dependencies.yml"
+  # GitHub evicts a cache nobody has used for 7 days; a daily run puts it back if that ever happens.
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-suite-dependencies
+  cancel-in-progress: false
+
+jobs:
+  cache:
+    name: Cache the Windows suite's installed dependencies
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: plugins/desk/mcp
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # The same pinned version as desk-windows-suite.yml, because the key names it.
+          node-version: "24.18.0"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Restore installed dependencies
+        id: node-modules
+        uses: actions/cache@v4
+        with:
+          path: plugins/desk/mcp/node_modules
+          key: desk-mcp-node-modules-${{ runner.os }}-${{ runner.arch }}-node-24.18.0-${{ hashFiles('plugins/desk/mcp/package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        working-directory: plugins/desk/mcp
+        run: npm ci

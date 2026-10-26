@@ -26,7 +26,7 @@ const assertAThenOnlyB = (f, message) => {
 }
 function git(root, ...args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 5000 })
-  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.error?.code ?? result.signal ?? result.stderr}`)
   return result.stdout.trim()
 }
 function desk(root, person = null) {
