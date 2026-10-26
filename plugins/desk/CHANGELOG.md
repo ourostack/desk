@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.360 — 2026-10-26
+
+Closing a browser now ends its processes. A `mine` browser's Edge could keep running after `browser_context` close said `closed: true`. Desk now records the Playwright CLI daemon and the browser it started when a context opens. On close, and when the server exits or cleans up after a crash, Desk waits up to five seconds and then kills whatever of those processes is left. Each process is matched by its PID and start time, never by name, so the person's own browser and other agents' browsers are never touched.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.359 — 2026-10-26
 
 `desk_status` now reports search from the session's own search engine, so it says "Search is ready." or "Search is preparing N of M sections…" in every session. Before, a large desk's full status rarely finished within the call's time budget, and search read `not_checked`.
