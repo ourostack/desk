@@ -4,7 +4,7 @@
 
 **Agent:** follow these steps in order on the operator's machine. Run the commands yourself. Stop to ask only where a step says **Ask**. Report each step's result in one line.
 
-Desk supports two hosts, Claude Code and Copilot CLI. Follow the section for the operator's host, or both. The setup installs three plugins from this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context, and it leaves the host's own config directory as a thin pointer to that desk.
+Desk supports two hosts, Claude Code and Copilot CLI. Follow the section for the operator's host, or both. The setup installs three plugins from this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context. On Claude Code it also leaves Claude's own config directory as a thin pointer to that desk; Copilot needs no pointer, because Desk's session-start hook applies its host settings.
 
 **Claude config directory:** every Claude Code step below reads and writes the directory Claude Code itself uses: `$CLAUDE_CONFIG_DIR` when that variable is set, otherwise `~/.claude`. Resolve it once and use it in every step, so a throwaway or alternate profile never touches the operator's real `~/.claude`:
 
@@ -141,7 +141,7 @@ Nothing to do by hand. Each Desk session start sets `memory: false` in Copilot's
 
 ### 4. Find or create the desk
 
-Follow Claude Code step 5's Entrance A and its **Ask**. Copilot has no saved binding file, so bind the chosen desk in one of these ways, most robust first: put it at `~/desk`, set `DESK=<absolute desk path>` in the operator's shell profile, or start Copilot from the desk folder. `desk_status` reports which one bound it.
+Follow Claude Code step 5's Entrance A and its **Ask**. Copilot has no saved binding file, so bind the chosen desk in one of these ways, most robust first: set `DESK=<absolute desk path>` in the operator's shell profile (Desk then never falls back to another folder), start Copilot from the desk folder, or put the desk at `~/desk`. Desk skips `~/desk` when an overlay such as MS Desk or PWF is loaded, so use `DESK` there. `desk_status` reports which one bound it.
 
 ### 5. Start a new session and verify
 
@@ -149,7 +149,7 @@ Follow Claude Code step 5's Entrance A and its **Ask**. Copilot has no saved bin
 agency copilot --agent desk:worker
 ```
 
-Copilot has no setting that picks a default agent for every session, so start with `--agent desk:worker`; a session started without it still gets the Desk foundation at startup, but not the worker's own instructions. Then check the same list as Claude Code step 6. Copilot names Desk's tools `desk-<name>`, for example `desk-desk_status`.
+Copilot has no setting that picks a default agent for every session, so start with `--agent desk:worker`; a session started without it still gets the Desk foundation and a startup line telling it to read the worker's instructions, but not the worker agent itself. Then check the same list as Claude Code step 6. Copilot names Desk's tools `desk-<name>`, for example `desk-desk_status`.
 
 ## Other hosts
 

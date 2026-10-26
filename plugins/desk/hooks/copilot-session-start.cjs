@@ -7,6 +7,9 @@ const path = require("node:path");
 
 const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
+// Copilot has no setting that makes a plugin's agent the default (Claude Code takes `agent` from settings.json), and the hook
+// input does not say which agent runs, so every session is told to act as the worker unless it was started as another agent.
+const workerPointer = `Unless started with \`--agent\`, act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
 const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
@@ -55,7 +58,14 @@ async function recordSession({ folder, sessionId, source }) {
 async function hostSettingLines() {
   try {
     const { disableCoAuthorTrailer, disableAskUser } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
-    return [disableCoAuthorTrailer({ env: process.env }).line, disableAskUser({ env: process.env }).line].filter(Boolean).join("\n\n");
+    const trailer = disableCoAuthorTrailer({ env: process.env });
+    const askUser = disableAskUser({ env: process.env });
+    // A first session usually sets both; one line keeps the startup context inside its budget.
+    if (trailer.state === "set" && askUser.state === "set") {
+      const file = path.join(process.env.COPILOT_HOME || path.join(process.env.HOME || process.env.USERPROFILE || require("node:os").homedir(), ".copilot"), "settings.json");
+      return `Desk startup: set \`includeCoAuthoredBy: false\` and \`askUser: false\` in ${file}, so from the next session Copilot adds no AI co-author trailer and the ask_user form is off; in this session add no trailer and ask in plain chat. Desk keeps a value the operator sets.`;
+    }
+    return [trailer.line, askUser.line].filter(Boolean).join("\n\n");
   } catch {
     return "";
   }
@@ -116,10 +126,12 @@ function emit(additionalContext) {
   // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
   try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
   try {
-    const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
+    // The frontmatter only names and describes the skill for the host's skill list; dropping it here pays for the worker pointer
+    // inside the startup context budget.
+    const foundation = fs.readFileSync(foundationPath, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\s*/u, "").trimEnd();
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
-    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
+    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
     await startFactory();
     emit(output);

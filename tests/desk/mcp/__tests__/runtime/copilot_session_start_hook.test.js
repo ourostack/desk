@@ -37,17 +37,37 @@ test("a hook payload with no session id records nothing but still starts the ses
   assert.match(context, /Desk startup:/u)
 })
 
-test("a session start turns Copilot's AI co-author commit trailer and question form off once when the operator never set them, and says so in one line each", () => {
+test("a session start turns Copilot's AI co-author commit trailer and question form off once when the operator never set them, and says so in one combined line", () => {
   const home = path.join(ROOT, "trailer")
   mkdirSync(path.join(home, ".copilot"), { recursive: true })
   const settings = path.join(home, ".copilot", "settings.json")
   const first = start({ sessionId: "sess-trailer", cwd: ROOT, source: "new" }, "trailer")
   assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, includeCoAuthoredBy: false, askUser: false })
-  assert.equal(first.context.split("\n").filter((line) => line.includes("includeCoAuthoredBy")).length, 1)
-  assert.equal(first.context.split("\n").filter((line) => line.includes("askUser")).length, 1)
-  assert.match(first.context, /\n\nDesk startup: set `includeCoAuthoredBy: false` in \S+settings\.json, so Copilot stops asking for an AI co-author trailer on commits from the next session; add none in this session either\.\n\n/u)
+  const lines = first.context.split("\n").filter((line) => /includeCoAuthoredBy|askUser/u.test(line))
+  assert.equal(lines.length, 1, "a first session gets one line for both settings")
+  assert.match(first.context, /\n\nDesk startup: set `includeCoAuthoredBy: false` and `askUser: false` in \S+settings\.json, so from the next session Copilot adds no AI co-author trailer and the ask_user form is off; in this session add no trailer and ask in plain chat\. Desk keeps a value the operator sets\.\n\n/u)
   assert.doesNotMatch(start({ sessionId: "sess-trailer-2", cwd: ROOT, source: "new" }, "trailer").context, /includeCoAuthoredBy|askUser/u, "the next session says nothing")
-  assert.doesNotMatch(start({ sessionId: "sess-no-copilot", cwd: ROOT, source: "new" }, "no-copilot-folder").context, /includeCoAuthoredBy/u, "a home with no Copilot folder is left alone")
+  assert.doesNotMatch(start({ sessionId: "sess-no-copilot", cwd: ROOT, source: "new" }, "no-copilot-folder").context, /includeCoAuthoredBy|askUser/u, "a home with no Copilot folder is left alone")
+})
+
+test("a session start that sets only the question form says so in its own line and keeps an explicit choice", () => {
+  const home = path.join(ROOT, "ask-only")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  writeFileSync(settings, JSON.stringify({ memory: false, includeCoAuthoredBy: false }))
+  const { context } = start({ sessionId: "sess-ask-only", cwd: ROOT, source: "new" }, "ask-only")
+  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, includeCoAuthoredBy: false, askUser: false })
+  assert.doesNotMatch(context, /includeCoAuthoredBy/u)
+  assert.equal(context.split("\n").filter((line) => line.includes("askUser")).length, 1)
+  writeFileSync(settings, JSON.stringify({ memory: false, includeCoAuthoredBy: false, askUser: true }))
+  assert.doesNotMatch(start({ sessionId: "sess-ask-kept", cwd: ROOT, source: "new" }, "ask-only").context, /askUser/u)
+  assert.equal(JSON.parse(readFileSync(settings, "utf8")).askUser, true, "an explicit askUser: true is kept")
+})
+
+test("every Copilot session is told to act as Desk's worker unless it was started as another agent", () => {
+  const { context } = start({ sessionId: "sess-worker", cwd: ROOT, source: "new" }, "worker")
+  assert.match(context, /\n\nUnless started with `--agent`, act as Desk's worker: read \S+worker\.agent\.md first\.\n\n# Using Desk/u, "the pointer comes just before the foundation, whose frontmatter is dropped")
+  assert.doesNotMatch(context, /^name: using-desk$/mu)
 })
 
 test("every Desk session disables explicitly enabled native memory and injects the versioned prohibition", () => {

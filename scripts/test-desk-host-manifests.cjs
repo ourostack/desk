@@ -100,7 +100,8 @@ function assertLightweightCopilotStartupHookSource(source, errors) {
   if (!/const foundationPath = path\.join\(pluginRoot,\s*"skills",\s*"using-desk",\s*"SKILL\.md"\);/u.test(source)) {
     errors.push("startup-composition Copilot hook must read the canonical using-desk skill at runtime");
   }
-  if (!/const foundation = fs\.readFileSync\(foundationPath,\s*"utf8"\)\.trimEnd\(\);/u.test(source)) {
+  // The hook may drop the frontmatter, and nothing else, before trimming.
+  if (!/const foundation = fs\.readFileSync\(foundationPath,\s*"utf8"\)(?:\.replace\(\/\^---[^\n]*?\/u,\s*""\))?\.trimEnd\(\);/u.test(source)) {
     errors.push("startup-composition Copilot hook must read only the canonical using-desk skill body");
   }
   const readCount = (source.match(/\breadFileSync\(/gu) ?? []).length;
