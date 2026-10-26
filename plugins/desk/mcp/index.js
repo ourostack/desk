@@ -327,7 +327,7 @@ export async function main({
       resolveRunner.close()
     }
     if (timedOut) {
-      stderr.write(`[desk-mcp] shutdown timed out after ${SHUTDOWN_TIMEOUT_MS} ms; controller close did not finish; exiting with failure\n`)
+      stderr.write(`[desk-mcp] shutdown timed out after ${SHUTDOWN_TIMEOUT_MS} ms; the session did not finish closing; exiting with failure\n`)
     }
     onClosed(timedOut ? 1 : 0)
   })

@@ -1086,7 +1086,7 @@ export function createDeskSession(deps) {
 
   recordLastStart(admission.snapshot())
 
-  // Older Desk versions ran a readiness controller that kept a folder per desk under readinessStateHome; nothing creates them now.
+  // Older Desk versions ran a readiness controller that kept a folder per desk under readinessStateHome. Desk no longer creates them; older versions still running may.
   function scheduleLeftoverRemoval() {
     if (typeof readinessStateHome !== "string" || leftoversTimer !== null) return
     leftoversTimer = setTimeout(() => {

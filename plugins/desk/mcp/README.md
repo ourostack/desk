@@ -157,7 +157,7 @@ Search runs inside each Desk server; there is no separate controller process. At
 
 - Until the vectors are ready, `desk_recall` answers with exact-word matches and says so; `desk_status` reports `Search is preparing N of M sections…` and then `Search is ready.`
 - Older builds kept a search index in `$DESK/.state/desk-index.sqlite`. The server removes it at start when no process has it open, and `desk_status` says how much space that freed.
-- Older builds also ran a readiness controller that kept a folder per desk under `~/.cache/ouroboros-skills/desk/readiness`. Each session removes the ones no running process owns, 30 seconds after it starts.
+- Older builds also ran a readiness controller that kept a folder per desk under `~/.cache/ouroboros-skills/desk/readiness`. Each session removes, 30 seconds after it starts, the ones no running process owns that have not changed for an hour.
 
 ### The state branch
 
