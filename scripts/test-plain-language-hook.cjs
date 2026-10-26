@@ -44,9 +44,11 @@ for (const event of ["SessionStart", "SubagentStart"]) {
     assert.equal(result.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: contract } }));
     assert.equal(result.stderr, "");
   }
-  const copilot = run(hook, "sessionStart");
-  assert.equal(copilot.stdout, JSON.stringify({ additionalContext: contract }));
-  assert.equal(copilot.stderr, "");
+  for (const event of ["sessionStart", "subagentStart"]) {
+    const copilot = run(hook, event);
+    assert.equal(copilot.stdout, JSON.stringify({ additionalContext: contract }));
+    assert.equal(copilot.stderr, "");
+  }
 }
 
 // One function reads the skill, strips its frontmatter and adds the tag; both host paths call it.

@@ -170,3 +170,17 @@ test("mandatory memory repair reports missing folders, concurrent changes and wr
     assert.equal(readFileSync(file(dir), "utf8"), text)
   }
 })
+
+test("the ask_user question form is turned off once when unset, and an operator's explicit choice is kept", () => {
+  const dir = home({ settings: JSON.stringify({ model: "x" }) })
+  const first = hostSettings.disableAskUser({ env: { HOME: dir } })
+  assert.equal(first.state, "set")
+  assert.equal(first.line, `Desk startup: set \`askUser: false\` in ${file(dir)}, so the ask_user form is off from the next session; ask in plain chat, never with ask_user.`)
+  assert.deepEqual(JSON.parse(readFileSync(file(dir), "utf8")), { model: "x", askUser: false })
+  assert.deepEqual(hostSettings.disableAskUser({ env: { HOME: dir } }), { state: "already", line: "" })
+  const chosen = home({ settings: JSON.stringify({ askUser: true }) })
+  assert.deepEqual(hostSettings.disableAskUser({ env: { HOME: chosen } }), { state: "kept", line: "" })
+  assert.deepEqual(JSON.parse(readFileSync(file(chosen), "utf8")), { askUser: true })
+  const unwritable = home({ settings: "{}" })
+  assert.equal(hostSettings.disableAskUser({ env: { HOME: unwritable }, recheck: () => { throw new Error("boom") } }).line, `Desk startup: could not write ${file(unwritable)}, so the ask_user form stays on; run \`copilot config askUser false\` once, and ask in plain chat, never with ask_user.`)
+})

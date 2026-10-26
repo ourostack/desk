@@ -5,9 +5,9 @@ The desk plugin ships a substrate-default engineering agent named `worker`. The 
 | File | Harness | Format | What it gives you |
 |---|---|---|---|
 | `worker.md` | Claude Code | YAML frontmatter + markdown body | A discrete agent selectable via plugin loader / marketplace. Invoke `claude --agent desk:worker`. |
-| `worker.agent.md` | Copilot CLI | YAML frontmatter (`target: github-copilot`, `user-invocable: true`) + markdown body | A discrete agent that appears in Copilot CLI's agent picker. Invoke `copilot --agent worker`. |
+| `worker.agent.md` | Copilot CLI | YAML frontmatter (`target: github-copilot`, `user-invocable: true`) + markdown body | A discrete agent that appears in Copilot CLI's agent picker. Invoke `agency copilot --agent desk:worker` (or `copilot --agent desk:worker`). |
 
-The plugin also ships `observer`, `worker`'s sibling, in the same two formats (`observer.md`, `observer.agent.md`). Named for Lean's process observer, it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. It is never the default agent: invoke `claude --agent desk:observer` or `copilot --agent observer`, and see [its release-evaluation skill](../skills/evaluate-release/SKILL.md) and the [evaluation packet](evaluation-packet.md).
+The plugin also ships `observer`, `worker`'s sibling, in the same two formats (`observer.md`, `observer.agent.md`). Named for Lean's process observer, it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. It is never the default agent: invoke `claude --agent desk:observer` or `agency copilot --agent desk:observer`, and see [its release-evaluation skill](../skills/evaluate-release/SKILL.md) and the [evaluation packet](evaluation-packet.md).
 
 ## Install + invoke per harness
 
@@ -21,23 +21,15 @@ claude --agent desk:worker
 
 ### Copilot CLI
 
-The root `plugin.json` names `agents/` as the agent directory. Select `ourostack/desk:plugins/desk@main` through the host's admitted opt-in composition; do not change a live default profile:
+The root `plugin.json` names `agents/` as the agent directory. Start a session with the worker:
 
 ```bash
-copilot --agent desk:worker
+agency copilot --agent desk:worker
 ```
 
-For conversations that ask questions in ordinary chat, the host launcher must exclude the structured-question tool before starting the session:
+Copilot has no setting that makes a plugin's agent the default, and Agency passes `--agent` to Copilot only when the launch names one. The `activation.copilot.targets["desk:worker"].default` field in `plugin.json` is Desk's own packaging metadata; neither host reads it. So every launcher, including an agent that starts Copilot, should pass `--agent desk:worker`. A session started without it still gets the Desk foundation from the `sessionStart` hook, plus one line telling it to read `agents/worker.agent.md` and act as the worker unless it was started as another agent. That line is a fallback: the worker's instructions then arrive as a file the model reads, not as the agent's own prompt, and the worker's tool limits do not apply.
 
-```bash
-copilot --agent desk:worker --excluded-tools=ask_user
-```
-
-This is a native Copilot CLI launch flag, not a Desk plugin setting. Copilot CLI 1.0.97 documents `--excluded-tools` as removing tools from the model's available tools; its agent frontmatter supports an allowlist, not an exclusion field, and `copilot help config` lists no equivalent setting. Do not enumerate an allowlist to simulate this exclusion: that would drop unlisted MCP, in-session todo or process-control tools. Do not substitute `--no-ask-user`, whose documented autonomous mode says the agent works without asking questions. Ordinary chat questions and waiting for the operator remain allowed.
-
-The launch owner must carry this flag through the supported native invocation, including an Agency-managed launch. Desk's plugin metadata, startup instructions and deny hooks cannot install a host CLI flag after launch. Until that owner supplies the flag and a fresh host catalog is observed, Copilot tool absence is **unqualified**; a blocked call or a model's own tool list is not catalog evidence. No personal/global configuration change is required by this package.
-
-There is no existing Desk-owned production Copilot launcher or exclusion-policy consumer in this package. `mcp/src/activation/copilot-bundle.js` builds `launch` metadata containing only the agent source and MCP declaration; `activation/desk.activation.json` entrypoints identify source paths, not native argv; `agency.json` declares acquisition dependencies. The startup hooks run after the host has launched. The exact external integration seam is Agency's `agency copilot [OPTIONS] [EXTRA_ARGS]...`: its installed help identifies `EXTRA_ARGS` as arguments forwarded to the underlying engine and lists `--excluded-tools`. The owner of that invocation must add `--excluded-tools=ask_user` to those forwarded arguments for new session generations. This is not an automatic Desk activation change. The repository's `evals/boot-acceptance/copilot.mjs` does own an evaluation-only `copilotFlags()` builder, but it is not a shipped consumer launch path.
+Desk's `sessionStart` hook sets `askUser: false` in Copilot's settings once when the operator has not chosen a value, so the `ask_user` question form is off from the next session, as `disallowedTools: ["AskUserQuestion"]` does in Claude's worker. The setting is the same switch as Copilot's `--no-ask-user` flag: with it off, Copilot's prompt drops only the `ask_user` clause, so the agent still asks questions in plain chat. An operator who sets `"askUser": true` keeps it. The hook does the same for `includeCoAuthoredBy`, and it sets `memory: false` on every start. `--excluded-tools=ask_user` on the launch still works and also covers the first session.
 
 The root package carries generated flattened Superpowers metadata for Copilot-compatible hosts. Desk + Superpowers and the declared companion closure must be loaded from the admitted roots; metadata alone is not runtime proof. The existing overlay keeps its own worker instead of launching the standalone agent above.
 

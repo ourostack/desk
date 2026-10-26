@@ -150,7 +150,12 @@ function checkStartupHooks(skill) {
     // over the limit never ran the boot, against 1 of 99 under it), so the boot imperative opens the context and the foundation follows it.
     assert.ok(contexts.claude.startsWith("Desk startup:"), "claude startup must open with the Desk startup line, ahead of the foundation");
     assert.ok(contexts.claude.indexOf("session-boot.js") < 2000, "claude startup must name the boot script inside the first 2 KB");
+    // Copilot's hook drops the frontmatter (the host's skill list already carries the name and description) to pay for its
+    // worker pointer; Claude's keeps the file as is.
+    const foundations = { claude: foundation, copilot: foundation.replace(/^---\n[\s\S]*?\n---\n\s*/u, "") };
+    assert.ok(foundations.copilot.startsWith("# Using Desk"), "the Copilot foundation starts at the skill's heading");
     for (const [host, context] of Object.entries(contexts)) {
+      const foundation = foundations[host];
       assert.equal(countOccurrences(context, foundation), 1, `${host} startup must inject the using-desk foundation exactly once`);
       const rfcLines = context.split("\n").filter((line) => line.startsWith("Desk RFC:"));
       assert.deepEqual(rfcLines, [`Desk RFC: ${installedRfcPath}`], `${host} startup must carry one Desk RFC line naming the installed RFC`);

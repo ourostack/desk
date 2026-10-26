@@ -118,12 +118,12 @@ export function authFailureProblem({ turn, auth }) {
 
 /**
  * Writes the run's Copilot profile under `<homeDir>/.copilot` (also `COPILOT_HOME` in the child): the same host defaults the Desk setup sets on a real machine
- * (SETUP.md: `memory: false`, `includeCoAuthoredBy: false`), the run's folders trusted so no prompt can ever wait for an answer, and no login of any kind.
+ * (the values Desk's session start sets: `memory: false`, `includeCoAuthoredBy: false`, `askUser: false`), the run's folders trusted so no prompt can ever wait for an answer, and no login of any kind.
  */
 export function writeCopilotProfile({ homeDir, trustedFolders }) {
   const copilotHome = path.join(homeDir, ".copilot")
   mkdirSync(copilotHome, { recursive: true })
-  const config = { memory: false, includeCoAuthoredBy: false, autoUpdate: false, trustedFolders: [...trustedFolders] }
+  const config = { memory: false, includeCoAuthoredBy: false, askUser: false, autoUpdate: false, trustedFolders: [...trustedFolders] }
   writeFileSync(path.join(copilotHome, "config.json"), `${JSON.stringify(config, null, 2)}\n`)
   return copilotHome
 }

@@ -4,7 +4,7 @@
 
 **Agent:** follow these steps in order on the operator's machine. Run the commands yourself. Stop to ask only where a step says **Ask**. Report each step's result in one line.
 
-The setup installs three plugins from the `ourostack` marketplace in this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context, and it leaves the host's own config directory as a thin pointer to that desk.
+Desk supports two hosts, Claude Code and Copilot CLI. Follow the section for the operator's host, or both. The setup installs three plugins from this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context. On Claude Code it also leaves Claude's own config directory as a thin pointer to that desk; Copilot needs no pointer, because Desk's session-start hook applies its host settings.
 
 **Claude config directory:** every Claude Code step below reads and writes the directory Claude Code itself uses: `$CLAUDE_CONFIG_DIR` when that variable is set, otherwise `~/.claude`. Resolve it once and use it in every step, so a throwaway or alternate profile never touches the operator's real `~/.claude`:
 
@@ -114,9 +114,46 @@ claude plugin update desk@ourostack
 
 Claude Code keys its plugin cache on the version string, so a change reaches installed users only when its plugin version is bumped.
 
+## Copilot CLI
+
+Copilot CLI runs Desk through [Agency](https://aka.ms/agency). The steps match the Claude Code ones; Desk's own session-start hook does the host settings, so there is no settings step.
+
+### 1. Check prerequisites
+
+```bash
+agency --version && node --version && git --version && gh --version
+```
+
+Node, the browser and `gh` need what the Claude Code step 1 lists.
+
+### 2. Install the plugins
+
+```bash
+agency plugin install github:ourostack/desk:plugins/desk@main --cache-policy auto --cache-ttl 0 --fetch-mode foreground
+agency plugin list
+```
+
+Installing Desk pulls in Superpowers and Plain Language (`plugins/desk/agency.json`). `--cache-policy auto --cache-ttl 0 --fetch-mode foreground` makes each new session fetch and load the latest `main` before it starts, so updates need no further step.
+
+### 3. Host settings
+
+Nothing to do by hand. Each Desk session start sets `memory: false` in Copilot's settings (`~/.copilot/settings.json`, or `$COPILOT_HOME/settings.json`), and sets `includeCoAuthoredBy: false` and `askUser: false` once when the operator has not chosen a value: no native memory, no AI co-author trailer and no question form, as Claude Code's step 3 and its worker agent arrange. Each change applies from the next session, and the first session says so in its startup text.
+
+### 4. Find or create the desk
+
+Follow Claude Code step 5's Entrance A and its **Ask**. Copilot has no saved binding file, so bind the chosen desk in one of these ways, most robust first: set `DESK=<absolute desk path>` in the operator's shell profile (Desk then never falls back to another folder), start Copilot from the desk folder, or put the desk at `~/desk`. Desk skips `~/desk` when an overlay such as MS Desk or PWF is loaded, so use `DESK` there. `desk_status` reports which one bound it.
+
+### 5. Start a new session and verify
+
+```bash
+agency copilot --agent desk:worker
+```
+
+Copilot has no setting that picks a default agent for every session, so start with `--agent desk:worker`; a session started without it still gets the Desk foundation and a startup line telling it to read the worker's instructions, but not the worker agent itself. Then check the same list as Claude Code step 6. Copilot names Desk's tools `desk-<name>`, for example `desk-desk_status`.
+
 ## Other hosts
 
 - **Codex:** Desk does not support Codex and ships no Codex manifests ([RFC section 8](plugins/desk/docs/agentic-engineering-v2-rfc.md#8-limits)).
-- **Copilot CLI and Ouroboros:** see `plugins/desk/README.md` for the admitted compositions. Set Copilot's own host defaults, the same pair Claude Code's step 3 sets: `memory: false` (keeps durable context out of Copilot's own cross-session memory, both default `true`) and `includeCoAuthoredBy: false` (removes the AI attribution Copilot adds to commits). `copilot help config` lists both keys; use its own config command (or the equivalent key in Copilot's own settings file, wherever your installed version keeps it) to set both to `false`.
+- **Ouroboros:** see `plugins/desk/README.md` ("Under Ouroboros").
 
 The host defaults and the no-attribution rule above apply on every host; set them wherever that host keeps its user configuration.
