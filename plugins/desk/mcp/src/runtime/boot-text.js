@@ -363,6 +363,13 @@ function cleanupLines(result) {
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
  * a result without them prints `instructions`.
  */
+// Claude Code shows a tool's output whole only up to about 30,000 characters and past that saves it to a file and shows a
+// short preview, so session start keeps its whole output under this.
+export const BOOT_TEXT_MAX_CHARS = 28_000
+// Room kept for the notice under the status line and the marker where the task list is shortened.
+const BOOT_NOTE_CHARS = 400
+const SHORTENED_MARK_CHARS = 200
+
 export function formatBootText(result) {
   // A sync call that threw has no summary reason but "it did not run"; its error message is in `degraded`, so say that.
   const thrown = (result.degraded ?? []).find((line) => line.startsWith("sync: "))
@@ -398,19 +405,56 @@ export function formatBootText(result) {
   const { rest: pendingRest, summaries: pendingSummaries } = collapsePending(result.pending ?? [])
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
-  lines.push(...namedTaskLines(result.task))
-  if (result.task_only === true) lines.push(...routeSection(result.push_accounts))
-  else taskSection(result, lines)
-  lines.push(...cleanupLines(result))
-  lines.push(...unsignedLines(result.unsigned_deliveries))
-  if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))
-  if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
+  // The task list, deliveries, pull requests and repos can run long; they are what gets shortened when the output would
+  // pass its limit. The status, the instructions and the AGENTS.md files (the rules that bind the session) never are.
+  const middle = [...namedTaskLines(result.task)]
+  if (result.task_only === true) middle.push(...routeSection(result.push_accounts))
+  else taskSection(result, middle)
+  middle.push(...cleanupLines(result))
+  middle.push(...unsignedLines(result.unsigned_deliveries))
+  if ((result.open_prs ?? []).length > 0) middle.push("", "Open pull requests:", ...result.open_prs.map(prLine))
+  if ((result.repo_states ?? []).length > 0) middle.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
-  if (instructions.length > 0) lines.push("", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`))
-  if (result.agents_md) {
-    // A heading, not a fence: the file's own text may hold any fence or rule line.
-    lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", result.agents_md.text.replace(/\n+$/u, ""))
-    if (result.agents_md.truncated) lines.push("", `[Cut after ${result.agents_md.shownBytes} of ${result.agents_md.bytes} bytes (limit ${AGENTS_MD_CAP_BYTES / 1024} KB): read the rest at ${result.agents_md.path}]`)
+  const tail = instructions.length > 0 ? ["", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`)] : []
+  const files = [[result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]].filter(([md]) => md)
+  const size = (list) => list.reduce((total, line) => total + line.length + 1, 0)
+  // Each file's heading, blank lines and cut marker, which names its path again.
+  const frame = (md, name) => name.length + 2 * md.path.length + 100
+  const notes = []
+  // Room for the AGENTS.md files before anything else, so the shortening falls on the task list.
+  let room = BOOT_TEXT_MAX_CHARS - size(lines) - size(tail) - BOOT_NOTE_CHARS
+  for (const [md, name] of files) room -= md.text.length + frame(md, name)
+  let shown = middle
+  if (size(middle) > Math.max(room, 0)) {
+    room -= SHORTENED_MARK_CHARS
+    let used = 0
+    let kept = 0
+    while (kept < middle.length && used + middle[kept].length + 1 <= room) used += middle[kept++].length + 1
+    shown = [...middle.slice(0, kept), `[Shortened here: ${middle.length - kept} more lines of tasks, deliveries, pull requests and repos not shown. Call desk_status, or run the boot with --json, for all of them.]`]
+    notes.push(`shortened the task list (${middle.length - kept} lines not shown)`)
   }
+  lines.push(...shown, ...tail)
+  // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
+  let left = BOOT_TEXT_MAX_CHARS - size(lines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
+  const cuts = []
+  for (const [md, name] of files) {
+    let text = md.text.replace(/\n+$/u, "")
+    let { truncated } = md
+    if (text.length > Math.max(left, 0)) {
+      const end = text.lastIndexOf("\n", Math.max(left, 0))
+      text = text.slice(0, Math.max(end, 0))
+      truncated = true
+    }
+    left -= text.length
+    // A heading, not a fence: the file's own text may hold any fence or rule line.
+    lines.push("", `## ${name} (${md.path}); its rules bind this session`, "", text)
+    if (truncated) {
+      const bytes = Buffer.byteLength(text, "utf8")
+      lines.push("", `[Cut after ${bytes} of ${md.bytes} bytes: read the rest at ${md.path}]`)
+      cuts.push(`${md.path} (${bytes} of ${md.bytes} bytes shown)`)
+    }
+  }
+  if (cuts.length > 0) notes.push(`cut ${cuts.join(" and ")}`)
+  if (notes.length > 0) lines.splice(1, 0, `Session start ${notes.join(" and ")}, to stay within ${AGENTS_MD_CAP_BYTES / 1024} KB of AGENTS.md and ${BOOT_TEXT_MAX_CHARS} characters of output.${cuts.length > 0 ? " Read the rest of each file before relying on its rules." : ""}`)
   return `${lines.join("\n")}\n`
 }

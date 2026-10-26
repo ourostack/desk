@@ -219,24 +219,24 @@ test("friction_add cross-cutting person:null → byte-identical _meta/friction.m
 
 // ── lesson_add ────────────────────────────────────────────────────────────────
 
-test("lesson_add person:ari → desks/ari/_meta/tips/<topic>.md", async () => {
+test("lesson_add person:ari → desks/ari/AGENTS.md", async () => {
   const root = await mkTempDeskRoot()
   const res = await lesson_add({
     deskRoot: root,
     person: "ari",
-    input: { topic: "EMU push auth", body: "use the personal token" },
+    input: { scope: "personal", topic: "EMU push auth", body: "use the personal token" },
   })
-  assert.equal(res.path, path.posix.join("desks", "ari", "_meta", "tips", "emu-push-auth.md"))
-  assert.ok(await exists(path.join(root, "desks", "ari", "_meta", "tips", "emu-push-auth.md")))
+  assert.equal(res.path, path.posix.join("desks", "ari", "AGENTS.md"))
+  assert.ok(await exists(path.join(root, "desks", "ari", "AGENTS.md")))
 })
 
-test("lesson_add person:null → byte-identical _meta/tips/<topic>.md (OFF)", async () => {
+test("lesson_add person:null → byte-identical AGENTS.md at the root (OFF)", async () => {
   const root = await mkTempDeskRoot()
   const res = await lesson_add({
     deskRoot: root,
-    input: { topic: "EMU push auth", body: "x" },
+    input: { scope: "personal", topic: "EMU push auth", body: "x" },
   })
-  assert.equal(res.path, path.posix.join("_meta", "tips", "emu-push-auth.md"))
+  assert.equal(res.path, "AGENTS.md")
 })
 
 // ── empty / whitespace person → OFF (treated as null) ─────────────────────────
@@ -294,7 +294,7 @@ test("friction_add rejects a path-traversal alias", async () => {
 test("lesson_add rejects a backslash in the alias", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    lesson_add({ deskRoot: root, person: "a\\b", input: { topic: "x", body: "y" } }),
+    lesson_add({ deskRoot: root, person: "a\\b", input: { scope: "personal", topic: "x", body: "y" } }),
     /alias/i,
   )
 })
@@ -520,22 +520,21 @@ test("friction_add rejects an intermediate _meta symlink outside the person root
   assert.equal(await exists(path.join(outside, "friction.md")), false)
 })
 
-test("lesson_add rejects an intermediate tips symlink outside the person root", async () => {
+test("lesson_add rejects a person root symlinked outside the desk", async () => {
   const root = await mkTempDeskRoot()
   const outside = await makeOutside()
-  const metaDir = path.join(root, "desks", "ari", "_meta")
-  await fs.mkdir(metaDir, { recursive: true })
-  await fs.symlink(outside, path.join(metaDir, "tips"))
+  await fs.mkdir(path.join(root, "desks"), { recursive: true })
+  await fs.symlink(outside, path.join(root, "desks", "ari"))
 
   await assert.rejects(
     lesson_add({
       deskRoot: root,
       person: "ari",
-      input: { topic: "topic", body: "must stay confined" },
+      input: { scope: "personal", topic: "topic", body: "must stay confined" },
     }),
     containmentError(),
   )
-  assert.equal(await exists(path.join(outside, "topic.md")), false)
+  assert.equal(await exists(path.join(outside, "AGENTS.md")), false)
 })
 
 test("task_archive rejects a source directory symlink outside the person root", async () => {

@@ -248,9 +248,17 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     file_card: flag("Also file the store's kaizen issue for the \"system\" friction now, instead of leaving it to the loop's mirror step. Only valid when about is \"system\"."),
   }, ["body"]),
   lesson_add: schema({
-    topic: text("The lesson topic; slugified for the filename."),
-    body: text("Markdown body."),
-  }, ["topic", "body"]),
+    scope: {
+      type: "string",
+      enum: ["personal", "desk", "team"],
+      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, added to their AGENTS.md, which session start prints. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner` and opens an improvement card against it. \"team\": every teammate's agents in a repository the team shares; Desk writes it into that repository's AGENTS.md through a pull request it merges.",
+    },
+    topic: text("The rule's short name, on one line; a later lesson with the same topic replaces it."),
+    body: text("The rule, on one line."),
+    owner: text("Required when scope is \"desk\": where the lesson takes effect. skill:<plugin>:<skill> for any installed plugin's skill (for example skill:desk:interaction-style), tool:<Desk tool name>, brief (the brief every child agent gets) or foundation (the always-on using-desk text)."),
+    repo: text("For scope \"team\": the path of your local clone of the team's repository. Defaults to the desk when the desk is a shared workspace."),
+    source: text("Required when scope is \"team\": where the lesson comes from, on one line. In a repository with _shared/decisions/, the path of the decision record; elsewhere who said it, where and when, with the date as YYYY-MM-DD."),
+  }, ["scope", "topic", "body"]),
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
     files: {

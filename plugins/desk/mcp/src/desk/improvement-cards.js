@@ -463,10 +463,7 @@ async function withLock({ deskRoot, personPrefix, lockWaitMs = LOCK_WAIT_MS, loc
   const folder = path.join(meta, "improvement")
   if ((await folderState(folder)) === "unreadable") return { result: "unreadable_folder" }
   await fs.mkdir(meta, { recursive: true })
-  const lock = path.join(meta, LOCK_NAME)
-  const token = randomBytes(8).toString("hex")
-  if (!(await acquire(lock, token, lockWaitMs, lockHooks))) return { result: "lock_busy" }
-  try {
+  return holdLock(path.join(meta, LOCK_NAME), { lockWaitMs, lockHooks }, async () => {
     const scanned = await scan(deskRoot, personPrefix, MAX_CARD_FILES)
     if (scanned.unreadable) return { result: "unreadable_folder" }
     const files = []
@@ -478,6 +475,19 @@ async function withLock({ deskRoot, personPrefix, lockWaitMs = LOCK_WAIT_MS, loc
     }
     const result = await work({ folder, meta, cards: scanned.cards, truncated: scanned.truncated })
     return files.length === 0 ? result : { ...result, set_aside: files.length / 2, set_aside_files: files }
+  })
+}
+
+/**
+ * `holdLock(lock, { lockWaitMs, lockHooks }, work)`: runs `work()` while holding the directory lock at `lock` (see
+ * `acquire`) and releases it after; `{ result: "lock_busy" }` when the lock is not free in time. The lock directory and
+ * its token directory are empty, so Git never sees them. The card store and `lesson_add`'s AGENTS.md writes use it.
+ */
+export async function holdLock(lock, { lockWaitMs = LOCK_WAIT_MS, lockHooks = {} }, work) {
+  const token = randomBytes(8).toString("hex")
+  if (!(await acquire(lock, token, lockWaitMs, lockHooks))) return { result: "lock_busy" }
+  try {
+    return await work()
   } finally {
     await lockHooks.beforeRelease?.(lock)
     await fs.rmdir(path.join(lock, token)).catch(() => {})

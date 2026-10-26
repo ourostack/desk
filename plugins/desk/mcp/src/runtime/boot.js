@@ -76,6 +76,7 @@ import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
 import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
+import { personAgentsCap } from "./agents-md.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -976,6 +977,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     sync_summary: null,
     needs_operator: null,
     agents_md: null,
+    person_agents_md: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -1343,6 +1345,7 @@ export async function bootOnce({
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
+  personFn = improvementPerson,
   staleDeskFn = checkStaleDesk,
   releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
@@ -1484,6 +1487,23 @@ export async function bootOnce({
   } catch {
     agentsMd = null
   }
+  // The person the Desk tools resolve, without a network call, worked out once: it picks both the person's own AGENTS.md
+  // and their improvement cards. A bad DESK_PERSON never stops the boot.
+  let who = null
+  let whoError = null
+  try {
+    who = await personFn({ deskRoot: root.path, env, now: now() })
+  } catch (error) {
+    whoError = error
+  }
+  // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs. The
+  // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole.
+  let personAgentsMd = null
+  try {
+    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: personAgentsCap(agentsMd) })
+  } catch {
+    personAgentsMd = null
+  }
 
   let tasks = null
   try {
@@ -1553,8 +1573,7 @@ export async function bootOnce({
   let improvement = null
   if (root !== null && !isNoninteractive(env)) {
     try {
-      // The person the Desk tools resolve, without a network call; a bad DESK_PERSON never stops the boot.
-      const who = await improvementPerson({ deskRoot: root.path, env, now: now() })
+      if (whoError !== null) throw whoError
       improvement = who.status !== "ok"
         ? { status: "unchecked", reason: who.reason }
         : await withinBudget(improvementFn({ deskRoot: root.path, personPrefix: who.personPrefix, env, now: now() }), Math.min(IMPROVEMENT_BUDGET_MS, deadline - now()), null)
@@ -1612,6 +1631,7 @@ export async function bootOnce({
     sync,
     sync_summary: syncSummaryText,
     agents_md: agentsMd,
+    person_agents_md: personAgentsMd,
     active_tasks: tasks,
     card_parser: parserName(nestedCards),
     card_validation: cardValidationResult,

@@ -18,7 +18,6 @@ import {
   assertFrontmatterPatchable,
 } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
-import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 
 test("vendored Unicode 16 category tables match their pinned source", async () => {
@@ -97,23 +96,10 @@ test("filename equivalence is pinned across case and normalization", async () =>
   )
 })
 
-test("equivalent-name symlinks cannot escape lesson or friction roots", async () => {
+test("equivalent-name symlinks cannot escape friction roots", async () => {
   const root = await mkTempDeskRoot()
   const outside = await fs.mkdtemp(path.join(tmpdir(), "desk-slug-symlink-"))
   try {
-    const outsideLesson = path.join(outside, "lesson.md")
-    await fs.writeFile(outsideLesson, "# CON\n\nOutside.\n", "utf8")
-    const tips = path.join(root, "_meta", "tips")
-    await fs.mkdir(tips, { recursive: true })
-    await fs.symlink(outsideLesson, path.join(tips, "_CON.md"))
-    await assert.rejects(
-      () => lesson_add({
-        deskRoot: root,
-        input: { topic: "CON", body: "Must stay confined." },
-      }),
-      /resolves outside the desk \(via a symbolic link\)/,
-    )
-
     const outsideFriction = path.join(outside, "friction.md")
     await fs.writeFile(outsideFriction, "<!-- desk-friction:v2 theme=caf -->\n\nOutside.\n", "utf8")
     const frictionDirectory = path.join(root, "t1", "_friction")
@@ -166,15 +152,8 @@ test("slugify preserves Unicode letters, marks, and numbers", () => {
   assert.equal(slugify("!!!"), "")
 })
 
-test("Unicode slugs reach lesson and track-friction file paths", async () => {
+test("Unicode slugs reach track-friction file paths", async () => {
   const root = await mkTempDeskRoot()
-
-  const lesson = await lesson_add({
-    deskRoot: root,
-    input: { topic: "日本語の教訓", body: "Lesson body." },
-  })
-  assert.equal(lesson.path, "_meta/tips/日本語の教訓.md")
-  assert.match(await fs.readFile(path.join(root, lesson.path), "utf8"), /Lesson body/)
 
   const friction = await friction_add({
     deskRoot: root,
@@ -184,46 +163,24 @@ test("Unicode slugs reach lesson and track-friction file paths", async () => {
   assert.match(path.basename(friction.path), /^\d{4}-\d{2}-\d{2}-安全-路径\.md$/)
   assert.match(await fs.readFile(path.join(root, friction.path), "utf8"), /Friction body/)
 
-  const reservedLesson = await lesson_add({
-    deskRoot: root,
-    input: { topic: "COM¹", body: "Windows-safe lesson." },
-  })
-  assert.equal(reservedLesson.path, "_meta/tips/_com¹.md")
 })
 
 test("reserved-name escaping stays distinct for both write orders", async () => {
   for (const topics of [["CON", "x con"], ["x con", "CON"]]) {
     const root = await mkTempDeskRoot()
-    const lessonPaths = []
     const frictionPaths = []
     for (const topic of topics) {
-      lessonPaths.push((await lesson_add({
-        deskRoot: root,
-        input: { topic, body: `Lesson for ${topic}.` },
-      })).path)
       frictionPaths.push((await friction_add({
         deskRoot: root,
         input: { track: "t1", theme: topic, body: `Friction for ${topic}.` },
       })).path)
     }
-    assert.notEqual(lessonPaths[0], lessonPaths[1])
     assert.notEqual(frictionPaths[0], frictionPaths[1])
   }
 })
 
-test("case-fold-equivalent inputs share lesson and friction paths", async () => {
+test("case-fold-equivalent inputs share friction paths", async () => {
   const root = await mkTempDeskRoot()
-
-  const firstLesson = await lesson_add({
-    deskRoot: root,
-    input: { topic: "Σ", body: "First lesson." },
-  })
-  const secondLesson = await lesson_add({
-    deskRoot: root,
-    input: { topic: "ς", body: "Second lesson." },
-  })
-  assert.equal(secondLesson.path, firstLesson.path)
-  assert.match(await fs.readFile(path.join(root, firstLesson.path), "utf8"), /Second lesson/)
 
   const firstFriction = await friction_add({
     deskRoot: root,
@@ -239,64 +196,6 @@ test("case-fold-equivalent inputs share lesson and friction paths", async () => 
 
 test("legacy paths are reused only when their identity is provable", async () => {
   const root = await mkTempDeskRoot()
-  const lessonSlug = "caf"
-  const lessonPath = path.join(root, "_meta", "tips", `${lessonSlug}.md`)
-  await fs.mkdir(path.dirname(lessonPath), { recursive: true })
-  await fs.mkdir(path.join(path.dirname(lessonPath), "a-directory.md"))
-  await fs.writeFile(path.join(path.dirname(lessonPath), "a-note.txt"), "Ignored.\n", "utf8")
-  await fs.writeFile(path.join(path.dirname(lessonPath), "a-no-heading.md"), "Ignored.\n", "utf8")
-  await fs.writeFile(path.join(path.dirname(lessonPath), "b-other.md"), "# caf\n\nOther.\n", "utf8")
-  await fs.writeFile(lessonPath, "# café\n\nOriginal lesson.\n", "utf8")
-
-  const lesson = await lesson_add({
-    deskRoot: root,
-    input: { topic: "cafe\u0301", body: "Updated lesson." },
-  })
-  assert.equal(lesson.path, `_meta/tips/${lessonSlug}.md`)
-  assert.match(await fs.readFile(lessonPath, "utf8"), /Updated lesson/)
-
-  const collisionRoot = await mkTempDeskRoot()
-  const collisionPath = path.join(collisionRoot, "_meta", "tips", `${lessonSlug}.md`)
-  await fs.mkdir(path.dirname(collisionPath), { recursive: true })
-  await fs.writeFile(collisionPath, "# caf\n\nDifferent lesson.\n", "utf8")
-  const collision = await lesson_add({
-    deskRoot: collisionRoot,
-    input: { topic: "café", body: "Specific lesson." },
-  })
-  assert.equal(collision.path, "_meta/tips/café.md")
-  assert.equal(await fs.readFile(collisionPath, "utf8"), "# caf\n\nDifferent lesson.\n")
-
-  const occupiedRoot = await mkTempDeskRoot()
-  const occupiedDirectory = path.join(occupiedRoot, "_meta", "tips")
-  await fs.mkdir(occupiedDirectory, { recursive: true })
-  await fs.writeFile(path.join(occupiedDirectory, "caf.md"), "# café\n\nLegacy collision.\n", "utf8")
-  await fs.writeFile(path.join(occupiedDirectory, "_caf.md"), "# café\n\nSecond collision.\n", "utf8")
-  const occupied = await lesson_add({
-    deskRoot: occupiedRoot,
-    input: { topic: "caf", body: "Distinct ASCII lesson." },
-  })
-  assert.equal(occupied.path, "_meta/tips/__caf.md")
-  const occupiedAgain = await lesson_add({
-    deskRoot: occupiedRoot,
-    input: { topic: "caf", body: "Second ASCII update." },
-  })
-  assert.equal(occupiedAgain.path, occupied.path)
-
-  const reservedRoot = await mkTempDeskRoot()
-  const reservedLegacyPath = path.join(reservedRoot, "_meta", "tips", "con.md")
-  await fs.mkdir(path.dirname(reservedLegacyPath), { recursive: true })
-  await fs.writeFile(reservedLegacyPath, "# CON\n\nOriginal reserved lesson.\n", "utf8")
-  const occupiedReservedPath = path.join(path.dirname(reservedLegacyPath), "_CON.md")
-  await fs.writeFile(occupiedReservedPath, "# Different topic\n\nMust survive.\n", "utf8")
-  const reserved = await lesson_add({
-    deskRoot: reservedRoot,
-    input: { topic: "CON", body: "Updated reserved lesson." },
-  })
-  assert.equal(reserved.path, "_meta/tips/__con.md")
-  await assert.rejects(() => fs.access(reservedLegacyPath), { code: "ENOENT" })
-  assert.match(await fs.readFile(path.join(reservedRoot, reserved.path), "utf8"), /Original reserved lesson/)
-  assert.equal(await fs.readFile(occupiedReservedPath, "utf8"), "# Different topic\n\nMust survive.\n")
-
   const frictionSlug = "ma-ana-notes"
   const frictionPath = path.join(root, "t1", "_friction", `${today()}-${frictionSlug}.md`)
   await fs.mkdir(path.dirname(frictionPath), { recursive: true })

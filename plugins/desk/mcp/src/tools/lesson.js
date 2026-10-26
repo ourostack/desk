@@ -1,209 +1,230 @@
-// lesson_add — write/append a lesson under `<root>/_meta/tips/<topic>.md`.
+// lesson_add — a correction lands where something loads it, and the reply says whether it is in effect.
 //
-// Per `plugins/desk/skills/lesson-capture/SKILL.md`, lessons are agent-driven
-// post-task captures. We write one file per topic slug; subsequent calls with
-// the same topic append `## Update <date>` sections so the file accumulates
-// without losing prior content.
+// A lesson is one rule on one line. `scope` says whose behaviour it changes:
+//   - personal: one person's preference. It becomes a line in the `## Lessons` section of that person's AGENTS.md
+//     (the desk root's, or `desks/<alias>/AGENTS.md` in a shared workspace), which session start prints. The reply says
+//     it is in effect only when it is committed and session start resolves the same person; a line that would push the
+//     AGENTS.md files session start prints past their shared size limit is refused, because nothing would load it.
+//   - desk: how Desk's tools and installed plugins' skills behave. It is recorded as system friction against the `owner`
+//     that carries the behaviour, which opens an improvement card; the lesson is in effect only once that card's change
+//     ships. A desk lesson without an owner is refused.
+//   - team: how every teammate's agents work in a repository the team shares. The tool writes the line into that
+//     repository's root AGENTS.md itself, through a pull request it merges (lesson-team.js).
 //
-// On a Git desk, stages exactly what it wrote and commits exactly those
-// paths right after, synchronously in the call (M4-6 Part 2); pushing is a
-// later part.
+// Before this, lessons went to `_meta/tips/<topic>.md`, which nothing loaded. The tips files that remain stay
+// searchable; this tool no longer writes them.
 
-import { promises as fs } from "node:fs"
+import { promises as fs, existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
+import { today, slugify, pathExists } from "../util/fm.js"
 import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
-
-function relPath(deskRoot, absPath) {
-  return deskRelativePath(deskRoot, absPath)
-}
+import { crewWorkspace } from "../desk/crew-roster.js"
+import { improvementPerson } from "../desk/improvement-person.js"
+import { holdLock } from "../desk/improvement-cards.js"
+import { deskPluginRoot } from "../package-metadata.js"
+import { compareVersions } from "../runtime/stale-desk.js"
+import { TOOL_NAMES } from "../tool-names.js"
+import { stagingAllowed, stageAndCommitFile } from "./_card-commit.js"
+import { factoryPluginScan } from "./factory-context.js"
+import { friction_add } from "./friction.js"
+import { addTeamLesson } from "./lesson-team.js"
+import { lead, oneLine, topicOf, withLesson } from "./lesson-lines.js"
+import { AGENTS_MD_CAP_BYTES, personAgentsCap, printedPart, readAgentsMd } from "../runtime/agents-md.js"
 
 // Every field lesson_add reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const LESSON_ADD_FIELDS = ["topic", "body"]
+export const LESSON_ADD_FIELDS = ["scope", "topic", "body", "owner", "repo", "source"]
 
-async function availableLessonPath(canonicalName, resolveCandidate) {
-  let candidateName = `_${canonicalName}`
-  let candidatePath = await resolveCandidate(candidateName)
-  while (await findFilenameEquivalent(candidatePath, resolveCandidate)) {
-    candidateName = `_${candidateName}`
-    candidatePath = await resolveCandidate(candidateName)
-  }
-  return candidatePath
-}
+const SCOPES = new Set(["personal", "desk", "team"])
+const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/u
+// An empty folder, so Git never sees it; it serialises writes to one AGENTS.md across sessions.
+const LOCK_NAME = ".agents-md.lock"
 
-async function lessonPathMatches(filePath, topicSlug) {
-  const [firstLine] = (await fs.readFile(filePath, "utf8")).split(/\r?\n/u)
-  return firstLine.startsWith("# ") && slugify(firstLine.slice(2)) === topicSlug
-}
-
-// Decides where this call writes, and whether that requires first renaming
-// an existing, differently-named file onto it — but performs neither the
-// rename nor the write itself, so the caller can check the *pre-rename*
-// path's Git status (M4-6 Part 2: a file this call is about to rename away
-// from is the one that might hold another session's untracked work; the
-// rename's destination, by construction, never already exists as a lesson
-// for this topic).
-async function decideLessonPath({ directory, topicSlug, canonicalPath, resolveCandidate }) {
-  const canonicalName = path.basename(canonicalPath)
-  const canonicalExistingPath = await findFilenameEquivalent(canonicalPath, resolveCandidate)
-  const canonicalExists = canonicalExistingPath !== null
-  if (canonicalExistingPath && await lessonPathMatches(canonicalExistingPath, topicSlug)) {
-    return { filePath: canonicalExistingPath, renameFrom: null }
-  }
-  const names = (await fs.readdir(directory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => entry.name)
-    .sort()
-  const matches = []
-  for (const name of names) {
-    const candidate = path.join(directory, name)
-    if (await lessonPathMatches(candidate, topicSlug)) {
-      matches.push(name)
+function pluginManifest(dir) {
+  for (const manifest of ["plugin.json", path.join(".claude-plugin", "plugin.json")]) {
+    try {
+      const { name, version } = JSON.parse(readFileSync(path.join(dir, manifest), "utf8"))
+      if (typeof name === "string") return { name, version: typeof version === "string" ? version : null }
+    } catch {
+      // No manifest here; try the other place a host keeps it.
     }
   }
-  if (matches.length > 0) {
-    const match = matches[0]
-    const matchedPath = path.join(directory, match)
-    if (!match.startsWith("_") && slugify(path.basename(match, ".md")) === topicSlug) {
-      const destination = canonicalExists
-        ? await availableLessonPath(canonicalName, resolveCandidate)
-        : canonicalPath
-      return { filePath: destination, renameFrom: matchedPath }
+  return null
+}
+
+// Whether `next` is a newer install of the same plugin than `kept`: a version beats none, and the higher version wins.
+function newer(next, kept) {
+  if (next.version === null) return false
+  if (kept.version === null) return true
+  return compareVersions(next.version, kept.version) === 1
+}
+
+/**
+ * The installed plugins a desk lesson can name, as a map of plugin name to its active folder: Desk's own plugin folder
+ * plus the plugins the host has installed beside it, read the way the factory reads them (`factoryPluginScan`). Built
+ * from what is installed, never from a fixed list, so an overlay's skills (MS Desk, Platform Workflows) are owners too.
+ * A host's cache keeps old versions beside the active one; only the running Desk and the newest version of each other
+ * plugin count, so a skill an upgrade removed is no owner.
+ */
+function installedPlugins(env, scan) {
+  const plugins = new Map()
+  const deskRoot = deskPluginRoot(env)
+  for (const dir of [deskRoot, ...scan(env).dirs]) {
+    const manifest = pluginManifest(dir)
+    if (manifest === null) continue
+    const kept = plugins.get(manifest.name)
+    if (kept === undefined || (kept.dir !== deskRoot && newer(manifest, kept))) plugins.set(manifest.name, { dir, version: manifest.version })
+  }
+  return plugins
+}
+
+/**
+ * `ownerOf(owner) -> { owner, plugin, frictionClass }`: where a desk lesson takes effect. `skill:<plugin>:<skill>` is a
+ * skill of an installed plugin, `tool:<name>` a Desk tool, `brief` the brief mapper that writes every child brief, and
+ * `foundation` the always-on `using-desk` text.
+ */
+function ownerOf(owner, { env, scan }) {
+  const usage = "lesson_add: a desk lesson needs `owner`: skill:<plugin>:<skill>, tool:<tool name>, brief or foundation"
+  if (typeof owner !== "string") throw new Error(usage)
+  if (owner === "brief" || owner === "foundation") return { owner, plugin: "desk", frictionClass: "skill" }
+  const tool = /^tool:(.+)$/u.exec(owner)
+  if (tool) {
+    if (!TOOL_NAMES.includes(tool[1])) throw new Error(`lesson_add: Desk has no tool named ${tool[1]}`)
+    return { owner, plugin: "desk", frictionClass: "mcp_tool" }
+  }
+  const skill = /^skill:([^:]+):(.+)$/u.exec(owner)
+  if (!skill || !NAME.test(skill[1]) || !NAME.test(skill[2])) throw new Error(usage)
+  const plugins = installedPlugins(env, scan)
+  const plugin = plugins.get(skill[1])
+  if (plugin === undefined) throw new Error(`lesson_add: no installed plugin is named ${skill[1]} (installed: ${[...plugins.keys()].sort().join(", ")})`)
+  if (!existsSync(path.join(plugin.dir, "skills", skill[2], "SKILL.md"))) throw new Error(`lesson_add: the ${skill[1]} plugin has no skill named ${skill[2]}`)
+  return { owner, plugin: skill[1], frictionClass: "skill" }
+}
+
+async function readIfPresent(file) {
+  return (await pathExists(file)) ? fs.readFile(file, "utf8") : ""
+}
+
+// Why the reply cannot say "in effect", or null when it can.
+function notLoaded(who, prefix) {
+  if (who.status !== "ok") return `session start on this desk cannot tell whose desk this is (${who.reason}), so it prints no person's AGENTS.md; set DESK_PERSON to your alias`
+  if (who.personPrefix === prefix) return null
+  const loaded = who.personPrefix === "" ? "only the desk's AGENTS.md" : `${who.personPrefix}/AGENTS.md`
+  return `session start on this desk prints ${loaded}, not this file; set DESK_PERSON to the alias this session writes for`
+}
+
+async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, schedulePush, search, personOf, lockWaitMs }) {
+  const alias = typeof person === "string" ? person.trim() : ""
+  if (alias === "" && crewWorkspace(deskRoot).crew) {
+    throw new Error("lesson_add: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; start Desk with --person <alias>, or use scope team")
+  }
+  const file = await resolveWriteTarget({ deskRoot, person, segments: ["AGENTS.md"] })
+  const where = deskRelativePath(deskRoot, file)
+  const prefix = deskRelativePath(deskRoot, path.dirname(file))
+  // Session start prints the desk's AGENTS.md and then the person's, from one shared budget; the lesson must be in the
+  // part it prints, judged by the same cut session start makes.
+  const cap = prefix === "" ? AGENTS_MD_CAP_BYTES : personAgentsCap(readAgentsMd(deskRoot))
+  // The lock lives beside the file, so its folder must exist first.
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const written = await holdLock(path.join(path.dirname(file), LOCK_NAME), { lockWaitMs }, async () => {
+    const current = await readIfPresent(file)
+    const line = `${lead(topic)} ${body} (${today()})`
+    const { text, replaced } = withLesson(current, line, topic)
+    if (!printedPart(text, cap).includes(line)) {
+      throw new Error(`lesson_add: session start prints only the first ${cap} bytes of ${where}${prefix === "" ? "" : " (what the desk's AGENTS.md leaves of the 16 KB both share)"}, and this lesson would fall after them, so nothing would load it; shorten that file first`)
     }
-    return { filePath: matchedPath, renameFrom: null }
+    // Checked before this call's own write, so an AGENTS.md another session left dirty is never committed as this call's.
+    const git = isGitRepository(path.dirname(file), spawnGit)
+    const stage = git && stagingAllowed(file, spawnGit)
+    // The same lesson again (same words, same day) changes nothing: it is as committed as the file already is.
+    if (text === current) return { replaced, git, committed: stage, commit: undefined }
+    await fs.writeFile(file, text, "utf8")
+    const commit = stage ? stageAndCommitFile(file, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
+    return { replaced, git, committed: stage && commit === undefined, commit, changed: true }
+  })
+  if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
+  if (written.committed && written.changed) schedulePush({ root: deskRoot })
+  if (written.changed) search?.noteChange(where)
+  const unloaded = notLoaded(await personOf({ deskRoot, env, now: now ?? Date.now() }), prefix)
+  const uncommitted = written.git && !written.committed
+    ? `it is not committed (${written.commit === undefined ? `${where} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
+    : null
+  const problems = [uncommitted, unloaded].filter((problem) => problem !== null)
+  const result = {
+    status: !written.changed ? "unchanged" : written.replaced ? "updated" : "added",
+    scope: "personal",
+    path: where,
+    in_effect: problems.length === 0,
+    message: problems.length === 0
+      ? `In effect: the lesson is in ${where}, which session start prints for you on this desk.`
+      : `Written to ${where}, but not in effect: ${problems.join("; and ")}.`,
   }
-  return {
-    filePath: canonicalExists ? await availableLessonPath(canonicalName, resolveCandidate) : canonicalPath,
-    renameFrom: null,
-  }
+  if (written.commit !== undefined) result.commit = written.commit
+  return result
 }
 
-// On a Git desk, lesson_add stages what it wrote — the lesson file, plus the
-// path it renamed away from when housekeeping moved an existing file onto
-// the canonical name — only when that pre-rename identity held no unstaged
-// changes beforehand, then commits exactly those paths (M4-6 Part 2). A
-// bare `git add -- <old> <new>` stages a rename the same way `fs.rename`
-// itself doesn't tell Git about (mirrors task.js's task_archive). `spawnGit`
-// is a test-only seam over `spawnSync`.
-function stagingAllowed(filePath, spawnGit) {
-  const dir = path.dirname(filePath)
-  return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
-}
-
-// A stage failure (e.g. a concurrent call holding .git/index.lock) leaves
-// nothing to commit, and neither it nor a commit failure ever throws away
-// the write or the tool's own result — either comes back as this function's
-// return value, which the caller attaches to its result under `commit` only
-// on failure, so a normal, silent success stays byte-identical to today's
-// response shape.
-function stageAndCommitLesson(root, paths, message, spawnGit) {
-  const relPaths = paths.map((p) => deskRelativePath(root, p))
-  const staged = stagePaths(root, relPaths, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
-  const committed = commitPaths(root, relPaths, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFriction, spawnGit, schedulePush, search, scan }) {
+  const target = ownerOf(owner, { env, scan })
+  const added = await addFriction({
+    deskRoot,
+    person,
+    env,
+    now,
+    search,
+    spawnGit,
+    schedulePush,
+    input: {
+      about: "system",
+      title: `Lesson for ${target.owner}: ${topic}`,
+      plugin: target.plugin,
+      friction_class: target.frictionClass,
+      body: `Lesson for \`${target.owner}\`: **${topic}.** ${body}`,
+    },
+  })
+  const opened = ["opened", "duplicate", "reopened"].includes(added.improvement)
+  const result = {
+    status: "routed",
+    scope: "desk",
+    owner: target.owner,
+    path: added.path,
+    improvement: added.improvement,
+    in_effect: false,
+    message: opened
+      ? `Not in effect yet. An improvement card is open against ${target.owner}; the lesson takes effect when the change it asks for ships.`
+      : `Not in effect, and no improvement card opened (${added.improvement}), so nothing will act on this lesson yet. The note is in ${added.path}.`,
+  }
+  for (const field of ["commit", "improvement_commit"]) if (added[field] !== undefined) result[field] = added[field]
+  return result
 }
 
 /**
  * lesson_add
  *
- * Input:
- *   {
- *     topic: string,    // human-readable; gets slugified for the filename
- *     body: string,     // markdown body
- *   }
+ * Input: { scope: "personal" | "desk" | "team", topic: string, body: string, owner?: string, repo?: string,
+ * source?: string }. `topic`, `body` and `source` are one line each; `owner` is required for a desk lesson; `source` is
+ * required for a team lesson, and `repo` names the team's clone when the desk is not itself the shared workspace.
  *
- * Side effects: writes `<root>/_meta/tips/<topic-slug>.md`. If the file
- * exists, appends an `## Update <YYYY-MM-DD>` section + the new body. May
- * first rename an existing, differently-named file for the same topic onto
- * this path (housekeeping, not a caller-visible move).
+ * Returns, by scope:
+ *   personal: { status: "added" | "updated", scope, path, in_effect, message, commit? }
+ *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, commit?, improvement_commit? }
+ *   team:     { status: "merged" | "pr_open" | "failed", scope, repo, path, section, line, in_effect, message, pr?,
+ *               commit?, account?, replaces?, stage?, reason?, claude_code_loads? }
  *
- * On a Git desk, stages what it wrote — plus any rename above — when the
- * file it renamed from (or, with no rename, the file it wrote) held no
- * unstaged changes beforehand, and commits exactly those paths right after
- * (M4-6 Part 2). A commit failure never loses the write: it comes back as
- * `commit: { status: "failed", reason }` on the result, omitted entirely on
- * a normal, silent success, when the file was already dirty, or on a
- * non-Git desk.
- *
- * Returns: { status: "added", path, commit? }
+ * A personal write on a Git desk is committed by itself when AGENTS.md held no unstaged changes before it; a commit
+ * failure never loses the write and comes back as `commit: { status: "failed", reason }`. A personal lesson is in effect
+ * only when it is committed (on a Git desk) and session start resolves the same person the write used.
  */
-export async function lesson_add({ deskRoot, input, person = null, search, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function lesson_add({ deskRoot, input, person = null, search, env = process.env, now, addFriction = friction_add, spawnGit = spawnSync, schedulePush = schedulePushDefault, personOf = improvementPerson, scan = factoryPluginScan, lockWaitMs, team = addTeamLesson }) {
   const values = input ?? {}
-  const { topic, body } = values
-  if (!topic || typeof topic !== "string") {
-    throw new Error("lesson_add: `topic` is required (string)")
-  }
-  if (!body || typeof body !== "string") {
-    throw new Error("lesson_add: `body` is required (string)")
-  }
-
-  const topicSlug = slugify(topic)
-  if (!topicSlug) {
-    throw new Error("lesson_add: `topic` slugified to empty string")
-  }
-
-  let filePath = await resolveWriteTarget({
-    deskRoot,
-    person,
-    segments: ["_meta", "tips", `${topicSlug}.md`],
-  })
-  const directory = path.dirname(filePath)
-  const resolveCandidate = (name) => resolveWriteTarget({
-    deskRoot,
-    person,
-    segments: ["_meta", "tips", name],
-  })
-  await fs.mkdir(directory, { recursive: true })
-  const decided = await decideLessonPath({
-    directory,
-    topicSlug,
-    canonicalPath: filePath,
-    resolveCandidate,
-  })
-  filePath = decided.filePath
-  const { renameFrom } = decided
-
-  // Checked against the pre-rename identity, before either this call's own
-  // housekeeping rename or its content write.
-  const stage = stagingAllowed(renameFrom ?? filePath, spawnGit)
-
-  if (renameFrom !== null) {
-    await fs.rename(renameFrom, filePath)
-    search?.noteChange(relPath(deskRoot, renameFrom))
-    search?.noteChange(relPath(deskRoot, filePath))
-  }
-
-  const trimmedBody = body.endsWith("\n") ? body : `${body}\n`
-  if (await pathExists(filePath)) {
-    const existing = await fs.readFile(filePath, "utf8")
-    const sep = existing.endsWith("\n") ? "" : "\n"
-    const update = `${existing}${sep}\n## Update ${today()}\n\n${trimmedBody}`
-    await fs.writeFile(filePath, update, "utf8")
-  } else {
-    // Initial write: include a top-level heading derived from the topic.
-    const header = `# ${topic}\n\n`
-    await fs.writeFile(filePath, `${header}${trimmedBody}`, "utf8")
-  }
-
-  const commit = stage
-    ? stageAndCommitLesson(
-        path.dirname(filePath),
-        renameFrom !== null ? [filePath, renameFrom] : [filePath],
-        `lesson_add: ${topicSlug}`,
-        spawnGit,
-      )
-    : undefined
-  if (stage && !commit) schedulePush({ root: deskRoot })
-
-  search?.noteChange(relPath(deskRoot, filePath))
-  const result = { status: "added", path: relPath(deskRoot, filePath) }
-  if (commit) result.commit = commit
-  return result
+  if (!SCOPES.has(values.scope)) throw new Error("lesson_add: `scope` is required: personal (this person's preference), desk (how Desk's tools and installed plugins' skills behave) or team (every teammate's agents in a repository the team shares)")
+  const topic = topicOf(values.topic)
+  const body = oneLine(values.body, "body")
+  if (values.scope === "personal") return addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, schedulePush, search, personOf, lockWaitMs })
+  if (values.scope === "desk") return addDesk({ deskRoot, person, env, now, topic, body, owner: values.owner, addFriction, spawnGit, schedulePush, search, scan })
+  return team({ deskRoot, person, topic, body, repo: values.repo, source: values.source, spawnGit })
 }
