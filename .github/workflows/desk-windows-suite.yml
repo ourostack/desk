@@ -120,6 +120,15 @@ jobs:
           ONLY_FILES: ${{ inputs.only }}
           REPEAT: ${{ inputs.repeat || '1' }}
           JOBS: ${{ inputs.jobs || '1' }}
+          SUITE_TAP_DIR: ${{ github.workspace }}\tap
+
+      - name: EXPERIMENT keep raw TAP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tap-${{ matrix.mode }}-shard-${{ matrix.shard }}
+          path: tap
+          if-no-files-found: ignore
 
       - name: Show the result in the job summary
         if: always()

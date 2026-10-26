@@ -78,6 +78,7 @@ const runFile = (file) => new Promise((resolve) => {
   const timer = setTimeout(() => { timedOut = true; stuck = describeDescendants(child.pid); killTree(child.pid) }, timeoutMs)
   child.on("close", (code) => {
     clearTimeout(timer)
+    if (process.env.SUITE_TAP_DIR) { fs.mkdirSync(process.env.SUITE_TAP_DIR, { recursive: true }); fs.writeFileSync(path.join(process.env.SUITE_TAP_DIR, relativeFile.replaceAll("/", "__") + ".tap"), output) }
     const failed = [...output.matchAll(/^\s*not ok \d+ - (.+?)(?: # .*)?$/gm)].map((m) => m[1])
     const count = (key) => Number(new RegExp(`^# ${key} (\\d+)`, "m").exec(output)?.[1] ?? 0)
     resolve({
