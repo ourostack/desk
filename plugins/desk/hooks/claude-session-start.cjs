@@ -9,6 +9,9 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+
+// How long the hook may keep running after its output is written, for cancelled children to close.
+const EXIT_GRACE_MS = 500;
 const { pathToFileURL } = require("node:url");
 
 const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
@@ -40,8 +43,9 @@ function emit(additionalContext) {
   // A host that closes its end of the pipe early would raise an uncaught EPIPE and fail the hook; the hook has nothing left to do then.
   process.stdout.on("error", () => {});
   // The host waits for this process to end, not for its output: once the output is written, nothing left running (a
-  // check past its budget, a migration block being stopped) may hold it. Every repair and delivery it started is detached.
-  process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } })}\n`, () => process.exit(0));
+  // check past its budget, a migration block being stopped) may hold it for long. Cancelled children get a moment to close
+  // first; the timer does not itself keep the process alive. Every repair and delivery it started is detached.
+  process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } })}\n`, () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref());
 }
 
 (async () => {

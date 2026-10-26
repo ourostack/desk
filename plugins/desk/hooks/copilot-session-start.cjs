@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
+// How long the hook may keep running after its output is written, for cancelled children to close.
+const EXIT_GRACE_MS = 500;
+
 const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 // Copilot has no setting that makes a plugin's agent the default (Claude Code takes `agent` from settings.json), and the hook
@@ -133,8 +136,9 @@ async function startFactory() {
 
 function emit(additionalContext) {
   // The host waits for this process to end, not for its output: once the output is written, nothing left running (a
-  // check past its budget, a migration block being stopped) may hold it. Every repair and delivery it started is detached.
-  process.stdout.write(JSON.stringify({ additionalContext }), () => process.exit(0));
+  // check past its budget, a migration block being stopped) may hold it for long. Cancelled children get a moment to close
+  // first; the timer does not itself keep the process alive. Every repair and delivery it started is detached.
+  process.stdout.write(JSON.stringify({ additionalContext }), () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref());
 }
 
 (async () => {
