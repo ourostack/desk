@@ -76,7 +76,8 @@ async function runHook({ host, payload, env = process.env } = {}) {
       import("../../mcp/scripts/resolve-desk-root.js"),
       import("../../mcp/src/runtime/sync-worker.js"),
     ]);
-    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd });
+    // The server binds the folder Copilot opened when it is a desk; Copilot passes it only as the payload's cwd.
+    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd, hostProjectRoot: claude ? env.CLAUDE_PROJECT_DIR : cwd });
     if (deskRoot === null) return "unavailable";
     const result = finalUnpushedCheck({ root: deskRoot, env });
     return result.state === "unpushed" ? "unpushed" : "clean";
