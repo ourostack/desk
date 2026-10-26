@@ -231,6 +231,7 @@ async function buildOneOfEachFixture() {
   await writeFile(root, "AGENTS.md", "# Agents\n")
   await writeFile(root, "README.md", "# Readme\n")
   await writeFile(root, "CLAUDE.md", "# Claude\n")
+  await writeFile(root, "agency.toml", "[mcps]\n")
   await writeFile(root, ".gitignore", "*.log\n")
   await fs.mkdir(path.join(root, "_meta"), { recursive: true })
 
@@ -353,7 +354,20 @@ test("loose_file never flags the desk-root allow-list", async () => {
   assert.ok(!loose.includes("AGENTS.md"))
   assert.ok(!loose.includes("README.md"))
   assert.ok(!loose.includes("CLAUDE.md"))
+  assert.ok(!loose.includes("agency.toml"))
   assert.ok(!loose.includes(".gitignore"))
+})
+
+// MS Desk keeps the workspace's MCP config as `agency.toml` at the desk root, where Agency finds it. Only that exact name, and only at the desk root, is allowed.
+test("loose_file allows agency.toml only by that exact name and only at the desk root", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "agency.toml", "[mcps]\n")
+  await writeFile(root, "agency.toml.bak", "[mcps]\n")
+  await writeFile(root, "other.toml", "[mcps]\n")
+  await writeFile(root, "normal-track/track.md", "---\nscope: Work on normal things.\n---\n")
+  await writeFile(root, "normal-track/agency.toml", "[mcps]\n")
+  const loose = findByCode(organizationFindings(root, { now: NOW }), "loose_file").map((f) => f.path).sort()
+  assert.deepEqual(loose, ["agency.toml.bak", "normal-track/agency.toml", "other.toml"])
 })
 
 // ── Scratch flagging (Part 6) ───────────────────────────────────────────

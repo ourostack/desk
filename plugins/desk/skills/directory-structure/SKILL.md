@@ -87,7 +87,7 @@ The agent chooses every track and task name itself, from the outcome, without as
 
 Only these entries belong at each root; everything else is loose.
 
-- **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, and dotfiles and dot-folders such as `.gitignore` and `.git/`.
+- **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, `agency.toml` (the workspace MCP config, which Agency reads from the desk root), and dotfiles and dot-folders such as `.gitignore` and `.git/`.
 - **At a track root:** `track.md`, task folders (each with a `task.md`) and underscore folders such as `_planning/`, `_friction/` and `_archive/`.
 
 Reports, status notes and handoffs belong in a task or iteration folder, committed to `main`, as do briefs, reviews, plans and small logs; only secrets, credentials, raw private transcripts and customer data stay outside Git. Cross-repo plans go in `<track>/_planning/`, and material about the whole desk in `_meta/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line under the safety rules in `interaction-style` section 2.
