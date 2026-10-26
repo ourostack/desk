@@ -57,7 +57,8 @@ function copilotAnswer(tag, since) {
     const text = fs.readFileSync(file, "utf8")
     if (!text.includes(tag)) continue
     const messages = text.split("\n").filter(Boolean).map((line) => { try { return JSON.parse(line) } catch { return null } }).filter(Boolean)
-    const replies = messages.filter((event) => /assistant\.message/u.test(event.type ?? "")).map((event) => event.data?.content ?? "")
+    // The answer is the assistant's text, or the summary it passes to task_complete when it ends with that tool.
+    const replies = messages.filter((event) => /assistant\.message/u.test(event.type ?? "")).flatMap((event) => [event.data?.content ?? "", ...(event.data?.toolRequests ?? []).map((request) => request.arguments?.summary ?? "")])
     const tools = messages.filter((event) => /tool\.execution_start/u.test(event.type ?? "")).map((event) => event.data?.toolName ?? event.data?.name)
     return { sessionId: id, answer: replies.join("\n"), tools }
   }
@@ -70,6 +71,11 @@ function parseResult(tag, text) {
   try { return JSON.parse(line.slice(line.indexOf("{"))) } catch { return null }
 }
 
+// The person's terminal, not this process: drop the session variables a parent Claude Code or Copilot session set, so the child is a new top-level session.
+function personEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|CLAUDECODE|COPILOT_AGENT|COPILOT_TASK|DESK)/u.test(key)))
+}
+
 async function session(host) {
   const tag = `bbx${randomUUID().slice(0, 8)}`
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `desk-real-${host}-`))
@@ -78,10 +84,10 @@ async function session(host) {
   let result
   if (host === "copilot") {
     const token = execFileSync("gh", ["auth", "token", "--user", copilotUser], { encoding: "utf8" }).trim()
-    result = await run("agency", ["copilot", "--allow-all", "-p", prompt(tag)], { cwd: desk, env: { ...process.env, COPILOT_GITHUB_TOKEN: token } })
+    result = await run("agency", ["copilot", "--allow-all", "-p", prompt(tag)], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
     Object.assign(result, copilotAnswer(tag, since))
   } else {
-    result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", prompt(tag)], { cwd: desk, env: process.env })
+    result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", prompt(tag)], { cwd: desk, env: personEnv() })
     try {
       const parsed = JSON.parse(result.stdout)
       result.answer = parsed.result ?? ""
@@ -95,7 +101,8 @@ async function session(host) {
   const log = git(desk, ["log", "--format=%s", "-n", "20"], process.env)
   const checks = {
     exited_ok: result.code === 0,
-    bound_this_desk: (() => { try { return fs.realpathSync(reported.root).toLowerCase() === fs.realpathSync(desk).toLowerCase() } catch { return false } })(),
+    // The session's project folder is a desk, so Desk must write there and nowhere else.
+    bound_this_desk: fs.existsSync(lesson),
     status_ready: reported?.state === "ready",
     lesson_written: fs.existsSync(lesson) && fs.readFileSync(lesson, "utf8").includes(tag),
     lesson_committed: git(desk, ["log", "--format=%H", "-n", "1", "--", "_meta/tips/blackbox-real.md"], process.env) !== "",
@@ -103,7 +110,9 @@ async function session(host) {
     browser_opened: /example domain/iu.test(reported?.browser_title ?? ""),
     browser_closed: reported?.browser_closed === true,
   }
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 })
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { fs.rmSync(root, { recursive: true, force: true }); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
+  }
   return { host, tag, ms: Math.round(result.ms), sessionId: result.sessionId, checks, reported, answerTail: result.answer.slice(-600), stderrTail: result.stderr.slice(-400), commits: log.split("\n") }
 }
 

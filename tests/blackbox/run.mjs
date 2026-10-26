@@ -61,6 +61,7 @@ function parseArgs(argv) {
 // Parity gaps use "parity:<parity id>".
 const KNOWN = {
   "parity:hooks.plain-language.copilot_has_every_claude_event": "Plain Language injects its contract into every Claude Code subagent through SubagentStart, but plugins/plain-language/hooks/copilot-hooks.json registers only sessionStart, so Copilot subagents start without it.",
+  "parity:speed.desk_session_start_hook_ms": "Copilot's Desk sessionStart hook does more than Claude Code's (it records the session folder for the server and checks Copilot's settings), and on Windows Copilot starts it through PowerShell: p50 1.4 s against 0.8 s on Windows CI; on macOS the two vary run to run between 0.9 and 2.8 s.",
   "parity:speed.desk_ready_ms": "On current main a Copilot session's Desk server reaches full readiness (desk_status ready with its root and search details loaded) about 2 s later than Claude Code's: p50 5.4 s against 3.5 s over 3 repeats on macOS, 7.7 s against 4.0 s on Windows CI. Copilot's server resolves its desk through the session record its sessionStart hook writes; the cause is not yet found.",
 }
 
@@ -1019,7 +1020,7 @@ async function cleanup(tempRoot, keep) {
   if (!keep) {
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 3 })
+        fs.rmSync(tempRoot, { recursive: true, force: true })
         break
       } catch {
         await sleep(1000)
