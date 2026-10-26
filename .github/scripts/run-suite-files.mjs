@@ -119,6 +119,8 @@ for (const file of mine) {
   results.push(result)
   if (repeat > 1) console.log(`        ${result.file}: ${runs.filter((r) => r.exitCode === 0).length} of ${repeat} runs passed`)
   console.log(`${result.timedOut ? "TIMEOUT" : result.exitCode === 0 ? "ok     " : "FAIL   "} ${result.file} pass=${result.pass} fail=${result.fail} ${result.ms}ms`)
+  // The failure itself goes in the log too: a full rerun replaces the run's artifacts, and with them the earlier attempt's results.json.
+  for (const f of result.failures) console.log(`        not ok: ${f.name}\n          ${f.error.replace(/\s+/gu, " ").slice(0, 800)}\n          at ${f.stack}`)
 }
 fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, aclProbe, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)
