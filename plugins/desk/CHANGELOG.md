@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.18 — 2026-10-26
+
+Each Desk session now starts its own search engine directly instead of going through what was left of the readiness controller. Search behaves as before; the session has less code between a tool call and its answer. `desk_status` reports `admission.search` (`started` or `not_started`) in place of `admission.controller`, the admission step is named `starting_search`, and a search engine that cannot start shows as `degraded:search_unavailable` while reads and writes keep working. The `desk_doctor` repair `prune_readiness_state` is gone: each session now removes, 30 seconds after it starts, the folders older Desk versions' readiness controllers left under `~/.cache/ouroboros-skills/desk/readiness` when no running process owns them and nothing in them changed in the last hour. A folder whose owner record cannot be read is kept. The `semantic: "required"` policy value is still accepted and now behaves like `background`.
+
+The session's check that `.git/HEAD` has not been replaced now compares exact file IDs. On Windows a file ID can exceed what a JavaScript number holds exactly, so two different files could look the same and a replaced `HEAD` could go unnoticed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.17 — 2026-10-26
 
 The installed plugin is smaller: the build and CI tools that no session ever runs now live in the repository's `tools/desk-build` folder instead of `plugins/desk`. They are the test coverage gate with its configuration and shard timings, and the generators and checks for the activation support matrix, the Copilot bundle and the runtime support matrix. About 1,800 lines and 86 KB no longer download with every install or copy into the runtime's source mirror. The `npm --prefix plugins/desk/mcp run …` commands are unchanged, and so are the generated files the runtime reads. Six package scripts that pointed at files deleted earlier are gone.
