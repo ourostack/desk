@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desk-windows-suite-${{ github.ref }}
+  group: desk-windows-suite-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -104,6 +104,15 @@ jobs:
         env:
           ONLY_FILES: ${{ inputs.only }}
           REPEAT: ${{ inputs.repeat || '1' }}
+          PROBE_DIR: ${{ github.workspace }}\probe
+
+      - name: EXPERIMENT keep probe output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.shard }}
+          path: probe/
+          if-no-files-found: ignore
 
       - name: Show the result in the job summary
         if: always()
