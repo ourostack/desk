@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.17 — 2026-10-26
+
+The installed plugin is smaller: the build and CI tools that no session ever runs now live in the repository's `tools/desk-build` folder instead of `plugins/desk`. They are the test coverage gate with its configuration and shard timings, and the generators and checks for the activation support matrix, the Copilot bundle and the runtime support matrix. About 1,800 lines and 86 KB no longer download with every install or copy into the runtime's source mirror. The `npm --prefix plugins/desk/mcp run …` commands are unchanged, and so are the generated files the runtime reads. Six package scripts that pointed at files deleted earlier are gone.
+
+The Superpowers README no longer calls Desk an opt-in alpha, and Superpowers moves up one patch version for that edit; its skills and upstream payload are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.16 — 2026-10-26
 
 Inspect unchanged macOS marker permissions in bounded native batches while retaining every per-read guard. Reuse a clean result only when the file and its full ancestry stayed unchanged; failed or ACL-bearing inspections never count as verified.
