@@ -51,7 +51,7 @@ test("routed timeline reads the session search engine, with and without a query"
   assert.equal(query.search_mode, "lexical")
 })
 
-test("timeline keeps the strongest section per document", async () => {
+test("search and timeline keep the strongest section per document", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nupdated: 2026-09-19\n---\n## One\n\nalpha opening\n\n## Two\n\nalpha later stronger detail alpha\n")
   await writeFile(root, "track/first/task.md", "---\nupdated: 2026-09-19\n---\n## One\n\nalpha opening stronger alpha\n\n## Two\n\nalpha later\n")
@@ -62,7 +62,14 @@ test("timeline keeps the strongest section per document", async () => {
   assert.deepEqual(Object.keys(snippets).sort(), ["track/first/task.md", "track/work/task.md"])
   assert.match(snippets["track/work/task.md"], /stronger/u)
   assert.match(snippets["track/first/task.md"], /stronger/u)
+
+  const search = await indexedSearch({ deskRoot: root, db: fixtureDb(root), input: { query: "alpha" } })
+  const searchSnippets = Object.fromEntries(search.results.map((r) => [r.path, r.snippet]))
+  assert.deepEqual(Object.keys(searchSnippets).sort(), ["track/first/task.md", "track/work/task.md"])
+  assert.match(searchSnippets["track/work/task.md"], /stronger/u)
+  assert.match(searchSnippets["track/first/task.md"], /stronger/u)
 })
+
 test("indexed search and timeline carry no meaning-search fields", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nstatus: processing\nupdated: 2026-09-19\nschema_version: 1\n---\nquartz lexical fallback\n")
