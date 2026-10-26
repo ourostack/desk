@@ -24,17 +24,17 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ### Under Copilot CLI
 
-The alpha source is `ourostack/desk:plugins/desk@main`. Use the host's admitted, explicit alpha composition instead of changing a live default installation.
+Run `agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot`, then start Copilot with `agency copilot`. `main` of `ourostack/desk` is the release channel.
 
 Acquisition is ordinary and single-root: select `desk` and let its own declaration pull the rest. `plugins/desk/agency.json` declares exactly two generic dependencies — Superpowers and Plain Language, both tracked at `ourostack/desk@main` — so the standalone composition is the three roots Desk, Superpowers and Plain Language, with no Ponytail, no Work Suite and no private feedback API. A shared-workspace composition adds Crew and its organization overlay (five roots), and a Platform Workflows consumer adds its own root on top (six roots); those are consumer compositions, not this package's closure. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission. Later source corrections arrive through ordinary Agency branch tracking of `@main`, not a manual refresh or rollback channel.
 
 ### Under Ouroboros
 
-Select `ourostack/desk:plugins/desk@main` through the host's supported opt-in bundle path. `main` of `ourostack/desk` is the release channel; do not substitute a fork, another branch or an exact commit.
+Select `ourostack/desk:plugins/desk@main` through the host's supported bundle path. `main` of `ourostack/desk` is the release channel; do not substitute a fork, another branch or an exact commit.
 
 The agent's `bundle.json` gains a `plugins[]` entry; the agent's preamble declares `Your desk: ~/AgentBundles/<agent>.ouro/desk/`.
 
-The source bundle carries the three selected roots — Desk, Superpowers and Plain Language — together. Its packaging contract does not establish full alpha runtime qualification:
+The source bundle carries the three selected roots — Desk, Superpowers and Plain Language — together. Its packaging contract does not establish full runtime qualification:
 
 ```json
 {

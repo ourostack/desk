@@ -1,11 +1,11 @@
 ---
 name: preview-feedback
-description: Record and publish a participant's qualitative feedback about an installed engineering preview as attributed Markdown in their own desk. Use only for preview feedback a participant explicitly offers, not ordinary task discussion, code review, telemetry, or automatic friction logging. There is no feedback MCP tool; preserved private records are never migrated into Git.
+description: Record and publish a participant's qualitative feedback about the installed Desk as attributed Markdown in their own desk. Use only for preview feedback a participant explicitly offers, not ordinary task discussion, code review, telemetry, or automatic friction logging. There is no feedback MCP tool; preserved private records are never migrated into Git.
 ---
 
 # Preview feedback
 
-A participant's feedback about the preview is their own words, offered deliberately. Write it, when they ask for it, as Markdown in the participant's own desk at `_meta/preview-feedback.md` — under their person prefix when the session is person-bound, so `desks/<alias>/_meta/preview-feedback.md` — attributed to them and dated. This is explicit capture, not a background assessment of the person or their work.
+A participant's feedback about Desk is their own words, offered deliberately. Write it, when they ask for it, as Markdown in the participant's own desk at `_meta/preview-feedback.md` — under their person prefix when the session is person-bound, so `desks/<alias>/_meta/preview-feedback.md` — attributed to them and dated. This is explicit capture, not a background assessment of the person or their work.
 
 There is no `desk_feedback` tool in this build, and no private feedback database to write into. Do not look for one, do not ask the host to enable one, and do not treat its absence as a failure to work around.
 
@@ -59,7 +59,7 @@ Use only the participant's own desk and its established contribution path, and k
 
 ## Preserved private records are not a source
 
-Some participants still hold private feedback captured by an earlier preview in a protected local store outside Git. That data stays where it is. Do not migrate, copy, summarize, index, or quote it into a desk, a report, or a message, and do not open its database directly. Only its owner decides whether any of it is ever offered — and if they offer it, they say the words again here, into their own `_meta/preview-feedback.md`.
+Some participants still hold private feedback captured by an earlier version in a protected local store outside Git. That data stays where it is. Do not migrate, copy, summarize, index, or quote it into a desk, a report, or a message, and do not open its database directly. Only its owner decides whether any of it is ever offered — and if they offer it, they say the words again here, into their own `_meta/preview-feedback.md`.
 
 ## Explain the real boundary
 

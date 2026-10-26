@@ -9,7 +9,7 @@ The manifest is intentionally declarative. Host adapters flatten it into native 
 - `schema_version`: Activation contract version. Unknown versions are unsupported until the host adapter is upgraded.
 - `id` and `version`: The activation package identity and exact plugin version.
 - `dependencies`: Ordered substrate/plugin inputs. Each entry declares a stable `id`, `kind`, exact `version` or `version_range`, `provenance`, and resolved `lock` data. Exact versions must match their lock; ranges must be satisfied by their lock.
-- `provides.activation_targets`: Launchable targets. The opt-in alpha selects `desk:worker` with the three roots Desk, Superpowers and Plain Language plus its host entrypoints.
+- `provides.activation_targets`: Launchable targets. The default activation selects `desk:worker` with the three roots Desk, Superpowers and Plain Language plus its host entrypoints.
 - `provides.overlay_agents`: Optional agent overlays that inherit Desk behavior without launching as `desk:worker`.
 - `mcp_servers`: Required MCP servers. Desk declares its MCP launch as host-native rather than as a manual `mcp add` step.
 - `desk_root`: Root binding policy, precedence, and opt-out modes. The default policy is global activation first, then `DESK`, then safe defaults, with project-local and manual-only opt-outs.
@@ -87,7 +87,7 @@ Embeddings are derivative data and may carry privacy risk. Desk keeps them in th
 
 Disposition: `supported-flattened`.
 
-Ouroboros/autonomous-agent bundles do not provide host-native-plugin-install for an independent Desk substrate. The alpha packaging path bundles Desk + Superpowers + Plain Language and binds `$DESK` to `~/AgentBundles/<agent>.ouro/desk/`. This source contract is not native alpha runtime admission.
+Ouroboros/autonomous-agent bundles do not provide host-native-plugin-install for an independent Desk substrate. The packaging path bundles Desk + Superpowers + Plain Language and binds `$DESK` to `~/AgentBundles/<agent>.ouro/desk/`. This source contract is not native runtime admission.
 
 The bundle owns the agent, skills, and MCP surfaces together. Desk still reads and writes durable workspace data only through the bound `$DESK` root.
 
