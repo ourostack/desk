@@ -63,7 +63,7 @@ async function canonicalFile(deskRoot, person, file, kind, required = true) {
 
 // work-orchestration's visual-proof sentence, verbatim. It is in every brief because a child follows its brief, and
 // a child briefed on "look into" or "review" work otherwise returns no screenshots of what it saw.
-export const VISUAL_PROOF_RULE = "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into an `evidence/` folder beside your brief file (or the task's desk folder when the brief is not a file), and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this."
+export const VISUAL_PROOF_RULE = "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into your own folder `evidence/<brief name>/` beside your brief file, named after the brief file without its extension (or, when the brief is not a file, `evidence/<a short name for your assignment>/` in the task's desk folder), so children whose briefs share a folder never overwrite each other's files, and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this."
 
 // The person-scoped write authority resolves symlinks against the person root, not this task, so a
 // same-person link inside the task can still name a neighbouring task's record. Compare resolved
