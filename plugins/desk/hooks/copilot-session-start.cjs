@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
+// How long the hook may keep running after its output is written, for cancelled children to close.
+const EXIT_GRACE_MS = 500;
+
 const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 // Copilot has no setting that makes a plugin's agent the default (Claude Code takes `agent` from settings.json), and the hook
@@ -14,6 +17,13 @@ const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
+// Copilot drops a sessionStart hook's whole output when the hook passes its 5 s limit, foundation included. So the
+// optional lines (boot pre-checks, migrations, the Copilot setting notes) get until this many milliseconds after the
+// process started; past it the hook prints the startup line and the foundation without them and does not start factory
+// delivery. The boot script runs the migration checks again; the pre-checks and the delivery wait for the next session start.
+const OPTIONAL_LINES_DEADLINE_MS = 3500;
+const { performance } = require("node:perf_hooks");
+let optionalLinesTimedOut = false;
 
 // Copilot passes the session's working folder as `cwd` and the session id as `sessionId` in the hook input. Read
 // them briefly and fall back to the process folder, so startup never waits on a host that leaves stdin open.
@@ -99,10 +109,17 @@ async function startupDirection() {
     const { runBootChecks, migrationLine } = require("./lib/boot-checks.cjs");
     // Desk's own migration Detect blocks run alongside the boot checks, and
     // add one line only when a migration is pending.
-    const pending = migrationLine({ host: "copilot", env: process.env, sessionFolder });
-    const boot = await runBootChecks({ host: "copilot", env: process.env, sessionFolder });
-    const migrations = await pending;
-    return [direction, boot, migrations, await hostSettingLines()].filter(Boolean).join("\n\n");
+    const optional = Promise.all([
+      runBootChecks({ host: "copilot", env: process.env, sessionFolder }),
+      migrationLine({ host: "copilot", env: process.env, sessionFolder }),
+      hostSettingLines(),
+    ]);
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()), null); });
+    const lines = await Promise.race([optional, late]);
+    clearTimeout(timer);
+    if (lines === null) optionalLinesTimedOut = true;
+    return [direction, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
     return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
   }
@@ -118,7 +135,10 @@ async function startFactory() {
 }
 
 function emit(additionalContext) {
-  process.stdout.write(JSON.stringify({ additionalContext }));
+  // The host waits for this process to end, not for its output: once the output is written, nothing left running (a
+  // check past its budget, a migration block being stopped) may hold it for long. Cancelled children get a moment to close
+  // first; the timer does not itself keep the process alive. Every repair and delivery it started is detached.
+  process.stdout.write(JSON.stringify({ additionalContext }), () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref());
 }
 
 (async () => {
@@ -133,7 +153,7 @@ function emit(additionalContext) {
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
     const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${workerPointer}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
-    await startFactory();
+    if (!optionalLinesTimedOut) await startFactory();
     emit(output);
   } catch {
     emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node ${bootScript} before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this.`);

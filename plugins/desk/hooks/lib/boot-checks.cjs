@@ -64,6 +64,7 @@
 // the MCP's engines range and runs the real work there.
 
 const fs = require("node:fs/promises");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
@@ -430,10 +431,14 @@ const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorksp
 // The registry.
 // ---------------------------------------------------------------------------
 
-/** Records skipped checks in the protected factory status.json, only when factory state already exists. */
+/**
+ * Records skipped checks in the protected factory status.json, only when factory state already exists and no other
+ * writer holds its lock: waiting on a lock that a crashed holder keeps for 10 minutes would hold session start.
+ */
 async function recordSkipped(env, skipped) {
   const { factoryStateRoot, writeStatus } = await import("../../mcp/src/factory/outbox.js");
-  if (await factoryStateRoot(env, { create: false }) === null) return false;
+  const root = await factoryStateRoot(env, { create: false });
+  if (root === null || existsSync(path.join(root, "status.json.lock"))) return false;
   await writeStatus(env, { boot_checks: { at: new Date().toISOString(), skipped } });
   return true;
 }
@@ -608,7 +613,7 @@ async function migrationLine({ host, env = process.env, sessionFolder, budgetMs,
     const shouldLaunchFiler = await import("../../mcp/src/runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({
-      pluginRoot, env, cwd, budgetMs, host,
+      pluginRoot, env, cwd, budgetMs, host, quietWhenUnchecked: true,
       fileProblem: async ({ reason }) => {
         const safeReason = argvSafeReason(reason);
         if (!shouldLaunchFiler({ env, mechanism: "pending-migrations", signature: safeReason })) {

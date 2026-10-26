@@ -55,14 +55,13 @@ test("pending repo checks collapse to one line per kind with a count", () => {
   const pending = [
     ...Array.from({ length: 62 }, (_, i) => `repo state for repo${i} (t/task${i % 3}): boot_budget_exceeded`),
     "repo state for repo0 (t/other): boot_budget_exceeded",
-    "open pull requests for a/b: boot_budget_exceeded",
-    "open pull requests for a/c: boot_budget_exceeded",
+    "open pull requests: timeout",
     "improvement: boot_budget_exceeded",
   ]
   const text = formatBootText({ status: "ok", pending, instructions: [] })
   assert.equal(text.match(/Repo state not checked/gu).length, 1)
   assert.match(text, /Repo state not checked for 62 repos \(boot ran out of time\); check a repo with git when you work in it\./u)
-  assert.match(text, /Open pull requests not checked for 2 repos/u)
+  assert.match(text, /Open pull requests: timeout; check a repo with gh pr list when you need it\./u)
   assert.match(text, /pending \(not finished in time, carry it\): improvement: boot_budget_exceeded/u)
   assert.doesNotMatch(text, /repo state for repo/u)
 })
@@ -77,11 +76,9 @@ test("a next step on the last line with no trailing newline is found; one inside
 test("a single pending repo is counted in the singular, and push-account lines collapse too", () => {
   const text = formatBootText({ status: "ok", instructions: [], pending: [
     "repo state for only (t/x): boot_budget_exceeded",
-    "open pull requests for a/b: boot_budget_exceeded",
     ...Array.from({ length: 80 }, (_, i) => `push account for o/r${i % 40} (t/task${i}): boot_budget_exceeded`),
   ] })
   assert.match(text, /Repo state not checked for 1 repo \(/u)
-  assert.match(text, /Open pull requests not checked for 1 repo \(/u)
   assert.match(text, /Push route not checked for 40 repos \(boot ran out of time\); run gh auth status before you push\./u)
   assert.doesNotMatch(text, /push account for/u)
   const one = formatBootText({ status: "ok", instructions: [], pending: ["push account for o/r (t/x): boot_budget_exceeded"] })

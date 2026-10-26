@@ -7,7 +7,7 @@ import * as path from "node:path"
 
 import { mkTempRoot } from "../_temp_roots.js"
 import { scratch } from "../factory/_session_helpers.js"
-import { readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import {
   unsignedDeliveries,
   unsignedDeliveriesAsync,
@@ -382,6 +382,20 @@ test("recordUnsigned scans, records the counts and returns the list; a failed wr
   assert.equal((await recordUnsigned(broken, desk, NOW)).count, 1, "a state folder that cannot be written never hides the list")
   assert.equal(await recordUnsigned(env, desk, NOW, { scan: () => { throw new Error("x") } }), null)
   assert.equal(await recordUnsigned(broken, desk, NOW, { scan: () => { throw new Error("x") } }), null)
+}))
+
+test("recordUnsigned shows the list without waiting while another writer holds the factory status lock, and leaves the lock alone", () => scratch(async ({ desk, env }) => {
+  await put(desk, ["alpha", "one"], card({ deliveredAt: ago(2) }))
+  await recordUnsigned(env, desk, NOW)
+  const lock = path.join(await factoryStateRoot(env, { create: false }), "status.json.lock")
+  await fs.writeFile(lock, JSON.stringify({ pid: 999999, started_at: new Date().toISOString() }))
+  await put(desk, ["alpha", "two"], card({ deliveredAt: ago(3) }))
+  const started = Date.now()
+  const found = await recordUnsigned(env, desk, NOW)
+  assert.ok(Date.now() - started < 2000, "returned without waiting on the lock")
+  assert.equal(found.count, 2)
+  assert.deepEqual((await readStatus(env)).signoff.unsigned, { state: "measured", value: 1 }, "the counts wait for the next boot")
+  assert.match(await fs.readFile(lock, "utf8"), /999999/u)
 }))
 
 test("the scan stays inside the boot budget on a desk with 500 archived cards", () => withDesk(async (desk) => {

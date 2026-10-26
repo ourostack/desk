@@ -75,7 +75,7 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
 const PENDING_PUSH = /^push account for (.+?) \(.*\): boot_budget_exceeded$/u
-const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
+const PENDING_PR = /^open pull requests: (.+)$/u
 
 /**
  * The pending lines as printed, `{ rest, summaries }`: the per-repo and per-store lines that only say boot ran out of time become one line each with a count and the next action; other lines pass through.
@@ -83,7 +83,7 @@ const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
  */
 function collapsePending(pending) {
   const repos = new Set()
-  const stores = new Set()
+  let prs = null
   const pushes = new Set()
   const rest = []
   const summaries = []
@@ -92,19 +92,19 @@ function collapsePending(pending) {
     const store = PENDING_PR.exec(line)
     const push = PENDING_PUSH.exec(line)
     if (repo !== null) repos.add(repo[1])
-    else if (store !== null) stores.add(store[1])
+    else if (store !== null) prs = store[1]
     else if (push !== null) pushes.add(push[1])
     else rest.push(line)
   }
   const plural = (count, one, many) => (count === 1 ? one : many)
   if (repos.size > 0) summaries.push(`Repo state not checked for ${repos.size} ${plural(repos.size, "repo", "repos")} (boot ran out of time); check a repo with git when you work in it.`)
-  if (stores.size > 0) summaries.push(`Open pull requests not checked for ${stores.size} ${plural(stores.size, "repo", "repos")} (boot ran out of time); check with gh pr list when you need them.`)
+  if (prs !== null) summaries.push(`Open pull requests: ${prs}; check a repo with gh pr list when you need it.`)
   if (pushes.size > 0) summaries.push(`Push route not checked for ${pushes.size} ${plural(pushes.size, "repo", "repos")} (boot ran out of time); run gh auth status before you push.`)
   return { rest, summaries }
 }
 
 /** How many active tasks the boot text lists; the rest are counted, never cut mid-sentence. */
-export const TASKS_SHOWN_CAP = 15
+export const TASKS_SHOWN_CAP = 10
 
 const NO_NEXT_STEP = "no next step recorded"
 
@@ -192,6 +192,12 @@ function pushNote(entry) {
   return `${store}: push access could not be checked (${entry.result}); verify with \`gh auth status\` before pushing.`
 }
 
+// A `--task-only` run has no task list to print the routes on, so they get their own section: every route, even a direct push by the active account.
+function routeSection(entries) {
+  const lines = entries.map((entry) => pushNote(entry) ?? (entry.result === "account_found" ? `${entry.store}: ${pushRoute(entry)}.` : null)).filter((line) => line !== null)
+  return lines.length === 0 ? [] : ["", "Push routes:", ...lines.map((line) => `- ${line}`)]
+}
+
 const SAY_ROUTE = "Say this route in one line when you report on the task."
 // Desk's own route is the answer to "which account and route can deliver"; an agent that re-checks it with gh and gets a failure goes on to probe the token itself.
 export const ROUTE_CHECKED = "Desk resolved this route, so say it rather than re-checking it with gh. Using the token inside the git or gh call as above is fine; never print, count or test it on its own, and if a gh call fails, report the error as it is."
@@ -258,8 +264,11 @@ function namedTaskLines(task) {
 // Two instructions name the active-task list. The structured result (`--json`) names it by its field, `active_tasks`;
 // the plain-text boot prints it as the "Active tasks" section, and an agent reading plain text cannot map a field name
 // to a section (boot acceptance rounds F, H and J: "where were we?" reported one task). So the text boot says the section.
-export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new."
-export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it."
+// A boot that names no task checks no repo state and no push route (they cost a network call per repo and matter only
+// once a task is picked), so the instruction says how to get them for the task the operator picks.
+const PICKED_TASK_SENTENCE = " When the operator picks one, run this boot again with `--task \"<its handle>\" --task-only` before working on it: that run prints only the task's push route, repos and instructions."
+export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks and open_prs, then ask which task to resume or whether to start new." + PICKED_TASK_SENTENCE
+export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it." + PICKED_TASK_SENTENCE
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
 export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" above, each with its status and its next step or blocker, then ask what to resume or start."
 // A first message that describes new work is the answer to "resume or start new", and the boot had no line for it: a session ran the
@@ -371,7 +380,9 @@ export function formatBootText(result) {
   }
   const waiting = typeof result.needs_operator?.question === "string"
   const waitingWords = waiting ? `, waiting on you (${result.needs_operator.summary})` : ""
-  const headline = result.status === "degraded" && failing.length > 0 ? `Desk boot: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})${waitingWords}` : `Desk boot: ${result.status}${waitingWords}`
+  // A `--task-only` run says so, so its short output is not read as a whole boot.
+  const label = result.task_only === true ? "Desk boot, named task only" : "Desk boot"
+  const headline = result.status === "degraded" && failing.length > 0 ? `${label}: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})${waitingWords}` : `${label}: ${result.status}${waitingWords}`
   const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
@@ -388,7 +399,8 @@ export function formatBootText(result) {
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
-  taskSection(result, lines)
+  if (result.task_only === true) lines.push(...routeSection(result.push_accounts))
+  else taskSection(result, lines)
   lines.push(...cleanupLines(result))
   lines.push(...unsignedLines(result.unsigned_deliveries))
   if ((result.open_prs ?? []).length > 0) lines.push("", "Open pull requests:", ...result.open_prs.map(prLine))

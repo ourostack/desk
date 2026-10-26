@@ -346,11 +346,14 @@ async function defaultFileProblem() {
  * every other migrated mechanism uses.
  */
 export async function startupMigrationLine({
-  pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit, host, fileProblem = defaultFileProblem, platform = process.platform,
+  pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit, host, fileProblem = defaultFileProblem, platform = process.platform, quietWhenUnchecked = false,
 }) {
   const drifts = []
   try {
-    const pending = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, host, onIndexDrift: (block) => drifts.push(block) })
+    const found = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, host, onIndexDrift: (block) => drifts.push(block) })
+    // The startup hooks pass `quietWhenUnchecked`: the boot script runs every Detect again and names any it cannot
+    // check, so a slow machine's hook does not spend its words on "could not be checked in time".
+    const pending = quietWhenUnchecked ? found.filter((entry) => entry.state !== "unchecked") : found
     return [migrationLine(pending, pluginRoot, platform), ...drifts].filter((part) => part !== "").join("\n")
   } catch (error) {
     const reason = oneLine(error?.message ?? String(error))

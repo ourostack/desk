@@ -66,10 +66,13 @@ function statusWithoutSignoff({ env, deskRoot }) {
   return { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete, pluginScanReason: reason }), loop: withLoopSwitch(storedLoop(env), env) }
 }
 
-/** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`. */
-export function factoryStatus({ env, deskRoot }) {
+/**
+ * `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`.
+ * `signoff: false` leaves the sign-off counts out, for boot, which scans the delivered tasks itself (`recordUnsigned`) and would otherwise scan every card twice.
+ */
+export function factoryStatus({ env, deskRoot, signoff = true }) {
   const status = statusWithoutSignoff({ env, deskRoot })
-  return deskRoot === null || deskRoot === undefined ? status : { ...status, signoff: signoffCounts(deskRoot) }
+  return deskRoot === null || deskRoot === undefined || !signoff ? status : { ...status, signoff: signoffCounts(deskRoot) }
 }
 
 /**

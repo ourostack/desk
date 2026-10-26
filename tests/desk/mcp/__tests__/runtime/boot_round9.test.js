@@ -145,7 +145,7 @@ test("boot reports the sync summary for a failed sync, a timed-out one and one w
   assert.equal(failed.sync_summary, "sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of 2026-09-30T10:00:00.000Z")
   const unknown = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }), lastSyncFn: () => { throw new Error("no git") } })
   assert.match(unknown.sync_summary, /local desk is as of unknown$/u)
-  const slow = await boot(root, { budgetMs: 1, syncFn: () => new Promise(() => {}) })
+  const slow = await boot(root, { budgetMs: 1, syncBudgetMs: 1, syncFn: () => new Promise(() => {}) })
   assert.match(slow.sync_summary, /did not finish within the boot's time budget/u)
   const threw = await boot(root, { syncFn: async () => { throw new Error("boom") } })
   assert.match(threw.sync_summary, /^sync failed: it did not run/u)
@@ -350,10 +350,10 @@ test("the shipped script prints text by default and JSON with --json", async () 
 // ── Review fixes ────────────────────────────────────────────────────────
 
 test("parseBootArgs: a flag after --task is never the task name", () => {
-  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
 })
 
 test("boot hands every card to the local-only recorder, and a recorder that throws never degrades the boot", async () => {
@@ -404,7 +404,7 @@ test("plain-text boot with no named task tells the agent to report every task un
   assert.match(text, /2\. The name matches no open task: report every task under "Active tasks" above/u)
   assert.doesNotMatch(text, /active_tasks|open_prs|repo_states/u)
   // The structured result keeps the field names for JSON consumers.
-  assert.match(NO_TASK_INSTRUCTION, /active_tasks, open_prs and repo_states/u)
+  assert.match(NO_TASK_INSTRUCTION, /active_tasks and open_prs/u)
 })
 
 test("the named task is always shown first with its push route, even when it ranks below the cap", () => {
@@ -424,7 +424,7 @@ test("the named task is always shown first with its push route, even when it ran
   // Ambiguous and unmatched names keep the full capped list.
   const full = formatBootText({ ...result, task: { status: "ambiguous", candidates: [{ track: "ops", slug: "a" }, { track: "ops", slug: "b" }] } })
   assert.equal([...full.matchAll(/^- ops\/(\S+)/gmu)].length, TASKS_SHOWN_CAP)
-  assert.match(full, /\n\.\.\.and 5 more active tasks/u)
+  assert.match(full, new RegExp(`\\n\\.\\.\\.and ${20 - TASKS_SHOWN_CAP} more active tasks`, "u"))
   const unnamed = formatBootText({ ...result, task: null })
   assert.ok(!unnamed.includes("- ops/oldest"), "without a name the oldest task falls under the cap")
   const last = formatBootText({ ...result, task: { status: "resolved", task: { track: "ops", slug: "t19", card: "c" } } })

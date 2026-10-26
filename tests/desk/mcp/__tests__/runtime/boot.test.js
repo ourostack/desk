@@ -913,23 +913,22 @@ test("auth: the worst case, a slow GitHub on every attempt, takes no longer than
 })
 
 test("auth: a token GitHub revoked, or a bad GH_TOKEN, passes the offline check and then shows as a warning from the pull-request lookup, once", async () => {
-  const deadline = Date.now() + 60000
   const runner = async () => ({ code: 1, stdout: "", stderr: "gh: Bad credentials (HTTP 401)\n" })
-  const { prs, pending } = await openPullRequests({ stores: ["acme/a", "acme/b"], runner, now: Date.now, deadline })
+  const { prs, pending } = await openPullRequests({ stores: ["acme/a", "acme/b"], runner })
   assert.deepEqual(prs, [])
   assert.equal(pending.length, 1, "said once, not per repo")
   assert.match(pending[0], /^auth: GitHub rejected the sign-in gh uses \(gh said: gh: Bad credentials \(HTTP 401\)\); pushes will fail until you run `gh auth login --hostname github\.com`, or unset or replace GH_TOKEN if it is set$/u)
-  const limited = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1, stdout: "", stderr: "HTTP 403: API rate limit exceeded" }), now: Date.now, deadline })
-  assert.deepEqual(limited.pending, [], "a rate limit is not a rejected token")
-  const silent = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1 }), now: Date.now, deadline })
-  assert.deepEqual(silent.pending, [], "a failure with no output says nothing about the token")
+  const limited = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1, stdout: "", stderr: "HTTP 403: API rate limit exceeded" }) })
+  assert.deepEqual(limited.pending, ["open pull requests: GitHub search failed"], "a rate limit is not a rejected token")
+  const silent = await openPullRequests({ stores: ["acme/a"], runner: async () => ({ code: 1 }) })
+  assert.deepEqual(silent.pending, ["open pull requests: GitHub search failed"], "a failure with no output says nothing about the token")
 })
 
 test("auth: a stored token rejected while the push routes were checked is a warning naming the account and the fix", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
   const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 401 } })
-  const result = await healthyBoot(root, { gh })
+  const result = await healthyBoot(root, { gh, taskQuery: "push-task" })
   assert.ok(result.pending.includes("auth: GitHub rejected the stored sign-in for ari; pushes as ari will fail until you run `gh auth login --hostname github.com`"), result.pending.join("|"))
   assert.ok(!result.instructions.some((line) => /Hard stop/u.test(line)))
 })
@@ -959,7 +958,7 @@ test("bootOnce: a crew-workspace (desk-set) corrupted card is located under desk
   const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
   const result = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery: "crew-task",
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
@@ -1001,7 +1000,7 @@ test("bootOnce: a repo no signed-in account can push degrades status and tells t
   const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 404 } })
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
   const result = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery: "push-task",
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
@@ -1102,7 +1101,7 @@ test("bootOnce: a push-account step that itself throws degrades only push_accoun
   const root = await mkDeskWorkspace()
   const { gh, jq } = okPrereqRunners()
   const brokenCard = {
-    track: "t", slug: "s", desk: null,
+    track: "t", slug: "s", desk: null, file: path.join(root, "t", "s", "task.md"),
     data: {
       status: "processing",
       get repos() {
@@ -1111,7 +1110,7 @@ test("bootOnce: a push-account step that itself throws degrades only push_accoun
     },
   }
   const result = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery: "s",
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     walkFn: () => [brokenCard],
@@ -1119,6 +1118,9 @@ test("bootOnce: a push-account step that itself throws degrades only push_accoun
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.startsWith("push_accounts:")))
   assert.deepEqual(result.push_accounts, [])
+  const taskOnly = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery: "s", taskOnly: true, walkFn: () => [brokenCard], repoFn: () => ({ states: [], pending: [] }) })
+  assert.ok(taskOnly.degraded.some((line) => line.startsWith("push_accounts:")))
+  assert.deepEqual(taskOnly.push_accounts, [])
 })
 
 test("bootOnce: a push-account store past the wall-clock budget is pending; a gh-missing account answer is degraded by name", async () => {
@@ -1127,7 +1129,7 @@ test("bootOnce: a push-account store past the wall-clock budget is pending; a gh
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
 
   const pending = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, jq, budgetMs: 0,
+    env: { DESK: root }, cwd: root, homeDir: root, jq, taskQuery: "pending-push-task", budgetMs: 0,
     gh: okPrereqRunners().gh,
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
@@ -1137,7 +1139,7 @@ test("bootOnce: a push-account store past the wall-clock budget is pending; a gh
   assert.equal(pending.status, "ready", "a pending push-account check alone does not degrade status")
 
   const ghMissing = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, jq,
+    env: { DESK: root }, cwd: root, homeDir: root, jq, taskQuery: "pending-push-task",
     gh: async () => ({ code: null, stdout: "", stderr: "", spawnError: "ENOENT" }),
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
@@ -1296,7 +1298,7 @@ test("bootOnce: a host signed in only through GH_TOKEN is not auth_stale, and it
   const ghAuth = fixedRunner({ "auth status": { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account someone (GH_TOKEN)\n", stderr: "" } })
   const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
   const result = await bootOnce({
-    env: { DESK: root, GH_TOKEN: "ghp_abc" }, cwd: root, homeDir: root, gh, ghAuth, jq,
+    env: { DESK: root, GH_TOKEN: "ghp_abc" }, cwd: root, homeDir: root, gh, ghAuth, jq, taskQuery: "push-task",
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
@@ -1374,11 +1376,12 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
 })
 
 test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
-  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true })
+  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "x", "--task-only"]), { taskQuery: "x", json: false, taskOnly: true })
 })
 
 test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
@@ -1386,6 +1389,9 @@ test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
   const io = { stdout: { write: () => {} } }
   await runBootCli({ argv: ["--task", "x/y"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
   assert.equal(seen.taskQuery, "x/y")
+  assert.equal(seen.taskOnly, false)
+  await runBootCli({ argv: ["--task", "x/y", "--task-only"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
+  assert.equal(seen.taskOnly, true)
 })
 
 // ── resolveTaskQuery ─────────────────────────────────────────────────────
@@ -1497,27 +1503,46 @@ test("repoStates: the real git defaults read a real clone's branch and dirty sta
   assert.equal(states[0].fetched, false)
 })
 
-test("openPullRequests: lists each store's open pull requests, and reports a slow store as pending", async () => {
-  const runner = async (args) => {
-    const store = args[3]
-    if (store === "a/slow") return { code: null, stdout: "", stderr: "", timedOut: true }
-    if (store === "a/err") return { code: 1, stdout: "", stderr: "boom" }
-    if (store === "a/junk") return { code: 0, stdout: "not json", stderr: "" }
-    if (store === "a/obj") return { code: 0, stdout: "{}", stderr: "" }
-    return { code: 0, stdout: JSON.stringify([{ number: 7, title: "Fix it", url: "https://x/7", isDraft: true, reviewDecision: "APPROVED" }, { number: 8, url: "https://x/8" }]), stderr: "" }
+function searchResult(nodes, issueCount = nodes.length) {
+  return { code: 0, stdout: JSON.stringify({ data: { search: { issueCount, nodes } } }), stderr: "" }
+}
+
+test("openPullRequests: one GitHub search covers every store, and only the stores' pull requests are kept", async () => {
+  const calls = []
+  const runner = async (args, options) => {
+    calls.push({ args, options })
+    return searchResult([
+      { number: 7, title: "Fix it", url: "https://x/7", isDraft: true, reviewDecision: "APPROVED", repository: { nameWithOwner: "a/ok" } },
+      { number: 8, url: "https://x/8", repository: { nameWithOwner: "A/Other" } },
+      { number: 9, url: "https://x/9", repository: { nameWithOwner: "elsewhere/repo" } },
+      {},
+    ])
   }
-  const { prs, pending } = await openPullRequests({ stores: ["a/ok", "a/slow", "a/err", "a/junk", "a/obj"], runner, now: () => 0, deadline: 60000 })
+  const { prs, pending } = await openPullRequests({ stores: ["a/ok", "a/other", "a/none"], runner })
+  assert.equal(calls.length, 1, "one search, not one call per repo")
+  assert.deepEqual(calls[0].args.slice(0, 2), ["api", "graphql"])
+  assert.ok(calls[0].args.includes("q=is:pr is:open author:@me archived:false sort:updated-desc"))
+  assert.equal(calls[0].options.timeoutMs, 8000)
   assert.deepEqual(prs, [
     { store: "a/ok", number: 7, title: "Fix it", url: "https://x/7", draft: true, review: "APPROVED" },
-    { store: "a/ok", number: 8, title: "", url: "https://x/8", draft: false, review: null },
+    { store: "A/Other", number: 8, title: "", url: "https://x/8", draft: false, review: null },
   ])
-  assert.deepEqual(pending, ["open pull requests for a/slow: timeout"])
+  assert.deepEqual(pending, [])
 })
 
-test("openPullRequests: past the deadline nothing is asked", async () => {
-  const { prs, pending } = await openPullRequests({ stores: ["a/late"], runner: () => assert.fail("no call"), now: () => 100, deadline: 101 })
-  assert.deepEqual(prs, [])
-  assert.deepEqual(pending, ["open pull requests for a/late: boot_budget_exceeded"])
+test("openPullRequests: no stores asks nothing; a slow, failed or unreadable search is one pending line", async () => {
+  assert.deepEqual(await openPullRequests({ stores: [], runner: () => assert.fail("no call") }), { prs: [], pending: [] })
+  const one = (result) => openPullRequests({ stores: ["a/ok"], runner: async () => result })
+  assert.deepEqual(await one({ code: null, stdout: "", stderr: "", timedOut: true }), { prs: [], pending: ["open pull requests: timeout"] })
+  assert.deepEqual(await one({ code: 1, stdout: "", stderr: "boom" }), { prs: [], pending: ["open pull requests: GitHub search failed"] })
+  assert.deepEqual(await one({ code: 0, stdout: "not json", stderr: "" }), { prs: [], pending: ["open pull requests: GitHub search failed"] })
+  assert.deepEqual(await one({ code: 0, stdout: "{}", stderr: "" }), { prs: [], pending: ["open pull requests: GitHub search failed"] })
+})
+
+test("openPullRequests: more open pull requests than one search returns says how many were checked", async () => {
+  const { prs, pending } = await openPullRequests({ stores: ["a/ok"], runner: async () => searchResult([{ number: 1, url: "u", repository: { nameWithOwner: "a/ok" } }], 140) })
+  assert.equal(prs.length, 1)
+  assert.deepEqual(pending, ["open pull requests: only the 1 most recently updated of 140 were checked"])
 })
 
 // ── bootOnce: migrations, named task, instructions, budget ───────────────
@@ -1596,9 +1621,10 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   assert.ok(!result.instructions.some((line) => /Confirm this session can call/u.test(line)))
   assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
   // Plain text names the printed section; the structured instructions keep the field names.
-  assert.ok(result.instructions.some((line) => /active_tasks, open_prs and repo_states/u.test(line)))
+  assert.ok(result.instructions.some((line) => /from active_tasks and open_prs/u.test(line) && /--task "<its handle>"/u.test(line)))
   const printed = formatBootText(result)
   assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
+  assert.match(printed, /run this boot again with `--task "<its handle>" --task-only` before working on it/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
@@ -1650,6 +1676,56 @@ test("bootOnce: an ambiguous or unknown --task is reported in instructions, not 
   const missing = await healthyBoot(root, { taskQuery: "zzz-none" })
   assert.equal(missing.task.status, "not_found")
   assert.ok(missing.instructions.some((line) => line.includes("matches no open task")))
+})
+
+test("bootOnce --task-only: prints the named task's push route, repos and instructions, and nothing the first boot already printed", async () => {
+  const root = await mkDeskWorkspace()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "desk rules\n")
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  await writeCard(root, "track-a", "other-task", VALID_CARD)
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  const never = (name) => async () => { throw new Error(`${name} ran`) }
+  const result = await healthyBoot(root, { gh, taskQuery: "push-task", taskOnly: true, syncFn: never("sync"), prFn: never("pull-request search"), migrationsFn: never("migrations"), factoryStatusFn: () => { throw new Error("factory ran") } })
+  assert.equal(result.task_only, true)
+  assert.equal(result.status, "ready", result.degraded.join("|"))
+  assert.equal(result.task.status, "resolved")
+  assert.equal(result.agents_md, null)
+  assert.equal(result.active_tasks, null)
+  assert.deepEqual(result.push_accounts.map((entry) => [entry.store, entry.result]), [["acme/widgets", "account_found"]])
+  assert.ok(result.instructions.some((line) => line.includes("desk:session-resumption") && line.includes("track-a/push-task/task.md")))
+  assert.ok(result.instructions.some((line) => line.includes("acme/widgets")), "the push route or the remote repo is an instruction")
+  const text = formatBootText(result)
+  assert.match(text, /^Desk boot, named task only: ready/u)
+  assert.doesNotMatch(text, /AGENTS\.md|desk rules|Active tasks|other-task/u)
+  assert.match(text, /Push routes:\n- acme\/widgets: push as ari \(route direct\)\./u)
+  assert.ok(text.split(/\s+/u).length < 300, text)
+})
+
+test("bootOnce --task-only: a route no account has, a missing clone, an ambiguous or unknown name and broken steps are each still said", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const denied = await healthyBoot(root, { gh: fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 404 } }), taskQuery: "push-task", taskOnly: true })
+  assert.equal(denied.status, "degraded")
+  assert.ok(denied.instructions.some((line) => line.startsWith("Do not push acme/widgets")))
+  assert.match(formatBootText(denied), /Push routes:\n- acme\/widgets: no signed-in account can push/u)
+  assert.ok(!formatBootText(denied).includes("Do not push acme/widgets"), "the text boot says the route once, in its section")
+  const states = [{ track: "track-a", slug: "push-task", repo: "local-only", local_path: "~/code/local-only", present: false }]
+  const blocked = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, repoFn: () => ({ states, pending: ["fetch: slow"] }) })
+  assert.match(blocked.instructions[0], /local-only/u, "the question about the missing clone comes first")
+  assert.ok(!blocked.instructions.some((line) => line.startsWith("Hand off")), "the question carries the hand-off")
+  assert.ok(blocked.pending.includes("fetch: slow"))
+  const cloneable = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, repoFn: () => ({ states: [{ ...states[0], repo: "acme/gears" }], pending: [] }) })
+  assert.ok(cloneable.instructions.some((line) => line.includes("gh repo clone")))
+  const { root: many } = await taskFixture()
+  const ambiguous = await healthyBoot(many, { taskQuery: "faster", taskOnly: true })
+  assert.ok(ambiguous.instructions.some((line) => line.includes("more than one open task")))
+  assert.doesNotMatch(formatBootText(ambiguous), /Push routes|Active tasks/u)
+  assert.doesNotMatch(formatBootText({ ...ambiguous, push_accounts: [{ store: "local/only", result: "not_a_github_repo" }] }), /Push routes/u, "a repo with no GitHub remote has no route")
+  assert.deepEqual((await healthyBoot(many, { taskQuery: "zzz-none", taskOnly: true })).instructions, ["The name matches no open task: use the task list from this session's first boot and ask what to resume or start."])
+  const broken = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, walkFn: () => { throw new Error("cards gone") }, repoFn: () => { throw new Error("git gone") } })
+  assert.ok(broken.degraded.includes("cards: cards gone"))
+  assert.ok(broken.degraded.includes("repo_states: git gone"))
+  assert.equal(broken.task.status, "not_found")
 })
 
 test("bootOnce: migrations run first; a pending one that needs a restart stops boot before the desk is touched", async () => {
@@ -1723,7 +1799,7 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
   const ghAuth = fixedRunner({ "auth status": { code: null, stdout: "", stderr: "", timedOut: true } })
   const jq = fixedRunner({ "--version": { code: null, stdout: "", stderr: "", spawnError: "ENOENT" } })
   const result = await bootOnce({
-    env: { DESK: root }, cwd: root, homeDir: root, gh, ghAuth, jq,
+    env: { DESK: root }, cwd: root, homeDir: root, gh, ghAuth, jq, taskQuery: "push-task",
     syncFn: async () => ({ state: "unresolved" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
@@ -1819,26 +1895,33 @@ test("bootOnce: undecided factory consent in a noninteractive session emits no c
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {
   const root = await mkDeskWorkspace()
-  const result = await healthyBoot(root, { budgetMs: 30, syncFn: () => new Promise(() => {}) })
+  const result = await healthyBoot(root, { budgetMs: 30, syncBudgetMs: 30, syncFn: () => new Promise(() => {}) })
   assert.ok(result.pending.includes("sync: boot_budget_exceeded"))
   assert.equal(result.sync, null)
 })
 
 test("bootOnce: a repo-state or open-PR step that throws degrades only itself; found PRs and repo states reach the result", async () => {
   const root = await mkDeskWorkspace()
-  const broken = await healthyBoot(root, { repoFn: () => { throw new Error("git gone") }, prFn: async () => { throw new Error("gh gone") } })
+  // Repo state is read only for a named task, and the pull-request search runs only when an open task names a GitHub repo.
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const broken = await healthyBoot(root, { taskQuery: "push-task", repoFn: () => { throw new Error("git gone") }, prFn: async () => { throw new Error("gh gone") } })
   assert.ok(broken.degraded.includes("repo_states: git gone"))
   assert.ok(broken.degraded.includes("open_prs: gh gone"))
   const found = await healthyBoot(root, {
+    taskQuery: "push-task",
     repoFn: () => ({ states: [{ repo: "r", branch: "main" }], pending: ["late"] }),
     prFn: async () => ({ prs: [{ number: 1 }], pending: ["also late"] }),
   })
   assert.deepEqual(found.repo_states, [{ repo: "r", branch: "main" }])
   assert.deepEqual(found.open_prs, [{ number: 1 }])
   assert.ok(found.pending.includes("late") && found.pending.includes("also late"))
+  let asked = false
+  const unnamed = await healthyBoot(root, { repoFn: () => { asked = true; return { states: [], pending: [] } }, prFn: async () => ({ prs: [], pending: [] }) })
+  assert.equal(asked, false, "a boot that names no task reads no repo state")
+  assert.deepEqual(unnamed.repo_states, [])
 })
 
-test("bootOnce: open-PR lookup is asked only for the GitHub repos the push-account step resolved", async () => {
+test("bootOnce: open-PR lookup is asked only for the GitHub repos open tasks name", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote\n  - name: not-github\n    local_path: \"\"\n    mode: remote"))
   let asked = null
@@ -1965,4 +2048,66 @@ test("bootOnce: a card that cannot be read is counted in the boot result, shown 
   const { signoff } = await readStatus(osEnv({ DESK: root }))
   assert.deepEqual(signoff.unsigned, { state: "partial", value: 1, reason: "cards_unreadable" })
   assert.equal(JSON.stringify(signoff).includes("broken"), false)
+})
+
+test("bootOnce: a sync that changes the named task's repos checks the new repos' push routes; PRs of repos no open task names after the sync are dropped", async () => {
+  const root = await mkDeskWorkspace()
+  const repo = (name) => VALID_CARD.replace("repos: []", `repos:\n  - name: ${name}\n    local_path: ""\n    mode: remote`)
+  await writeCard(root, "track-a", "push-task", repo("acme/widgets"))
+  const asked = []
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  const counting = async (args, options) => {
+    if (args[0] === "api" && args[1] !== "graphql") asked.push(args.join(" "))
+    return gh(args, options)
+  }
+  const result = await healthyBoot(root, {
+    gh: counting,
+    taskQuery: "push-task",
+    // The pull rewrote the card: the task now names acme/gadgets instead.
+    syncFn: async () => {
+      await writeCard(root, "track-a", "push-task", repo("acme/gadgets"))
+      return { state: "synced" }
+    },
+    prFn: async ({ stores }) => ({ prs: stores.map((store) => ({ store, number: 1 })), pending: [] }),
+  })
+  assert.deepEqual(result.push_accounts.map((entry) => entry.store), ["acme/gadgets"])
+  assert.ok(asked.some((call) => call.includes("acme/gadgets")), asked.join("|"))
+  assert.deepEqual(result.open_prs, [], "the search ran for acme/widgets, which no open task names after the sync")
+})
+
+test("bootOnce: the pull-request search covers open tasks' GitHub repos, remote or a local clone's origin, and skips the rest", async () => {
+  const root = await mkDeskWorkspace()
+  const clone = await mkTempRoot("desk-boot-local-clone-")
+  spawnSync("git", ["init", "-q", clone])
+  spawnSync("git", ["-C", clone, "remote", "add", "origin", "https://github.com/acme/local.git"])
+  const repos = (lines) => VALID_CARD.replace("repos: []", `repos:\n${lines}`)
+  await writeCard(root, "track-a", "mixed", repos([
+    "  - name: acme/remote\n    local_path: \"\"\n    mode: remote",
+    `  - name: local\n    local_path: ${clone}\n    mode: local`,
+    "  - name: missing\n    local_path: /no/such/clone\n    mode: local",
+    "  - name: not-a-slug\n    local_path: \"\"\n    mode: remote",
+    "  - just-a-string",
+  ].join("\n")))
+  await writeCard(root, "track-a", "finished", repos("  - name: acme/done\n    local_path: \"\"\n    mode: remote").replace("status: processing", "status: done"))
+  await writeCard(root, "track-a", "no-repos", VALID_CARD.replace("repos: []\n", "").replace("\nrepos: []", ""))
+  let asked = null
+  const result = await healthyBoot(root, { taskQuery: "no-repos", prFn: async ({ stores }) => { asked = stores; return { prs: [], pending: [] } } })
+  assert.deepEqual(asked.sort(), ["acme/local", "acme/remote"])
+  assert.equal(result.task.status, "resolved")
+  assert.deepEqual(result.push_accounts, [])
+})
+
+test("bootOnce: a named task the sync brings in gets its push routes checked after the sync", async () => {
+  const root = await mkDeskWorkspace()
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  const result = await healthyBoot(root, {
+    gh,
+    taskQuery: "pulled-task",
+    syncFn: async () => {
+      await writeCard(root, "track-a", "pulled-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+      return { state: "synced" }
+    },
+  })
+  assert.equal(result.task.status, "resolved")
+  assert.deepEqual(result.push_accounts.map((entry) => [entry.store, entry.result]), [["acme/widgets", "account_found"]])
 })

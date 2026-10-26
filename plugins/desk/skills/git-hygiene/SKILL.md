@@ -5,7 +5,7 @@ description: Keep code repos synced and leave no state behind. Use at session st
 
 # Git hygiene
 
-> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). If it ran with no task named and a task was picked since, run it again with `--task "<handle>" --task-only`: that prints the task's push route and repos. A child agent with a bounded brief follows its brief and skips this.
 
 > **overlay users**: consumer overlays may add their own state-sync workflow for the `$DESK/` repo, identity context (e.g. enterprise-managed git accounts), and overlay-specific anti-patterns. This skill stays generic.
 
@@ -124,6 +124,8 @@ It means every repo in the current investigation, code repos most of all when th
 ## Pre-push gate
 
 Every `git push` that carries code changes is a CI-parity boundary. The agent reproduces every routine gate the CI pipelines will run, locally, **before** the push — not after, not in parallel, not optimistically. Explicit final-candidate expensive gates use the exact-SHA exception below.
+
+Before a task's first push in a session, know its push route: the boot's `Push routes` line for that repo, printed by a boot run with `--task`. A boot with no task named checks no routes, so if this session has none, run the boot with `--task "<handle>" --task-only` first, and push only as the account and route it names.
 
 Three layers, all mandatory, all green:
 

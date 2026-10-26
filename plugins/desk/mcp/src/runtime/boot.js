@@ -70,6 +70,7 @@ import {
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
+import { readRemotes } from "../util/git-config-file.js"
 import { isHeadlessFactorySession } from "../factory/headless-flag.js"
 import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
@@ -496,12 +497,18 @@ const MIN_ACCOUNT_CALL_MS = 3000
 // check above already rules out, so neither call needs its own try/catch —
 // a card whose `local_path` cannot be read still degrades cleanly, one
 // level up, through `resolvePushAccounts`'s own caller in `bootOnce`.
-function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs }) {
+function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs, fileOnly = false }) {
   if (typeof localPath !== "string" || localPath.trim() === "") return null
   const resolved = resolveLocalPath(localPath, { homeDir, deskRoot })
-  const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
-  if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
-  const url = result.stdout.trim()
+  // The clone's own config file answers without a git process; git is asked only when the file cannot say.
+  const found = readRemotes(resolved)
+  let url = found === null ? null : found.remotes.origin ?? null
+  if (found === null && !fileOnly) {
+    const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
+    if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
+    url = result.stdout
+  }
+  url = (url ?? "").trim()
   if (url === "") return null
   const normalized = normalizeRemote(url)
   const match = /^https:\/\/github\.com\/(.+)$/u.exec(normalized)
@@ -575,19 +582,15 @@ export async function resolvePushAccounts({
     }
   }
 
-  const resolved = new Map()
-  for (const store of new Set(entries.map((entry) => entry.store))) {
-    const remaining = deadline - now()
-    if (remaining < MIN_ACCOUNT_CALL_MS) {
-      resolved.set(store, { result: "pending", reason: "boot_budget_exceeded" })
-      continue
-    }
-    // `chooseAccount` resolves every failure of its own into a `{ result }`
-    // code (see `factory/flush.js`); a card whose data makes this loop
-    // itself throw is still caught one level up, by `resolvePushAccounts`'s
-    // caller in `bootOnce`.
-    resolved.set(store, await chooseAccount({ store, runner, deadlineMs: Math.min(remaining, perCallTimeoutMs), now }))
-  }
+  // Every store is asked at once, so boot waits for the slowest store, not the sum of them. `chooseAccount` resolves
+  // every failure of its own into a `{ result }` code (see `factory/flush.js`); a card whose data makes this
+  // itself throw is still caught one level up, by `resolvePushAccounts`'s caller in `bootOnce`.
+  const stores = [...new Set(entries.map((entry) => entry.store))]
+  const remaining = deadline - now()
+  const answers = await Promise.all(stores.map((store) => (remaining < MIN_ACCOUNT_CALL_MS
+    ? { result: "pending", reason: "boot_budget_exceeded" }
+    : chooseAccount({ store, runner, deadlineMs: Math.min(remaining, perCallTimeoutMs), now }))))
+  const resolved = new Map(stores.map((store, index) => [store, answers[index]]))
   for (const entry of entries) results.push({ ...entry.label, store: entry.store, ...resolved.get(entry.store) })
   return results
 }
@@ -692,7 +695,13 @@ function machineLocalRepos(root) {
  * this machine's `.machine-local.yml` points at (a `repos:` entry under the repo's name, or its name after the owner, whose path exists).
  */
 function remoteRepoNames(card, { root, homeDir }) {
-  const repos = Array.isArray(card.data.repos) ? card.data.repos : []
+  let repos
+  try {
+    repos = Array.isArray(card.data.repos) ? card.data.repos : []
+  } catch {
+    // An unreadable repos list names no repo here; card validation and the push-route check report it.
+    repos = []
+  }
   const overrides = machineLocalRepos(root)
   const hasLocalClone = (repo) => {
     if (typeof repo.name !== "string" || repo.name === "") return false
@@ -754,46 +763,144 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
 // What gh prints when GitHub refuses the credential itself (a revoked or expired token, a bad GH_TOKEN), as opposed to a rate limit or a network failure.
 const AUTH_REJECTED = /HTTP 401|bad credentials|requires authentication|token[^.\n]{0,40}(?:invalid|expired|revoked)|no longer valid/iu
 
-/** Open pull requests the signed-in account authored, one `gh pr list` per distinct GitHub repo, within the deadline. */
-export async function openPullRequests({ stores, runner, now, deadline }) {
-  const prs = []
-  const pending = []
-  for (const store of stores) {
-    const remaining = deadline - now()
-    if (remaining < MIN_ACCOUNT_CALL_MS) {
-      pending.push(`open pull requests for ${store}: boot_budget_exceeded`)
-      continue
-    }
-    const result = await runner(["pr", "list", "--repo", store, "--author", "@me", "--state", "open", "--json", "number,title,url,isDraft,reviewDecision"], { timeoutMs: Math.min(remaining, 12000) })
-    if (result.timedOut) {
-      pending.push(`open pull requests for ${store}: timeout`)
-      continue
-    }
-    if (result.code !== 0) {
-      // The offline sign-in check cannot see a token GitHub has revoked, or an invalid GH_TOKEN; this call can, so say it once, as a warning.
-      const said = `${result.stderr ?? ""}\n${result.stdout ?? ""}`
-      if (AUTH_REJECTED.test(said) && !pending.some((line) => line.startsWith("auth: "))) {
-        pending.push(`auth: GitHub rejected the sign-in gh uses (gh said: ${redactCredentialLikeText(trimmed(said, 200).replace(/\s+/gu, " "))}); pushes will fail until you run \`gh auth login --hostname github.com\`, or unset or replace GH_TOKEN if it is set`)
-      }
-      continue
-    }
-    let list
-    try {
-      list = JSON.parse(result.stdout)
-    } catch {
-      continue
-    }
-    if (!Array.isArray(list)) continue
-    for (const entry of list) {
-      prs.push({ store, number: entry.number, title: redactCredentialLikeText(String(entry.title ?? "")), url: entry.url, draft: entry.isDraft === true, review: entry.reviewDecision ?? null })
-    }
+const PR_SEARCH_QUERY = "query($q: String!) { search(query: $q, type: ISSUE, first: 100) { issueCount nodes { ... on PullRequest { number title url isDraft reviewDecision repository { nameWithOwner } } } } }"
+const PR_SEARCH_TIMEOUT_MS = 8000
+
+/**
+ * The open pull requests the signed-in account authored, in the repos of open tasks (`stores`): one GitHub search for
+ * all of them, never one call per repo, so a desk with many repos costs what a desk with one does. GitHub returns the
+ * 100 most recently updated; `pending` says so when there were more, and says a failed or slow search in one line.
+ */
+export async function openPullRequests({ stores, runner, timeoutMs = PR_SEARCH_TIMEOUT_MS }) {
+  const wanted = new Set(stores.map((store) => store.toLowerCase()))
+  if (wanted.size === 0) return { prs: [], pending: [] }
+  const result = await runner(["api", "graphql", "-f", `query=${PR_SEARCH_QUERY}`, "-f", "q=is:pr is:open author:@me archived:false sort:updated-desc"], { timeoutMs })
+  if (result.timedOut) return { prs: [], pending: ["open pull requests: timeout"] }
+  if (result.code !== 0) {
+    const said = `${result.stderr ?? ""}\n${result.stdout ?? ""}`
+    // The offline sign-in check cannot see a token GitHub has revoked, or an invalid GH_TOKEN; this call can, so say it once, as a warning.
+    if (AUTH_REJECTED.test(said)) return { prs: [], pending: [`auth: GitHub rejected the sign-in gh uses (gh said: ${redactCredentialLikeText(trimmed(said, 200).replace(/\s+/gu, " "))}); pushes will fail until you run \`gh auth login --hostname github.com\`, or unset or replace GH_TOKEN if it is set`] }
+    return { prs: [], pending: ["open pull requests: GitHub search failed"] }
   }
-  return { prs, pending }
+  let search
+  try {
+    search = JSON.parse(result.stdout)?.data?.search
+  } catch {
+    search = null
+  }
+  if (search === null || typeof search !== "object" || !Array.isArray(search.nodes)) return { prs: [], pending: ["open pull requests: GitHub search failed"] }
+  const prs = []
+  for (const entry of search.nodes) {
+    const store = entry?.repository?.nameWithOwner
+    if (typeof store !== "string" || !wanted.has(store.toLowerCase())) continue
+    prs.push({ store, number: entry.number, title: redactCredentialLikeText(String(entry.title ?? "")), url: entry.url, draft: entry.isDraft === true, review: entry.reviewDecision ?? null })
+  }
+  const more = Number(search.issueCount) > search.nodes.length ? [`open pull requests: only the ${search.nodes.length} most recently updated of ${search.issueCount} were checked`] : []
+  return { prs, pending: more }
 }
 
 // ── Orchestrator ────────────────────────────────────────────────────────
 
-const DEFAULT_BUDGET_MS = 45000
+/** A push route that could not be found or checked, as a `degraded` or `pending` line, and a stored token GitHub refused, once per account, as a warning. */
+function notePushAccounts(pushAccounts, degraded, pending) {
+  for (const entry of pushAccounts) {
+    const where = cardLocation(entry)
+    if (entry.result === "no_account_can_deliver") {
+      degraded.push(`push account: no signed-in account can push ${entry.store} for ${where}`)
+    } else if (entry.result === "pending") {
+      pending.push(`push account for ${entry.store} (${where}): ${entry.reason}`)
+    } else if (entry.result !== "account_found" && entry.result !== "not_a_github_repo") {
+      degraded.push(`push account: ${entry.store} (${where}) — ${entry.result}`)
+    }
+  }
+  for (const account of new Set(pushAccounts.flatMap((entry) => (Array.isArray(entry.accounts) ? entry.accounts.filter((item) => item.reason === "auth_failed").map((item) => item.account) : [])))) {
+    pending.push(`auth: GitHub rejected the stored sign-in for ${account}; pushes as ${account} will fail until you run \`gh auth login --hostname github.com\``)
+  }
+}
+
+/** `result.task` for `--task <query>`: the resolved task with its remote-only repos and whether its Host line names another host, or why none resolved. */
+function namedTaskResult(taskQuery, cards, { root, host, homeDir }) {
+  const resolved = resolveTaskQuery(taskQuery, cards, root.path)
+  if (resolved.status !== "resolved") return resolved
+  const { file, ...shown } = resolved.task
+  const recorded = hostLineHostname(readCardText(file) ?? "")
+  return { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file), { root: root.path, homeDir }) }, host_line_changed: recorded !== null && recorded !== host.hostname }
+}
+
+/** The cards of the task `resolveTaskQuery` resolved, or none. */
+function namedCards(resolved, cards) {
+  return resolved.status === "resolved" ? cards.filter((card) => card.file === resolved.task.file) : []
+}
+
+/** The GitHub `owner/repo` of every repo of every open task, read from the cards and the clones' config files, never by running git. */
+function taskStores(cards, { root, homeDir }) {
+  const stores = new Set()
+  for (const card of cards) {
+    // A card that cannot be read here names no repo; card validation reports it.
+    try {
+      if (TERMINAL_STATUSES.has(card.data.status) || !Array.isArray(card.data.repos)) continue
+      for (const repo of card.data.repos) {
+        if (repo === null || typeof repo !== "object") continue
+        if (repo.mode === "remote" && typeof repo.name === "string" && PATTERNS.prRepo.test(repo.name)) stores.add(repo.name)
+        else if (repo.mode === "local") {
+          const store = resolveLocalStore(repo.local_path, { homeDir, deskRoot: root, fileOnly: true })
+          if (store !== null) stores.add(store)
+        }
+      }
+    } catch {
+      continue
+    }
+  }
+  return [...stores]
+}
+
+/**
+ * `--task <query> --task-only`: what a session that already booted needs once the operator picks a task, and nothing it
+ * already has. The task's push routes and repo state, and the instructions about that task; no sync, migrations, task
+ * list, pull requests, factory lines or AGENTS.md.
+ */
+async function taskOnlyBoot({ taskQuery, root, host, degraded, pending, walkFn, repoFn, gh, now, deadline, spawnGit, homeDir }) {
+  let cards = []
+  try {
+    cards = walkFn(root.path)
+  } catch (error) {
+    degraded.push(`cards: ${error.message}`)
+  }
+  const task = namedTaskResult(taskQuery, cards, { root, host, homeDir })
+  const named = namedCards(resolveTaskQuery(taskQuery, cards, root.path), cards)
+  const routes = resolvePushAccounts({ root: root.path, cards: named, runner: gh, now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
+  let repoStateList = []
+  try {
+    const found = repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
+    repoStateList = found.states
+    pending.push(...found.pending)
+  } catch (error) {
+    degraded.push(`repo_states: ${error.message}`)
+  }
+  let pushAccounts = []
+  try {
+    pushAccounts = await routes
+  } catch (error) {
+    degraded.push(`push_accounts: ${error.message}`)
+  }
+  notePushAccounts(pushAccounts, degraded, pending)
+  const blockers = blockingClones(task, repoStateList)
+  const ask = blockers.length > 0 ? [askThenHandOff(blockers, task.task)] : []
+  const items = namedTaskInstructions({ task, repoStateList, root, host, blocked: blockers.length > 0, taskOnly: true })
+  return {
+    ...emptyResult({ status: healthWord(degraded), degraded, pending, instructions: [...ask, ...pushLines(pushAccounts), ...items.map((item) => item.text)], root, host }),
+    task_only: true,
+    task,
+    push_accounts: pushAccounts,
+    repo_states: repoStateList,
+    // The text boot prints the routes in their own section, as the full boot prints them on each task.
+    text_instructions: [...ask, ...items.map((item) => item.plain)],
+  }
+}
+
+// The checks' ceiling: each network check has its own, shorter limit, and they run at once, during the sync. The sync
+// has its own 20 s limit (`session-sync.js`) and is never cut short; its budget here is only a backstop above it.
+const DEFAULT_BUDGET_MS = 15000
 const SYNC_BUDGET_MS = 25000
 const AGENT_HOSTS = Object.freeze(["claude", "copilot"])
 
@@ -980,30 +1087,14 @@ function pushInstruction(entry, where) {
   return `Push access for ${store} (${where}) could not be checked (${entry.result}): treat it as unknown and verify with \`gh auth status\` before pushing.`
 }
 
-const PUSH_LINE_CAP = 5
-
-function taskList(locations) {
-  const shown = locations.slice(0, 3).join(", ")
-  const more = locations.length > 3 ? ` and ${locations.length - 3} more` : ""
-  return `${locations.length === 1 ? "task" : "tasks"} ${shown}${more}`
-}
-
-// One line per store and outcome, not per task and repo: a repo shared by many tasks is one line naming the first
-// few. At most PUSH_LINE_CAP lines, then one summary. `namedTask`, when the operator named one, narrows to its repos.
-function pushLines(pushAccounts, namedTask) {
-  const groups = new Map()
+// One line per store and outcome: boot checks push routes only for the task the operator named, so every line is that task's.
+function pushLines(pushAccounts) {
+  const lines = new Map()
   for (const entry of pushAccounts) {
-    if (namedTask !== null && (entry.track !== namedTask.track || entry.slug !== namedTask.slug)) continue
-    if (pushInstruction(entry, "") === null) continue
-    const key = [entry.store, entry.result, entry.account, entry.route].join("|")
-    const group = groups.get(key) ?? { entry, locations: [] }
-    const location = cardLocation(entry)
-    if (!group.locations.includes(location)) group.locations.push(location)
-    groups.set(key, group)
+    const line = pushInstruction(entry, `task ${cardLocation(entry)}`)
+    if (line !== null) lines.set([entry.store, entry.result, entry.account, entry.route].join("|"), line)
   }
-  const lines = [...groups.values()].map(({ entry, locations }) => pushInstruction(entry, taskList(locations)))
-  if (lines.length <= PUSH_LINE_CAP) return lines
-  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: read each task's \`push:\` line in the plain-text boot (the \`push_accounts\` field with \`--json\`) before pushing anywhere.`]
+  return [...lines.values()]
 }
 
 // What to do about a recorded local clone that is not on this machine: the exact clone command when the card carries
@@ -1067,12 +1158,45 @@ function factoryTextLine(factory, pluginRoot) {
 // prints, or null when the text boot says it elsewhere (a push route sits on its task) or not at all. Every producer
 // adds to `body`; the consent block is built only by `consentItems` and joined only by `withConsentLast`, so no
 // producer can put a line after consent (three packages broke "consent is last" by appending after it).
+/** The named task's missing clones with no source to clone them from: the agent has to ask the operator before it hands off. */
+function blockingClones(task, repoStateList) {
+  return task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
+}
+
+// A `--task-only` run comes after a boot that printed the task list, so it points back at that list.
+const TASK_ONLY_UNMATCHED = "The name matches no open task: use the task list from this session's first boot and ask what to resume or start."
+
+/**
+ * The instructions about the task `--task` named, as `{ text, plain }` items: hand off, clone what is missing, read the
+ * remote repos, fix the Host line; or ask which task when the name matched several or none. `blocked` means an
+ * ask-first instruction already leads (`askThenHandOff`), which carries the hand-off itself.
+ */
+function namedTaskInstructions({ task, repoStateList, root, host, noninteractive, blocked, taskOnly = false }) {
+  const items = []
+  const add = (text, plain = text) => items.push({ text, plain })
+  if (task?.status === "resolved") {
+    const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
+    if (!blocked) add(taskOnly ? `Hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}). Every instruction from this session's first boot still applies.` : `The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+    for (const missing of named.filter(hasCloneSource)) add(missingCloneInstruction(missing))
+    if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
+    if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
+  } else if (task?.status === "ambiguous") {
+    add(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
+  } else if (taskOnly) {
+    add(TASK_ONLY_UNMATCHED)
+  } else {
+    add(UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT)
+    add(noninteractive ? NEW_WORK_INSTRUCTION_UNATTENDED : NEW_WORK_INSTRUCTION)
+  }
+  return items
+}
+
 function buildInstructionItems(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, task, host, migrationEntries, taskQuery, agentHost, noninteractive, repoStateList, improvement } = ctx
   const body = []
   const add = (text, plain = text) => body.push({ text, plain })
   // A question for the operator comes first, before the desk path and the tool names: the agent must not start anything until it is asked.
-  const namedBlockers = taskQuery !== null && task?.status === "resolved" ? repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug && !hasCloneSource(state)) : []
+  const namedBlockers = taskQuery !== null ? blockingClones(task, repoStateList) : []
   if (namedBlockers.length > 0) add(askThenHandOff(namedBlockers, task.task))
   for (const entry of migrationEntries) {
     add(migrationLine([entry], ctx.pluginRoot, ctx.platform).replace(/^Desk migrations: /u, ""))
@@ -1092,25 +1216,12 @@ function buildInstructionItems(ctx) {
   for (const entry of cardValidationResult) {
     add(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
-  // The named task's repos when the operator named one, every active task's otherwise. The text boot prints each push
-  // route on its task instead, so these are `--json`-only.
-  const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
-  for (const line of pushLines(pushAccounts, namedTask)) add(line, null)
+  // The named task's push routes. The text boot prints each route on its task instead, so these are `--json`-only.
+  for (const line of pushLines(pushAccounts)) add(line, null)
   add(deferredToolsHint(agentHost))
   if (agentHost === "copilot" && !noninteractive) add(COPILOT_ASK_IN_CHAT_INSTRUCTION)
   if (taskQuery !== null) {
-    if (task?.status === "resolved") {
-      const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
-      if (namedBlockers.length === 0) add(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
-      for (const missing of named.filter(hasCloneSource)) add(missingCloneInstruction(missing))
-      if (task.task.remote_repos.length > 0) add(remoteRepoInstruction(task.task.remote_repos, root))
-      if (task.host_line_changed) add(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
-    } else if (task?.status === "ambiguous") {
-      add(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
-    } else {
-      add(UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT)
-      add(noninteractive ? NEW_WORK_INSTRUCTION_UNATTENDED : NEW_WORK_INSTRUCTION)
-    }
+    body.push(...namedTaskInstructions({ task, repoStateList, root, host, noninteractive, blocked: namedBlockers.length > 0 }))
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
     add(noninteractive ? NEW_WORK_INSTRUCTION_UNATTENDED : NEW_WORK_INSTRUCTION)
@@ -1189,7 +1300,9 @@ export async function bootOnce({
   cwd = process.cwd(),
   now = Date.now,
   budgetMs = DEFAULT_BUDGET_MS,
+  syncBudgetMs = SYNC_BUDGET_MS,
   taskQuery = null,
+  taskOnly = false,
   spawnGit = spawnSync,
   homeDir = env.HOME || os.homedir(),
   gh: ghArg,
@@ -1230,7 +1343,8 @@ export async function bootOnce({
   // path must never be scanned or synced.
   let migrationEntries = []
   try {
-    migrationEntries = await migrationsFn({ pluginRoot, env, cwd })
+    // A task-only boot follows a full boot of the same session, which ran the migration checks.
+    migrationEntries = taskOnly && taskQuery !== null ? [] : await migrationsFn({ pluginRoot, env, cwd })
   } catch (error) {
     degraded.push(`migrations: ${error.message}`)
   }
@@ -1263,12 +1377,42 @@ export async function bootOnce({
     return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
 
+  if (taskOnly && taskQuery !== null) {
+    return taskOnlyBoot({ taskQuery, root, host, degraded, pending, walkFn, repoFn, gh: withAmbientToken(gh, env), now, deadline, spawnGit, homeDir })
+  }
+
   // A headless evaluator session changes nothing in the desk: no card guard, no sync, no stale refresh.
   const headless = isHeadlessFactorySession(env)
   // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
   const staleDesk = Promise.resolve()
     .then(() => (headless ? null : staleDeskFn({ env, pluginRoot, agentHost: host.agent, now })))
     .catch(() => null)
+
+  // The network checks start now and run while the card guard and the sync run, so boot waits
+  // for the slowest of them, not their sum. None of them reads the desk's content after the sync:
+  //   - the prerequisite probe (gh, jq, sign-in);
+  //   - one GitHub search for the operator's open pull requests, only when an open task names a GitHub repo;
+  //   - the push route of the named task's repos, only when the operator named a task. A boot that names no task
+  //     checks no push routes: the route matters only before a push, and the agent runs the boot again with `--task
+  //     <handle> --task-only` once the operator picks one.
+  // The card list read here, before the sync, only decides what to start; everything shown is read after the sync.
+  const prereqsStarted = checkPrereqs({ gh, jq, ghAuth, authOptions })
+  let earlyCards = []
+  try {
+    earlyCards = walkFn(root.path)
+  } catch {
+    earlyCards = []
+  }
+  const earlyStores = taskStores(earlyCards, { root: root.path, homeDir })
+  // Called now (a promise executor runs at once), not in a later microtask: the card guard below blocks the event loop
+  // for a moment, and the search must already be under way.
+  const prsStarted = earlyStores.length === 0 ? null : new Promise((resolve) => resolve(prFn({ stores: earlyStores, runner: ghAuth }))).catch((error) => ({ error }))
+  const pushRunner = withAmbientToken(gh, env)
+  const pushFor = (selected) => resolvePushAccounts({ root: root.path, cards: selected, runner: pushRunner, now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
+  const earlyNamed = taskQuery === null ? [] : namedCards(resolveTaskQuery(taskQuery, earlyCards, root.path), earlyCards)
+  const pushStarted = earlyNamed.length === 0 ? null : pushFor(earlyNamed)
+  // A failure is reported where the routes are awaited, below; this only keeps it from being an unhandled rejection meanwhile.
+  pushStarted?.catch(() => {})
 
   // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
   // only a failure to install is worth a line.
@@ -1281,7 +1425,19 @@ export async function bootOnce({
     degraded.push(`card guard: ${error.message}`)
   }
 
-  const prereqs = await checkPrereqs({ gh, jq, ghAuth, authOptions })
+  let sync = null
+  let syncTimedOut = false
+  try {
+    const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env }), syncBudgetMs, { timedOut: true })
+    if (synced.timedOut === true) {
+      syncTimedOut = true
+      pending.push("sync: boot_budget_exceeded")
+    } else sync = synced
+  } catch (error) {
+    degraded.push(`sync: ${error.message}`)
+  }
+
+  const prereqs = await prereqsStarted
   for (const [name, check] of Object.entries(prereqs)) {
     if (check.ok) continue
     if (check.soft === true) {
@@ -1293,17 +1449,6 @@ export async function bootOnce({
     }
   }
 
-  let sync = null
-  let syncTimedOut = false
-  try {
-    const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env }), Math.min(SYNC_BUDGET_MS, deadline - now()), { timedOut: true })
-    if (synced.timedOut === true) {
-      syncTimedOut = true
-      pending.push("sync: boot_budget_exceeded")
-    } else sync = synced
-  } catch (error) {
-    degraded.push(`sync: ${error.message}`)
-  }
   const syncProblem = syncDegradation(sync)
   if (syncProblem !== null) degraded.push(syncProblem)
   let lastSyncAt = null
@@ -1348,30 +1493,17 @@ export async function bootOnce({
     degraded.push(`${cardValidationResult.length} task card${cardValidationResult.length === 1 ? "" : "s"} with corrupted frontmatter`)
   }
 
-  let pushAccounts = []
-  try {
-    pushAccounts = await resolvePushAccounts({ root: root.path, cards, runner: withAmbientToken(gh, env), now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
-  } catch (error) {
-    degraded.push(`push_accounts: ${error.message}`)
-  }
-  for (const entry of pushAccounts) {
-    const where = cardLocation(entry)
-    if (entry.result === "no_account_can_deliver") {
-      degraded.push(`push account: no signed-in account can push ${entry.store} for ${where}`)
-    } else if (entry.result === "pending") {
-      pending.push(`push account for ${entry.store} (${where}): ${entry.reason}`)
-    } else if (entry.result !== "account_found" && entry.result !== "not_a_github_repo") {
-      degraded.push(`push account: ${entry.store} (${where}) — ${entry.result}`)
-    }
-  }
-
+  // The named task's repos are the only ones whose state and push route boot checks.
+  const named = taskQuery === null ? [] : namedCards(resolveTaskQuery(taskQuery, cards, root.path), cards)
   let repoStateList = []
-  try {
-    const found = repoFn({ cards, root: root.path, spawnGit, homeDir, now, deadline })
-    repoStateList = found.states
-    pending.push(...found.pending)
-  } catch (error) {
-    degraded.push(`repo_states: ${error.message}`)
+  if (named.length > 0) {
+    try {
+      const found = repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
+      repoStateList = found.states
+      pending.push(...found.pending)
+    } catch (error) {
+      degraded.push(`repo_states: ${error.message}`)
+    }
   }
   // A clone seen with no remote and no card url is recorded on its card as local-only, once: the only record the done
   // check trusts for a commit with nowhere to push (`tools/local-only.js`).
@@ -1381,24 +1513,9 @@ export async function bootOnce({
     // Recording is a convenience and never a reason to degrade a boot.
   }
 
-  let openPrs = []
-  try {
-    const stores = [...new Set(pushAccounts.filter((entry) => typeof entry.store === "string").map((entry) => entry.store))]
-    const found = await prFn({ stores, runner: ghAuth, now, deadline })
-    openPrs = found.prs
-    pending.push(...found.pending)
-  } catch (error) {
-    degraded.push(`open_prs: ${error.message}`)
-  }
-
-  // A stored token GitHub refused while the push routes were checked: say so once per account, as a warning.
-  for (const account of new Set(pushAccounts.flatMap((entry) => (Array.isArray(entry.accounts) ? entry.accounts.filter((item) => item.reason === "auth_failed").map((item) => item.account) : [])))) {
-    pending.push(`auth: GitHub rejected the stored sign-in for ${account}; pushes as ${account} will fail until you run \`gh auth login --hostname github.com\``)
-  }
-
   let factory = null
   try {
-    factory = factoryStatusFn({ env, deskRoot: root.path })
+    factory = factoryStatusFn({ env, deskRoot: root.path, signoff: false })
   } catch (error) {
     degraded.push(`factory: ${error.message}`)
   }
@@ -1428,17 +1545,32 @@ export async function bootOnce({
     }
   }
 
-  let task = null
-  if (taskQuery !== null) {
-    const resolved = resolveTaskQuery(taskQuery, cards, root.path)
-    if (resolved.status === "resolved") {
-      const { file, ...shown } = resolved.task
-      const recorded = hostLineHostname(readCardText(file) ?? "")
-      task = { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file), { root: root.path, homeDir }) }, host_line_changed: recorded !== null && recorded !== host.hostname }
-    } else {
-      task = resolved
-    }
+  let pushAccounts = []
+  try {
+    // The routes started before the sync stand unless the sync changed the named task's repos.
+    const reposOf = (list) => JSON.stringify(list.map((card) => [card.file, card.data.repos ?? null]))
+    const reuse = pushStarted !== null && reposOf(named) === reposOf(earlyNamed)
+    pushAccounts = named.length === 0 ? [] : await (reuse ? pushStarted : pushFor(named))
+    // A dropped early check may still have `gh` children; the script exits right after its output, which would leave them running. It started first and has the same limits.
+    if (!reuse && pushStarted !== null) await Promise.allSettled([pushStarted])
+  } catch (error) {
+    degraded.push(`push_accounts: ${error.message}`)
   }
+  notePushAccounts(pushAccounts, degraded, pending)
+
+  let openPrs = []
+  try {
+    const found = prsStarted === null ? { prs: [], pending: [] } : await prsStarted
+    if (found.error) throw found.error
+    // Only the pull requests in repos that open tasks still name after the sync.
+    const wanted = new Set(taskStores(cards, { root: root.path, homeDir }).map((store) => store.toLowerCase()))
+    openPrs = found.prs.filter((pr) => typeof pr.store !== "string" || wanted.has(pr.store.toLowerCase()))
+    pending.push(...found.pending)
+  } catch (error) {
+    degraded.push(`open_prs: ${error.message}`)
+  }
+
+  const task = taskQuery === null ? null : namedTaskResult(taskQuery, cards, { root, host, homeDir })
 
   const staleFinding = await staleDesk
   const releaseFinding = await releaseAlert
@@ -1479,7 +1611,7 @@ export async function bootOnce({
   }
 }
 
-/** `--task <query>` and `--json` from the command line: the named task or null, and whether to print the structured result. */
+/** `--task <query>`, `--json` and `--task-only` from the command line: the named task or null, whether to print the structured result, and whether to check only the named task. */
 export function parseBootArgs(argv) {
   const index = argv.indexOf("--task")
   // `--task --json` names no task: a flag is never the query.
@@ -1487,6 +1619,7 @@ export function parseBootArgs(argv) {
   return {
     taskQuery: typeof value === "string" && value.trim() !== "" && !value.startsWith("--") ? value : null,
     json: argv.includes("--json"),
+    taskOnly: argv.includes("--task-only"),
   }
 }
 
@@ -1495,10 +1628,10 @@ export function parseBootArgs(argv) {
  * tests) and always exits 0 — a boot script must never block session start.
  */
 export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
-  const { taskQuery, json } = parseBootArgs(argv)
+  const { taskQuery, json, taskOnly } = parseBootArgs(argv)
   let result
   try {
-    result = await bootFn({ env, taskQuery })
+    result = await bootFn({ env, taskQuery, taskOnly })
   } catch (error) {
     result = emptyResult({
       status: "degraded",

@@ -23,6 +23,7 @@ import {
   overwrittenUntrackedPaths,
   queueDeskProblemFiling,
   runSessionSyncCli,
+  spawnGitAsync,
   syncWorkspace,
 } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 
@@ -775,4 +776,36 @@ test("scripts/session-sync.js runs the command line for real, as a subprocess", 
   await writeAndCommit(root, "seed.md", "seed\n", "seed")
   const stdout = execFileSync(process.execPath, [SCRIPT, "--root", root], { encoding: "utf8", env: process.env })
   assert.equal(stdout, "")
+})
+
+// Boot starts its network checks before the sync and times them with timers. A pull that blocked the event loop held
+// those timers back until it returned, and then a check that had long finished read as timed out.
+test("syncWorkspace: a slow pull leaves the event loop running", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  git(cloneA, ["push", "-q", "origin", "main"])
+  git(cloneB, ["config", "remote.origin.uploadpack", "sleep 1; git-upload-pack"])
+  let ticks = 0
+  const ticker = setInterval(() => { ticks += 1 }, 50)
+  try {
+    const result = await syncWorkspace({ root: cloneB, env: {} })
+    assert.equal(result.state, "synced")
+  } finally {
+    clearInterval(ticker)
+  }
+  assert.ok(ticks >= 5, `the event loop ran during the pull (${ticks} ticks)`)
+  assert.ok(existsSync(path.join(cloneB, "more.md")))
+})
+
+test("spawnGitAsync: spawnSync's result shape for an exit, a timeout and a spawn failure", async () => {
+  const done = await spawnGitAsync(process.execPath, ["-e", "process.stdout.write('out'); process.stderr.write('err'); process.exit(3)"], { timeout: 10000 })
+  assert.deepEqual(done, { status: 3, signal: null, stdout: "out", stderr: "err" })
+  const slow = await spawnGitAsync(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 50 })
+  assert.equal(slow.status, null)
+  assert.equal(slow.signal, "SIGTERM")
+  assert.equal(slow.error.code, "ETIMEDOUT")
+  const missing = await spawnGitAsync(path.join(os.tmpdir(), "no-such-git-binary"), [], { timeout: 1000 })
+  assert.equal(missing.status, null)
+  assert.equal(missing.error.code, "ENOENT")
 })

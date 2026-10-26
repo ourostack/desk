@@ -131,13 +131,13 @@ function fakeGh({ accounts, repos }) {
   }
 }
 
-async function bootWith(gh) {
+async function bootWith(gh, taskQuery = "one") {
   const root = await mkTempRoot("desk-boot-round10-")
   await fs.mkdir(path.join(root, "_meta"), { recursive: true })
   await fs.mkdir(path.join(root, "_archive"), { recursive: true })
   await fs.mkdir(path.join(root, "ops", "one"), { recursive: true })
   await fs.writeFile(path.join(root, "ops", "one", "task.md"), `---\nschema_version: 1\ntitle: One\nstatus: processing\ncreated: '2026-01-01T00:00:00Z'\nupdated: '2026-01-02T00:00:00Z'\ntrack: ops\nrepos:\n  - name: acme/widgets\n    local_path: ""\n    mode: remote\n---\n\nBody.\n`)
-  return bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" }), syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }) })
+  return bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: async () => ({ code: 0, stdout: "jq-1.7\n", stderr: "" }), syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }), taskQuery })
 }
 
 test("bootOnce: a fork route with a different active account says to push as the fork account and never to write the active one", async () => {

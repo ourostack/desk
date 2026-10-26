@@ -5,7 +5,7 @@ description: Find or set up local clones of a task's repos across machines with 
 
 # Repo handling
 
-> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). If it ran with no task named and a task was picked since, run it again with `--task "<handle>" --task-only`: that prints the task's push route and repos. A child agent with a bounded brief follows its brief and skips this.
 
 Machines lay code out differently (`~/code/` on a Mac, `Q:\src\` on Windows, `/repos/` on a Linux box), and a task card written on one must still resume on another. Use this skill when a card's `local_path` is empty or does not resolve here, when the operator asks where a repo is, or on a fresh machine. Overlays may ship a richer discovery skill (another tracker, cross-org routing); this one stays generic.
 

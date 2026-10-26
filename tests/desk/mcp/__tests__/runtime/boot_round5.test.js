@@ -99,7 +99,7 @@ test("bootOnce: a sync result without a cause (an older syncFn) keeps the git st
 // ── push route ──────────────────────────────────────────────────────────
 
 test("bootOnce: a plain direct push by the active account adds no route line", async () => {
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }))
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { taskQuery: "one" })
   assert.equal(result.push_accounts[0].result, "account_found")
   assert.ok(!result.instructions.some((line) => /Push route|Push access|Do not push/u.test(line)))
   assert.ok(!result.instructions.some((line) => /Push route/u.test(line)))
@@ -107,7 +107,7 @@ test("bootOnce: a plain direct push by the active account adds no route line", a
 
 test("bootOnce: a fork route names the repo, the account and the route, in instructions and actions", async () => {
   const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh, taskQuery: "one" })
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /task example-track\/one/u)
   assert.match(line, /account ari cannot push to it directly\. Push your branch to ari's fork/u)
@@ -119,7 +119,7 @@ test("bootOnce: a fork route names the repo, the account and the route, in instr
 
 test("bootOnce: when only a non-active account can push, the instruction names both and how to push as the right one", async () => {
   const gh = fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: PUSH } })
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh, taskQuery: "one" })
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /account ari is the one with push access \(route direct\), but gh's active account is work/u)
   assert.match(line, /GH_TOKEN=\$\(gh auth token --user ari\)/u)
@@ -128,59 +128,55 @@ test("bootOnce: when only a non-active account can push, the instruction names b
 
 test("bootOnce: no account can deliver lists each account's reason", async () => {
   const gh = fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: 404 } })
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh, taskQuery: "one" })
   const line = result.instructions.find((entry) => entry.startsWith("Do not push acme/widgets"))
   assert.match(line, /no signed-in account can \(work: store_not_visible; ari: store_not_visible\)\. Ask the operator which account to use, or fork, and say so in one line/u)
 })
 
 test("bootOnce: a no-account answer without an account list still says so", async () => {
   const gh = fakeGh({ accounts: [], repos: {} })
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh, taskQuery: "one" })
   assert.ok(result.instructions.some((line) => /^Do not push acme\/widgets \(task example-track\/one\): no signed-in account can\. Ask/u.test(line)))
 })
 
 test("bootOnce: an account lookup that failed is reported as unknown push access", async () => {
   const gh = async (args) => (args[0] === "--version" ? { code: 0, stdout: VERSION_OK, stderr: "" } : { code: 127, stdout: "", stderr: "", spawnError: "ENOENT" })
-  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
+  const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh, taskQuery: "one" })
   const line = result.instructions.find((entry) => entry.startsWith("Push access for acme/widgets"))
   assert.match(line, /could not be checked \(gh_missing\): treat it as unknown/u)
   assert.ok(result.instructions.includes(line))
 })
 
-test("bootOnce: a named task keeps only its own repos' route lines; with no name every active task is covered", async () => {
+test("bootOnce: a named task gets its own repos' route lines; with no name, or a name that matches nothing, no push route is checked", async () => {
   const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
   const root = await mkDesk({ one: CARD("acme/widgets", "Widgets"), two: CARD("acme/gadgets", "Gadgets") })
-  const both = await boot(root, { gh })
-  assert.equal(both.instructions.filter((line) => line.startsWith("Push route for")).length, 2)
+  const none = await boot(root, { gh })
+  assert.deepEqual(none.push_accounts, [])
+  assert.equal(none.instructions.filter((line) => line.startsWith("Push route for")).length, 0)
   const named = await boot(root, { gh, taskQuery: "gadgets" })
   assert.equal(named.task.status, "resolved")
   const lines = named.instructions.filter((line) => line.startsWith("Push route for"))
   assert.equal(lines.length, 1)
   assert.match(lines[0], /acme\/gadgets/u)
   const unmatched = await boot(root, { gh, taskQuery: "no-such-task" })
-  assert.equal(unmatched.instructions.filter((line) => line.startsWith("Push route for")).length, 2, "a name that matches nothing narrows nothing")
+  assert.deepEqual(unmatched.push_accounts, [])
 })
 
 test("bootOnce: a repo that is not on GitHub and a pending account lookup add no route line", async () => {
   const root = await mkDesk({ one: CARD("not-a-slug") })
-  const result = await boot(root)
+  const result = await boot(root, { taskQuery: "one" })
   assert.equal(result.push_accounts[0].result, "not_a_github_repo")
   assert.ok(!result.instructions.some((line) => /Push (route|access)/u.test(line)))
 })
 
-test("bootOnce: a repo shared by many tasks is one grouped line, and the total is capped, in instructions and actions", async () => {
+test("bootOnce: a task with several repos gets one route line for each repo that needs one", async () => {
   const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
-  const cards = {}
-  for (let index = 0; index < 30; index += 1) cards[`a-shared-${index}`] = CARD("acme/widgets", `Shared ${index}`)
-  for (let index = 0; index < 7; index += 1) cards[`own-${index}`] = CARD(`acme/repo${index}`, `Own ${index}`)
-  const result = await boot(await mkDesk(cards), { gh })
-  for (const list of [result.instructions, result.instructions]) {
-    const lines = list.filter((line) => /^Push route for|^\.\.\.and \d+ more repos/u.test(line))
-    assert.equal(lines.length, 6, "five route lines plus one summary")
-    const shared = lines.find((line) => line.includes("acme/widgets"))
-    assert.match(shared, /^Push route for acme\/widgets \(tasks example-track\/a-shared-\d+, example-track\/a-shared-\d+, example-track\/a-shared-\d+ and 27 more\)/u)
-    assert.match(lines[5], /^\.\.\.and 3 more repos with push-route notes/u)
-  }
+  let card = CARD("acme/repo0")
+  for (let index = 1; index < 7; index += 1) card += `\n  - name: acme/repo${index}\n    local_path: ""\n    mode: remote`
+  const result = await boot(await mkDesk({ one: card }), { gh, taskQuery: "one" })
+  const lines = result.instructions.filter((line) => line.startsWith("Push route for"))
+  assert.equal(lines.length, 7)
+  assert.ok(lines.every((line) => line.includes("(task example-track/one)")))
 })
 
 test("bootOnce: a named task narrows the actions as well as the instructions", async () => {
@@ -195,7 +191,7 @@ test("bootOnce: a named task narrows the actions as well as the instructions", a
 test("bootOnce: one task listing the same store twice is named once", async () => {
   const gh = fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } })
   const card = CARD("acme/widgets") + "\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"
-  const result = await boot(await mkDesk({ one: card }), { gh })
+  const result = await boot(await mkDesk({ one: card }), { gh, taskQuery: "one" })
   const lines = result.instructions.filter((line) => line.startsWith("Push route for"))
   assert.equal(lines.length, 1)
   assert.match(lines[0], /\(task example-track\/one\)/u)
