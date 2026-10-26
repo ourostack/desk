@@ -264,7 +264,8 @@ export async function main({
       env,
       stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }),
       onRecord: () => {
-        session.admission.idle({ waitMs: 60000 }).then(() => session.admission.refresh({ waitMs: 0 })).catch(() => {})
+        // Neither call rejects: admission turns every failure into a state.
+        void session.admission.idle({ waitMs: 60000 }).then(() => session.admission.refresh({ waitMs: 0 }))
       },
     })
   }

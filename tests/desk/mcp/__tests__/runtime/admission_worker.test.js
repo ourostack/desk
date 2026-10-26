@@ -348,6 +348,46 @@ test("attachAdmissionWorker answers one job on its port, and does nothing outsid
   for (const port of [channel.port1, channel.port2, other.port1, other.port2]) port.close()
 })
 
+test("a persistent admission worker answers every job on its port", async () => {
+  const channel = new MessageChannel()
+  assert.equal(attachAdmissionWorker(channel.port1, { deskAdmissionWorker: true, persistent: true }), true)
+  const base = await mkTempRoot("desk-worker-persistent-")
+  for (let i = 0; i < 2; i++) {
+    const reply = new Promise((resolve) => channel.port2.once("message", resolve))
+    channel.port2.postMessage({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })
+    assert.equal((await reply).value.root.root, base)
+  }
+  channel.port1.close()
+  channel.port2.close()
+})
+
+test("the resolve runner ignores phase notes, reports a worker error, and starts a real worker by default", async () => {
+  const fakes = []
+  const runner = createResolveRunner({
+    createWorker: () => {
+      const worker = Object.assign(new EventEmitter(), { unref() {}, terminate() {}, postMessage(job) { this.job = job } })
+      fakes.push(worker)
+      return worker
+    },
+  })
+  const answered = runner.run({ kind: "resolve" })
+  fakes[0].emit("message", { phase: "resolving" })
+  fakes[0].emit("message", { ok: true, value: "done" })
+  assert.equal(await answered, "done")
+  const failed = runner.run({ kind: "resolve" })
+  fakes[0].emit("error", new Error("worker broke"))
+  await assert.rejects(failed, /worker broke/u)
+  fakes[0].emit("exit", 1)
+  runner.close()
+  const base = await mkTempRoot("desk-resolve-runner-default-")
+  const real = createResolveRunner()
+  try {
+    assert.equal((await real.run({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })).root.root, base)
+  } finally {
+    real.close()
+  }
+})
+
 test("runInWorker runs a job on a real worker thread", async () => {
   const base = await mkTempRoot("desk-worker-thread-")
   const result = await runInWorker({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })

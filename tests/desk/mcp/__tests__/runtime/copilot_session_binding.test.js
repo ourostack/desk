@@ -317,6 +317,11 @@ test("the server hears about the session record as soon as the hook writes it, o
   }
   // No session id: nothing to watch. A stopped watch never calls back.
   assert.equal(typeof watchCopilotSessionRecord({ env: envFor(), onRecord: () => assert.fail("no session id") }), "function")
+  // A watch that has run out of time stops looking.
+  const late = envFor({ COPILOT_AGENT_SESSION_ID: "late" })
+  watchCopilotSessionRecord({ env: late, stateDir: stateDirOf(late), limitMs: 0, intervalMs: 10, onRecord: () => assert.fail("past its limit") })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  recordCopilotSession({ sessionId: "late", folder: desk(), env: late })
   const quiet = envFor({ COPILOT_AGENT_SESSION_ID: "stopped" })
   watchCopilotSessionRecord({ env: quiet, intervalMs: 10, onRecord: () => assert.fail("stopped") })()
   recordCopilotSession({ sessionId: "stopped", folder: desk(), env: quiet })
