@@ -139,7 +139,6 @@
     "tests/desk/mcp/__tests__/desk/lifecycle.test.js": 0.7,
     "tests/desk/mcp/__tests__/desk/naming.test.js": 0.8,
     "tests/desk/mcp/__tests__/desk/organization.test.js": 0.6,
-    "tests/desk/mcp/__tests__/desk/status_normalize.test.js": 1.4,
     "tests/desk/mcp/__tests__/desk/steps.test.js": 1.5,
     "tests/desk/mcp/__tests__/desk/tidy.test.js": 12.6,
     "tests/desk/mcp/__tests__/desk/unsigned_deliveries.test.js": 1.8,

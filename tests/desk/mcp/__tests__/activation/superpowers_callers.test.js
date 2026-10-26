@@ -7,7 +7,6 @@ import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/
 const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, repoRoot), "utf8")
 const json = (relativePath) => JSON.parse(read(relativePath))
-const integration = "plugins/desk/skills/superpowers-integration/SKILL.md"
 const adapter = "plugins/desk/skills/using-superpowers-with-desk/SKILL.md"
 const excludedProviderPattern = new RegExp(["robo", "rev"].join(""), "iu")
 const normalWorkerSurfaces = [
@@ -36,7 +35,6 @@ for (const file of normalWorkerSurfaces) {
 test("normal generic orchestration and compatibility policy select native Superpowers review", () => {
   for (const file of [
     "plugins/desk/skills/work-orchestration/SKILL.md",
-    integration,
     adapter,
     "plugins/desk/skills/session-resumption/SKILL.md",
     "plugins/desk/skills/task-lifecycle/SKILL.md",
@@ -81,17 +79,17 @@ for (const [file, retiredDirective] of [
   })
 }
 
-// Only the redirect itself and the adapter's retired-names row may name the retired entry; every caller names the adapter.
-test("no skill or agent doc directs work into the retired desk:superpowers-integration name", () => {
+// The retired skill is gone; no skill or agent doc may name it, and every caller names the adapter.
+test("no skill or agent doc names the removed desk:superpowers-integration skill", () => {
   const skillsRoot = new URL("plugins/desk/skills/", repoRoot)
   const callers = readdirSync(skillsRoot)
-    .filter((name) => !["superpowers-integration", "using-superpowers-with-desk"].includes(name))
+    .filter((name) => name !== "using-superpowers-with-desk")
     .map((name) => `plugins/desk/skills/${name}/SKILL.md`)
     .filter((file) => existsSync(new URL(file, repoRoot)))
   for (const file of [...callers, "plugins/desk/docs/agent-files.md"]) {
     assert.doesNotMatch(read(file), /desk:superpowers-integration/u, `${file} names the retired entry`)
   }
-  assert.match(read(adapter), /\| Retired Work Suite call names \| `desk:superpowers-integration`, the retired compatibility redirect \|/u)
+  assert.equal(existsSync(new URL("plugins/desk/skills/superpowers-integration/SKILL.md", repoRoot)), false, "the retired redirect skill must not ship")
 })
 
 const adapterCallers = [
@@ -187,20 +185,8 @@ test("work accounting is automatic factory capture, not a manual ledger skill to
   const text = read(adapter)
   assert.match(text, /\| Work accounting \| automatic: the factory captures each session when it ends and reports each finished job; nothing to route \|/u)
   assert.match(text, /\| Evaluating a finished job \| `desk:online-evaluation` \|/u)
-  for (const file of [adapter, integration]) assert.doesNotMatch(read(file), /work-measurement-ledger|work-measurement\/|desk_work_ledger/u)
+  assert.doesNotMatch(read(adapter), /work-measurement-ledger|work-measurement\/|desk_work_ledger/u)
   assert.equal(existsSync(new URL("plugins/desk/skills/work-measurement-ledger/SKILL.md", repoRoot)), false, "the manual ledger skill must not ship")
-})
-
-test("the retired integration name redirects to the adapter without becoming a second contract", () => {
-  const text = read(integration)
-  assert.match(text, /desk:using-superpowers-with-desk/u)
-  assert.match(text, /[Rr]etired/u)
-  assert.doesNotMatch(text, /Entry: start \| reconciled-resume \| material-redesign\./u)
-  assert.doesNotMatch(text, /## Bounded execution and recovery/u)
-  assert.doesNotMatch(text, /host protocol declares armed|two consecutive actual interruption/u)
-  assert.doesNotMatch(text, /^## Review and accounting$/mu)
-  const sections = [...text.matchAll(/^## (.+)$/gmu)].map((match) => match[1])
-  assert.deepEqual(sections, ["Legacy capability mapping"], "the retired seam permits only the Legacy capability mapping section")
 })
 
 for (const mode of ["global-personal", "project-local"]) {
@@ -278,47 +264,6 @@ test("the adapter preserves prior approval, delegation, alpha endpoint and a sin
     assert.ok(contract.includes(invariant), `missing adapter invariant: ${invariant}`)
   }
 })
-
-const successors = [
-  ["work-ideator", "superpowers:brainstorming"],
-  ["work-planner", "superpowers:writing-plans"],
-  ["work-doer", "superpowers:subagent-driven-development"],
-  ["work-merger", "superpowers:verification-before-completion"],
-  ["autopilot", "native continuation"],
-  ["stay-in-turn", "native notifications"],
-  ["inch-worm", "approved backlog"],
-  ["watchdog-mode", "native monitoring"],
-  ["visual-qa-dogfood", "screenshots"],
-  ["deep-research", "firsthand evidence"],
-]
-
-for (const [retired, successor] of successors) {
-  test(`retired capability ${retired} has a named successor, not a second lifecycle dependency`, () => {
-    const row = read(integration).split("\n").find((line) => line.startsWith(`| \`${retired}\` |`))
-    assert.ok(row, `missing capability disposition for ${retired}`)
-    assert.ok(row.includes(successor), `${retired} must name ${successor}`)
-  })
-}
-
-for (const [retired, owner, requiredLimit] of [
-  ["autopilot", "superpowers:executing-plans", "host continuation"],
-  ["stay-in-turn", "superpowers:executing-plans", "host wait tools"],
-  ["inch-worm", "desk:start-task", "approved backlog"],
-  ["watchdog-mode", "desk:runtime-symptom-investigation", "persistent monitoring is not bundled"],
-  ["visual-qa-dogfood", "superpowers:verification-before-completion", "visual tools"],
-  ["deep-research", "superpowers:brainstorming", "exhaustive research requires a consumer-provided entrypoint"],
-]) {
-  test(`${retired} discloses its owning entrypoint, conditional capability and unproven runtime status`, () => {
-    const row = read(integration).split("\n").find((line) => line.startsWith(`| \`${retired}\` |`))
-    assert.ok(row)
-    assert.ok(row.includes(`Owner: \`${owner}\``), `${retired} must identify its actual owning entrypoint`)
-    assert.ok(row.includes("Capability: conditional"), `${retired} must not imply unconditional availability`)
-    assert.ok(row.includes("Proof: runtime qualification required"), `${retired} must not treat source characterization as consumption proof`)
-    assert.ok(row.includes(requiredLimit), `${retired} must disclose its material capability limit`)
-    const [plugin, skill] = owner.split(":")
-    assert.ok(existsSync(new URL(`plugins/${plugin}/skills/${skill}/SKILL.md`, repoRoot)), `${owner} must be a shipped skill, not an invented entrypoint`)
-  })
-}
 
 // T02: Desk's ready-set scheduling and continuous peer review contract.
 // This is a source contract witness over `work-orchestration/SKILL.md`, not proof that natural-language

@@ -247,7 +247,7 @@ const workerBodies = [
 const ownedRules = [
   [/Core invariants|Operating invariants/u, "using-desk and the skills"],
   [/^## (?:My )?[Ss]kills$/mu, "the host's skill listing"],
-  [/Selected engineering lifecycle|desk:superpowers-integration/u, "using-desk \"Engineering work\""],
+  [/Selected engineering lifecycle/u, "using-desk \"Engineering work\""],
   [/Prereqs first/u, "session-start"],
   [/Desk MCP health guard/u, "session-start"],
   [/One decision group per message/u, "using-desk \"Alignment, then ownership\""],

@@ -54,9 +54,6 @@ async function loadTombstonesModule() {
   return import("../../../../../plugins/desk/mcp/src/artifacts/tombstones.js")
 }
 
-async function loadRebuildIndexScriptModule() {
-  return import("../../../../../plugins/desk/mcp/scripts/rebuild-index.js")
-}
 
 async function tmpRoot(prefix) {
   return mkTempRoot(prefix)
@@ -1159,124 +1156,6 @@ test("tombstones make fresh local indexes stale and prune redacted docs", async 
     vectors: 0,
     refs: 0,
   })
-})
-
-test("manual rebuild-index script honors the committed tombstone ledger", async () => {
-  const deskRoot = await tmpRoot("desk-redaction-script-rebuild-")
-  const pluginRoot = await tmpRoot("desk-redaction-script-plugin-")
-  const docPath = "trackA/task-1/task.md"
-  const body = "---\nstatus: processing\n---\nscript redaction body"
-  await writeFile(deskRoot, docPath, body)
-  await writeTombstoneLedger(pluginRoot, [
-    tombstoneRow({
-      document_path: docPath,
-      document_hash: sha256(body),
-      reason: "deleted",
-      artifact_rotation_id: "rotation-script-rebuild",
-    }),
-  ])
-
-  const result = spawnSync(
-    process.execPath,
-    [path.join(mcpRoot, "scripts", "rebuild-index.js"), "--root", deskRoot],
-    {
-      cwd: mcpRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DESK_PLUGIN_ROOT: pluginRoot,
-        DESK_EMBED_TIMEOUT_MS: "10",
-      },
-    },
-  )
-
-  assert.equal(result.status, 0, result.stderr)
-  const summary = JSON.parse(result.stdout)
-  assert.equal(summary.docs_tombstoned, 1)
-  assert.equal(summary.docs_indexed, 0)
-  assert.equal(summary.docs_removed, 0)
-  assert.deepEqual(dbCounts(deskRoot), {
-    docs: 0,
-    chunks: 0,
-    vectors: 0,
-    refs: 0,
-  })
-})
-
-test("manual rebuild-index command helpers stay covered and injectable", async () => {
-  const scriptPath = path.join(mcpRoot, "scripts", "rebuild-index.js")
-  const deskRoot = await tmpRoot("desk-redaction-command-rebuild-")
-  const pluginRoot = await tmpRoot("desk-redaction-command-plugin-")
-  const mod = await loadRebuildIndexScriptModule()
-  const writes = []
-  const captured = {}
-  let now = 100
-
-  assert.deepEqual(mod.parseArgs(["--unused", "--root", deskRoot]), {
-    root: deskRoot,
-  })
-  assert.equal(mod.resolvePluginRoot({}, pluginRoot), pluginRoot)
-  assert.equal(mod.isMainModule(`${pathToFileURL(scriptPath).href}?fresh=1`, scriptPath), true)
-  assert.equal(mod.isMainModule(pathToFileURL(scriptPath).href, ""), false)
-
-  const summary = await mod.main({
-    argv: ["--root", deskRoot],
-    env: { DESK_PLUGIN_ROOT: pluginRoot },
-    now: () => {
-      now += 7
-      return now
-    },
-    rebuild: async (root, opts) => {
-      captured.root = root
-      captured.opts = opts
-      return {
-        docs_tombstoned: 1,
-        docs_indexed: 0,
-        docs_removed: 0,
-      }
-    },
-    write: (text) => writes.push(text),
-  })
-
-  assert.equal(captured.root, deskRoot)
-  assert.deepEqual(captured.opts, {
-    tombstones: { pluginRoot },
-  })
-  assert.equal(summary.elapsed_ms, 7)
-  assert.equal(summary.docs_tombstoned, 1)
-  assert.deepEqual(JSON.parse(writes[0]), summary)
-
-  const fatalMessages = []
-  const started = mod.startCli({
-    importMetaUrl: `${pathToFileURL(scriptPath).href}?fresh=2`,
-    argv1: scriptPath,
-    mainFn: async () => {
-      throw new Error("covered failure")
-    },
-    onFatal: (err) => fatalMessages.push(err.message),
-  })
-  await started
-  assert.deepEqual(fatalMessages, ["covered failure"])
-
-  const skipped = mod.startCli({
-    importMetaUrl: pathToFileURL(scriptPath).href,
-    argv1: path.join(mcpRoot, "other-script.js"),
-    mainFn: async () => {
-      throw new Error("should not run")
-    },
-  })
-  assert.equal(skipped, null)
-
-  const logged = []
-  let exitCode = 0
-  mod.handleFatalError(new Error("fatal path"), {
-    logError: (...args) => logged.push(args),
-    exit: (code) => {
-      exitCode = code
-    },
-  })
-  assert.deepEqual(logged, [["[rebuild-index] fatal:", "fatal path"]])
-  assert.equal(exitCode, 1)
 })
 
 test("local index freshness fails closed for corrupt tombstones and schema drift", async () => {
