@@ -4,16 +4,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
 import { desk_recall } from "../../../../../plugins/desk/mcp/src/tools/search.js"
-import {
-  buildFixtureIndex,
-  makeEmbedFetch,
-  makeFailingFetch,
-  mkTempDeskRoot,
-  writeFile,
-} from "./_search_helpers.js"
 
 test("desk_recall routes semantic recall requests through the public query router", async () => {
-  const embedFetch = makeEmbedFetch()
   const queryRouter = {
     async semantic(request) {
       return { routed: true, request }
@@ -23,7 +15,7 @@ test("desk_recall routes semantic recall requests through the public query route
   const result = await desk_recall({
     deskRoot: "/tmp/desk",
     input: { topic: "alpha", limit: 3 },
-    opts: { embed: { fetch: embedFetch } },
+    opts: { now: 1 },
     queryRouter,
   })
 
@@ -33,7 +25,7 @@ test("desk_recall routes semantic recall requests through the public query route
       deskRoot: "/tmp/desk",
       kind: "recall",
       limit: 3,
-      opts: { embed: { fetch: embedFetch } },
+      opts: { now: 1 },
       signal: undefined,
       topic: "alpha",
     },

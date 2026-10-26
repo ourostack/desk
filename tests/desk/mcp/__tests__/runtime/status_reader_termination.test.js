@@ -29,7 +29,7 @@ async function responsiveReader(t, { stopped = false } = {}) {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
     await exited
   })
-  assert.equal((await reader.inspect("local")).local_db.state, "missing")
+  assert.equal((await reader.inspect("root")).exists, true)
   if (stopped) assert.equal(child.kill("SIGSTOP"), true)
   return { reader, child, controller, exited }
 }
@@ -51,7 +51,7 @@ test("cancelling an unresponsive owned reader escalates and verifies actual exit
   skip: process.platform === "win32" ? "SIGSTOP is Unix-only; portable retained-handler termination runs on Windows." : false,
 }, async (t) => {
   const { reader, child, controller, exited } = await responsiveReader(t, { stopped: true })
-  const pending = reader.inspect("index")
+  const pending = reader.inspect("root")
   const rejection = assert.rejects(pending, /cancelled/u)
   controller.abort(new Error("cancelled"))
   const outcome = await Promise.race([
@@ -89,7 +89,7 @@ test("failed termination reports nonexit and retains the exact owned resource fo
     signal: controller.signal, spawn: () => child,
     closeGraceMs: 5, terminateGraceMs: 5, killGraceMs: 5,
   })
-  const pending = reader.inspect("local")
+  const pending = reader.inspect("root")
   const rejected = assert.rejects(pending, (error) => error.code === "status_reader_not_exited" && error.pid === child.pid)
   const closed = reader.close()
   await assert.rejects(closed, (error) => error.code === "status_reader_not_exited" && error.pid === child.pid)
@@ -113,7 +113,7 @@ test("a throwing owned-child kill reports a bounded nonexit resource rather than
     signal: controller.signal, spawn: () => child,
     closeGraceMs: 1, terminateGraceMs: 1, killGraceMs: 1,
   })
-  const pending = reader.inspect("local")
+  const pending = reader.inspect("root")
   const rejected = assert.rejects(pending, { code: "status_reader_not_exited" })
   await assert.rejects(reader.close(), (error) => error.code === "status_reader_not_exited" &&
     error.failures.every((message) => message.includes("termination refused")))
@@ -196,7 +196,7 @@ test("closing during an unanswered request rejects the request explicitly even w
   child.send = (_, callback) => callback(null)
   child.disconnect = () => child.emit("exit", 0)
   const reader = createStatusInspection("root", { spawn: () => child })
-  const pending = reader.inspect("local")
+  const pending = reader.inspect("root")
   const rejected = assert.rejects(pending, /before completing its request/u)
   await assert.rejects(reader.close(), /before completing its request/u)
   await rejected

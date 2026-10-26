@@ -4,13 +4,6 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
 import { desk_similar } from "../../../../../plugins/desk/mcp/src/tools/search.js"
-import {
-  buildFixtureIndex,
-  makeEmbedFetch,
-  makeFailingFetch,
-  mkTempDeskRoot,
-  writeFile,
-} from "./_search_helpers.js"
 
 test("desk_similar routes similarity requests through the public query router", async () => {
   const queryRouter = {
