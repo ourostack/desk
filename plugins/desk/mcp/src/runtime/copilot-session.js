@@ -102,7 +102,7 @@ export function readCopilotSession({ env = process.env, stateDir = resolveDeskSt
  * Calls `onRecord()` once when this session's record appears, checking every `intervalMs` for at most `limitMs`. Copilot starts the server before its sessionStart hook writes the record, so the first admission finds no root and the next attempt would wait for the retry backoff (1, 2, then 5 s); this lets admission start again as soon as the hook has written it.
  * Does nothing without a session id. A record that already exists when it starts is reported too, because the first admission may have resolved just before it was written. The checks are asynchronous and never block the thread that answers the host. Returns a function that stops it.
  */
-export function watchCopilotSessionRecord({ env = process.env, stateDir = resolveDeskStateDir({ env }), onRecord, intervalMs = 200, limitMs = 120000, access = fsPromises.access, now = Date.now } = {}) {
+export function watchCopilotSessionRecord({ env, stateDir = resolveDeskStateDir({ env }), onRecord, intervalMs = 200, limitMs = 120000, access = fsPromises.access, now = Date.now }) {
   const sessionId = env?.[COPILOT_SESSION_ENV]
   if (!hasText(sessionId)) return () => {}
   const file = copilotSessionFile(stateDir, sessionId)
