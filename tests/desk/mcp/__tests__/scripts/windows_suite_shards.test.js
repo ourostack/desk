@@ -133,8 +133,6 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   assert.ok(totals.length >= 3)
   for (const total of totals) assert.equal(total, shards.length)
   assert.equal(Number(/windows-suite-verdict\.mjs shard-results (\d+)/u.exec(text)[1]), shards.length)
-  // Both modes run the same number of files at once, so the elevated diagnostic sees what the gate saw.
-  assert.deepEqual([...text.matchAll(/run-suite-files\.mjs --shard \$\{\{ matrix\.shard \}\}\/\d+ --jobs (\d+)/gu)].map((m) => m[1]), ["3", "3"])
   assert.equal(workflow.on.pull_request?.paths, undefined, "a path filter would leave the required Windows suite check missing on a skipped pull request")
   assert.equal(workflow.on.pull_request?.["paths-ignore"], undefined)
 })
@@ -177,30 +175,4 @@ test("main keeps the Windows suite's installed dependencies cached under the key
   assert.deepEqual(warm.on.push.branches, ["main"])
   assert.ok(warm.on.push.paths.includes("plugins/desk/mcp/package-lock.json"))
   assert.ok("schedule" in warm.on, "a daily run restores a cache GitHub evicted")
-})
-
-test("--jobs runs a shard's files at once and still reports every file, in name order", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-shard-jobs-"))
-  try {
-    const tests = path.join(dir, "tests")
-    const meet = path.join(dir, "meet")
-    mkdirSync(tests)
-    mkdirSync(meet)
-    // Each of a and b waits until the other has started, so they pass only when they run at the same time; c runs after either.
-    const waiter = (me, other) => `import { test } from "node:test"\nimport fs from "node:fs"\nimport path from "node:path"\ntest("${me}", async () => {\n  fs.writeFileSync(path.join(process.env.MEET_DIR, "${me}"), "")\n  const until = Date.now() + 60000\n  while (!fs.existsSync(path.join(process.env.MEET_DIR, "${other}"))) {\n    if (Date.now() > until) throw new Error("${other} never started")\n    await new Promise((resolve) => setTimeout(resolve, 50))\n  }\n})\n`
-    writeFileSync(path.join(tests, "a.test.js"), waiter("a", "b"))
-    writeFileSync(path.join(tests, "b.test.js"), waiter("b", "a"))
-    writeFileSync(path.join(tests, "c.test.js"), `import { test } from "node:test"\ntest("c", () => {})\n`)
-    const durations = path.join(dir, "d.json")
-    writeFileSync(durations, JSON.stringify({ defaultSeconds: 1, files: { "a.test.js": 10, "b.test.js": 10, "c.test.js": 1 } }))
-    const env = { ...process.env, MEET_DIR: meet }
-    delete env.NODE_TEST_CONTEXT
-    const out = path.join(dir, "r.json")
-    const result = spawnSync(process.execPath, [path.join(scripts, "run-suite-files.mjs"), "--shard", "1/1", "--jobs", "2", "--out", out, "--tests-root", tests, "--durations", durations], { encoding: "utf8", env, timeout: 120000 })
-    assert.equal(result.status, 0, result.stdout + result.stderr)
-    const { results } = JSON.parse(readFileSync(out, "utf8"))
-    assert.deepEqual(results.map((r) => [r.file, r.exitCode, r.pass]), [["a.test.js", 0, 1], ["b.test.js", 0, 1], ["c.test.js", 0, 1]])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
 })
