@@ -76,7 +76,9 @@ async function runHook({ host, payload, env = process.env } = {}) {
       import("../../mcp/scripts/resolve-desk-root.js"),
       import("../../mcp/src/runtime/sync-worker.js"),
     ]);
-    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd });
+    // On Copilot, the payload's cwd: the folder the server records for the session (copilot-session.js), so both pick the same desk.
+    // Copilot 1.0.12 and later also set CLAUDE_PROJECT_DIR for plugin hooks; older ones do not.
+    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd, hostProjectRoot: claude ? env.CLAUDE_PROJECT_DIR : cwd });
     if (deskRoot === null) return "unavailable";
     const result = finalUnpushedCheck({ root: deskRoot, env });
     return result.state === "unpushed" ? "unpushed" : "clean";

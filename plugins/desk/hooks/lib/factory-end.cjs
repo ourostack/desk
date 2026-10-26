@@ -93,7 +93,9 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     const [{ resolveHookDeskRoot }, outbox, { resolveStore }, cli] = await Promise.all([
       import("../../mcp/scripts/resolve-desk-root.js"), import("../../mcp/src/factory/outbox.js"), import("../../mcp/src/factory/store-route.js"), import("../../mcp/scripts/factory.js"),
     ]);
-    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
+    // On Copilot, the payload's cwd: the folder the server records for the session (copilot-session.js), so both pick the same desk.
+    // Copilot 1.0.12 and later also set CLAUDE_PROJECT_DIR for plugin hooks; older ones do not.
+    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd, hostProjectRoot: claude || codex ? env.CLAUDE_PROJECT_DIR : payload.cwd });
     if (deskRoot === null) return "unavailable";
     const { metadata } = require("../../mcp/src/factory/plugin-sources.cjs");
     const { plugins, dirs, incomplete } = metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, sourceDeadline: performance.now() + SOURCE_BUDGET_MS });

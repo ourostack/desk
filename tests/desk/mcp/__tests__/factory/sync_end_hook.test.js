@@ -74,6 +74,26 @@ test("wrong host, wrong event and an unresolvable desk root never throw and neve
   assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: ctx.desk, hook_event_name: "SessionEnd" }, env: noDeskEnv }), "unavailable")
 }))
 
+test("a Copilot session checks the desk of the folder the server records, over CLAUDE_PROJECT_DIR", () => scratch(async (ctx) => {
+  await mkDeskRepo(ctx)
+  const project = path.join(ctx.base, "project")
+  await fs.mkdir(path.join(project, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(project, "_archive"))
+  await mkDeskRepo({ desk: project })
+  const originDir = path.join(ctx.base, "origin.git")
+  git(ctx.base, ["init", "-q", "--bare", originDir])
+  git(project, ["remote", "add", "origin", originDir])
+  git(project, ["push", "-q", "-u", "origin", "HEAD:main"])
+  await writeAndCommit(project, "more.md", "more\n", "more")
+  // Copilot also gives hooks CLAUDE_PROJECT_DIR; here it names another desk, which has nothing to push, while the payload's folder,
+  // the one the server records for the session, has a commit to push.
+  const env = { ...ctx.env, CLAUDE_PROJECT_DIR: ctx.desk }
+  delete env.DESK
+  assert.equal(await runHook({ host: "copilot", payload: { cwd: project, reason: "complete" }, env }), "unpushed")
+  // Claude Code's own project folder still decides for Claude Code.
+  assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: project, hook_event_name: "SessionEnd" }, env }), "clean")
+}))
+
 test("stdin is byte bounded and malformed input finishes silently", async () => {
   assert.deepEqual(await readInput(Readable.from(['{"ok":true}'])), { ok: true })
   for (const input of ["{", "null", "[]", "1", "x".repeat(1024 * 1024 + 1)]) {
