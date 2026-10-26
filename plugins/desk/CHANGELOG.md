@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.361 — 2026-10-26
+
+The release checks now accept a plain stable version such as `3.2.0`. A plain version can also appear by chance in third-party package lockfiles and in a documentation example, which made the stable release fail its own check. The check no longer counts lockfiles as Desk version surfaces, the documentation example uses `1.0.0`, and the pull request release dry run now covers the `stable` stage too.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.360 — 2026-10-26
 
 Closing a browser now ends its processes. A `mine` browser's Edge could keep running after `browser_context` close said `closed: true`. Desk now records the Playwright CLI daemon and the browser it started when a context opens. On close, and when the server exits or cleans up after a crash, Desk waits up to five seconds and then kills whatever of those processes is left. Each process is matched by its PID and start time, never by name, so the person's own browser and other agents' browsers are never touched.
