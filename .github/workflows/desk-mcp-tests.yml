@@ -141,7 +141,8 @@ jobs:
           key: desk-blackbox-${{ runner.os }}-${{ hashFiles('plugins/desk/mcp/src/search/embedder.js', 'plugins/desk/mcp/web-catalog.json') }}
       - name: Run the black-box tester on both hosts
         shell: bash
-        run: node tests/blackbox/run.mjs --out "$RUNNER_TEMP/blackbox" --cache-dir "$RUNNER_TEMP/desk-blackbox-cache" --label "ci-${{ runner.os }}"
+        # Two repeats in alternating host order, so neither host always pays a cold machine's first start.
+        run: node tests/blackbox/run.mjs --repeat 2 --out "$RUNNER_TEMP/blackbox" --cache-dir "$RUNNER_TEMP/desk-blackbox-cache" --label "ci-${{ runner.os }}"
       - name: Keep the results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

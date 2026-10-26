@@ -41,7 +41,7 @@ const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"))
 
 /**
  * Install the plugin set for one host under `home`, where that host keeps installed plugins:
- * Claude Code under ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>, Copilot under ~/.copilot/installed-plugins/<marketplace>/<plugin>.
+ * Claude Code under its config folder ($CLAUDE_CONFIG_DIR, else ~/.claude) in plugins/cache/<marketplace>/<plugin>/<version>, Copilot under ~/.copilot/installed-plugins/<marketplace>/<plugin>.
  */
 export function installPlugins({ host, home, pluginsSource }) {
   const roots = {}
@@ -49,12 +49,17 @@ export function installPlugins({ host, home, pluginsSource }) {
     const source = path.join(pluginsSource, name)
     const version = readJson(path.join(source, "plugin.json")).version
     const target = host === "claude"
-      ? path.join(home, ".claude", "plugins", "cache", "ourostack", name, version)
+      ? path.join(claudeConfigDir(home), "plugins", "cache", "ourostack", name, version)
       : path.join(home, ".copilot", "installed-plugins", "ourostack", name)
     copyPlugin(source, target)
     roots[name] = target
   }
   return roots
+}
+
+/** Claude Code's config folder for the throwaway person, who has no CLAUDE_CONFIG_DIR set, so it is ~/.claude. */
+export function claudeConfigDir(home, env = {}) {
+  return env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")
 }
 
 /** The environment a person's shell gives a host: their home, PATH with Node and Git, and on Windows the system variables. */

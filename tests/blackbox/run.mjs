@@ -13,7 +13,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { McpSession } from "./lib/mcp.mjs"
 import { hookContext, hookEntries, runHook } from "./lib/hooks.mjs"
-import { copyTree, deskStateDir, git, installPlugins, makeDesk, makeHome, makeTempRoot, NOTES, personEnv, WINDOWS } from "./lib/world.mjs"
+import { claudeConfigDir, copyTree, deskStateDir, git, installPlugins, makeDesk, makeHome, makeTempRoot, NOTES, personEnv, WINDOWS } from "./lib/world.mjs"
 import { treeRssKiB } from "./lib/proc.mjs"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -58,7 +58,11 @@ function parseArgs(argv) {
 
 // ---- known failures on main: the check still runs; a pass here is reported as fixed ----
 // Each entry is a real bug, not a weakened check. Key: "<host>:<check id>" or "*:<check id>".
-const KNOWN = {}
+// Parity gaps use "parity:<parity id>".
+const KNOWN = {
+  "parity:hooks.plain-language.copilot_has_every_claude_event": "Plain Language injects its contract into every Claude Code subagent through SubagentStart, but plugins/plain-language/hooks/copilot-hooks.json registers only sessionStart, so Copilot subagents start without it.",
+  "parity:speed.desk_ready_ms": "On current main a Copilot session's Desk server reaches full readiness (desk_status ready with its root and search details loaded) about 2 s later than Claude Code's: p50 5.4 s against 3.5 s over 3 repeats on macOS, 7.7 s against 4.0 s on Windows CI. Copilot's server resolves its desk through the session record its sessionStart hook writes; the cause is not yet found.",
+}
 
 // ---- result recording ----
 
@@ -175,7 +179,7 @@ const EVENTS = {
 
 function payloadFor(world, event, extra = {}) {
   if (world.host === "copilot") return { sessionId: world.sessionId, timestamp: Date.now(), cwd: world.desk, ...extra }
-  return { session_id: world.sessionId, transcript_path: path.join(world.home, ".claude", "projects", "t.jsonl"), cwd: world.desk, hook_event_name: event, ...extra }
+  return { session_id: world.sessionId, transcript_path: path.join(claudeConfigDir(world.home), "projects", "t.jsonl"), cwd: world.desk, hook_event_name: event, ...extra }
 }
 
 /** Run every hook of one event across the installed plugin set; returns { plugin: result }. */
@@ -397,7 +401,7 @@ async function sessionStartHooks(ctx, world, shared) {
   if (!outputs) return
   const deskStart = outputs.outputs["desk#0"]
   const context = hookContext(deskStart?.stdout ?? "")
-  shared.hooks[world.host] = { startContext: context, startMs: deskStart?.ms }
+  shared.hooks[world.host] = { startContext: context, startMs: deskStart?.ms, pluginRoot: world.plugins.desk }
   metric(ctx, "desk_session_start_hook_ms", deskStart?.ms, "ms")
   metric(ctx, "desk_session_start_context_chars", context.length, "chars")
   await check(ctx, "hook.session_start.boot_direction", "hooks", () => {
@@ -857,9 +861,10 @@ function parityChecks(shared, hosts) {
 
   const [hc, hl] = [shared.hooks.copilot, shared.hooks.claude]
   if (hc && hl) {
-    const strip = (text) => text.replace(/\\/gu, "/").replace(/\/[^\s"']*r\d+-(copilot|claude)/gu, "<root>")
-    const firstLine = (text) => strip(text.split("\n")[0])
-    const [a, b] = [firstLine(hc.startContext), firstLine(hl.startContext)]
+    // Each host installs the plugin in its own folder, so the plugin root and the session's temp folder are named alike first.
+    const strip = (text, pluginRoot) => text.split(pluginRoot).join("<plugin>").replace(/\\/gu, "/").split(pluginRoot.replace(/\\/gu, "/")).join("<plugin>").replace(/\/[^\s"'`]*r\d+-(copilot|claude)/gu, "<root>")
+    const firstLine = (hook) => strip(hook.startContext.split("\n")[0], hook.pluginRoot)
+    const [a, b] = [firstLine(hc), firstLine(hl)]
     let at = 0
     while (at < a.length && a[at] === b[at]) at++
     add("hooks.same_startup_line", a === b, a === b ? a.slice(0, 160) : `differs at character ${at}: copilot "…${a.slice(Math.max(0, at - 40), at + 120)}" / claude "…${b.slice(Math.max(0, at - 40), at + 120)}"`)
@@ -917,7 +922,8 @@ function summarize(options, shared, wallMs) {
   const metricList = Object.values(metricRows).map((m) => ({ ...m, p50: median(m.values), p95: percentile(m.values, 95), max: Math.max(...m.values) }))
   const unexpected = checkRows.filter((c) => c.failed > 0 && !c.known)
   const flaky = checkRows.filter((c) => c.failed > 0 && c.passed > 0)
-  const parityFailures = parity.filter((p) => !p.ok && !KNOWN[`parity:${p.id}`])
+  for (const p of parity) if (KNOWN[`parity:${p.id}`]) p.known = KNOWN[`parity:${p.id}`]
+  const parityFailures = parity.filter((p) => !p.ok && !p.known)
   return {
     schemaVersion: 1,
     label: options.label,
@@ -939,6 +945,7 @@ function summarize(options, shared, wallMs) {
       unexpected_failures: unexpected.length,
       flaky_checks: flaky.length,
       parity_gaps: parity.filter((p) => !p.ok).length,
+      unexpected_parity_gaps: parity.filter((p) => !p.ok && !KNOWN[`parity:${p.id}`]).length,
     },
     ok: unexpected.length === 0 && parityFailures.length === 0,
     checks: checkRows,
@@ -955,7 +962,7 @@ function markdown(summary) {
     "",
     `Desk ${summary.desk_version} at ${summary.git_head?.slice(0, 12) ?? "unknown"}, Node ${summary.node}, ${summary.repeat} repeat(s), ${Math.round(summary.wall_ms / 1000)} s wall. Caches seeded: ${JSON.stringify(summary.caches_seeded)}.`,
     "",
-    `**${summary.ok ? "PASS" : "FAIL"}**: ${summary.totals.passed} of ${summary.totals.runs} check runs passed; ${summary.totals.unexpected_failures} unexpected failure(s), ${summary.totals.known_failures} known, ${summary.totals.flaky_checks} flaky, ${summary.totals.parity_gaps} parity gap(s).`,
+    `**${summary.ok ? "PASS" : "FAIL"}**: ${summary.totals.passed} of ${summary.totals.runs} check runs passed; ${summary.totals.unexpected_failures} unexpected failure(s), ${summary.totals.known_failures} known, ${summary.totals.flaky_checks} flaky, ${summary.totals.parity_gaps} parity gap(s) (${summary.totals.unexpected_parity_gaps} not known).`,
     "",
     "## Measurements",
     "",
@@ -970,7 +977,7 @@ function markdown(summary) {
     lines.push(`| ${name} | ${fmt(c?.p50, unit)} | ${fmt(c?.p95, unit)} | ${fmt(l?.p50, unit)} | ${fmt(l?.p95, unit)} | ${unit} |`)
   }
   lines.push("", "## Parity", "", "| Check | Result | Detail |", "| --- | --- | --- |")
-  for (const p of summary.parity) lines.push(`| ${p.id} | ${p.ok ? "same" : "GAP"} | ${p.detail.replace(/\|/gu, "/")} |`)
+  for (const p of summary.parity) lines.push(`| ${p.id} | ${p.ok ? (p.known ? "same (was known)" : "same") : p.known ? "GAP (known)" : "GAP"} | ${p.detail.replace(/\|/gu, "/")} |`)
   lines.push("", "## Checks", "", "| Check | Area | Copilot | Claude | Copilot p50 ms | Claude p50 ms |", "| --- | --- | --- | --- | --- | --- |")
   const ids = [...new Set(summary.checks.map((c) => c.id))]
   for (const id of ids) {
@@ -1022,6 +1029,23 @@ async function cleanup(tempRoot, keep) {
   return left
 }
 
+async function warmUp(options, tempRoot) {
+  const root = path.join(tempRoot, "warm-up")
+  fs.mkdirSync(root, { recursive: true })
+  const home = makeHome(root)
+  const env = personEnv(home)
+  const { desk } = makeDesk({ root, env })
+  const session = new McpSession({ command: process.execPath, args: [path.join(options.plugins, "desk", "mcp", "bootstrap.cjs")], cwd: desk, env: { ...env, DESK: desk }, name: "warm-up" })
+  try {
+    await session.handshake("warm-up")
+    await session.call("desk_status", {})
+  } catch (error) {
+    console.log(`warm-up start failed (not a check): ${error.message.slice(0, 200)}`)
+  } finally {
+    await session.close()
+  }
+}
+
 // ---- main ----
 
 async function main() {
@@ -1036,6 +1060,8 @@ async function main() {
   console.log(`Desk black-box tester: ${options.hosts.join(" and ")}, ${options.repeat} repeat(s), temp ${tempRoot}`)
   let leftover = []
   try {
+    // One untimed start first, so the first host measured does not alone pay for a cold machine (Node, Git and the disk cache).
+    await warmUp(options, tempRoot)
     for (let repeat = 1; repeat <= options.repeat; repeat++) {
       // Alternate the order so neither host always runs first on a cold machine.
       const order = repeat % 2 === 1 ? options.hosts : [...options.hosts].reverse()
