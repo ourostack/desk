@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage, normalizeStatus } from "../../../../../plugins/desk/mcp/src/desk/lifecycle.js"
+import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage } from "../../../../../plugins/desk/mcp/src/desk/lifecycle.js"
 import { ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp/src")
@@ -12,29 +12,6 @@ test("the lifecycle lists are the eight states and the two terminal ones, and ar
   assert.deepEqual([...LIFECYCLE_STATES], ["drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled"])
   assert.deepEqual([...TERMINAL_STATES], ["done", "cancelled"])
   assert.ok(Object.isFrozen(LIFECYCLE_STATES) && Object.isFrozen(TERMINAL_STATES))
-})
-
-test("normalizeStatus returns a valid state unchanged", () => {
-  for (const state of LIFECYCLE_STATES) assert.deepEqual(normalizeStatus(state), { status: state, known: true })
-})
-
-test("normalizeStatus maps every ghost status, folding case and separators", () => {
-  const cases = {
-    processing: ["active", "Active", "doing", "DOING", "in progress", "in-progress", "in_progress", "IN_PROGRESS", " In  Progress ", "in-_ progress", "Processing"],
-    drafting: ["planning", "Planning", "backlog", "BACKLOG"],
-    collaborating: ["needs review", "needs_review", "NEEDS_REVIEW", "Needs-Review"],
-    blocked: ["waiting", "Waiting"],
-    done: ["Done"],
-  }
-  for (const [state, values] of Object.entries(cases)) {
-    for (const value of values) assert.deepEqual(normalizeStatus(value), { status: state, known: true }, value)
-  }
-})
-
-test("normalizeStatus never guesses at other values", () => {
-  for (const value of ["on hold", "wip", "", "  ", "in progress now", null, undefined, 3, {}, "__proto__", "constructor"]) {
-    assert.deepEqual(normalizeStatus(value), { status: null, known: false }, String(value))
-  }
 })
 
 test("invalidStatusMessage names the value and lists the eight states", () => {

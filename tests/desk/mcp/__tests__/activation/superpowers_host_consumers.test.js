@@ -179,12 +179,6 @@ test("generated Codex instructions send fresh sessions to the active adapter, no
       `${mode} activation must not name the retired compatibility redirect`,
     )
   }
-
-  // The retired name keeps working for unchanged standing instructions; that is the redirect's job, not the
-  // generated instruction's, so the redirect skill itself must still exist.
-  const redirect = readFileSync(new URL("../../../../../plugins/desk/skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
-  assert.match(redirect, /Retired/u)
-  assert.match(redirect, /desk:using-superpowers-with-desk/u)
 })
 
 test("Codex onboarding restart instruction names the selected Superpowers composition exactly", () => {

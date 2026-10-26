@@ -6,11 +6,9 @@ import { readFileSync } from "node:fs"
 const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (file) => readFileSync(new URL(file, repoRoot), "utf8")
 const evaluation = () => read("plugins/desk/skills/online-evaluation/SKILL.md")
-const integration = () => read("plugins/desk/skills/superpowers-integration/SKILL.md")
 
-test("the evaluation skill states its own agreed-horizon or request trigger, not a second copy on the retired integration seam", () => {
+test("the evaluation skill states its own agreed-horizon or request trigger", () => {
   assert.match(evaluation(), /at an agreed evaluation endpoint or observation horizon, or for a requested work-item evaluation or retrospective/iu)
-  assert.doesNotMatch(integration(), /agreed evaluation endpoint or observation horizon/iu)
 })
 
 test("the evaluation trigger preserves absent-skill, disabled-recording and collection-authority boundaries on its own owning skill", () => {
@@ -27,12 +25,6 @@ test("the evaluation reads the factory's job report and never the retired manual
   assert.match(text, /desk:factory-evaluator/u)
   assert.match(text, /mark flow and consumption unavailable with that reason/u)
   assert.doesNotMatch(text, /desk_work_ledger|work-measurement-ledger|ledger/iu)
-})
-
-test("the retired integration seam no longer carries executable review/accounting instructions", () => {
-  const text = integration()
-  assert.doesNotMatch(text, /^## Review and accounting$/mu)
-  assert.doesNotMatch(text, /invocation grants no collection consent/iu)
 })
 
 test("the packaged evaluation skill is the exact parent-approved body", () => {

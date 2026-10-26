@@ -132,6 +132,5 @@ An intentionally retained alpha/PR-only worktree or an acknowledged transfer sta
 | Work accounting | automatic: the factory captures each session when it ends and reports each finished job; nothing to route |
 | Evaluating a finished job | `desk:online-evaluation` |
 | Delivery and promotion | the recorded repository policy and the existing repository skills |
-| Retired Work Suite call names | `desk:superpowers-integration`, the retired compatibility redirect |
 
 If a required native or consumer capability is unavailable, report that limitation and preserve the unfinished outcome; do not silently drop its acceptance criteria or substitute a reduced-capability path.
