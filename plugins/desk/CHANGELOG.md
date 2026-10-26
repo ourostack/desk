@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0 — 2026-10-26
+
+Release Desk as a stable version; no pending changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.361 — 2026-10-26
 
 The release checks now accept a plain stable version such as `3.2.0`. A plain version can also appear by chance in third-party package lockfiles and in a documentation example, which made the stable release fail its own check. The check no longer counts lockfiles as Desk version surfaces, the documentation example uses `1.0.0`, and the pull request release dry run now covers the `stable` stage too.
