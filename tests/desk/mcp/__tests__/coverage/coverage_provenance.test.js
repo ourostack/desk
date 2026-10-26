@@ -115,7 +115,7 @@ function runFixture(t, summary, options = {}) {
       if (args.join(" ") === "merge-base origin/main HEAD") {
         return { status: 0, stdout: "base\n", stderr: "" }
       }
-      if (args.join(" ") === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (args.join(" ") === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         const changedFiles = options.changedFiles ?? [sourceFile, ...(options.additionalFiles ?? [])]
         return { status: 0, stdout: changedFiles.join("\n"), stderr: "" }
       }

@@ -504,7 +504,7 @@ test("coverage runner discovers changed files from git state and falls back from
       if (key === "rev-parse --abbrev-ref --symbolic-full-name @{upstream}") {
         return { status: 1, stdout: "", stderr: "no upstream\n" }
       }
-      if (key === "diff --name-only --diff-filter=AM base-main..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base-main..HEAD") {
         return {
           status: 0,
           stdout: [
@@ -517,10 +517,10 @@ test("coverage runner discovers changed files from git state and falls back from
           stderr: "",
         }
       }
-      if (key === "diff --name-only --diff-filter=AM") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM") {
         return { status: 0, stdout: "plugins/desk/mcp/src/coverage/runner.js\n", stderr: "" }
       }
-      if (key === "diff --cached --name-only --diff-filter=AM") {
+      if (key === "diff --cached --name-only --no-renames --diff-filter=AM") {
         return { status: 0, stdout: "plugins/desk/mcp/scripts/run-coverage.js\n", stderr: "" }
       }
       if (key === "ls-files --others --exclude-standard") {
@@ -555,6 +555,42 @@ test("coverage runner discovers changed files from git state and falls back from
     assert.deepEqual(
       normalizePaths(collectChangedCoverageFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       included.sort(),
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test("coverage runner reports a moved file at its new path, committed, staged or unstaged", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const tmp = makeTempDir()
+  try {
+    const git = (...args) => {
+      const result = spawnSync("git", args, { cwd: tmp, encoding: "utf8" })
+      assert.equal(result.status, 0, result.stderr)
+      return result.stdout.trim()
+    }
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "T")
+    git("config", "commit.gpgsign", "false")
+    // Enough shared content that Git's rename detection pairs each move with its source.
+    const body = Array.from({ length: 40 }, (_, line) => `export const value${line} = ${line}\n`).join("")
+    for (const name of ["committed", "staged", "unstaged"]) writeFixture(tmp, `old/${name}.js`, body)
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    const base = git("rev-parse", "HEAD")
+    mkdirSync(path.join(tmp, "new"))
+    git("mv", "old/committed.js", "new/committed.js")
+    git("commit", "-q", "-m", "move")
+    git("mv", "old/staged.js", "new/staged.js")
+    // An unstaged move shows as a deletion plus an untracked file, so it is the ls-files call that reports it.
+    writeFileSync(path.join(tmp, "new", "unstaged.js"), body)
+    rmSync(path.join(tmp, "old", "unstaged.js"))
+
+    assert.deepEqual(
+      normalizePaths(collectChangedFiles({ repoRoot: tmp, env: { DESK_COVERAGE_BASE_REF: base } })).sort(),
+      ["new/committed.js", "new/staged.js", "new/unstaged.js"],
     )
   } finally {
     rmSync(tmp, { recursive: true, force: true })
@@ -938,7 +974,7 @@ test("coverage runner filters documented exclusions before maintained instrument
         }
       }
       if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-      if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         return {
           status: 0,
           stdout: [
@@ -1032,7 +1068,7 @@ test("coverage runner returns child status, coverage failures, and success codes
         return { status: testStatus, stdout: "test output", stderr: "" }
       }
       if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-      if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+      if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
         return { status: 0, stdout: "plugins/desk/mcp/src/coverage/gate.js\n", stderr: "" }
       }
       return { status: 0, stdout: "", stderr: "" }
@@ -1144,7 +1180,7 @@ test("coverage runner default wiring uses repo paths, temp files, and stdio", as
       }
     }
     if (key === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-    if (key === "diff --name-only --diff-filter=AM base..HEAD") {
+    if (key === "diff --name-only --no-renames --diff-filter=AM base..HEAD") {
       return {
         status: 0,
         stdout: [

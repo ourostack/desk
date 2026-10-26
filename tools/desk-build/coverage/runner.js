@@ -161,18 +161,19 @@ export function filterCoverageIncludeFiles({ requiredFiles, exclusions = [] }) {
   return requiredFiles.filter((file) => !excludedPaths.has(normalizePath(file)))
 }
 
+// --no-renames: a moved or renamed file is new at its new path and must be measured there; with rename detection, --diff-filter=AM would drop it.
 export function collectChangedFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
   return unique([
     ...changedSinceMergeBase({ repoRoot, spawn, env }),
-    ...gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM"] }),
-    ...gitLines({ repoRoot, spawn, args: ["diff", "--cached", "--name-only", "--diff-filter=AM"] }),
+    ...gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--no-renames", "--diff-filter=AM"] }),
+    ...gitLines({ repoRoot, spawn, args: ["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=AM"] }),
     ...gitLines({ repoRoot, spawn, args: ["ls-files", "--others", "--exclude-standard"] }),
   ].map(normalizePath))
 }
 
 export function changedSinceMergeBase({ repoRoot, spawn = spawnSync, env = process.env }) {
   const base = resolveCoverageBase({ repoRoot, spawn, env })
-  return gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
+  return gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--no-renames", "--diff-filter=AM", `${base}..HEAD`] })
 }
 
 export function resolveCoverageBase({ repoRoot, spawn = spawnSync, env = process.env }) {

@@ -112,7 +112,7 @@ function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr:
       }
       assert.equal(command, "git")
       if (args.join(" ") === "merge-base origin/main HEAD") return { status: 0, stdout: "base\n", stderr: "" }
-      if (args.join(" ") === "diff --name-only --diff-filter=AM base..HEAD") return { status: 0, stdout: changedFiles.join("\n"), stderr: "" }
+      if (args.join(" ") === "diff --name-only --no-renames --diff-filter=AM base..HEAD") return { status: 0, stdout: changedFiles.join("\n"), stderr: "" }
       return { status: 0, stdout: "", stderr: "" }
     },
   })
