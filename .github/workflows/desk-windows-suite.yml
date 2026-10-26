@@ -61,6 +61,9 @@ jobs:
         with:
           # The Windows runtime pack is built with Node 24.18.0 (desk-mcp-tests.yml, win32-x64-node-137). Node 24.19.0 and later abort when a better-sqlite3 build made against their headers collects a prepared statement (nodejs/node#65446, WiseLibs/better-sqlite3#1515), so this suite pins the version the pack ships with.
           node-version: "24.18.0"
+          # Only a pull request's first run needs it: main never runs this workflow, so the node_modules cache below starts empty on each pull request, while the npm download cache comes from main's "desk on native Windows" job.
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       # `npm ci` took 1.5 to 2.7 minutes per shard on Windows. The installed tree is restored whole when the Node version and the committed lock are unchanged, and installed from the lock otherwise (the same key scheme as "desk on native Windows" in desk-mcp-tests.yml).
       - name: Restore installed dependencies
