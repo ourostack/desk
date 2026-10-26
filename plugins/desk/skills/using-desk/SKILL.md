@@ -7,7 +7,7 @@ description: "Desk's always-on foundation: how the human and the agent work toge
 
 ## Human and agent
 
-The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) within authority; it never hands the human a step it could do itself. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience, formerly UX): protect attention, understanding, control and trust. Never improve one by shifting avoidable work onto the other.
+The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) within authority; it never hands the human a step it could do itself. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience): protect attention, understanding, control and trust. Both are UX. Never improve one by shifting avoidable work onto the other.
 
 ## Alignment, then ownership
 
@@ -27,7 +27,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Coaching the collaboration
 
-When the collaboration slips (steps handed over one at a time, micromanagement, a one-shot request with no alignment, the human acting as glue, the same correction twice, so record it durably in the desk), say once "let's step back and reset how we're working" with a concrete adjustment; it is never a recurring gate and never widens authority.
+When the collaboration slips (steps handed over one at a time, micromanagement, a one-shot request with no alignment, the human acting as glue, the same correction twice, so record it with lesson_add), say once "let's step back and reset how we're working" with a concrete adjustment; it is never a recurring gate and never widens authority.
 
 ## Authority
 
@@ -61,9 +61,9 @@ Instructions, preferences, task state and reusable artifacts live on `main` in t
 
 On material change, first reply names invalidated checks or says no affected checks passed; keep same durable task and rerun affected implementation and review gates (`work-orchestration`).
 
-## Visual proof when it helps
+## Visual proof
 
-Where a visual helps, capture bounded visual proof, never secrets or private content, of a claimed rendered, installed, merged or rollout state, not a terminal success line (`evidence-discipline`).
+Capture bounded visual proof as you go of anything a person sees, and any claimed rendered, installed, merged or rollout state, not a terminal success line; never secrets or private content (`evidence-discipline`).
 
 ## Instruction coherence
 

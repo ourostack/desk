@@ -3,7 +3,7 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md"],
-  "reviewedSourceFingerprint": "9e81a1914e295eeb1c4634b0be4e57cb360c22aa797585b7131a4236d674805a",
+  "reviewedSourceFingerprint": "33e4f49e501f02f624c12c55f634a9662be47cf7e24ceb063cb9c3953edd3187",
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},

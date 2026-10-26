@@ -292,7 +292,7 @@ function main() {
     "Source and channels",
     "Durable context and attribution",
     "Requirements that arrive during execution",
-    "Visual proof when it helps",
+    "Visual proof",
     "Instruction coherence",
     "Child agents",
     "The RFC",
@@ -322,7 +322,7 @@ function main() {
     /The agent owns execution.*sequencing.*verification.*cleanup/u,
     /never hands the human a step it could do itself/u,
     /AX \(agent experience\).*deterministically.*easy to understand and use/u,
-    /HX \(human experience, formerly UX\).*attention.*understanding.*control.*trust/u,
+    /HX \(human experience\).*attention.*understanding.*control.*trust\. Both are UX\./u,
     /Never improve one by shifting avoidable work onto the other/u,
   ]);
 
@@ -363,12 +363,12 @@ function main() {
     /concrete adjustment/iu,
     /once/iu,
     /never a recurring gate and never widens authority/u,
-    /same correction twice, so record it durably in the desk/u,
+    /same correction twice, so record it with lesson_add/u,
   ]);
   // The rest of the coaching rule moved to interaction-style to make room in the foundation (SessionStart size budget).
   for (const phrase of [
     "work pulled back mid-flight by either side",
-    "the same correction twice, which means context is missing: record it durably in the desk",
+    "the same correction twice, which means context is missing: record it with `lesson_add`",
     "never becomes a recurring gate or widens your authority",
     "Ambitious delegation is welcome",
     "shape an overbroad ask into an assessable outcome rather than shrinking it",
@@ -472,13 +472,17 @@ function main() {
     "must not return control merely because the plan changed",
   ]);
 
-  assertSectionPhrases(section(skill, "Visual proof when it helps"), "using-desk Visual proof when it helps", [
-    "bounded visual proof",
+  assertSectionPhrases(section(skill, "Visual proof"), "using-desk Visual proof", [
+    "bounded visual proof as you go",
+    "anything a person sees",
     "rendered, installed, merged or rollout",
     "terminal success line",
     "(`evidence-discipline`)",
   ]);
-  assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof when it helps"), "evidence-discipline Visual proof when it helps", [
+  assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof"), "evidence-discipline Visual proof", [
+    "by default whenever work touches something a person sees",
+    "not what it is called",
+    "a brief's silence never waives it",
     "working or doing logs",
     "intermediate milestones",
     "pull request opened, reviewed, or merged states",

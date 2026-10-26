@@ -1592,7 +1592,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-desk", /A child brief bounds the work and leaves the method to the child\. A handoff to a peer that owns its task is not a brief: say what you changed and intend to touch, what was decided, the edges and how to reach you; never tell it how to work or presume its state/u],
     ["using-desk", /bounded known repairs or approved source work, not unsolicited repair children or PRs/u],
     ["using-desk", /AX \(agent experience\): do deterministic work deterministically; make tools easy to understand and use/u],
-    ["using-desk", /HX \(human experience, formerly UX\): protect attention, understanding, control and trust/u],
+    ["using-desk", /HX \(human experience\): protect attention, understanding, control and trust\. Both are UX\./u],
     ["using-desk", /Never improve one by shifting avoidable work onto the other/u],
     ["work-orchestration", /Choose each subagent's model deliberately, by the work's need for capability\. Pick from whatever model family the host offers rather than inheriting the default[\s\S]+most capable, most expensive tier[\s\S]+smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review/u, "Choosing and briefing agents"],
     ["work-orchestration", /fork\) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default/u, "Choosing and briefing agents"],
