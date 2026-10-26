@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.19 — 2026-10-26
+
+The task-only boot (`session-boot.js --task <name> --task-only`) no longer starves its push-access checks. It fetched the task's repos one after another in a way that blocked the checks, so on a busy machine they could run out of time and the boot reported "degraded". The fetches now run at once while the checks proceed: on Ari's desk the task-only boot went from 5–10 s to about 3 s.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.18 — 2026-10-26
 
 Each Desk session now starts its own search engine directly instead of going through what was left of the readiness controller. Search behaves as before; the session has less code between a tool call and its answer. `desk_status` reports `admission.search` (`started` or `not_started`) in place of `admission.controller`, the admission step is named `starting_search`, and a search engine that cannot start shows as `degraded:search_unavailable` while reads and writes keep working. The `desk_doctor` repair `prune_readiness_state` is gone: each session now removes, 30 seconds after it starts, the folders older Desk versions' readiness controllers left under `~/.cache/ouroboros-skills/desk/readiness` when no running process owns them and nothing in them changed in the last hour. A folder whose owner record cannot be read is kept. The `semantic: "required"` policy value is still accepted and now behaves like `background`.
