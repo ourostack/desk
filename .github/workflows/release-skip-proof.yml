@@ -1,0 +1,32 @@
+name: Release skip proof
+# Throwaway: proves the desk-release.yml build and report conditions on real push events. Copied verbatim from that file.
+on:
+  push:
+    branches: [user/arimendelow/release-skip-proof-20261026]
+permissions: {}
+jobs:
+  build:
+    if: github.event_name != 'push' || github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com' || !startsWith(github.event.head_commit.message, 'Release Desk ')
+    runs-on: ubuntu-latest
+    outputs:
+      released: "false"
+    steps:
+      - run: echo "build ran for ${{ github.event.head_commit.message }}"
+  push:
+    needs: build
+    if: needs.build.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo push
+  announce:
+    needs: [build, push]
+    if: always() && needs.build.result == 'success' && (needs.push.result == 'success' || needs.push.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo announce
+  report:
+    needs: [build, push, announce]
+    if: always() && needs.build.result != 'cancelled' && needs.build.result != 'skipped' && needs.push.result != 'cancelled' && needs.announce.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo report
