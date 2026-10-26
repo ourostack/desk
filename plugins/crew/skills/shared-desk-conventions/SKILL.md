@@ -30,7 +30,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
 ```
 <crew-repo>/                            # one git repo, N operators
   README.md                             # plain-markdown front page (graceful degradation)
-  AGENTS.md                             # crew conventions and team lessons; every agent here reads it
+  AGENTS.md                             # crew conventions and team lessons; Desk's session start prints it
   _meta/
     desks.md                            # the desk registry (one row per desk) -- see desk:session-start
   _shared/                              # the common area -- team-neutral, the contention hotspot
@@ -128,19 +128,25 @@ There is **NO human review step.** The PR is a serialization primitive, not an a
 
 ## Team lessons -- a correction taught once reaches every teammate's agents
 
-When someone corrects an agent and the correction holds for the whole team's work, it goes in the root `AGENTS.md`, in its `## Lessons` section, one rule per line, attributed: `- **<rule>.** <detail> (<alias>, <date>)`. That file is the one place every agent in the repository reads at the start of its work: Desk's session start prints it, and so do agents that run without Desk, such as a cloud coding agent or an always-on assistant. So nobody has to teach the same thing to their own agents, or a teammate's, again.
+When someone corrects an agent and the correction holds for the whole team's work, it goes in the root `AGENTS.md` of the repository the team works in, in its `## Lessons` section, one rule per line, attributed and sourced: `- **<rule>.** <detail> (<alias>, <date>; <source>)`. That repository may be this shared workspace or a team code repository that is not a desk at all; the root `AGENTS.md` is the file the team's agents load there, so nobody has to teach the same thing to their own agents, or a teammate's, again.
+
+Who loads that file:
+
+- **Desk's session start** prints the shared workspace's root `AGENTS.md`, then the person's own `desks/<alias>/AGENTS.md`, on every host.
+- **Copilot CLI and Codex** load a repository's `AGENTS.md` by themselves when they work in it.
+- **Claude Code** loads `CLAUDE.md`, not `AGENTS.md`. It reads `AGENTS.md` only when `CLAUDE.md` imports it (a line `@AGENTS.md`) or is a link to it, so a team repository used from Claude Code without Desk needs that line.
 
 Which home a correction gets follows the taxonomy above:
 
 | The correction is | Home | Who it reaches |
 |---|---|---|
 | One person's preference ("I want shorter replies") | that person's `desks/<alias>/AGENTS.md` | that person's agents |
-| Team-neutral and true of the team's work: a fact about a source, tool or customer ("the cloud workspace cannot reach github.com; use the node"), or a team decision applied to how agents work | root `AGENTS.md`, `## Lessons` | every teammate's agents |
+| True of the team's work and backed by a source: an agreed decision in `_shared/decisions/`, or, where the repository keeps no decision records, a team statement with who said it, where and when | root `AGENTS.md`, `## Lessons` | every teammate's agents |
 | How Desk or Crew itself behaves | an improvement card against the skill or tool that owns it | everyone who installs the plugin, once it ships |
 
-When in doubt, keep it personal: one person's preference recorded as a team lesson is a false consensus. A team lesson that rests on a fact carries its source, like any fact.
+A team lesson binds every teammate's agents, so one person cannot make one up: it cites where it comes from. Where the repository keeps `_shared/decisions/`, the source is the decision record the team agreed, so record the decision there first (the attribution discipline above); elsewhere it is who said it, where and when, with the date. When in doubt, keep it personal: one person's preference recorded as a team lesson is a false consensus.
 
-`lesson_add` does the routing. `scope: "personal"` writes the person's own `AGENTS.md` directly, because it is inside their desk. `scope: "team"` writes nothing and returns the attributed line and the section; the agent writes it through the shared-path protocol above, and every teammate's agents load it from their next session after the merge. `scope: "desk"` opens the improvement card. Tell the person what the tool's reply says; a lesson is in effect only when the file that carries it is merged.
+`lesson_add` does the routing and the writing. `scope: "personal"` writes the person's own `AGENTS.md` directly, because it is inside their desk. `scope: "team"` takes `repo` (the local clone; this workspace by default) and `source`, and runs the shared-path protocol above itself: it fetches the default branch, writes the line in a temporary worktree, pushes a branch, opens the pull request and merges it, rebuilding on top of a teammate's change when the merge conflicts. Its reply says `merged` (with the pull request and merge commit), `pr_open` (and why it could not merge) or `failed` (and the step it stopped at), and whether Claude Code loads the file. `scope: "desk"` opens the improvement card. Tell the person what the reply says; a team lesson is in effect only when it is merged.
 
 ## Shared tracks (when several people work one effort)
 
