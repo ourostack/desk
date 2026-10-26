@@ -1311,7 +1311,9 @@ export async function bootOnce({
   const pushRunner = withAmbientToken(gh, env)
   const pushFor = (selected) => resolvePushAccounts({ root: root.path, cards: selected, runner: pushRunner, now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
   const earlyNamed = taskQuery === null ? [] : namedCards(resolveTaskQuery(taskQuery, earlyCards, root.path), earlyCards)
-  const pushStarted = earlyNamed.length === 0 ? null : pushFor(earlyNamed).catch((error) => ({ error }))
+  const pushStarted = earlyNamed.length === 0 ? null : pushFor(earlyNamed)
+  // A failure is reported where the routes are awaited, below; this only keeps it from being an unhandled rejection meanwhile.
+  pushStarted?.catch(() => {})
 
   // The desk's own pre-commit hook (refuses a hand commit that changes a task card; see desk/card-commit-guard.js). Installing is idempotent and quiet;
   // only a failure to install is worth a line.
@@ -1449,7 +1451,6 @@ export async function bootOnce({
     // The routes started before the sync stand unless the sync changed the named task's repos.
     const reposOf = (list) => JSON.stringify(list.map((card) => [card.file, card.data.repos ?? null]))
     const found = named.length === 0 ? [] : await (pushStarted !== null && reposOf(named) === reposOf(earlyNamed) ? pushStarted : pushFor(named))
-    if (found?.error) throw found.error
     pushAccounts = found
   } catch (error) {
     degraded.push(`push_accounts: ${error.message}`)
