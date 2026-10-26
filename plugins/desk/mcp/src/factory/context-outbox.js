@@ -141,7 +141,7 @@ async function discoveryCursor(env, store, job) {
   return value.cursor
 }
 
-function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock, readRemote, resolveIdentity }) {
+function* taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock, readRemote, resolveIdentity }) {
   const cards = new Map()
   let next = cursor
   const within = () => withinBudget(deadline, clock)
@@ -217,6 +217,7 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock
         throw error
       }
       next = (index + 1) % candidates.length
+      yield { cards, cursor: next }
       if (cards.size === wanted.size) break
     }
     return { cards, incomplete, cursor: incomplete ? next : 0 }
@@ -237,48 +238,30 @@ async function prepareContextGroups(env, {
   const within = () => withinBudget(limit, clock)
   const counts = { prepared: 0, unchanged: 0, held: 0, deferred: [] }
   if ((await readConsent(env)).stores[store]?.contribute !== true) return counts
-  const cardIndexes = new Map()
   const groups = verifiedGroups ?? [...groupsOf(entries, store).values()]
+  const namespaces = new Map()
   for (const group of groups) {
+    const key = `${group.desk_root}\0${group.person_prefix}`
+    if (!namespaces.has(key)) namespaces.set(key, [])
+    namespaces.get(key).push(group)
+  }
+  const save = async (group, taskCard) => {
     within()
-    if (!allowed(group.desk_root, store)) continue
+    if (!allowed(group.desk_root, store)) return
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
     const sources = group.entries.map((entry) => entry.facts)
-    if (sources.length > 512 || new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; continue }
+    if (new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; return }
     const privateEvidence = group.entries.map(logEvidence)
-    const deskKey = `${group.desk_root}\0${group.person_prefix}`
-    if (!cardIndexes.has(deskKey)) {
-      const peers = groups.filter((item) => item.desk_root === group.desk_root && item.person_prefix === group.person_prefix)
-      const progressJob = peers.map((item) => item.job).sort()[0]
-      const cursor = await discoveryCursor(env, store, progressJob)
-      const started = clock()
-      // Keep the one-second discovery ceiling while leaving a third of short turns for persistence.
-      const discoveryDeadline = Math.min(started + PREPARATION_MS / 2, (started + 2 * limit) / 3)
-      const index = taskCardIndex(group.desk_root, group.person_prefix, {
-        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: discoveryDeadline, clock, readRemote, resolveIdentity,
-      })
-      cardIndexes.set(deskKey, index)
-      if (index.cursor !== cursor) await writeTaskContextFile(env, store, progressJob, "discovery.json", {
-        schema: "desk.factory.context-discovery/1", cursor: index.cursor,
-      })
-    }
-    const index = cardIndexes.get(deskKey)
-    if (index.incomplete && !index.cards.has(group.local_job)) {
-      counts.held += 1
-      counts.deferred.push(group.job)
-      continue
-    }
-    const taskCard = index.cards.get(group.local_job) ?? null
     const basis = sha({ sources: sources.map((facts) => contextSource(facts, group.job)), private_evidence: privateEvidence, task_card: taskCard, plugin_version: pluginVersion })
     const input = {
       schema: INPUT, basis, job: group.job, local_job: group.local_job, desk_root: group.desk_root,
       person_prefix: group.person_prefix, store,
       evaluator: { plugin_version: pluginVersion, rubric: "1" }, sources, private_evidence: privateEvidence, task_card: taskCard,
     }
-    if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; continue }
+    if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; return }
     const before = await stateOf(env, store, group.job)
     within()
-    if (before?.basis === basis) { counts.unchanged += 1; continue }
+    if (before?.basis === basis) { counts.unchanged += 1; return }
     await writeTaskContextFile(env, store, group.job, `input-${basis}.json`, input)
     const inputSeal = await seal(env, "input", basis, input)
     await updateTaskContextState(env, store, group.job, (current) => ({
@@ -290,6 +273,55 @@ async function prepareContextGroups(env, {
       publication_seal: current?.publication_seal ?? null, refusals: 0, hold_until: null,
     }))
     counts.prepared += 1
+  }
+  for (const peers of namespaces.values()) {
+    within()
+    const first = peers[0]
+    if (!allowed(first.desk_root, store)) continue
+    const eligible = peers.filter((group) => {
+      const sources = group.entries.map((entry) => entry.facts)
+      if (sources.length > 512 || new Set(sources.map((entry) => entry.session.id)).size !== sources.length) {
+        counts.held += 1
+        return false
+      }
+      return true
+    })
+    if (eligible.length === 0) continue
+    const progressJob = peers.map((group) => group.job).sort()[0]
+    let cursor = await discoveryCursor(env, store, progressJob)
+    const remember = async (next) => {
+      if (next === cursor) return
+      await writeTaskContextFile(env, store, progressJob, "discovery.json", {
+        schema: "desk.factory.context-discovery/1", cursor: next,
+      })
+      cursor = next
+    }
+    const iterator = taskCardIndex(first.desk_root, first.person_prefix, {
+      wanted: new Set(eligible.map((group) => group.local_job)), cursor,
+      deadline: Math.min(clock() + PREPARATION_MS / 2, limit), clock, readRemote, resolveIdentity,
+    })
+    const handled = new Set()
+    let step = iterator.next()
+    while (!step.done) {
+      for (const group of eligible) {
+        if (handled.has(group.job) || !step.value.cards.has(group.local_job)) continue
+        await save(group, step.value.cards.get(group.local_job))
+        handled.add(group.job)
+      }
+      await remember(step.value.cursor)
+      step = iterator.next()
+    }
+    const index = step.value
+    await remember(index.cursor)
+    for (const group of eligible) {
+      if (handled.has(group.job)) continue
+      if (index.incomplete) {
+        counts.held += 1
+        counts.deferred.push(group.job)
+      } else {
+        await save(group, null)
+      }
+    }
   }
   return counts
 }

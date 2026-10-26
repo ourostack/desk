@@ -104,6 +104,58 @@ jobs:
           DESK_BROWSER_REAL: "1"
         run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web.test.js
 
+  # Desk's black-box tester (tests/blackbox): installs the shipped plugins the way Copilot and Claude Code do, drives every user-facing
+  # behavior through each host's own MCP config and hook manifest against a throwaway desk, compares the two hosts and measures them.
+  blackbox:
+    name: Black-box tester (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each Node matches the runtime pack Desk ships for that platform.
+          - os: ubuntu-latest
+            node: "22"
+          - os: windows-latest
+            node: "24"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Allow the browser sandbox on Linux
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The search model and browser driver a person downloads once; the run reports whether they were seeded.
+      - name: Restore the downloaded search model and browser driver
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/desk-blackbox-cache
+          key: desk-blackbox-${{ runner.os }}-${{ hashFiles('plugins/desk/mcp/src/search/embedder.js', 'plugins/desk/mcp/web-catalog.json') }}
+      - name: Run the black-box tester on both hosts
+        shell: bash
+        # Two repeats in alternating host order, so neither host always pays a cold machine's first start.
+        run: node tests/blackbox/run.mjs --repeat 2 --out "$RUNNER_TEMP/blackbox" --cache-dir "$RUNNER_TEMP/desk-blackbox-cache" --label "ci-${{ runner.os }}"
+      - name: Keep the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackbox-${{ runner.os }}
+          path: ${{ runner.temp }}/blackbox
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Show the results table
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: cat "$RUNNER_TEMP"/blackbox/*.md >> "$GITHUB_STEP_SUMMARY" || true
+
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
   # coverage gate once, over the combined result.
@@ -691,6 +743,7 @@ jobs:
   ci-gate:
     name: CI gate
     needs:
+      - blackbox
       - browser
       - desk-mcp-coverage-shards
       - offline-eval-tests

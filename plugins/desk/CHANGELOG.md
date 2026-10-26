@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.1 — 2026-10-26
+
+Persist each verified task-card input before starting another identity check. Cold callers can finish a complete multi-command identity unit, while faster callers retain bounded multi-task throughput under the unchanged one-second stage, two-second overall and 500 ms per-Git-call ceilings.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0 — 2026-10-26
 
 Release Desk as a stable version; no pending changes.
