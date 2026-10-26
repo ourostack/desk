@@ -93,7 +93,8 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     const [{ resolveHookDeskRoot }, outbox, { resolveStore }, cli] = await Promise.all([
       import("../../mcp/scripts/resolve-desk-root.js"), import("../../mcp/src/factory/outbox.js"), import("../../mcp/src/factory/store-route.js"), import("../../mcp/scripts/factory.js"),
     ]);
-    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
+    // The server binds the folder Copilot opened when it is a desk; Copilot passes it only as the payload's cwd.
+    const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd, hostProjectRoot: claude || codex ? env.CLAUDE_PROJECT_DIR : payload.cwd });
     if (deskRoot === null) return "unavailable";
     const { metadata } = require("../../mcp/src/factory/plugin-sources.cjs");
     const { plugins, dirs, incomplete } = metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, sourceDeadline: performance.now() + SOURCE_BUDGET_MS });

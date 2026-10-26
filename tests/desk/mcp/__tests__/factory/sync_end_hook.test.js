@@ -74,6 +74,24 @@ test("wrong host, wrong event and an unresolvable desk root never throw and neve
   assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: ctx.desk, hook_event_name: "SessionEnd" }, env: noDeskEnv }), "unavailable")
 }))
 
+test("a Copilot session opened in another desk checks that desk, as the server binds it", () => scratch(async (ctx) => {
+  await mkDeskRepo(ctx)
+  const project = path.join(ctx.base, "project")
+  await fs.mkdir(path.join(project, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(project, "_archive"))
+  await mkDeskRepo({ desk: project })
+  const originDir = path.join(ctx.base, "origin.git")
+  git(ctx.base, ["init", "-q", "--bare", originDir])
+  git(project, ["remote", "add", "origin", originDir])
+  git(project, ["push", "-q", "-u", "origin", "HEAD:main"])
+  await writeAndCommit(project, "more.md", "more\n", "more")
+  const env = { ...ctx.env }
+  delete env.DESK
+  // The home-folder desk has nothing to push; the project desk has.
+  assert.equal(await runHook({ host: "copilot", payload: { cwd: project, reason: "complete" }, env }), "unpushed")
+  assert.equal(await runHook({ host: "claude", payload: { session_id: "s", cwd: project, hook_event_name: "SessionEnd" }, env }), "clean")
+}))
+
 test("stdin is byte bounded and malformed input finishes silently", async () => {
   assert.deepEqual(await readInput(Readable.from(['{"ok":true}'])), { ok: true })
   for (const input of ["{", "null", "[]", "1", "x".repeat(1024 * 1024 + 1)]) {
