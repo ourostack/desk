@@ -6,7 +6,7 @@
 // Each runs headless as its own browser process with its own user-data folder, driven by the
 // Playwright CLI inside playwright-core, which talks to the browser over a pipe, not a debugging
 // port. So Desk never focuses a window, never attaches to, closes or changes the person's running
-// browser, and never touches another agent's browser. Closing a context deletes its folder.
+// browser, and never touches another agent's browser. Closing a context ends its own processes and deletes its folder.
 //
 // browser_command runs one Playwright CLI page command (snapshot, click, fill, goto, ...) in it.
 //
@@ -106,7 +106,11 @@ function settings(o) {
     profileRoots: o.profileRoots || {},
     installMs: o.installMs || 180000,
     openMs: o.openMs || 120000,
-    commandMs: o.commandMs || 120000
+    commandMs: o.commandMs || 120000,
+    exitWaitMs: o.exitWaitMs || 5000,
+    processTable: o.processTable || function () {
+      return readProcessTable(platform, env);
+    }
   };
 }
 
@@ -264,6 +268,10 @@ function open(s, kind) {
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, profileName, outputDir)));
     return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
+    return recordProcesses(s, dir, result.text).then(function () {
+      return result;
+    });
+  }).then(function (result) {
     if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
     var opened = {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
@@ -295,10 +303,120 @@ function removeDir(dir) {
   }
 }
 
+// ---- the context's own processes ----
+//
+// The CLI starts a detached daemon, and the daemon starts the browser. A browser running a copy of a real profile can
+// outlive the CLI's close, so Desk records the daemon and everything under it when the context opens, and on close
+// waits a few seconds, then kills only those processes. Each is matched by PID and start time, so a PID the system
+// has since given to another process is never touched; nothing is matched by name.
+
+function processTableCommand(platform, env) {
+  if (platform === "win32") {
+    var shell = path.win32.join(env.SystemRoot || env.windir || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    return [shell, ["-NoProfile", "-NonInteractive", "-Command",
+      "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToFileTimeUtc() }"]];
+  }
+  return ["ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="]];
+}
+
+// Lines of "pid ppid start"; the start is the rest of the line.
+function parseProcessTable(text) {
+  return text.split(/\r?\n/).map(function (line) {
+    var match = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line);
+    return match && { pid: Number(match[1]), ppid: Number(match[2]), start: match[3] };
+  }).filter(Boolean);
+}
+
+// Resolves the process table, or null when it cannot be read.
+function readProcessTable(platform, env) {
+  var command = processTableCommand(platform, env);
+  return new Promise(function (resolve) {
+    var child = childProcess.execFile(command[0], command[1], { timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" }, function (error, stdout) {
+      resolve(error ? null : parseProcessTable(stdout));
+    });
+    // PowerShell reads a piped stdin before it exits, so it is closed at once.
+    child.stdin.end();
+  });
+}
+
+// Windows start times are file-time numbers, ps start times are dates.
+function startValue(start) {
+  return /^\d+$/.test(start) ? Number(start.slice(0, -4)) : Date.parse(start);
+}
+
+// The given processes that are still running as themselves, and everything they have started since. A child must have
+// started no earlier than its parent, because Windows keeps a parent PID after the parent exits and may reuse it.
+function liveTree(table, roots) {
+  var live = table.filter(function (row) {
+    return roots.some(function (root) { return root.pid === row.pid && root.start === row.start; });
+  });
+  for (var i = 0; i < live.length; i += 1) {
+    var parent = live[i];
+    table.forEach(function (row) {
+      if (row.ppid === parent.pid && live.indexOf(row) === -1 && startValue(row.start) >= startValue(parent.start)) live.push(row);
+    });
+  }
+  return live.map(function (row) { return { pid: row.pid, start: row.start }; });
+}
+
+function readOwner(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"));
+  } catch (error) {
+    return {};
+  }
+}
+
+// The CLI prints the daemon's PID when it opens ("opened with pid N") and when the daemon fails to start ("Daemon pid=N:").
+function recordProcesses(s, dir, text) {
+  var match = /(?:opened with pid |Daemon pid=)(\d+)/.exec(text);
+  if (!match) return Promise.resolve();
+  var daemon = Number(match[1]);
+  return Promise.resolve(s.processTable()).then(function (table) {
+    var row = (table || []).filter(function (entry) { return entry.pid === daemon; })[0];
+    if (!row) return;
+    var owner = readOwner(dir);
+    owner.processes = liveTree(table, [row]);
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(owner) + "\n");
+  });
+}
+
+function pause(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+// Waits up to exitWaitMs for the recorded processes to exit, then kills what is left of them; resolves the PIDs it killed.
+function endProcesses(s, recorded) {
+  if (!recorded || !recorded.length) return Promise.resolve([]);
+  var deadline = Date.now() + s.exitWaitMs;
+  function check() {
+    return Promise.resolve(s.processTable()).then(function (table) {
+      if (!table) return [];
+      var live = liveTree(table, recorded);
+      if (!live.length) return [];
+      if (Date.now() < deadline) return pause(250).then(check);
+      live.forEach(function (entry) {
+        try {
+          process.kill(entry.pid, "SIGKILL");
+        } catch (error) {
+          // It exited after the table was read.
+        }
+      });
+      return pause(250).then(function () {
+        return live.map(function (entry) { return entry.pid; });
+      });
+    });
+  }
+  return check();
+}
+
 function close(s, id) {
   var dir = contextDir(s, id);
+  var recorded = readOwner(dir).processes;
   var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
   return stop.then(function () {
+    return endProcesses(s, recorded);
+  }).then(function () {
     removeDir(dir);
     return { contextId: id, closed: true };
   });
@@ -481,6 +599,10 @@ module.exports = {
   npmCli: npmCli,
   profileRoot: profileRoot,
   copyProfile: copyProfile,
+  processTableCommand: processTableCommand,
+  parseProcessTable: parseProcessTable,
+  readProcessTable: readProcessTable,
+  liveTree: liveTree,
   createController: createController,
   serve: serve,
   run: run
