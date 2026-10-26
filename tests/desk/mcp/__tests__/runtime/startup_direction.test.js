@@ -44,7 +44,7 @@ test("the startup line names the bound root and where it came from", () => {
   for (const [source, label] of [
     ["explicit-root", "the root passed to Desk"],
     ["host-session-root", "the root passed to Desk"],
-    ["host-project", "this session's project folder is a desk"],
+    ["host-project", "the project folder"],
     ["activation-config", "the saved desk binding"],
     ["env:DESK", "the DESK environment variable"],
     ["home_fallback", "a home-folder fallback"],

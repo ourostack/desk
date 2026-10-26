@@ -171,7 +171,7 @@ function checkStartupHooks(skill) {
     // Overlay case on Claude: the Desk server also receives CLAUDE_PROJECT_DIR, so the crew-shaped project folder is
     // the root it binds, and the line names it.
     const claudeOverlay = startupLine(runClaudeHook({ env, cwd: crew, projectDir: crew }));
-    assert.match(claudeOverlay, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(this session's project folder is a desk\\)`, "u"), "claude must name the desk-shaped project folder");
+    assert.match(claudeOverlay, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(the project folder\\)`, "u"), "claude must name the desk-shaped project folder");
     assert.ok(!claudeOverlay.includes(fallback), "claude must not name the home fallback when the project folder is a desk");
 
     // Copilot: the sessionStart hook records the session folder for the Desk server, so a session folder that is a desk is
@@ -183,15 +183,15 @@ function checkStartupHooks(skill) {
     };
     for (const [host, context] of Object.entries(copilotOverlay)) {
       const line = startupLine(context);
-      assert.match(line, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(this session's project folder is a desk\\)`, "u"), `${host}: ${line}`);
+      assert.match(line, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(the project folder\\)`, "u"), `${host}: ${line}`);
       assert.ok(!line.includes(fallback), `${host} must not name the home fallback when the session folder is a desk`);
     }
 
     // A session folder that is itself a desk wins over $DESK on every host; in any other folder $DESK binds.
     const other = runCopilotHook({ env: { ...env, DESK: solo }, cwd: crew, sessionCwd: crew });
-    assert.ok(startupLine(other).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(other));
+    assert.ok(startupLine(other).startsWith(`Desk startup: $DESK is ${crew} (the project folder)`), startupLine(other));
     const claudeOther = runClaudeHook({ env: { ...env, DESK: solo }, cwd: crew, projectDir: crew });
-    assert.ok(startupLine(claudeOther).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(claudeOther));
+    assert.ok(startupLine(claudeOther).startsWith(`Desk startup: $DESK is ${crew} (the project folder)`), startupLine(claudeOther));
     const elsewhere = runCopilotHook({ env: { ...env, DESK: solo }, cwd: codeRepo, sessionCwd: codeRepo });
     assert.ok(startupLine(elsewhere).startsWith(`Desk startup: $DESK is ${solo} (the DESK environment variable)`), startupLine(elsewhere));
 
@@ -249,7 +249,7 @@ function checkStartupHooks(skill) {
     const elapsed = Date.now() - started;
     assert.equal(open.status, 0, open.stderr);
     assert.ok(elapsed < 4000, `copilot hook must stop waiting for stdin; took ${elapsed} ms`);
-    assert.ok(startupLine(JSON.parse(open.stdout).additionalContext).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), "after the stdin timeout the hook uses the process folder");
+    assert.ok(startupLine(JSON.parse(open.stdout).additionalContext).startsWith(`Desk startup: $DESK is ${crew} (the project folder)`), "after the stdin timeout the hook uses the process folder");
   });
 }
 
