@@ -89,7 +89,7 @@ async function pathExists(file) {
  * `spawnSync`'s result shape, without blocking the event loop: the pull is the one network call here and can take
  * seconds, and boot's own network checks run while it does. A timeout ends the child with SIGTERM, as `spawnSync` does.
  */
-export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn } = {}) {
+export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn }) {
   return new Promise((resolve) => {
     const stdout = []
     const stderr = []

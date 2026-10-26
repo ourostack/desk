@@ -1552,7 +1552,7 @@ export async function bootOnce({
     const reuse = pushStarted !== null && reposOf(named) === reposOf(earlyNamed)
     pushAccounts = named.length === 0 ? [] : await (reuse ? pushStarted : pushFor(named))
     // A dropped early check may still have `gh` children; the script exits right after its output, which would leave them running. It started first and has the same limits.
-    if (!reuse && pushStarted !== null) await pushStarted.catch(() => null)
+    if (!reuse && pushStarted !== null) await Promise.allSettled([pushStarted])
   } catch (error) {
     degraded.push(`push_accounts: ${error.message}`)
   }

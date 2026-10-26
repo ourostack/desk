@@ -35,10 +35,10 @@ test("readRemotes: a url with a trailing comment, quotes or escapes reads as git
   git(dir, "init", "-q")
   await fs.appendFile(path.join(dir, ".git", "config"), [
     "[remote \"noted\"]", "\turl = https://example.com/n.git # note", "[remote \"semi\"]", "\turl = https://example.com/s.git;note",
-    "[remote \"hash\"]", "\turl = \"https://example.com/a#b.git\" ; c", "[remote \"escaped\"]", "\turl = https://example.com/e\\\"x\\t.git", "",
+    "[remote \"hash\"]", "\turl = \"https://example.com/a#b.git\" ; c", "[remote \"escaped\"]", "\turl = https://example.com/e\\\"x\\t.git", "[remote \"controls\"]", "\turl = https://example.com/c\\n\\b.git", "",
   ].join("\n"))
   const { remotes } = readRemotes(dir)
-  for (const name of ["noted", "semi", "hash", "escaped"]) assert.equal(remotes[name], git(dir, "config", "--get", `remote.${name}.url`).stdout.replace(/\n$/u, ""), name)
+  for (const name of ["noted", "semi", "hash", "escaped", "controls"]) assert.equal(remotes[name], git(dir, "config", "--get", `remote.${name}.url`).stdout.replace(/\n$/u, ""), name)
   assert.equal(remotes.noted, "https://example.com/n.git")
   assert.equal(remotes.hash, "https://example.com/a#b.git")
 })

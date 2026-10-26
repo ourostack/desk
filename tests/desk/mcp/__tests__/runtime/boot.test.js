@@ -1720,6 +1720,7 @@ test("bootOnce --task-only: a route no account has, a missing clone, an ambiguou
   const ambiguous = await healthyBoot(many, { taskQuery: "faster", taskOnly: true })
   assert.ok(ambiguous.instructions.some((line) => line.includes("more than one open task")))
   assert.doesNotMatch(formatBootText(ambiguous), /Push routes|Active tasks/u)
+  assert.doesNotMatch(formatBootText({ ...ambiguous, push_accounts: [{ store: "local/only", result: "not_a_github_repo" }] }), /Push routes/u, "a repo with no GitHub remote has no route")
   assert.deepEqual((await healthyBoot(many, { taskQuery: "zzz-none", taskOnly: true })).instructions, ["The name matches no open task: use the task list from this session's first boot and ask what to resume or start."])
   const broken = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, walkFn: () => { throw new Error("cards gone") }, repoFn: () => { throw new Error("git gone") } })
   assert.ok(broken.degraded.includes("cards: cards gone"))

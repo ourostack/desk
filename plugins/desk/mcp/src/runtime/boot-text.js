@@ -399,7 +399,7 @@ export function formatBootText(result) {
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
-  if (result.task_only === true) lines.push(...routeSection(result.push_accounts ?? []))
+  if (result.task_only === true) lines.push(...routeSection(result.push_accounts))
   else taskSection(result, lines)
   lines.push(...cleanupLines(result))
   lines.push(...unsignedLines(result.unsigned_deliveries))
