@@ -365,7 +365,9 @@ test("close ends the browser and the CLI daemon the context started, even when t
   const second = json(await controller.call("browser_context", { action: "open" })).contextId
   const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${first}`, "daemon.json"), "utf8"))
   const others = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${second}`, "daemon.json"), "utf8"))
-  assert.deepEqual(recorded(tmp, first).map((entry) => entry.pid).sort(), [daemon, browser].sort())
+  // Windows adds the console host the fake browser gets, so the record holds at least these two.
+  const firstPids = recorded(tmp, first).map((entry) => entry.pid)
+  assert.ok(firstPids.includes(daemon) && firstPids.includes(browser), JSON.stringify(firstPids))
   assert.ok(recorded(tmp, first).every((entry) => typeof entry.start === "string" && entry.start.length > 0))
 
   assert.deepEqual(json(await controller.call("browser_context", { action: "close", contextId: first })), { contextId: first, closed: true })
@@ -387,7 +389,7 @@ test("close kills nothing when the CLI's close already ended the browser, and co
   const controller = web.createController({ ...options, exitWaitMs: 500, processTable: () => (reads++ === 0 ? realTable() : null) })
   const blind = json(await controller.call("browser_context", { action: "open" })).contextId
   const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${blind}`, "daemon.json"), "utf8"))
-  assert.equal(recorded(tmp, blind).length, 2)
+  assert.ok(recorded(tmp, blind).length >= 2)
   assert.deepEqual(json(await controller.call("browser_context", { action: "close", contextId: blind })), { contextId: blind, closed: true })
   assert.deepEqual([running(daemon), running(browser)], [false, false])
 
@@ -742,17 +744,4 @@ test("real: mine carries the person's sign-in into a copy, leaves a running brow
     page.closeAllConnections()
     page.close()
   }
-})
-// TEMPORARY diagnostic for a Windows CI run that does not exit after the last test: what keeps this process alive, and which processes started recently.
-test("zz diagnostic: report live handles a little after the last test", () => {
-  const report = (label) => {
-    const handles = process._getActiveHandles().map((h) => `${h.constructor?.name}${h.pid ? ` pid=${h.pid}` : ""}${h.spawnfile ? ` ${h.spawnfile}` : ""}${h.spawnargs ? ` ${JSON.stringify(h.spawnargs).slice(0, 300)}` : ""}`)
-    process.stderr.write(`[web.test diagnostic ${label}] pid ${process.pid} resources ${JSON.stringify(process.getActiveResourcesInfo())} handles ${JSON.stringify(handles)}\n`)
-    if (process.platform === "win32") {
-      const listed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -or $_.Name -like 'msedge*' -or $_.Name -like 'chrome*' } | ForEach-Object { '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }"], { encoding: "utf8", input: "", timeout: 60000 })
-      process.stderr.write(`[web.test diagnostic ${label}] recent processes:\n${listed.stdout}\n${listed.stderr}\n`)
-    }
-  }
-  setTimeout(() => report("5s"), 5000).unref()
-  setTimeout(() => report("30s"), 30000).unref()
 })
