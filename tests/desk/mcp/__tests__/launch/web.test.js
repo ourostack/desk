@@ -55,6 +55,7 @@ if (verb === "open" && mode === "ghost") process.stdout.write("### Browser \`des
 const FAKE_DAEMON = `
 const fs = require("fs")
 const browser = require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
+fs.appendFileSync(process.env.FAKE_DAEMON_LOG, process.pid + " " + browser.pid + "\\n")
 fs.writeFileSync(process.argv[2] + ".tmp", JSON.stringify({ daemon: process.pid, browser: browser.pid }))
 fs.renameSync(process.argv[2] + ".tmp", process.argv[2])
 setInterval(() => {}, 1000)
@@ -94,7 +95,7 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
     fs.copyFileSync(cliSource, path.join(cliDir, "cli.js"))
   }
   const profiles = path.join(root, "profiles")
-  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
+  const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_DAEMON_LOG: path.join(root, "daemons.log"), FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
   const options = {
     env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
     profileRoots: { msedge: path.join(profiles, "edge"), chrome: path.join(profiles, "chrome") },
@@ -337,10 +338,28 @@ const running = (pid) => {
   }
 }
 
+// Every fake daemon and browser a setup started that is still running.
+const fakesRunning = (root) => {
+  const log = path.join(root, "daemons.log")
+  return (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split(/\s+/u).filter(Boolean).map(Number) : []).filter(running)
+}
+
+// A test that starts fake daemons stops any that are left, so a leak fails the test instead of keeping the runner alive.
+const stopFakes = (t, root) => t.after(() => {
+  for (const pid of fakesRunning(root)) {
+    try {
+      process.kill(pid)
+    } catch {
+      // Already gone.
+    }
+  }
+})
+
 const recorded = (tmp, contextId) => JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${contextId}`, "owner.json"), "utf8")).processes ?? []
 
-test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", { timeout: 180000 }, async () => {
-  const { options, tmp } = await setup({ mode: "daemon-leak" })
+test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", { timeout: 180000 }, async (t) => {
+  const { options, tmp, root } = await setup({ mode: "daemon-leak" })
+  stopFakes(t, root)
   const controller = web.createController({ ...options, exitWaitMs: 500 })
   const first = json(await controller.call("browser_context", { action: "open" })).contextId
   const second = json(await controller.call("browser_context", { action: "open" })).contextId
@@ -357,10 +376,12 @@ test("close ends the browser and the CLI daemon the context started, even when t
   await controller.closeAll()
   assert.deepEqual([running(others.daemon), running(others.browser)], [false, false])
   assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${second}`)), false)
+  assert.deepEqual(fakesRunning(root), [])
 })
 
-test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", { timeout: 180000 }, async () => {
-  const { options, tmp } = await setup({ mode: "daemon" })
+test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", { timeout: 180000 }, async (t) => {
+  const { options, tmp, root } = await setup({ mode: "daemon" })
+  stopFakes(t, root)
   let reads = 0
   const realTable = () => web.readProcessTable(process.platform, process.env)
   const controller = web.createController({ ...options, exitWaitMs: 500, processTable: () => (reads++ === 0 ? realTable() : null) })
@@ -372,8 +393,10 @@ test("close kills nothing when the CLI's close already ended the browser, and co
 
   const seeing = web.createController({ ...options, exitWaitMs: 500 })
   const id = json(await seeing.call("browser_context", { action: "open" })).contextId
+  const seen = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${id}`, "daemon.json"), "utf8"))
   await seeing.call("browser_context", { action: "close", contextId: id })
   assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${id}`)), false)
+  assert.deepEqual([running(seen.daemon), running(seen.browser)], [false, false])
 
   const unreadable = web.createController({ ...options, processTable: () => null })
   const lost = json(await unreadable.call("browser_context", { action: "open" })).contextId
@@ -381,15 +404,18 @@ test("close kills nothing when the CLI's close already ended the browser, and co
   const pids = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${lost}`, "daemon.json"), "utf8"))
   await unreadable.call("browser_context", { action: "close", contextId: lost })
   assert.deepEqual([running(pids.daemon), running(pids.browser)], [false, false])
+  assert.deepEqual(fakesRunning(root), [])
 })
 
-test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000 }, async () => {
+test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000 }, async (t) => {
   const failed = await setup({ mode: "daemon-open-fail" })
+  stopFakes(t, failed.root)
   const controller = web.createController({ ...failed.options, exitWaitMs: 500 })
   const result = await controller.call("browser_context", { action: "open" })
   assert.match(text(result), /The browser did not start.*Daemon pid=\d+/su)
   const record = fs.readdirSync(failed.tmp)
   assert.deepEqual(record, [], "the failed context's folder is gone")
+  assert.deepEqual(fakesRunning(failed.root), [], "the failed context's daemon and browser are gone")
   const ghost = await setup({ mode: "ghost" })
   const opened = json(await web.createController(ghost.options).call("browser_context", { action: "open" }))
   assert.deepEqual(recorded(ghost.tmp, opened.contextId), [])
@@ -717,14 +743,13 @@ test("real: mine carries the person's sign-in into a copy, leaves a running brow
     page.close()
   }
 })
-
 // TEMPORARY diagnostic for a Windows CI run that does not exit after the last test: what keeps this process alive, and which processes started recently.
 test("zz diagnostic: report live handles a little after the last test", () => {
   const report = (label) => {
     const handles = process._getActiveHandles().map((h) => `${h.constructor?.name}${h.pid ? ` pid=${h.pid}` : ""}${h.spawnfile ? ` ${h.spawnfile}` : ""}${h.spawnargs ? ` ${JSON.stringify(h.spawnargs).slice(0, 300)}` : ""}`)
     process.stderr.write(`[web.test diagnostic ${label}] pid ${process.pid} resources ${JSON.stringify(process.getActiveResourcesInfo())} handles ${JSON.stringify(handles)}\n`)
     if (process.platform === "win32") {
-      const listed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt (Get-Date).AddMinutes(-10) } | ForEach-Object { '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }"], { encoding: "utf8", input: "", timeout: 60000 })
+      const listed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -or $_.Name -like 'msedge*' -or $_.Name -like 'chrome*' } | ForEach-Object { '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }"], { encoding: "utf8", input: "", timeout: 60000 })
       process.stderr.write(`[web.test diagnostic ${label}] recent processes:\n${listed.stdout}\n${listed.stderr}\n`)
     }
   }
