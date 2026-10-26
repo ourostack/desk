@@ -97,7 +97,6 @@ async function sessionWith(t, env) {
     stderr: { write: () => {} },
     resolveInputs: async () => ({ root: { root, source: "explicit-root" }, activation: { activationStatus: null, readinessPolicy: { lexical: "required", semantic: "unsupported", write_authority: "workspace", authority_provider: null, root: "workspace" }, stateBranch: null } }),
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
-    hung: { probe: async () => ({ state: "refused" }) },
   })
   t.after(() => session.dispose())
   return { session, calls }

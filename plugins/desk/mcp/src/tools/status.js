@@ -1,11 +1,6 @@
 import * as path from "node:path"
-import { indexDbPath } from "../db/init.js"
-import { unavailableLocalDb } from "../db/status-read.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
-import { createDeskQueryRouter } from "../readiness/query-router.js"
-import { indexOwnerSentence } from "../readiness/index-writer.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
@@ -50,17 +45,6 @@ async function syncStatus({ deskRoot, env, signal }) {
     last_push_at: recorded?.last_push_at ?? null,
     ...lastPull,
   }
-}
-
-const EMBEDDING_SPEC = {
-  id: ACTIVE_EMBEDDING_SPEC.id,
-  provider: "ollama",
-  model: ACTIVE_EMBEDDING_SPEC.model,
-  model_revision: ACTIVE_EMBEDDING_SPEC.model_revision,
-  dimensions: ACTIVE_EMBEDDING_SPEC.dimension,
-  encoding: "float32",
-  chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
-  normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
 // The desk_status calls still running, by the signal that owns them: their card reads hold files in the desk folder open.
@@ -109,7 +93,7 @@ export function desk_status(request) {
   return call
 }
 
-async function statusCall({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
+async function statusCall({ deskRoot, person, statusContext = {}, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -124,292 +108,32 @@ async function statusCall({ deskRoot, person, statusContext = {}, queryRouter, s
     // The sync section comes last; its worker thread starts while the inspections run.
     if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
-    const localDb = root.valid
-      ? await reader.inspect("local")
-      : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
-    const startup = normalizeStartup(statusContext.startup)
-    const readiness = await controllerReadiness(statusContext.admission, signal)
-    const observed = await (queryRouter ?? createDeskQueryRouter({
-      controller: statusContext.admission?.controller,
-    })).snapshot({ deskRoot: root.valid ? root.path : null, signal }, {
-      readIndex: () => root.valid ? reader.inspect("index") : null,
-    })
-    const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
-    const semantic = root.valid ? observed.semantic : {
-      ...observed.semantic,
-      current: false,
-      generation: null,
-      current_automatic_action: null,
-    }
-    const snapshots = snapshotStatus(startup)
-    const vectorPacks = vectorPackStatus(startup)
-    const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
     const activation = activationStatus(statusContext.activation)
-    const startupFallback = startupFallbackStatus({
-      startup,
-      documentVectors: localDb.document_vectors,
-      queryEmbedding,
-      lexicalIndex: localDb.lexical_index,
-      readiness,
-    })
-    const degradedModes = degradedModesFor({
-      documentVectors: localDb.document_vectors,
-      queryEmbedding,
-      lexicalIndex: localDb.lexical_index,
-      startupFallback,
-      readiness,
-    })
+    const search = await searchStatus(statusContext.admission)
 
     return {
       status: root.valid ? "ok" : "error",
       root,
       activation,
       runtime,
-      readiness: presentReadiness(readiness),
-      lexical,
-      semantic,
-      local_db: localDb.local_db,
-      db_schema: localDb.local_db.schema,
-      active_embedding_spec: EMBEDDING_SPEC,
-      snapshots,
-      vector_packs: vectorPacks,
-      document_vectors: localDb.document_vectors,
-      query_embedding: queryEmbedding,
-      lexical_index: localDb.lexical_index,
-      startup_fallback: startupFallback,
-      degraded_modes: degradedModes,
+      search,
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
       active_tasks: root.valid ? await activeTasks(root.path) : null,
       factory: await factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal }),
       sync: root.valid ? await syncStatus({ deskRoot: root.path, env, signal }) : null,
-      summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
+      summary: summaryFor({ root, activation, search }),
     }
   } finally {
     await reader.close()
   }
 }
 
-// One word for agents (`ready`, `converging`, `degraded`, `unavailable`, `not_checked`), with the controller's own
-// state name and convergence snapshot under `detail`. The raw controller state used to sit in `readiness.state`, where
-// `RECOVERING` read as an outage next to an admission `state` of `ready` and sent agents chasing a problem that was not
-// there (round 5: 7 of 16 runs raised it). The top-level `state` (admission) still decides whether Desk's tools work;
-// `readiness` only describes the search index's controller.
-const READINESS_MEANING = {
-  ready: "The search index is current; nothing to do.",
-  converging: "The search index is still catching up in the background; searches read the files meanwhile and stay correct. Nothing to fix.",
-  degraded: "Desk's search service hit a problem and is trying again, or its last update of the search index failed (see `detail.convergence.diagnostic`). The top-level `state` decides whether task, track and file tools work; searches read the files directly. Mention it in one line only if the work needs search.",
-  unavailable: "Desk's search service did not answer; searches read the files directly. The top-level `state` still decides whether Desk's tools work.",
-  not_checked: "desk_status did not ask Desk's search service.",
-}
+const SEARCH_STARTING = Object.freeze({ state: "starting", message: "Desk search is starting." })
 
-function readinessWord({ state, convergence }) {
-  if (state === "not_checked" || state === "unavailable") return state
-  if (state === "TERMINAL") return "unavailable"
-  if (state === "RECOVERING" || convergence.status === "failed") return "degraded"
-  if (state === "READY" || state === "LEXICAL_READY") return "ready"
-  return "converging"
-}
-
-const LEXICAL_MEANING = "Exact-word search and the search index are current, but meaning-based search is not fully available, for example because the embedding service did not answer. Tools work; results may not be ranked by meaning."
-
-// A build that stands aside because a newer build's session owns the shared index (readiness/index-writer.js).
-const OWNER_INDEXES_DIFFERENTLY = "A newer Desk in another session owns the search index and builds it with other settings, so this session cannot read it and writes nothing to it. Searches here read the files and stay correct, but meaning-based search is not available in this session. To use the index here, restart this session on the newer Desk; once the other session ends, this session takes the index over."
-const OWNER_CATCHING_UP = "The Desk session that owns the search index has not finished updating it. Searches here read the files meanwhile and stay correct; this session checks again shortly, and again at its next meaning-based search or desk change. Nothing to fix."
-const OWNER_PREPARING_TEXT = "Exact-word search uses the search index, which the Desk session that owns it keeps current. That session has not finished preparing all desk text for meaning-based search; this session checks again shortly, and again at its next meaning-based search."
-
-// Every meaning desk_status can give for search, for the plain-wording test.
-export const READINESS_STATUS_WORDING = Object.freeze([
-  ...Object.values(READINESS_MEANING), LEXICAL_MEANING, OWNER_INDEXES_DIFFERENTLY, OWNER_CATCHING_UP, OWNER_PREPARING_TEXT,
-])
-
-function presentReadiness(readiness) {
-  const standingAside = readiness.index_owner?.this_controller === false
-  const reason = readiness.freshness_reason ?? null
-  const differently = standingAside && reason === "index_owned_by_newer_desk"
-  const word = differently ? "degraded" : readinessWord(readiness)
-  const meaning = differently ? OWNER_INDEXES_DIFFERENTLY
-    : standingAside && word === "converging" && reason === "index_owner_catching_up" ? OWNER_CATCHING_UP
-      : word === "ready" && readiness.state === "LEXICAL_READY" ? (standingAside ? OWNER_PREPARING_TEXT : LEXICAL_MEANING)
-        : READINESS_MEANING[word]
-  // Which Desk build owns the shared search index, and whether it is this session's: several builds can share one desk, and only the owner writes the index.
-  const owner = indexOwnerSentence(readiness.index_owner)
-  return {
-    state: word, meaning,
-    ...(owner === null ? {} : { owner, owned_by_this_session: readiness.index_owner.this_controller === true }),
-    detail: { controller_state: readiness.state, convergence: readiness.convergence },
-  }
-}
-
-// Settles as `promise` does, or rejects with the signal's reason once it aborts.
-function untilAborted(promise, signal) {
-  if (signal === undefined) return promise
-  const aborted = new Promise((resolve, reject) => {
-    signal.throwIfAborted()
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true })
-  })
-  return Promise.race([promise, aborted])
-}
-
-async function controllerReadiness(admission, signal) {
-  const empty = { status: "not_checked", semantic: null, diagnostic: null }
-  if (typeof admission?.controller?.status !== "function") {
-    return { state: "not_checked", convergence: empty }
-  }
-  try {
-    // An aborted run stops waiting for the controller, so the session's close does not wait for it either.
-    const snapshot = await untilAborted(Promise.resolve().then(() => admission.controller.status()), signal)
-    return { state: snapshot.state, convergence: snapshot.convergence ?? empty, index_owner: snapshot.index_owner ?? null,
-      freshness_reason: snapshot.freshness?.reason ?? null }
-  } catch (error) {
-    return {
-      state: "unavailable",
-      convergence: {
-        status: "unavailable", semantic: null,
-        diagnostic: { message: String(error?.message ?? error).slice(0, 2048) },
-      },
-    }
-  }
-}
-
-
-function normalizeStartup(startup) {
-  return startup !== null && typeof startup === "object" ? startup : {}
-}
-
-function startupEnsure(startup) {
-  const ensure = startup.ensure_index
-  return ensure !== null && typeof ensure === "object" ? ensure : null
-}
-
-function snapshotStatus(startup) {
-  const ensure = startupEnsure(startup)
-  const snapshot = ensure?.snapshot
-  const base = { module_state: "available" }
-  if (!snapshot) {
-    return { ...base, restore_state: "not_checked" }
-  }
-  return compactObject({
-    ...base,
-    restore_state: snapshotRestoreState(snapshot),
-    snapshot_id: snapshot.snapshot_id,
-    reason: snapshot.reason,
-    reconciled: snapshot.reconciled,
-    freshness: snapshot.freshness,
-  })
-}
-
-function vectorPackStatus(startup) {
-  const ensure = startupEnsure(startup)
-  const base = { module_state: "available" }
-  if (!ensure) return { ...base, import_state: "not_checked" }
-  if (ensure.fallback === "vector_packs") {
-    return {
-      ...base,
-      ...ensure.vector_packs,
-      import_state: "used_as_fallback",
-      fallback_used: true,
-    }
-  }
-  if (ensure.vector_packs?.import_state) {
-    return { ...base, ...ensure.vector_packs }
-  }
-  return { ...base, import_state: "absent" }
-}
-
-function queryEmbeddingStatus(startup, readiness) {
-  const semantic = startupEnsure(startup)?.semantic
-  const base = { spec_id: EMBEDDING_SPEC.id }
-  const query = readiness.convergence.semantic?.query_embedding
-  if (typeof query?.available === "boolean") {
-    return { ...base, available: query.available, diagnostic: query.diagnostic }
-  }
-  if (typeof semantic?.embedding_available === "boolean") {
-    return compactObject({
-      ...base,
-      available: semantic.embedding_available,
-      diagnostic: semantic.embedding_diagnostic,
-    })
-  }
-  return {
-    ...base,
-    available: "not_checked",
-    note: "desk_status does not probe live embedding endpoints during session start",
-  }
-}
-
-function startupFallbackStatus({
-  startup,
-  documentVectors,
-  queryEmbedding,
-  lexicalIndex,
-  readiness,
-}) {
-  const ensure = startupEnsure(startup)
-  const mode = startup.fallback_mode ?? inferStartupFallbackMode({ ensure, lexicalIndex })
-  const degraded = ["failed", "unavailable"].includes(readiness.convergence.status)
-    || (startup.degraded ?? fallbackIsDegraded({
-      documentVectors,
-      mode,
-      queryEmbedding,
-    }))
-  return compactObject({
-    mode,
-    degraded,
-    duration_ms: startup.duration_ms,
-    budget_ms: startup.budget_ms,
-  })
-}
-
-function degradedModesFor({
-  documentVectors,
-  queryEmbedding,
-  lexicalIndex,
-  startupFallback,
-  readiness,
-}) {
-  const modes = []
-  if (readiness.convergence.status === "failed") modes.push("convergence_failed")
-  if (readiness.state === "unavailable") modes.push("readiness_unavailable")
-  if (documentVectors.state === "partial") modes.push("document_vectors_partial")
-  if (documentVectors.state === "missing") modes.push("document_vectors_missing")
-  if (queryEmbedding.available === false) modes.push("query_embedding_unavailable")
-  if (startupFallback.mode === "lexical_only" && lexicalIndex.available) {
-    modes.push("lexical_fallback_active")
-  }
-  return modes
-}
-
-function snapshotRestoreState(snapshot) {
-  if (snapshot.restored === true) return "restored"
-  if (snapshot.reason === "snapshot_already_restored") return "already_restored"
-  return "skipped"
-}
-
-
-function inferStartupFallbackMode({ ensure, lexicalIndex }) {
-  if (!ensure) return "not_checked"
-  if (ensure.fallback === "vector_packs" && ensure.snapshot?.restored) {
-    return "snapshot_then_vector_packs"
-  }
-  if (ensure.fallback === "vector_packs") return "vector_packs"
-  if (
-    (ensure.semantic?.repairable_missing_vectors ?? ensure.semantic?.missing_vectors) > 0 &&
-    lexicalIndex.available
-  ) {
-    return "lexical_only"
-  }
-  if (ensure.snapshot?.restored) return "snapshot"
-  if (ensure.reason === "startup_budget_exceeded") return "startup_deferred"
-  return ensure.built ? "rebuild" : "fresh"
-}
-
-function fallbackIsDegraded({ documentVectors, mode, queryEmbedding }) {
-  return mode === "lexical_only" ||
-    mode === "startup_deferred" ||
-    documentVectors.state === "missing" ||
-    documentVectors.state === "partial" ||
-    queryEmbedding.available === false
+// Search in plain words, from the session's search engine (src/search/engine.js) once admission has started it.
+function searchStatus(admission) {
+  return typeof admission?.controller?.searchStatus === "function" ? admission.controller.searchStatus() : SEARCH_STARTING
 }
 
 function compactObject(value) {
@@ -486,20 +210,12 @@ function defaultTarget() {
 
 
 
-function summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }) {
-  const startupSummary = startupFallback.mode === "not_checked"
-    ? "Snapshot restore, vector-pack import, and query embedding probes were not run."
-    : `Startup fallback mode: ${startupFallback.mode}. Snapshot restore: ${snapshots.restore_state}. Vector pack import: ${vectorPacks.import_state}.`
-  const activationSummary = activation.selected_id
-    ? `Active activation: ${activation.selected_id}.`
-    : null
+function summaryFor({ root, activation, search }) {
   return [
     `Desk root ${root.path} resolved from ${root.source}.`,
-    activationSummary,
+    activation.selected_id ? `Active activation: ${activation.selected_id}.` : null,
     root.valid ? null : `Root diagnostic: ${root.diagnostic}.`,
-    localDb.local_db.exists
-      ? `Local DB is ${localDb.local_db.state}.`
-      : "Local DB is missing; this is normal on first run.",
-    startupSummary,
+    search.message,
+    search.old_index_removed ?? null,
   ].filter(Boolean).join(" ")
 }

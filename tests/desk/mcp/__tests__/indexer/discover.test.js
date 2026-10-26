@@ -37,7 +37,7 @@ async function buildFixture() {
   await w("trackA/_archive/old-task/task.md", "should be ignored")
   await w("node_modules/foo/task.md", "ignored")
   await w(".state/leftover.md", "ignored")
-  await w("trackA/task-1/notes.md", "ignored — not a recognized shape")
+  await w("trackA/task-1/notes.md", "# Notes inside the task folder")
   await w("trackA/task-1/notes.txt", "ignored — not markdown")
   await w("trackA/task-1/task.md.bak", "ignored bak")
   try {
@@ -63,6 +63,7 @@ test("discover picks up only the indexable shapes", async () => {
     "trackA/_friction/2026-05-01-flaky.md",
     "trackA/task-1/doing.md",
     "trackA/task-1/feedback.md",
+    "trackA/task-1/notes.md",
     "trackA/task-1/planning.md",
     "trackA/task-1/task.md",
     "trackB/task-2/task.md",
@@ -219,11 +220,14 @@ test("isIndexable matches the intended set", () => {
   assert.equal(isIndexable("_meta/friction.txt"), false)
   assert.equal(isIndexable("_meta/tips/x.md"), true)
   assert.equal(isIndexable("tips/x.md"), false)
-  assert.equal(isIndexable("trackA/tips/x.md"), false)
+  assert.equal(isIndexable("trackA/tips/x.md"), true)
   assert.equal(isIndexable("trackA/_friction/foo.md"), true)
   assert.equal(isIndexable("trackA/_friction/foo.txt"), false)
   assert.equal(isIndexable("trackA/notes.md"), false)
-  assert.equal(isIndexable("trackA/task-1/random.md"), false)
+  assert.equal(isIndexable("trackA/task-1/random.md"), true)
+  assert.equal(isIndexable("trackA/task-1/2026-10-22-iteration/runbook.md"), true)
+  assert.equal(isIndexable("trackA/task-1/runbook.txt"), false)
+  assert.equal(isIndexable("_meta/notes/x.md"), false)
 })
 
 test("classify is purely path-driven", () => {
@@ -287,6 +291,8 @@ test("classify is purely path-driven", () => {
     track: null,
     task_slug: null,
   })
+  assert.deepEqual(classify("trackA/task-1/2026-10-22-iteration/runbook.md"), { kind: "task-file", track: "trackA", task_slug: "task-1" })
+  assert.deepEqual(classify("trackA/_planning/2026-10-09-plan.md"), { kind: "task-file", track: "trackA", task_slug: null })
 })
 
 test("normalizeDate preserves strings and normalizes Date or scalar values", () => {

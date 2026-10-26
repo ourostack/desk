@@ -450,17 +450,6 @@ test("Desk MCP package exposes every freshness artifact script CI needs", () => 
   }
 })
 
-test("normal native messaging scripts use the one real family builder and its compile-free verify mode", () => {
-  const packageJson = loadJson("plugins", "desk", "mcp", "package.json")
-  for (const [name, command] of Object.entries({
-    "browser:messaging-assets:build": "node scripts/build-browser-messaging-assets.cjs",
-    "browser:messaging-assets:verify": "node scripts/build-browser-messaging-assets.cjs --verify",
-  })) {
-    assert.equal(packageJson.scripts[name], command)
-    assert.equal(existsSync(packageScriptTargetPath(command)), true)
-  }
-})
-
 test("root generated-artifact verifier exports the production freshness contract", () => {
   const generatedArtifacts = require(path.join(repoRoot, generatedArtifactsScript))
 

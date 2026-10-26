@@ -48,7 +48,7 @@ function rowFor(identity, seed = 1, overrides = {}) {
 }
 
 function storedVector(db, chunkId) {
-  const row = db.prepare("SELECT embedding FROM chunk_vecs WHERE chunk_id = ?").get(chunkId)
+  const row = db.prepare("SELECT t.embedding FROM chunks c JOIN text_vectors t ON t.text_hash = c.text_hash WHERE c.id = ?").get(chunkId)
   assert.ok(row, `missing vector row for chunk_id ${chunkId}`)
   const buffer = Buffer.from(row.embedding)
   const values = []
@@ -765,7 +765,7 @@ test("vector pack import is idempotent and deduplicates repeated chunk keys acro
     assert.equal(imported.packs_imported, 2)
     assert.equal(imported.rows_imported, 3)
     assert.equal(imported.rows_skipped_duplicate, 1)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 3)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 3)
     assertStoredVector(db, first.chunkId, vector(1))
     assertStoredVector(db, second.chunkId, vector(2))
     assertStoredVector(db, third.chunkId, vector(3))
@@ -777,7 +777,7 @@ test("vector pack import is idempotent and deduplicates repeated chunk keys acro
     })
     assert.equal(secondImport.rows_imported, 0)
     assert.equal(secondImport.rows_skipped_duplicate, 4)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 3)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 3)
   } finally {
     closeDb(db)
   }
@@ -813,7 +813,7 @@ test("vector pack import accepts empty active packs as no-op artifacts", async (
     assert.equal(imported.rows_imported, 0)
     assert.equal(imported.rows_skipped_duplicate, 0)
     assert.equal(imported.rows_skipped_missing_chunk, 0)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
@@ -1035,7 +1035,7 @@ test("vector pack validation and import reject when startup abort signal is trip
       }),
       (err) => err.name === "AbortError" && err.message === "operation aborted",
     )
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
@@ -1129,7 +1129,7 @@ test("vector pack import deduplicates repeated chunk keys across packs after has
     assert.equal(imported.packs_imported, 2)
     assert.equal(imported.rows_imported, 1)
     assert.equal(imported.rows_skipped_duplicate, 1)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 1)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
     assertStoredVector(db, chunk.chunkId, vector(5))
   } finally {
     closeDb(db)
@@ -1174,7 +1174,7 @@ test("vector pack import handles missing pack directories and missing local chun
     assert.equal(imported.packs_imported, 1)
     assert.equal(imported.rows_imported, 0)
     assert.equal(imported.rows_skipped_missing_chunk, 1)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
@@ -1214,7 +1214,7 @@ test("vector pack import ignores inactive spec directories and rejects inactive 
     })
     assert.equal(ignored.packs_considered, 0)
     assert.equal(ignored.packs_imported, 0)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
 
     await writePack({
       pluginRoot,
@@ -1236,7 +1236,7 @@ test("vector pack import ignores inactive spec directories and rejects inactive 
       }),
       /manifest embedding_spec_id/u,
     )
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
@@ -1303,13 +1303,13 @@ test("vector pack import verifies chunk text hashes against the local DB before 
         return true
       },
     )
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
 })
 
-test("vector pack import inserts vectors for every local chunk that shares a covered chunk key", async () => {
+test("vector pack import gives every local chunk that shares a covered chunk key the pack vector", async () => {
   const { importVectorPacks } = await loadVectorPackModule()
   const root = await tmpRoot()
   const pluginRoot = path.join(root, "plugins", "desk")
@@ -1341,7 +1341,8 @@ test("vector pack import inserts vectors for every local chunk that shares a cov
     })
     assert.equal(imported.rows_imported, 2)
     assert.equal(imported.rows_skipped_duplicate, 0)
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 2)
+    // Both sections have the same text, so they share one stored vector.
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
     assertStoredVector(db, first.chunkId, vector(4))
     assertStoredVector(db, second.chunkId, vector(4))
   } finally {

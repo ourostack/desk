@@ -6,7 +6,6 @@ import * as path from "node:path"
 import { createStatusInspection, inspectStatusDb, waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/runtime/status-inspection.js"
 import { attachStatusInspectionChild, inspectStatusInputs } from "../../../../../plugins/desk/mcp/src/runtime/status-inspection-child.js"
 import { closeDb, indexDbPath, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { callTool, ensureIndex } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { statusObservedSince } from "./_status_observation.js"
 
@@ -152,32 +151,6 @@ test("cancelled status inspection kills only its owned child and waits for that 
   assert.equal(finished, true)
 })
 
-test("status generation metadata is sampled after controller observation, not ahead of it", async () => {
-  const root = await mkTempRoot("status-observation-order-")
-  writeFileSync(path.join(root, "task.md"), "# Generation observation ordering\n")
-  await ensureIndex(root, { skipEmbed: true, snapshots: false, vectorPacks: false })
-  const before = openDb(root)
-  assert.ok(before.prepare("SELECT COUNT(*) AS n FROM chunks").get().n > 0)
-  closeDb(before)
-  let changed = false
-  const controller = {
-    async status() {
-      if (!changed) {
-        changed = true
-        const db = openDb(root)
-        db.prepare("DELETE FROM chunks").run()
-        closeDb(db)
-      }
-      return { state: "READY", convergence: { status: "complete" } }
-    },
-  }
-  const response = await callTool({ deskRoot: root, name: "desk_status", statusContext: { admission: { controller } } })
-  assert.notEqual(response.isError, true)
-  const payload = JSON.parse(response.content[0].text)
-  assert.ok(payload.document_vectors.chunks_total > 0, "local inspection retains its original earlier sampling point")
-  assert.equal(payload.semantic.missing_vectors, 0, "generation metadata must observe the later DB, after controller status")
-})
-
 test("the owned reader serializes its jobs and refuses use after close", async () => {
   const child = new EventEmitter()
   child.send = (_, callback) => callback(null)
@@ -217,7 +190,7 @@ test("a close-only spawn error also retires its exact-owned reader", async () =>
 
 test("consumer qualification rejects old-root, old-time, undated and silently relabeled cached detail", () => {
   const recent = {
-    root: { path: "root" }, readiness: { detail: {} },
+    root: { path: "root" }, search: { state: "ready" }, write_scope: { mode: "workspace" },
     status_detail: "cached: completed same-context computation", status_detail_from: "2026-10-10T01:00:00.000Z",
   }
   const checkpoint = { root: "root", since: Date.parse("2026-10-10T00:59:59.999Z") }

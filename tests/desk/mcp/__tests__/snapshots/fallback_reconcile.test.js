@@ -253,8 +253,8 @@ function storedVector(db, docPath, chunkIndex) {
   const row = db
     .prepare(
       `SELECT v.embedding
-       FROM chunk_vecs v
-       JOIN chunks c ON c.id = v.chunk_id
+       FROM text_vectors v
+       JOIN chunks c ON c.text_hash = v.text_hash
        JOIN docs d ON d.id = c.doc_id
        WHERE d.path = ? AND c.chunk_index = ?`,
     )
@@ -771,14 +771,14 @@ test("desk_reindex uses runtime artifacts without artifact opts", async () => {
 
     assert.equal(calls, 0)
     assert.equal(result.status, "error")
-    assert.equal(result.code, "required_capability_unavailable")
+    assert.equal(result.code, "search_starting")
   } finally {
     globalThis.fetch = originalFetch
   }
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 0)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 0)
   } finally {
     closeDb(db)
   }

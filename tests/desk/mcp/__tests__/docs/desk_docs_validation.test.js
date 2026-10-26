@@ -67,20 +67,6 @@ function canonicalRfcBody({ marker = canonicalRfcMarker, extraSection = "" } = {
   ].join("\n")
 }
 
-function browserPolicyBody() {
-  return [
-    "The browser-context-broker owns acquisition, proxying, status, doctor, and release.",
-    "The plugin-relative source is canonical; an ordinary Desk install does not place the broker on PATH.",
-    'The host overlay supplies "$BROWSER_CONTEXT_BROKER_BIN" as the executable path.',
-    'Use "$BROWSER_CONTEXT_BROKER_BIN" acquire and proxy.',
-    "Target.createTarget({ url, background: true })",
-    "Use status, doctor, and release for the exact lease.",
-    "A lease exposes only its owned targets.",
-    "A plugin's desk.browser declaration makes desk-web drive the real profile. Each session works in its own tab group, and calls `browser_close` when done.",
-    "This includes the first window a context opens: there is no first-window focus-stealing exception.",
-  ].join("\n")
-}
-
 test("Desk docs validator exports a testable contract", () => {
   for (const exportName of [
     "DOCS",
@@ -281,44 +267,6 @@ test("MCP tool documentation is compared against the registry rather than a priv
     "plugins/desk/mcp/README.md must advertise 0 exposed tools",
     "plugins/desk/mcp/README.md must state all 0 tools are wired",
   ])
-})
-
-test("browser focus validation rejects an initial-window focus exception", () => {
-  const errors = []
-  docsValidator.validateBrowserFocusPolicy(errors, {
-    readFile: () => browserPolicyBody().replace(
-      "This includes the first window a context opens: there is no first-window focus-stealing exception.",
-      "The bring-to-front rule does not apply to the one new window desk-web opens for you.",
-    ),
-  })
-  assert.ok(errors.some((error) => error.includes("focus")))
-})
-
-test("browser focus validation requires broker routing and rejects unsafe discovery or cleanup", () => {
-  const errors = []
-  docsValidator.validateBrowserFocusPolicy(errors, {
-    readFile: () => browserPolicyBody(),
-  })
-  assert.deepEqual(errors, [])
-
-  const staleErrors = []
-  docsValidator.validateBrowserFocusPolicy(staleErrors, {
-    readFile: () => [
-      'curl -s "http://localhost:9222/json/version"',
-      'nohup browser --remote-debugging-port=9222 &',
-      "browser-context-broker acquire --alias corporate-default",
-      'pkill -f "user-data-dir=profile"',
-      "const page = ctx.pages().find(candidate => candidate.url().includes(target))",
-    ].join("\n"),
-  })
-  assert.ok(staleErrors.some((error) => error.includes("browser context broker")))
-  assert.ok(staleErrors.some((error) => error.includes("background target creation")))
-  assert.ok(staleErrors.some((error) => error.includes("fixed-port or arbitrary endpoint discovery")))
-  assert.ok(staleErrors.some((error) => error.includes("process-pattern cleanup")))
-  assert.ok(staleErrors.some((error) => error.includes("cross-lease page selection")))
-  assert.ok(staleErrors.some((error) => error.includes("plugin-relative broker executable")))
-  assert.ok(staleErrors.some((error) => error.includes("bare PATH command")))
-  assert.ok(staleErrors.some((error) => error.includes("real browser profile")))
 })
 
 test("canonical RFC validation is structural rather than prose-locking", () => {
@@ -639,7 +587,6 @@ test("docs validator exports also pass through their repository defaults", () =>
   docsValidator.validateWorkflowWiring(errors)
   docsValidator.validateMcpReadmeToolSurface(errors)
   docsValidator.validateMcpToolRegistrySurface(errors)
-  docsValidator.validateBrowserFocusPolicy(errors)
   assert.deepEqual(errors, [])
 
   assert.throws(() => docsValidator.validateLocalMarkdownLinks([]), /replace/u)
@@ -695,7 +642,6 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
         if (file === "plugins/desk/docs/evaluation-packet.md") return `${goodBody}\n[The RFC](agentic-engineering-v2-rfc.md)`
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
         if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
-        if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return browserPolicyBody()
         return file.endsWith(".yml") ? workflowBody : goodBody
       },
       stdout: { write: (text) => stdout.push(text) },

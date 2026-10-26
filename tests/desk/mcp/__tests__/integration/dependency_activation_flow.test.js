@@ -170,7 +170,7 @@ test("cold start restores the committed production snapshot without rebuild or e
         [{ path: productionDocPath }],
       )
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n, 2)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 2)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 2)
     } finally {
       closeDb(db)
     }
@@ -226,7 +226,7 @@ test("cold rebuild imports committed production vector packs without embeddings"
         [{ path: productionDocPath }],
       )
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n, 2)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 2)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 2)
     } finally {
       closeDb(db)
     }
@@ -253,7 +253,7 @@ test("cold rebuild live-generates only production vectors missing from committed
       snapshots: false,
       embed: {
         endpoint: "http://127.0.0.1:9/api/embeddings",
-        model: "unit-24a3-production-missing-vector",
+        model: ACTIVE_EMBEDDING_SPEC.model,
         fetch: async (url, request) => {
           embeddingRequests.push({
             url,
@@ -285,7 +285,7 @@ test("cold rebuild live-generates only production vectors missing from committed
       {
         url: "http://127.0.0.1:9/api/embeddings",
         body: {
-          model: "unit-24a3-production-missing-vector",
+          model: ACTIVE_EMBEDDING_SPEC.model,
           prompt: missingChunk,
         },
       },
@@ -305,7 +305,7 @@ test("cold rebuild live-generates only production vectors missing from committed
           { chunk_index: 2, heading: "Unit 24a3 Missing Vector" },
         ],
       )
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 3)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 3)
     } finally {
       closeDb(db)
     }
@@ -371,7 +371,6 @@ test("cold rebuild preserves active archive scope and refs graph with production
       opts: { embed },
     })
     assert.equal(active.search_mode, "lexical")
-    assert.equal(active.semantic_unavailable, true)
     assert.ok(active.results.length >= 1)
     assert.ok(
       active.results.every((resultRow) => !resultRow.path.includes("_archive")),
@@ -384,7 +383,6 @@ test("cold rebuild preserves active archive scope and refs graph with production
       opts: { embed },
     })
     assert.equal(all.search_mode, "lexical")
-    assert.equal(all.semantic_unavailable, true)
     assert.ok(
       all.results.some((resultRow) =>
         resultRow.path === "tasks/_archive/scope-old/task.md"
@@ -401,7 +399,7 @@ test("cold rebuild preserves active archive scope and refs graph with production
       },
     })
     assert.equal(thread.status, "error")
-    assert.equal(thread.code, "required_capability_unavailable")
+    assert.equal(thread.code, "search_starting")
 
     const db = openDb(deskRoot)
     try {
@@ -496,16 +494,14 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
         opts: { embed },
       })
       assert.equal(search.search_mode, "lexical")
-      assert.equal(search.semantic_unavailable, true)
-      assert.ok(
+        assert.ok(
         search.results.some((resultRow) => resultRow.path === productionDocPath),
         JSON.stringify(search.results, null, 2),
       )
       const productionResult = search.results.find((resultRow) =>
         resultRow.path === productionDocPath
       )
-      assert.equal(productionResult.score_breakdown.semantic, 0)
-      assert.ok(productionResult.score_breakdown.bm25 > 0)
+      assert.ok(productionResult)
       assert.equal(embeddingCalls, 2)
     } finally {
       configureRuntimeArtifacts({ pluginRoot: null })

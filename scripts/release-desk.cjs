@@ -4,7 +4,7 @@
 // Releases Desk from the changelog fragments that merged pull requests left on main. A pull request that changes
 // Desk adds one fragment under plugins/desk/changelog.d/ and never touches a version surface, so parallel pull
 // requests no longer conflict on the changelog head or on the next free alpha. After a merge, the release workflow
-// runs this script on main: it follows the alpha/RC line on every release surface, folds every pending fragment into one
+// runs this script on main: it follows the alpha, RC or stable line on every release surface, folds every pending fragment into one
 // changelog entry, removes the fragments, and the workflow commits the result back to main. Every merged change
 // therefore still ships as a new version.
 
@@ -66,14 +66,21 @@ function nextAlpha(version) {
 }
 
 function validateStage(stage) {
-  if (stage !== "auto" && stage !== "rc") throw new Error(`unsupported release stage ${stage}; use auto or rc`);
+  if (stage !== "auto" && stage !== "rc" && stage !== "stable") throw new Error(`unsupported release stage ${stage}; use auto, rc or stable`);
 }
 
 function nextReleaseVersion(currentVersion, stage = "auto") {
   validateStage(stage);
   const number = "(?:0|[1-9]\\d*)";
-  const match = new RegExp(`^(${number}\\.${number}\\.${number})-(alpha|rc)\\.(${number})$`, "u").exec(currentVersion);
-  if (!match) throw new Error(`Desk version ${currentVersion} is not a supported alpha or RC release`);
+  const match = new RegExp(`^(${number}\\.${number}\\.${number})(?:-(alpha|rc)\\.(${number}))?$`, "u").exec(currentVersion);
+  if (!match) throw new Error(`Desk version ${currentVersion} is not a supported alpha, RC or stable release`);
+  if (match[2] === undefined) {
+    // After a stable release every stage moves to the next patch: auto and stable stay plain, rc starts that patch's RC line.
+    const [major, minor, patch] = match[1].split(".");
+    const next = `${major}.${minor}.${BigInt(patch) + 1n}`;
+    return stage === "rc" ? `${next}-rc.1` : next;
+  }
+  if (stage === "stable") return match[1];
   if (stage === "rc" && match[2] === "alpha") return `${match[1]}-rc.1`;
   return `${match[1]}-${match[2]}.${BigInt(match[3]) + 1n}`;
 }
@@ -116,7 +123,7 @@ function releaseDesk({ root, date, stage = "auto" }) {
   const from = readJson(root, DESK_MANIFEST).version;
   const to = nextReleaseVersion(from, stage);
   const fragments = pendingFragments(root);
-  const promoting = stage === "rc" && from.includes("-alpha.");
+  const promoting = (stage === "rc" && from.includes("-alpha.")) || (stage === "stable" && from.includes("-"));
   if (fragments.length === 0 && !promoting) return { released: false, fragments };
   // Everything is read and checked before any file is written, so a bad fragment leaves the tree untouched.
   const bodies = fragments.map((file) => {
@@ -136,7 +143,7 @@ function releaseDesk({ root, date, stage = "auto" }) {
   replaceVersion(root, DESK_VERSION_FILES, from, to);
   const coupling = fs.readFileSync(couplingPath, "utf8");
   fs.writeFileSync(couplingPath, coupling.replace(/const expectedReleaseDate = "[^"]*"/u, `const expectedReleaseDate = "${date}"`));
-  const notes = bodies.length > 0 ? bodies.join("\n\n") : "Promote the current Desk alpha to the release-candidate line; no pending changes.";
+  const notes = bodies.length > 0 ? bodies.join("\n\n") : (stage === "stable" ? "Release Desk as a stable version; no pending changes." : "Promote the current Desk alpha to the release-candidate line; no pending changes.");
   fs.writeFileSync(changelogPath, `${CHANGELOG_HEADER}## ${to} — ${date}\n\n${notes}\n\nShips \`desk-mcp@${mcpVersion}\`.\n\n${changelog.slice(CHANGELOG_HEADER.length)}`);
   for (const file of fragments) fs.rmSync(path.join(root, file));
   return { released: true, from, to, fragments };

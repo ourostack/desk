@@ -82,14 +82,6 @@ jobs:
       - name: Check the Desk release commits every file it bumps
         run: node scripts/test-desk-release-staging.cjs
 
-      - name: Install browser context broker dependencies
-        working-directory: plugins/desk/browser-context-broker
-        run: npm ci
-
-      - name: Test browser context broker
-        working-directory: plugins/desk/browser-context-broker
-        run: npm test
-
   claude-code-load:
     name: Claude Code plugin load
     runs-on: ubuntu-latest

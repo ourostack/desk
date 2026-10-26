@@ -367,11 +367,16 @@ test("the zero-model preflight returns a typed receipt and refuses to claim more
   assert.equal(receipt.claimScope, "behavioral_outcome");
   assert.equal(receipt.status, "unavailable", "A host without the namespace launcher cannot be qualified");
   assert.deepEqual(Object.keys(receipt.checks).sort(), ["boundedCapture", "frozenIdentities", "hiddenAssertionsSeparated", "isolation", "namespaceCleanup"]);
-  assert.equal(Object.values(receipt.checks).every(value => value === false), true);
+  // Identities freeze only when the host has a launcher file to hash; Ubuntu 26.04 runners ship /usr/bin/bwrap, older images do not.
+  const launcherPresent = fs.existsSync("/usr/bin/bwrap");
+  const { frozenIdentities, ...observed } = receipt.checks;
+  assert.equal(Object.values(observed).every(value => value === false), true);
+  assert.equal(frozenIdentities, launcherPresent);
   assert.match(receipt.identities.sourceManifestSha256, /^[a-f0-9]{64}$/u);
   assert.match(receipt.identities.controllerSha256, /^[a-f0-9]{64}$/u);
   assert.match(receipt.identities.runtimeSha256, /^[a-f0-9]{64}$/u);
-  assert.equal(receipt.identities.launcherSha256, null);
+  if (launcherPresent) assert.match(receipt.identities.launcherSha256, /^[a-f0-9]{64}$/u);
+  else assert.equal(receipt.identities.launcherSha256, null);
   assert.ok(receipt.evidenceRefs.length > 0);
   for (const ref of receipt.evidenceRefs) {
     assert.match(ref.sha256, /^[a-f0-9]{64}$/u);

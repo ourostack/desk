@@ -52,51 +52,6 @@ const killTree = (pid) => {
   else try { process.kill(-pid, "SIGKILL") } catch { /* already gone */ }
 }
 
-// One browser fixture's bounded, safe diagnostic, not a general TAP log store.
-// Extract from the complete failure body before its ordinary excerpts are cut.
-const nativeGenerationDiagnostic = (body, indentation) => {
-  // Match TAP comments at this failed case's depth, not quoted YAML contents.
-  const marker = new RegExp("^" + indentation + "# DESK_NATIVE_GENERATION_DIAGNOSTIC_V1(?: ([^\\r\\n]*))?\\r?$", "gm")
-  const first = marker.exec(body)
-  if (!first) return undefined
-  if (marker.exec(body)) return { unavailable: "duplicate" }
-  const candidate = first[1] ?? ""
-  if (Buffer.byteLength(candidate, "utf8") > 512) return { unavailable: "oversize" }
-  const closed = (value, keys) => value !== null && typeof value === "object" &&
-    !Array.isArray(value) && Object.keys(value).length === keys.length &&
-    keys.every((key) => Object.hasOwn(value, key))
-  const codes = new Set([
-    "unknown", "NATIVE_CODE_UNAVAILABLE", "NATIVE_CODE_CHANGED", "NATIVE_PRIVATE_PATH_INVALID",
-    "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE", "ENOENT", "EACCES", "EPERM", "EIO",
-    "ETIMEDOUT", "EINTR", "EMFILE", "ENFILE", "ENOTDIR", "EISDIR",
-    "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
-  ])
-  const signals = new Set(["unknown", "SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP", "SIGSEGV", "SIGPIPE"])
-  const guardFiles = new Set([
-    "plugins/desk/mcp/web-extension-credential.cjs",
-    "plugins/desk/mcp/web-playwright-patch.cjs",
-  ])
-  try {
-    const value = JSON.parse(candidate)
-    if (!closed(value, ["setupPhase", "originalCode", "status", "signal", "guard"]) ||
-        !["unknown", "signedWorkerFixture.initial-daemon", "signedWorkerFixture.codec-binding"].includes(value.setupPhase) ||
-        !codes.has(value.originalCode) || !signals.has(value.signal) ||
-        !(value.status === "unknown" || (Number.isInteger(value.status) &&
-          value.status >= -2147483648 && value.status <= 4294967295)) ||
-        !closed(value.guard, ["file", "line"]) ||
-        !((value.guard.file === "unknown" && value.guard.line === "unknown") ||
-          (guardFiles.has(value.guard.file) && Number.isInteger(value.guard.line) &&
-            value.guard.line >= 1 && value.guard.line <= 99999)))
-      return { unavailable: "malformed" }
-    // Reconstruct only closed allowlisted fields; never preserve arbitrary JSON.
-    return {
-      setupPhase: value.setupPhase, originalCode: value.originalCode,
-      status: value.status, signal: value.signal,
-      guard: { file: value.guard.file, line: value.guard.line },
-    }
-  } catch { return { unavailable: "malformed" } }
-}
-
 // One compact record per failed test: its name, the assertion or error text and the first stack frames.
 const failures = (output, file) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: # [^\n]*)?\n([\s\S]*?)(?=^\s*(?:# Subtest|ok \d+|not ok \d+|1\.\.))/gm)].map((m) => {
   const body = m[2]
@@ -104,13 +59,7 @@ const failures = (output, file) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+
   const frames = (/^\s*stack: \|-\n([\s\S]*?)^\s*\.\.\./m.exec(body)?.[1] ?? "").split("\n").map((l) => l.trim().replace(/file:\/\/\/[A-Z]:\/a\/desk\/desk\//g, "")).filter(Boolean)
   // The first frames show where it failed; the first frames in the test files show what the test was doing.
   const stack = [...frames.slice(0, 3), ...frames.filter((l) => l.includes("__tests__") && !l.includes("_isolated_env")).slice(0, 3)].join(" | ")
-  const record = { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
-  if (file === "launch/browser_context_runtime.test.js") {
-    const indentation = /^[ \t]*(?=not ok )/m.exec(m[0])?.[0] ?? ""
-    const diagnostic = nativeGenerationDiagnostic(body, indentation)
-    if (diagnostic !== undefined) record.nativeGenerationDiagnostic = diagnostic
-  }
-  return record
+  return { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
 })
 
 const runFile = (file) => new Promise((resolve) => {

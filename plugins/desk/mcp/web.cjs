@@ -1,61 +1,54 @@
-// Normal maintained-browser runtime preparation, discovery and detached refresh.
-// These facades remain shared by private and signed-in explicit controllers.
-// Installs publish a verified immutable generation under the existing lock;
-// refresh never rewrites the generation of a retained daemon.
+// Desk's browser: the desk-web MCP server.
 //
-// The desk-web entry now starts the browser-only standard-SDK frontend with
-// browser_context/browser_command. Handshake/list never acquire a browser.
-// There is no routable legacy page-tool proxy or signed-in/private fallback.
+// browser_context opens one of two browsers and closes it again:
+//   fresh  an empty throwaway profile in a private temp folder;
+//   mine   a private copy of the person's own Edge (or Chrome) profile, so their sign-ins work.
+// Each runs headless as its own browser process with its own user-data folder, driven by the
+// Playwright CLI inside playwright-core, which talks to the browser over a pipe, not a debugging
+// port. So Desk never focuses a window, never attaches to, closes or changes the person's running
+// browser, and never touches another agent's browser. Closing a context ends its own processes and deletes its folder.
 //
-// Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
+// browser_command runs one Playwright CLI page command (snapshot, click, fill, goto, ...) in it.
+//
+// playwright-core is installed with npm into Desk's state folder on the first open.
 
 "use strict";
 
 var childProcess = require("child_process");
+var crypto = require("crypto");
 var fs = require("fs");
 var os = require("os");
 var path = require("path");
-var bootstrap = require("./bootstrap.cjs");
-var playwrightPatch = require("./web-playwright-patch.cjs");
 var browserDiscovery = require("./web-browser-discovery.cjs");
 
-var PACKAGE_NAME = "@playwright/mcp";
-var PACKAGE = PACKAGE_NAME + "@latest";
-// Installed beside Playwright MCP only when a plugin declares a real browser profile: classic-level so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB (it ships prebuilt N-API binaries, so one install serves every Node), and ws for the tab-cleanup relay in web-real-tabs.cjs.
-var LEVEL_PACKAGE = "classic-level@1.4.1";
-var WS_PACKAGE = "ws@8.21.3";
-// Left in an install folder when the reader could not be installed (for example, no prebuilt binary for this platform), so the install is not repeated at every launch.
-var READER_UNAVAILABLE = "reader-unavailable";
-// A marker this old is tried again once, because one transient npm failure should not leave a machine without the reader until the next release.
-var READER_RETRY_MS = 24 * 60 * 60 * 1000;
-var DEFAULT_ARGS = ["--headless", "--isolated"];
-// Options that connect to a browser that already runs; with any of them Desk's headless and isolated defaults do not apply.
-var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
-// Options that already say which browser to drive or connect to; with any of them the launcher adds no browser choice of its own.
-var BROWSER_CHOICE = ["--browser", "--executable-path"].concat(CONNECT);
-var REFRESH_FLAG = "--desk-web-refresh";
-var DEFAULT_PROTOCOL = "2025-06-18";
-// Healthy and degraded entry points expose the same explicit-context catalog.
+var PLAYWRIGHT_VERSION = "1.63.0";
 var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
-// npm without retries and with a short fetch timeout: an unreachable registry fails in seconds, not minutes.
-var NPM_ENV = {
-  npm_config_fetch_retries: "0",
-  npm_config_fetch_timeout: "10000",
-  npm_config_audit: "false",
-  npm_config_fund: "false",
-  npm_config_update_notifier: "false",
-  npm_config_loglevel: "error"
-};
-// How long the first install may take. A launch with no installed copy answers the host's handshake at once and holds browser calls meanwhile (web-proxy.cjs), so this is not bound by the host's connection timeout; it stays below the proxy's hold time for a call, so a call that arrives at start still gets the browser before it gives up.
-var FIRST_INSTALL_MS = 110000;
-var REFRESH_MS = 180000;
-var WAIT_STEP_MS = 250;
-var LOCK_STALE_MS = 10 * 60 * 1000;
-// Older installs stay this long, so a long-running session never loses the files it started from.
-var KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+var ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var PREFIX = "desk-browser-";
+// Each context folder is its own Playwright CLI workspace, so one fixed session name per folder is enough.
+var SESSION = "desk";
+// The page commands browser_command may run; one of them must come first. Everything else stays out: opening, closing,
+// attaching or listing browsers (only browser_context opens and closes, and some of these reach other sessions or kill every
+// Playwright browser on the machine), running Node code (run-code), and saving or reading sign-in state and cookies.
+var PAGE_COMMANDS = ["goto", "go-back", "go-forward", "reload", "snapshot", "find", "click", "dblclick", "type", "fill", "press",
+  "keydown", "keyup", "select", "check", "uncheck", "hover", "drag", "drop", "upload", "mousemove", "mousedown", "mouseup",
+  "mousewheel", "eval", "console", "dialog-accept", "dialog-dismiss", "resize", "screenshot", "pdf", "tab-list", "tab-new",
+  "tab-close", "tab-select", "localstorage-list", "localstorage-get", "localstorage-set", "localstorage-delete",
+  "localstorage-clear", "sessionstorage-list", "sessionstorage-get", "sessionstorage-set", "sessionstorage-delete",
+  "sessionstorage-clear", "requests", "request", "request-headers", "request-body", "response-headers", "response-body",
+  "route", "route-list", "unroute", "network-state-set", "generate-locator", "highlight"];
+// Long options that would switch session or browser, or print help instead of running. The CLI also refuses any option the command does not have.
+var REFUSED_OPTIONS = ["session", "s", "config", "profile", "browser", "persistent", "headed", "extension", "endpoint", "cdp",
+  "cdp-endpoint", "all", "global", "g", "help", "h", "version", "v"];
+// Parts of a profile that are large caches, belong to extensions, or would reopen the person's own tabs. Sign-ins live in Cookies, Local Storage and Login Data, which are kept.
+var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "CacheStorage",
+  "ScriptCache", "Extensions", "Extension Scripts", "Extension State", "Extension Rules", "Local Extension Settings",
+  "Sync Extension Settings", "File System", "Shared Dictionary", "IndexedDB", "WebStorage", "load_statistics.db",
+  "WebAssistDatabase", "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs"];
+var BROWSERS = { msedge: { name: "Microsoft Edge", short: "Edge" }, chrome: { name: "Google Chrome", short: "Chrome" } };
 
-function either(value, fallback) {
-  return value === undefined || value === null ? fallback : value;
+function plain(message) {
+  return Object.assign(new Error(message), { plain: true });
 }
 
 function exists(file) {
@@ -66,689 +59,559 @@ function exists(file) {
   }
 }
 
-function realpath(file) {
-  try {
-    return fs.realpathSync(file);
-  } catch (error) {
-    return file;
-  }
+// Desk's state folder for the browser: $DESK_BROWSER_STATE_DIR, else $XDG_STATE_HOME/ouroboros-skills/desk/browser, else ~/.local/state/ouroboros-skills/desk/browser.
+function stateDir(env, homeDir) {
+  if (env.DESK_BROWSER_STATE_DIR) return env.DESK_BROWSER_STATE_DIR;
+  return path.join(env.XDG_STATE_HOME || path.join(homeDir, ".local", "state"), "ouroboros-skills", "desk", "browser");
 }
-
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) {
-    return null;
-  }
-}
-
-function describe(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// The file-system calls below need Node 14.14 or later, which every supported host runs; on an older host run() reports the failure in one line.
-function mkdirp(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function removeTree(target) {
-  fs.rmSync(target, { recursive: true, force: true });
-}
-
-function hasOption(args, names) {
-  return args.some(function (arg) {
-    return names.some(function (name) {
-      return arg === name || arg.indexOf(name + "=") === 0;
-    });
-  });
-}
-
-// ---- which browser ----
-
-var browserPaths = browserDiscovery.browserPaths;
-var channelBrowserSelection = browserDiscovery.channelBrowserSelection;
-var firstExisting = browserDiscovery.firstExisting;
-
-function browserSelection(args, platform, env, fileExists) {
-  if (hasOption(args, BROWSER_CHOICE)) return { args: [], executablePath: null };
-  var chrome = channelBrowserSelection("chrome", platform, env, fileExists);
-  return chrome.executablePath ? chrome : channelBrowserSelection("msedge", platform, env, fileExists);
-}
-
-// Keep legacy MCP arguments unchanged; isolated clients also need the selected
-// binary because their private environment no longer contains discovery paths.
-function browserArgs(args, platform, env, fileExists) {
-  return browserSelection(args, platform, env, fileExists).args;
-}
-
-// Everything passed to Playwright MCP: Desk's defaults (unless the caller connects to a running browser), the output folder in Desk's state folder (unless the caller chose one), then the caller's own options.
-function launchArgs(args, platform, env, fileExists, root) {
-  var base = hasOption(args, CONNECT) ? [] : DEFAULT_ARGS.concat(browserArgs(args, platform, env, fileExists));
-  var output = hasOption(args, ["--output-dir"]) ? [] : ["--output-dir", path.join(root, "output")];
-  return base.concat(output, args);
-}
-
-// ---- which npm and which Node ----
 
 // The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.
 function npmCli(node, platform, fileExists) {
-  var candidates = [node, realpath(node)].map(function (file) {
+  var real = node;
+  try {
+    real = fs.realpathSync(node);
+  } catch (error) {
+    // keep the path as given
+  }
+  var candidates = [node, real].map(function (file) {
     return platform === "win32"
       ? path.win32.join(path.win32.dirname(file), "node_modules", "npm", "bin", "npm-cli.js")
       : path.join(path.dirname(file), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
   });
-  return firstExisting(candidates, fileExists);
+  return browserDiscovery.firstExisting(candidates, fileExists);
 }
 
-// A copy of env with the chosen Node's folder first on PATH, keeping the variable's own spelling (Windows uses Path).
-function withNodeFirst(env, node, platform) {
-  var copy = {};
-  Object.keys(env).forEach(function (key) {
-    copy[key] = env[key];
+// Where each browser keeps its profiles.
+function profileRoot(channel, platform, env, homeDir) {
+  var chrome = channel === "chrome";
+  if (platform === "win32") {
+    var local = env.LOCALAPPDATA || path.win32.join(homeDir, "AppData", "Local");
+    return chrome ? path.win32.join(local, "Google", "Chrome", "User Data") : path.win32.join(local, "Microsoft", "Edge", "User Data");
+  }
+  if (platform === "darwin") return path.join(homeDir, "Library", "Application Support", chrome ? "Google/Chrome" : "Microsoft Edge");
+  return path.join(env.XDG_CONFIG_HOME || path.join(homeDir, ".config"), chrome ? "google-chrome" : "microsoft-edge");
+}
+
+function settings(o) {
+  var env = o.env || process.env;
+  var homeDir = o.homeDir || os.homedir();
+  var platform = o.platform || process.platform;
+  var fileExists = o.exists || exists;
+  var node = o.node || process.execPath;
+  return {
+    env: env, homeDir: homeDir, platform: platform, fileExists: fileExists, node: node,
+    npmCli: o.npmCli === undefined ? npmCli(node, platform, fileExists) : o.npmCli,
+    tmpDir: o.tmpDir || os.tmpdir(),
+    stateRoot: stateDir(env, homeDir),
+    profileRoots: o.profileRoots || {},
+    installMs: o.installMs || 180000,
+    openMs: o.openMs || 120000,
+    commandMs: o.commandMs || 120000,
+    exitWaitMs: o.exitWaitMs || 5000,
+    processTable: o.processTable || function () {
+      return readProcessTable(platform, env);
+    }
+  };
+}
+
+// The installed browser to drive: Edge first, then Chrome. For mine, only one whose profile folder exists.
+function chooseBrowser(s, mine) {
+  var found = ["msedge", "chrome"].map(function (channel) {
+    var selected = browserDiscovery.channelBrowserSelection(channel, s.platform, s.env, s.fileExists);
+    var root = s.profileRoots[channel] || profileRoot(channel, s.platform, s.env, s.homeDir);
+    return { channel: channel, executablePath: selected.executablePath, profileRoot: root };
+  }).filter(function (browser) {
+    return browser.executablePath && (!mine || exists(path.join(browser.profileRoot, "Local State")));
   });
-  var key = Object.keys(copy).filter(function (name) {
-    return name.toUpperCase() === "PATH";
-  })[0] || "PATH";
-  var separator = platform === "win32" ? ";" : ":";
-  var dir = platform === "win32" ? path.win32.dirname(node) : path.dirname(node);
-  copy[key] = copy[key] ? dir + separator + copy[key] : dir;
-  return copy;
+  if (found.length) return found[0];
+  if (mine) throw plain("Desk could not find your own Edge or Chrome profile on this computer. Use a fresh browser instead (browser: \"fresh\").");
+  throw plain("Desk needs Microsoft Edge or Google Chrome to open a browser, and found neither. Install one, then try again.");
 }
 
-function npmEnv(env, node, platform) {
-  var copy = withNodeFirst(env, node, platform);
-  Object.keys(NPM_ENV).forEach(function (key) {
-    copy[key] = NPM_ENV[key];
-  });
-  return copy;
+// Copy the person's last-used profile, and Local State, which holds the key their sign-ins are encrypted with.
+// A file the running browser holds locked (Windows does this to Cookies and a few others) is skipped, not fatal; the result lists what was skipped.
+function copyProfile(source, dest) {
+  var name = "Default";
+  try {
+    var last = JSON.parse(fs.readFileSync(path.join(source, "Local State"), "utf8")).profile.last_used;
+    if (typeof last === "string" && /^[^/\\]+$/.test(last) && last !== "..") name = last;
+  } catch (error) {
+    // no usable last_used: copy Default
+  }
+  fs.mkdirSync(dest, { mode: 448 });
+  fs.copyFileSync(path.join(source, "Local State"), path.join(dest, "Local State"));
+  var skipped = [];
+  function copy(from, to, relative) {
+    fs.mkdirSync(to);
+    fs.readdirSync(from, { withFileTypes: true }).forEach(function (entry) {
+      if (SKIP.indexOf(entry.name) !== -1) return;
+      var inner = relative ? relative + "/" + entry.name : entry.name;
+      if (entry.isDirectory()) return copy(path.join(from, entry.name), path.join(to, entry.name), inner);
+      try {
+        fs.copyFileSync(path.join(from, entry.name), path.join(to, entry.name));
+      } catch (error) {
+        skipped.push(inner);
+      }
+    });
+  }
+  copy(path.join(source, name), path.join(dest, name), "");
+  return { name: name, skipped: skipped };
 }
 
-// Run npm with the chosen Node; resolves { code, stdout, stderr } and never rejects. A call that outlives its time limit is killed and resolves with code null.
-function npm(tools, args, timeoutMs) {
+function launchConfig(kind, browser, profileDir, profileName, outputDir) {
+  var launch = { channel: browser.channel, executablePath: browser.executablePath, headless: true, args: ["--no-first-run", "--no-default-browser-check"] };
+  if (kind === "mine") {
+    // Playwright's mock keychain and basic password store would hide the saved sign-ins; sync stays off so the copy never writes back to the person's account.
+    launch.ignoreDefaultArgs = ["--use-mock-keychain", "--password-store=basic"];
+    launch.args.push("--profile-directory=" + profileName, "--disable-sync");
+  }
+  return { browser: { browserName: "chromium", isolated: false, userDataDir: profileDir, launchOptions: launch }, outputDir: outputDir };
+}
+
+// ---- the Playwright CLI ----
+
+function cliPath(s) {
+  return path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION, "node_modules", "playwright-core", "lib", "tools", "cli-client", "cli.js");
+}
+
+// Run the Playwright CLI in a context folder; resolves { code, text, timedOut }.
+function runCli(s, cwd, args, timeoutMs) {
   return new Promise(function (resolve) {
-    var out = "";
-    var err = "";
-    var done = false;
-    var timer = null;
-    function finish(code) {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      tools.children = tools.children.filter(function (other) {
-        return other !== child;
-      });
-      resolve({ code: code, stdout: out, stderr: err });
-    }
-    var child;
-    try {
-      // On POSIX npm leads its own process group, so a stop signal can end npm and everything it started.
-      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: tools.platform !== "win32" });
-    } catch (error) {
-      err = describe(error);
-      finish(null);
-      return;
-    }
-    tools.children.push(child);
-    timer = setTimeout(function () {
-      err = "npm " + args[0] + " timed out after " + timeoutMs / 1000 + " seconds\n";
-      stopTree(tools, child, "SIGKILL");
-      finish(null);
-    }, timeoutMs);
-    child.stdout.on("data", function (chunk) {
-      out += chunk;
-    });
-    child.stderr.on("data", function (chunk) {
-      err += chunk;
-    });
-    child.on("error", function (error) {
-      err += describe(error) + "\n";
-      finish(null);
-    });
-    child.on("close", function (code) {
-      finish(code);
+    childProcess.execFile(s.node, [cliPath(s), "--session=" + SESSION].concat(args), {
+      cwd: cwd, env: s.env, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
+    }, function (error, stdout, stderr) {
+      resolve({ code: error ? 1 : 0, text: (stdout + "\n" + stderr).trim(), timedOut: Boolean(error && error.killed) });
     });
   });
 }
 
-// Windows' own taskkill, from SystemRoot (any letter case, then windir, then C:\Windows), never from PATH: an environment trimmed for npm may have no System32 on its PATH.
-function taskkillPath(env) {
-  function value(name) {
-    var key = Object.keys(env).filter(function (candidate) {
-      return candidate.toLowerCase() === name;
-    })[0];
-    return key === undefined ? undefined : env[key];
+var installing = {};
+
+function installPlaywright(s) {
+  if (!s.npmCli) {
+    return Promise.reject(plain("Desk could not find npm next to Node (" + s.node + "), so it cannot install the browser driver. Reinstall Node.js with npm, then try again."));
   }
-  var root = [value("systemroot"), value("windir")].filter(function (candidate) {
-    return candidate !== undefined && path.win32.isAbsolute(candidate);
-  })[0];
-  return path.win32.join(root === undefined ? "C:\\Windows" : root, "System32", "taskkill.exe");
-}
-
-// End one npm run and everything it started. On POSIX npm leads its own process group, so the signal goes to the group; on Windows taskkill ends npm and its whole tree. When neither works, or npm has no pid, the npm process alone gets the signal.
-function stopTree(tools, child, signal) {
-  if (typeof child.pid !== "number") {
-    child.kill(signal);
-    return;
-  }
-  if (tools.platform !== "win32") {
-    try {
-      process.kill(-child.pid, signal);
-    } catch (error) {
-      child.kill(signal);
-    }
-    return;
-  }
-  // npm has already ended: its pid may belong to another process now, and taskkill would end that one.
-  if (typeof child.exitCode === "number" || typeof child.signalCode === "string") return;
-  try {
-    var killer = tools.spawn(taskkillPath(tools.env), ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    killer.on("error", function () {
-      child.kill(signal);
-    });
-    killer.on("exit", function (code) {
-      if (code !== 0) child.kill(signal);
-    });
-  } catch (error) {
-    child.kill(signal);
-  }
-}
-
-// End every npm run still going, with the processes it started.
-function stopInstalls(tools) {
-  tools.children.forEach(function (child) {
-    stopTree(tools, child, "SIGTERM");
-  });
-}
-
-// The useful part of npm's error output: its error code and first message line, without the syscall, errno, stack and log-file lines.
-function npmError(result, what) {
-  var code = null;
-  var detail = null;
-  String(result.stderr).split("\n").forEach(function (raw) {
-    var body = raw.trim().replace(/^npm (error|ERR!)\s*/, "");
-    var match = /^code (\S+)$/.exec(body);
-    if (match) {
-      code = either(code, match[1]);
-      return;
-    }
-    if (!body || /^(syscall|errno) |^at |complete log of this run|^\d+$/.test(body)) return;
-    detail = either(detail, body);
-  });
-  if (detail === null) return redactSignedUrls(code === null ? what + " exited with code " + result.code : code);
-  return redactSignedUrls(code === null ? detail : code + ": " + detail);
-}
-
-function lastLine(text) {
-  var lines = String(text).split("\n").map(function (line) {
-    return line.trim();
-  }).filter(Boolean);
-  return lines.length ? lines[lines.length - 1] : "";
-}
-
-// ---- the installed copy ----
-
-// Desk's state folder for the browser: $DESK_BROWSER_STATE_DIR, else $XDG_STATE_HOME/ouroboros-skills/desk/browser, else ~/.local/state/ouroboros-skills/desk/browser.
-function stateDir(env, homeDir) {
-  if (env.DESK_BROWSER_STATE_DIR) return env.DESK_BROWSER_STATE_DIR;
-  return path.join(either(env.XDG_STATE_HOME, path.join(homeDir, ".local", "state")), "ouroboros-skills", "desk", "browser");
-}
-
-// The install a folder holds: its version, playwright-core version and entry script, or null when it is incomplete.
-function readInstall(root, dir) {
-  var modules = path.join(root, dir, "node_modules");
-  var pkg = readJson(path.join(modules, "@playwright", "mcp", "package.json"));
-  if (!pkg || typeof pkg.version !== "string") return null;
-  var bin = typeof pkg.bin === "string" ? pkg.bin : either(pkg.bin, {})["playwright-mcp"];
-  if (typeof bin !== "string") return null;
-  var cli = path.join(modules, "@playwright", "mcp", bin);
-  if (!exists(cli)) return null;
-  var core = readJson(path.join(modules, "playwright-core", "package.json"));
-  var found = { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null,
-    cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")),
-    ws: exists(path.join(modules, "ws", "package.json")) };
-  found.patchRevision = playwrightPatch.readRevision(found);
-  if (found.reader) return found;
-  var marker = path.join(root, dir, READER_UNAVAILABLE);
-  if (exists(marker)) {
-    found.reader = true;
-    found.unavailableAt = fs.statSync(marker).mtime.getTime();
-  }
-  return found;
-}
-
-// The install current.json points at, or null.
-function readInstalled(root) {
-  var pointer = readJson(path.join(root, "current.json"));
-  return pointer && typeof pointer.dir === "string" ? readInstall(root, pointer.dir) : null;
-}
-
-// Replace a file atomically: write a sibling, then rename it over the target.
-function writeAtomic(file, text) {
-  var temp = file + "." + process.pid + "." + Math.random().toString(36).slice(2) + ".tmp";
-  fs.writeFileSync(temp, text);
-  fs.renameSync(temp, file);
-}
-
-function newGeneration(tools, root) {
-  var id = "installs/" + tools.clock() + "-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
-  var dir = path.join(root, id);
-  mkdirp(dir);
-  return { id: id, dir: dir };
-}
-
-function publishGeneration(tools, root, generation) {
-  var installed = readInstall(root, generation.id);
-  playwrightPatch.apply(installed);
-  installed = readInstall(root, generation.id);
-  var previous = readJson(path.join(root, "current.json"));
-  var previousDir = previous && typeof previous.dir === "string" ? previous.dir : null;
-  prune(root, [generation.id, previousDir], tools.clock);
-  writeAtomic(path.join(root, "current.json"), JSON.stringify({ version: installed.version, dir: generation.id, previous: previousDir }, null, 2) + "\n");
-  return { ok: true, installed: installed };
-}
-
-function generationFailed(generation, error) {
-  removeTree(generation.dir);
-  return { ok: false, error: describe(error), code: error.code === "PLAYWRIGHT_PATCH_UNSUPPORTED" ? "browser_patch_unsupported" : "browser_patch_failed" };
-}
-
-function migrate(tools, root, installed) {
-  var generation = newGeneration(tools, root);
-  return playwrightPatch.copyPackages(path.join(installed.dir, "node_modules"), path.join(generation.dir, "node_modules")).then(function () {
-    fs.writeFileSync(path.join(generation.dir, "package.json"), "{\"private\":true}\n");
-    var marker = path.join(installed.dir, READER_UNAVAILABLE);
-    if (exists(marker)) {
-      var copy = path.join(generation.dir, READER_UNAVAILABLE);
-      fs.copyFileSync(marker, copy);
-      var stat = fs.statSync(marker);
-      fs.utimesSync(copy, stat.atime, stat.mtime);
-    }
-    return publishGeneration(tools, root, generation);
-  }).catch(function (error) { return generationFailed(generation, error); });
-}
-
-// Remove installs other than the ones to keep, once they are older than KEEP_MS.
-function prune(root, keep, clock) {
-  var installs = path.join(root, "installs");
-  fs.readdirSync(installs).forEach(function (entry) {
-    if (keep.indexOf("installs/" + entry) !== -1) return;
-    var dir = path.join(installs, entry);
-    try {
-      if (clock() - fs.statSync(dir).mtime.getTime() > KEEP_MS) removeTree(dir);
-    } catch (error) {
-      // An install that cannot be removed now is tried again at the next refresh.
-    }
-  });
-}
-
-// Install the channel's current release into a new folder, then point current.json at it. With `withReader` the token reader goes in the same npm call; if that fails the browser alone is installed and the folder is marked, so a machine without a reader still gets the browser and the real-profile mode answers that it cannot read the token. The caller holds the lock.
-function install(tools, root, timeoutMs, withReader) {
-  var generation = newGeneration(tools, root);
-  var id = generation.id;
-  var dir = generation.dir;
-  fs.writeFileSync(path.join(dir, "package.json"), "{\"private\":true}\n");
-  function run(packages) {
-    return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock"].concat(packages), timeoutMs);
-  }
-  var first = run(withReader ? [PACKAGE, LEVEL_PACKAGE, WS_PACKAGE] : [PACKAGE]);
-  var done = !withReader ? first : first.then(function (result) {
-    if (result.code === 0) return result;
-    return run([PACKAGE]).then(function (alone) {
-      if (alone.code === 0) fs.writeFileSync(path.join(dir, READER_UNAVAILABLE), "");
-      return alone;
+  var dir = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION);
+  fs.mkdirSync(s.stateRoot, { recursive: true });
+  var staging = fs.mkdtempSync(path.join(s.stateRoot, "install-"));
+  fs.writeFileSync(path.join(staging, "package.json"), "{\"private\":true}\n");
+  var env = Object.assign({}, s.env, { npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false", npm_config_loglevel: "error", npm_config_fetch_retries: "1", npm_config_fetch_timeout: "20000" });
+  return new Promise(function (resolve, reject) {
+    childProcess.execFile(s.node, [s.npmCli, "install", "--no-save", "--ignore-scripts", "playwright-core@" + PLAYWRIGHT_VERSION], {
+      cwd: staging, env: env, timeout: s.installMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8"
+    }, function (error, stdout, stderr) {
+      var installed = path.join(staging, path.relative(dir, cliPath(s)));
+      if (error || !exists(installed)) {
+        removeDir(staging);
+        reject(plain("Desk could not install the browser driver (playwright-core " + PLAYWRIGHT_VERSION + ") with npm. Check the internet connection, then try again. npm said: " + (stderr.trim().split("\n").filter(function (line) { return line.indexOf("complete log") === -1; }).pop() || "nothing")));
+        return;
+      }
+      try {
+        fs.renameSync(staging, dir);
+      } catch (renameError) {
+        // Another Desk process finished the same install first; its copy is used.
+        removeDir(staging);
+      }
+      resolve();
     });
   });
-  return done.then(function (result) {
-    var installed = result.code === 0 ? readInstall(root, id) : null;
-    if (installed === null) {
-      removeTree(dir);
-      return { ok: false, error: npmError(result, "npm install") };
-    }
-    try {
-      return publishGeneration(tools, root, generation);
-    } catch (error) {
-      return generationFailed(generation, error);
-    }
-  });
 }
 
-// ---- the lock ----
-
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-
-function stale(file, clock) {
-  var now = clock();
-  var stat;
-  try {
-    stat = fs.statSync(file);
-  } catch (error) {
-    // Its owner released it a moment ago.
-    return true;
-  }
-  if (now - stat.mtime.getTime() > LOCK_STALE_MS) return true;
-  var owner = readJson(file);
-  return owner !== null && typeof owner.pid === "number" && !alive(owner.pid);
-}
-
-function createLock(file, clock) {
-  try {
-    var fd = fs.openSync(file, "wx");
-    fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: clock() }));
-    fs.closeSync(fd);
-    return true;
-  } catch (error) {
-    if (error.code === "EEXIST") return false;
-    throw error;
-  }
-}
-
-// Take the lock, replacing one whose owner died or that is older than LOCK_STALE_MS. False when another process holds it.
-function takeLock(file, clock) {
-  if (createLock(file, clock)) return true;
-  if (!stale(file, clock)) return false;
-  try {
-    fs.unlinkSync(file);
-  } catch (error) {
-    // Another process removed it first; the create below decides who wins.
-  }
-  return createLock(file, clock);
-}
-
-function releaseLock(file) {
-  var owner = readJson(file);
-  if (owner !== null && owner.pid === process.pid) fs.unlinkSync(file);
-}
-
-function wait(ms) {
-  return new Promise(function (resolve) {
-    setTimeout(resolve, ms);
-  });
-}
-
-// npm's error text with any credential removed: the user and password of a registry address, and an auth token setting.
-function redactSignedUrls(text) {
-  return String(text).replace(/https?:\/\/[^\s"'<>]+/gi, function (url) {
-    return /[?&](?:sig|signature|x-amz-signature|x-goog-signature)=/i.test(url) ? "<redacted-url>" : url;
-  });
-}
-function scrub(text) {
-  return redactSignedUrls(text)
-    .replace(/\/\/\S*@/g, "//<redacted>@")
-    .replace(/\b(Bearer|Basic)\s+\S+/gi, "$1 <redacted>")
-    .replace(/\bnpm_[A-Za-z0-9]{20,}/g, "<redacted>")
-    .replace(/\b(token|password)=[^&\s]*/gi, "$1=<redacted>")
-    .replace(/(_auth\w*|_password)\s*=\s*\S+/gi, "$1=<redacted>");
-}
-
-// The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
-// Whether an install can start as it is, with no npm run first: it has the reader and ws when a real profile needs them, and a reader that could not be installed is not due for another try.
-function complete(installed, reader, clock) {
-  if (installed === null || installed.patchRevision !== playwrightPatch.REVISION) return false;
-  if (!reader) return true;
-  var retry = installed.unavailableAt !== undefined && clock() - installed.unavailableAt > READER_RETRY_MS;
-  return installed.reader && !retry && Boolean(installed.ws || installed.unavailableAt);
-}
-
-function ensureInstalled(tools, root, deadline, reader) {
-  var installed = readInstalled(root);
-  if (complete(installed, reader, tools.clock)) return Promise.resolve({ installed: installed, fresh: false });
-  // An install that only lacks the reader still works without it, so a failed or crowded retry keeps it.
-  var current = installed === null || installed.patchRevision !== playwrightPatch.REVISION ? null : { installed: installed, fresh: false };
-  var lock = path.join(root, "refresh.lock");
-  if (takeLock(lock, tools.clock)) {
-    return Promise.resolve().then(function () {
-      if (installed !== null && installed.patchRevision !== playwrightPatch.REVISION) return migrate(tools, root, installed);
-      return install(tools, root, Math.max(deadline - tools.clock(), 1000), reader);
-    }).then(function (result) {
-      releaseLock(lock);
-      if (!result.ok && current !== null) tools.stderr.write("[web] could not install the connection reader (" + scrub(result.error) + "); keeping the install without it\n");
-      if (result.ok && !complete(result.installed, reader, tools.clock)) return ensureInstalled(tools, root, deadline, reader);
-      return result.ok ? { installed: result.installed, fresh: installed === null || installed.patchRevision === playwrightPatch.REVISION } : current || { error: result.error, code: result.code };
+function ensurePlaywright(s) {
+  if (exists(cliPath(s))) return Promise.resolve();
+  var key = s.stateRoot;
+  if (!installing[key]) {
+    installing[key] = installPlaywright(s).then(function () {
+      delete installing[key];
+      if (!exists(cliPath(s))) throw plain("Desk installed the browser driver but could not put it in place in " + s.stateRoot + ". Try again.");
     }, function (error) {
-      releaseLock(lock);
+      delete installing[key];
       throw error;
     });
   }
-  if (current !== null) {
-    tools.stderr.write("[web] another Desk session is installing; keeping the install without the connection reader\n");
-    return Promise.resolve(current);
-  }
-  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it", retry: true });
-  return wait(WAIT_STEP_MS).then(function () {
-    return ensureInstalled(tools, root, deadline, reader);
+  return installing[key];
+}
+
+// ---- contexts ----
+
+function contextDir(s, id) {
+  return path.join(s.tmpDir, PREFIX + id);
+}
+
+function open(s, kind) {
+  if (kind !== "fresh" && kind !== "mine") throw plain("browser must be \"fresh\" or \"mine\".");
+  var browser = chooseBrowser(s, kind === "mine");
+  var short = BROWSERS[browser.channel].short;
+  var id = crypto.randomUUID();
+  var dir = contextDir(s, id);
+  // Screenshots, snapshots and logs stay inside the private context folder, so they go when the context closes.
+  var outputDir = path.join(dir, "files");
+  var cookiesLeft = false;
+  return ensurePlaywright(s).then(function () {
+    fs.mkdirSync(dir, { mode: 448 });
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind }) + "\n");
+    fs.mkdirSync(path.join(dir, ".playwright"));
+    fs.mkdirSync(outputDir);
+    var profileDir = path.join(dir, "profile");
+    var profileName = null;
+    if (kind === "mine") {
+      try {
+        var copied = copyProfile(browser.profileRoot, profileDir);
+        profileName = copied.name;
+        cookiesLeft = copied.skipped.indexOf("Network/Cookies") !== -1 || copied.skipped.indexOf("Cookies") !== -1;
+      } catch (error) {
+        throw plain("Desk could not copy your " + short + " profile, probably because " + short + " is using it. Close " + short + ", or use a fresh browser (browser: \"fresh\").");
+      }
+    } else {
+      fs.mkdirSync(profileDir, { mode: 448 });
+    }
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, profileName, outputDir)));
+    return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
+  }).then(function (result) {
+    return recordProcesses(s, dir, result.text).then(function () {
+      return result;
+    });
+  }).then(function (result) {
+    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
+    var opened = {
+      contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
+      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, so copy out any screenshot you need first."
+    };
+    if (cookiesLeft) {
+      opened.signIns = browser.channel === "msedge"
+        ? "Edge is open, so only your Microsoft work sign-in carries over; close Edge to use all your sign-ins."
+        : "Chrome is open, so some of your sign-ins did not carry over; close Chrome to use all your sign-ins.";
+    }
+    return opened;
+  }).catch(function (error) {
+    return close(s, id).then(function () {
+      throw error;
+    });
   });
 }
 
-// ---- the background refresh ----
-
-// Bring the installed copy up to the channel's current release. Runs detached after a launch; never throws, and records its outcome in last-refresh.json.
-function refresh(o) {
-  var env = either(o.env, process.env);
-  var platform = either(o.platform, process.platform);
-  var node = either(o.node, process.execPath);
-  var clock = either(o.clock, Date.now);
-  var root = stateDir(env, either(o.homeDir, either(either(env.HOME, env.USERPROFILE), os.homedir())));
-  var lock = path.join(root, "refresh.lock");
-  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
-  var held = false;
-  function record(result) {
+// A browser that just exited can hold its files for a moment, most often on Windows, so a refused removal is retried for about two seconds.
+function removeDir(dir) {
+  for (var attempt = 1; ; attempt += 1) {
     try {
-      writeAtomic(path.join(root, "last-refresh.json"), JSON.stringify({ at: new Date(clock()).toISOString(), result: result }, null, 2) + "\n");
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
     } catch (error) {
-      // Losing the record never keeps the lock.
+      if (attempt >= 10 || ["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].indexOf(error.code) === -1) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
     }
-    if (held) releaseLock(lock);
-    return result;
   }
-  return Promise.resolve().then(function () {
-    mkdirp(root);
-    held = takeLock(lock, clock);
-    if (!held) return { ok: true, skipped: "another Desk session holds the refresh lock" };
-    return npm(tools, ["view", PACKAGE, "version"], REFRESH_MS).then(function (view) {
-      var latest = view.code === 0 ? lastLine(view.stdout) : "";
-      if (!latest) return { ok: false, error: npmError(view, "npm view") };
-      var installed = readInstalled(root);
-      var same = installed !== null && installed.version === latest;
-      if (same && installed.patchRevision === playwrightPatch.REVISION && (!installed.reader || installed.ws || installed.unavailableAt)) return { ok: true, version: latest, changed: false };
-      var work = same && installed.patchRevision !== playwrightPatch.REVISION ? migrate(tools, root, installed) : install(tools, root, REFRESH_MS, installed !== null && installed.reader);
-      return work.then(function (result) {
-        return result.ok ? { ok: true, version: result.installed.version, changed: true } : result;
+}
+
+// ---- the context's own processes ----
+//
+// The CLI starts a detached daemon, and the daemon starts the browser. A browser running a copy of a real profile can
+// outlive the CLI's close, so Desk records the daemon and everything under it when the context opens, and on close
+// waits a few seconds, then kills only those processes. Each is matched by PID and start time, so a PID the system
+// has since given to another process is never touched; nothing is matched by name.
+
+function processTableCommand(platform, env) {
+  if (platform === "win32") {
+    var shell = path.win32.join(env.SystemRoot || env.windir || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    return [shell, ["-NoProfile", "-NonInteractive", "-Command",
+      "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToFileTimeUtc() }"]];
+  }
+  return ["ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="]];
+}
+
+// Lines of "pid ppid start"; the start is the rest of the line.
+function parseProcessTable(text) {
+  return text.split(/\r?\n/).map(function (line) {
+    var match = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line);
+    return match && { pid: Number(match[1]), ppid: Number(match[2]), start: match[3] };
+  }).filter(Boolean);
+}
+
+// Resolves the process table, or null when it cannot be read.
+function readProcessTable(platform, env) {
+  var command = processTableCommand(platform, env);
+  return new Promise(function (resolve) {
+    var child = childProcess.execFile(command[0], command[1], { timeout: 20000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" }, function (error, stdout) {
+      resolve(error ? null : parseProcessTable(stdout));
+    });
+    // PowerShell reads a piped stdin before it exits, so it is closed at once.
+    child.stdin.end();
+  });
+}
+
+// Windows start times are file-time numbers, ps start times are dates.
+function startValue(start) {
+  return /^\d+$/.test(start) ? Number(start.slice(0, -4)) : Date.parse(start);
+}
+
+// The given processes that are still running as themselves, and everything they have started since. A child must have
+// started no earlier than its parent, because Windows keeps a parent PID after the parent exits and may reuse it.
+function liveTree(table, roots) {
+  var live = table.filter(function (row) {
+    return roots.some(function (root) { return root.pid === row.pid && root.start === row.start; });
+  });
+  for (var i = 0; i < live.length; i += 1) {
+    var parent = live[i];
+    table.forEach(function (row) {
+      if (row.ppid === parent.pid && live.indexOf(row) === -1 && startValue(row.start) >= startValue(parent.start)) live.push(row);
+    });
+  }
+  return live.map(function (row) { return { pid: row.pid, start: row.start }; });
+}
+
+function readOwner(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"));
+  } catch (error) {
+    return {};
+  }
+}
+
+// The CLI prints the daemon's PID when it opens ("opened with pid N") and when the daemon fails to start ("Daemon pid=N:").
+function recordProcesses(s, dir, text) {
+  var match = /(?:opened with pid |Daemon pid=)(\d+)/.exec(text);
+  if (!match) return Promise.resolve();
+  var daemon = Number(match[1]);
+  return Promise.resolve(s.processTable()).then(function (table) {
+    var row = (table || []).filter(function (entry) { return entry.pid === daemon; })[0];
+    if (!row) return;
+    var owner = readOwner(dir);
+    owner.processes = liveTree(table, [row]);
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(owner) + "\n");
+  });
+}
+
+function pause(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+// Waits up to exitWaitMs for the recorded processes to exit, then kills what is left of them; resolves the PIDs it killed.
+function endProcesses(s, recorded) {
+  if (!recorded || !recorded.length) return Promise.resolve([]);
+  var deadline = Date.now() + s.exitWaitMs;
+  function check() {
+    return Promise.resolve(s.processTable()).then(function (table) {
+      if (!table) return [];
+      var live = liveTree(table, recorded);
+      if (!live.length) return [];
+      if (Date.now() < deadline) return pause(250).then(check);
+      live.forEach(function (entry) {
+        try {
+          process.kill(entry.pid, "SIGKILL");
+        } catch (error) {
+          // It exited after the table was read.
+        }
+      });
+      return pause(250).then(function () {
+        return live.map(function (entry) { return entry.pid; });
       });
     });
-  }).then(record, function (error) {
-    return record({ ok: false, error: describe(error) });
+  }
+  return check();
+}
+
+function close(s, id) {
+  var dir = contextDir(s, id);
+  var recorded = readOwner(dir).processes;
+  var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
+  return stop.then(function () {
+    return endProcesses(s, recorded);
+  }).then(function () {
+    removeDir(dir);
+    return { contextId: id, closed: true };
   });
 }
 
-// Start the refresh in a detached process, so it outlives neither the launch nor blocks it.
-function startRefresh(o) {
-  var child = childProcess.spawn(o.node, [__filename, REFRESH_FLAG, o.npmCli], { detached: true, stdio: "ignore", env: o.env, windowsHide: true });
-  child.on("error", function () {});
-  child.unref();
-  return child;
+function checkId(id) {
+  if (typeof id !== "string" || !ID.test(id)) throw plain("contextId must be the id that browser_context open returned.");
 }
 
-// ---- degrade, never die: serve the MCP handshake itself when the browser cannot start ----
-//
-// Mirrors bootstrap.cjs's own degraded responder (same wire shape, same `serveDegraded` name), so an agent reads
-// the same thing from either server: every tool listed as unavailable, every call answered with a status, a code
-// and a fix. The browser has no diagnostic tool of its own (no `desk_status` equivalent), so every call here is
-// `isError: true`; the fix is in the payload regardless.
-
-function reconnectFix(action) {
-  return action + ", then reconnect the desk-web MCP server (in Claude Code run /mcp and reconnect desk-web; otherwise start a new session).";
-}
-
-function placeholderTools() {
-  return require("./web-catalog.json").tools;
-}
-
-function respond(stdout, id, body) {
-  var message = { jsonrpc: "2.0", id: id };
-  Object.keys(body).forEach(function (key) {
-    message[key] = body[key];
+// The CLI takes its command from the first argument that is not an option, and reads options anywhere before "--".
+function checkArgs(args) {
+  if (!Array.isArray(args) || args.length === 0 || args.some(function (arg) { return typeof arg !== "string"; })) {
+    throw plain("args must be a list of strings, for example [\"snapshot\"].");
+  }
+  if (PAGE_COMMANDS.indexOf(args[0]) === -1) {
+    throw plain("args must start with a page command such as snapshot, click or goto, and \"" + args[0] + "\" is not one. Open and close browsers with browser_context.");
+  }
+  var end = args.indexOf("--");
+  (end === -1 ? args : args.slice(0, end)).forEach(function (arg) {
+    if (/^-[A-Za-z]/.test(arg)) throw plain("Short options such as " + arg + " are not available here. Use the long form, such as --filename, and put text that starts with - after \"--\".");
+    var name = /^--/.test(arg) ? arg.slice(2).split("=")[0].replace(/^no-/, "") : null;
+    if (REFUSED_OPTIONS.indexOf(name) !== -1) throw plain("The option " + arg.split("=")[0] + " is not available here; the browser is chosen when browser_context opens it.");
   });
-  stdout.write(JSON.stringify(message) + "\n");
 }
 
-function answer(stdout, payload, line) {
-  var text = line.trim();
-  if (text === "") return;
-  var message;
+function command(s, id, args) {
+  checkId(id);
+  checkArgs(args);
+  var dir = contextDir(s, id);
+  if (!fs.existsSync(path.join(dir, "config.json"))) throw plain("There is no open browser with that contextId. Open one with browser_context.");
+  return runCli(s, dir, args, s.commandMs).then(function (result) {
+    if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
+    if (result.code !== 0) throw plain(result.text || "The command failed.");
+    return result.text;
+  });
+}
+
+function ownerGone(file) {
   try {
-    message = JSON.parse(text);
+    process.kill(JSON.parse(fs.readFileSync(file, "utf8")).pid, 0);
+    return false;
   } catch (error) {
-    respond(stdout, null, { error: { code: -32700, message: "Parse error" } });
-    return;
-  }
-  if (message === null || typeof message !== "object" || Array.isArray(message)) {
-    respond(stdout, null, { error: { code: -32600, message: "Invalid Request" } });
-    return;
-  }
-  if (message.id === undefined) return;
-  var params = either(message.params, {});
-  if (message.method === "initialize") {
-    respond(stdout, message.id, { result: {
-      protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : DEFAULT_PROTOCOL,
-      capabilities: { tools: { listChanged: true } },
-      serverInfo: { name: "desk-web-launcher", version: "0.0.0" },
-      instructions: payload.summary + " " + payload.fix
-    } });
-  } else if (message.method === "ping") {
-    respond(stdout, message.id, { result: {} });
-  } else if (message.method === "tools/list") {
-    respond(stdout, message.id, { result: { tools: placeholderTools() } });
-  } else if (message.method === "tools/call") {
-    respond(stdout, message.id, { result: { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true } });
-  } else {
-    respond(stdout, message.id, { error: { code: -32601, message: "Method not found: " + message.method } });
+    return error.code === "ESRCH";
   }
 }
 
-// Line-delimited JSON-RPC on stdio, answering every call with one degraded payload; resolves when stdin closes.
-function serveDegraded(options) {
-  var stdin = options.stdin;
-  return new Promise(function (resolve) {
-    var buffered = "";
-    function onData(chunk) {
-      buffered += chunk;
-      var newline = buffered.indexOf("\n");
-      while (newline !== -1) {
-        answer(options.stdout, options.payload, buffered.slice(0, newline));
-        buffered = buffered.slice(newline + 1);
-        newline = buffered.indexOf("\n");
-      }
-    }
-    function finish() {
-      answer(options.stdout, options.payload, buffered);
-      buffered = "";
-      stdin.removeListener("data", onData);
-      stdin.removeListener("end", finish);
-      stdin.removeListener("error", finish);
-      resolve();
-    }
-    stdin.setEncoding("utf8");
-    stdin.on("data", onData);
-    stdin.on("end", finish);
-    stdin.on("error", finish);
-    if (stdin.resume) stdin.resume();
+// Close what an earlier Desk process left open when it stopped without closing.
+function sweep(s) {
+  var names = fs.existsSync(s.tmpDir) ? fs.readdirSync(s.tmpDir) : [];
+  var stale = names.filter(function (name) {
+    return name.indexOf(PREFIX) === 0 && ID.test(name.slice(PREFIX.length)) && ownerGone(path.join(s.tmpDir, name, "owner.json"));
   });
-}
-
-// ---- run ----
-
-// Runtime selection and the staged installer are shared with the explicit private CLI.
-// This layer deliberately never reads a browser declaration or acquires a profile.
-function browserRuntimeTools(o, io) {
-  var env = either(o.env, process.env);
-  var platform = either(o.platform, process.platform);
-  var fileExists = either(o.exists, exists);
-  var homeDir = o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir());
-  var current = either(o.current, { path: process.execPath, version: process.version, abi: process.versions.modules });
-  var clock = either(o.clock, Date.now);
-  var selection = bootstrap.selectNode({
-    env: env,
-    platform: platform,
-    arch: either(o.arch, process.arch),
-    homeDir: homeDir,
-    mcpRoot: either(o.mcpRoot, __dirname),
-    current: current,
-    systemPrefix: o.systemPrefix !== undefined ? o.systemPrefix : either(env.DESK_NODE_SYSTEM_PREFIX, ""),
-    probe: o.probe,
-    now: o.now
-  });
-  if (selection.node === null) {
-    throw Object.assign(new Error("Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed"),
-      { code: "node_missing", fix: reconnectFix("Install Node " + selection.range) });
-  }
-  var node = selection.node.path;
-  var cli = npmCli(node, platform, fileExists);
-  if (cli === null) {
-    throw Object.assign(new Error("Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable"),
-      { code: "npm_missing", fix: reconnectFix("Reinstall that Node with its bundled npm") });
-  }
-  var root = stateDir(env, homeDir);
-  mkdirp(root);
-  var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
-  return { env: env, platform: platform, fileExists: fileExists, homeDir: homeDir, clock: clock, selection: selection, node: node, cli: cli, root: root, tools: tools };
-}
-
-function prepareBrowserRuntime(o) {
-  o = o || {};
-  return Promise.resolve().then(function () {
-    var runtime = browserRuntimeTools(o, { stderr: either(o.stderr, process.stderr) });
-    return ensureInstalled(runtime.tools, runtime.root, runtime.clock() + either(o.firstInstallMs, FIRST_INSTALL_MS), false).then(function (got) {
-      if (!got.installed) throw Object.assign(new Error("Desk could not prepare a verified browser install: " + scrub(got.error)), { code: got.code || "install_failed" });
-      if (!got.fresh) either(o.startRefresh, startRefresh)({ node: runtime.node, npmCli: runtime.cli, env: runtime.env });
-      return { nodePath: runtime.node, installed: got.installed, stateRoot: runtime.root };
+  return stale.reduce(function (chain, name) {
+    return chain.then(function () {
+      return close(s, name.slice(PREFIX.length));
     });
-  });
+  }, Promise.resolve());
 }
 
-// The SDK frontend owns normal/degraded initialization, never the legacy proxy.
-function run(o) {
-  return require("./browser-context-mcp.cjs").run(o);
+// ---- MCP ----
+
+function createController(options) {
+  var s = settings(options || {});
+  var owned = {};
+  function answer(work) {
+    return Promise.resolve().then(work).then(function (value) {
+      return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError: false };
+    }, function (error) {
+      return { content: [{ type: "text", text: error.plain ? error.message : "Desk's browser hit an unexpected problem: " + error.message }], isError: true };
+    });
+  }
+  function context(input) {
+    if (input.action === "open") {
+      return open(s, input.browser || "fresh").then(function (opened) {
+        owned[opened.contextId] = true;
+        return opened;
+      });
+    }
+    if (input.action !== "close") throw plain("action must be \"open\" or \"close\".");
+    checkId(input.contextId);
+    delete owned[input.contextId];
+    return close(s, input.contextId);
+  }
+  return {
+    settings: s,
+    call: function (name, input) {
+      var given = input || {};
+      if (name === "browser_context") return answer(function () { return context(given); });
+      if (name === "browser_command") return answer(function () { return command(s, given.contextId, given.args); });
+      return answer(function () { throw plain("Unknown tool " + name + "."); });
+    },
+    closeAll: function () {
+      return Promise.all(Object.keys(owned).map(function (id) {
+        delete owned[id];
+        return close(s, id);
+      }));
+    },
+    sweep: function () {
+      return Promise.resolve().then(function () {
+        return sweep(s);
+      }).catch(function (error) {
+        return error;
+      });
+    }
+  };
+}
+
+// options: stdin, stdout, signals (an emitter of SIGINT/SIGTERM/SIGHUP), exit, plus the controller's own settings.
+function serve(o) {
+  var stdin = o.stdin;
+  var controller = createController(o);
+  var tools = require("./web-catalog.json").tools;
+  var pending = [];
+  var buffered = "";
+  function send(id, body) {
+    o.stdout.write(JSON.stringify(Object.assign({ jsonrpc: "2.0", id: id }, body)) + "\n");
+  }
+  function handle(line) {
+    var message;
+    try {
+      message = JSON.parse(line);
+    } catch (error) {
+      send(null, { error: { code: -32700, message: "Parse error" } });
+      return;
+    }
+    if (!message || message.id === undefined) return;
+    var params = message.params || {};
+    if (message.method === "initialize") {
+      send(message.id, { result: { protocolVersion: params.protocolVersion || "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "desk-web", version: "2.0.0" } } });
+    } else if (message.method === "ping") {
+      send(message.id, { result: {} });
+    } else if (message.method === "tools/list") {
+      send(message.id, { result: { tools: tools } });
+    } else if (message.method === "tools/call") {
+      pending.push(controller.call(params.name, params.arguments).then(function (body) {
+        send(message.id, { result: body });
+      }));
+    } else {
+      send(message.id, { error: { code: -32601, message: "Method not found: " + message.method } });
+    }
+  }
+  var swept = controller.sweep();
+  return new Promise(function (resolve) {
+    var finishing = null;
+    function finish() {
+      if (!finishing) {
+        finishing = Promise.all(pending.concat([swept])).then(function () {
+          return controller.closeAll();
+        });
+      }
+      return finishing;
+    }
+    function stop() {
+      o.exit(0);
+    }
+    ["SIGINT", "SIGTERM", "SIGHUP"].forEach(function (signal) {
+      o.signals.once(signal, function () {
+        finish().then(stop, stop);
+      });
+    });
+    stdin.setEncoding("utf8");
+    stdin.on("data", function (chunk) {
+      buffered += chunk;
+      var lines = buffered.split("\n");
+      buffered = lines.pop();
+      lines.forEach(function (line) {
+        if (line.trim()) handle(line);
+      });
+    });
+    stdin.on("end", function () {
+      finish().then(resolve, resolve);
+    });
+    stdin.resume();
+  });
 }
 
 module.exports = {
   BROWSER_TOOL_NAMES: BROWSER_TOOL_NAMES,
-  DEFAULT_ARGS: DEFAULT_ARGS,
-  LEVEL_PACKAGE: LEVEL_PACKAGE,
-  NPM_ENV: NPM_ENV,
-  PACKAGE: PACKAGE,
-  REFRESH_FLAG: REFRESH_FLAG,
-  browserArgs: browserArgs,
-  browserSelection: browserSelection,
-  channelBrowserSelection: channelBrowserSelection,
-  browserPaths: browserPaths,
-  launchArgs: launchArgs,
+  PLAYWRIGHT_VERSION: PLAYWRIGHT_VERSION,
   npmCli: npmCli,
-  npmError: npmError,
-  readInstalled: readInstalled,
-  prepareBrowserRuntime: prepareBrowserRuntime,
-  refresh: refresh,
-  run: run,
-  serveDegraded: serveDegraded,
-  startRefresh: startRefresh,
-  stopInstalls: stopInstalls,
-  stopTree: stopTree,
-  taskkillPath: taskkillPath,
-  stateDir: stateDir,
-  takeLock: takeLock,
-  WS_PACKAGE: WS_PACKAGE,
-  withNodeFirst: withNodeFirst
+  profileRoot: profileRoot,
+  copyProfile: copyProfile,
+  processTableCommand: processTableCommand,
+  parseProcessTable: parseProcessTable,
+  readProcessTable: readProcessTable,
+  liveTree: liveTree,
+  createController: createController,
+  serve: serve,
+  run: run
 };
 
-// Started directly by a host (the Copilot config, the managed-Edge overlay) or as the detached refresher. The Claude config requires this file and calls run() itself. Spawned tests cover these lines; the in-process coverage run cannot be the main module.
-/* istanbul ignore next */
-if (require.main === module) {
-  if (process.argv[2] === REFRESH_FLAG) refresh({ npmCli: process.argv[3] });
-  else run({});
+/* istanbul ignore next -- the hosts start this with the real process; tests call serve() with their own streams */
+function run() {
+  return serve({ stdin: process.stdin, stdout: process.stdout, signals: process, exit: function (code) { process.exit(code); } });
 }
+
+/* istanbul ignore next -- Copilot starts this file directly */
+if (require.main === module) run();

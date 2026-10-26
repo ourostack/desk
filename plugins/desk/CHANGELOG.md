@@ -1,5 +1,68 @@
 # desk plugin — changelog
 
+## 3.2.0 — 2026-10-26
+
+Release Desk as a stable version; no pending changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.361 — 2026-10-26
+
+The release checks now accept a plain stable version such as `3.2.0`. A plain version can also appear by chance in third-party package lockfiles and in a documentation example, which made the stable release fail its own check. The check no longer counts lockfiles as Desk version surfaces, the documentation example uses `1.0.0`, and the pull request release dry run now covers the `stable` stage too.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.360 — 2026-10-26
+
+Closing a browser now ends its processes. A `mine` browser's Edge could keep running after `browser_context` close said `closed: true`. Desk now records the Playwright CLI daemon and the browser it started when a context opens. On close, and when the server exits or cleans up after a crash, Desk waits up to five seconds and then kills whatever of those processes is left. Each process is matched by its PID and start time, never by name, so the person's own browser and other agents' browsers are never touched.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.359 — 2026-10-26
+
+`desk_status` now reports search from the session's own search engine, so it says "Search is ready." or "Search is preparing N of M sections…" in every session. Before, a large desk's full status rarely finished within the call's time budget, and search read `not_checked`.
+
+`desk_recall` now ranks by meaning and by exact words together (reciprocal rank fusion), so a document strong on both comes first. Search also indexes every Markdown file inside a track, such as a runbook or notes in an iteration folder, not only `task.md`, `planning.md`, `doing.md` and `feedback.md`.
+
+A new session's first `desk_recall` or `desk_similar` waits up to 3 s for the search model to load, so a desk whose vectors are already stored answers by meaning at once instead of with exact words only.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.358 — 2026-10-25
+
+The Desk release workflow has a new `stable` stage, so Desk can leave alpha. Run it by hand from the Actions tab (or `gh workflow run desk-release.yml --ref main -f stage=stable`). From any `X.Y.Z-alpha.N` or `X.Y.Z-rc.N` it releases plain `X.Y.Z`, with or without pending changes.
+
+After a stable release, the default `auto` stage releases the next patch as a plain version: the next merged change ships `X.Y.(Z+1)`. The `rc` stage after a stable release starts `X.Y.(Z+1)-rc.1`. The "Released in Desk …" note on merged pull requests also works for plain versions.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.357 — 2026-10-25
+
+Desk's browser is now simple. `browser_context` opens one of two browsers: `fresh`, an empty throwaway profile that is never signed in, or `mine`, a private copy of your own Edge (or Chrome) profile so your sign-ins work. Both run headless as their own browser processes, never take focus, never touch your open browser windows or another agent's browser, and delete their folder on close. `browser_command` runs Playwright CLI page commands such as `goto`, `snapshot`, `click` and `screenshot`; it refuses commands that open, close, list or kill browsers, run Node code or save sign-in state, wherever they appear. Screenshots and other files stay in the browser's private folder and are deleted with it on close. Installing the plugin is the only setup step: Desk installs `playwright-core` on the first open. The browser extension, native messaging helpers and their per-platform binaries, managed and real profiles, the browser-context broker, the `cdp-headed-browser` skill and the recovery layers are removed; [the browser roadmap](../../docs/roadmap/browser.md) lists what each would solve. On Windows, files a running Edge locks are skipped instead of failing the copy; with Edge open only your work sign-in carries over, and Desk says so.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.356 — 2026-10-25
+
+Meaning-based search now works with nothing to install. Desk embeds the desk inside its own MCP server with a small built-in model (Model2Vec `potion-base-8M`, run in plain JavaScript), downloaded once on first use into the desk's `.state` folder. There is no separate search controller process, no Ollama and no shared index between Desk builds any more.
+
+- `desk_recall` always answers. Before the model is ready it returns exact-word matches and says meaning-based search is getting ready; while sections are still being embedded it adds exact-word matches and says how many sections remain.
+- Vectors are kept in `.state/desk-vectors.sqlite` by section text, so an edit embeds only the changed sections and nothing is embedded again after a restart. The first run embeds in small batches with short pauses so the machine stays responsive.
+- `desk_status` reports search in plain words: "Search is ready." or "Search is preparing N of M sections…".
+- At start Desk deletes the old shared index (`.state/desk-index.sqlite`, which reached 9.7 GB on one desk) when no other process has it open.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.355 — 2026-10-25
+
+Meaning-based search (`desk_recall`, `desk_similar`) now becomes ready on a busy desk that older Desk builds also write to. Desk stored each section's embedding by the section's row number, and re-indexing a card gives every section a new row number even when its text is unchanged. On a desk where an older session re-indexed a busy card every minute or so, each pass embedded thousands of sections only to lose them at the next re-index, so recall never became ready and the index file kept growing. Embeddings now live in a new `text_vectors` table, keyed by the section's text and by a hash of the same provenance record older builds read (its schema version, and the embedding specification, model, model revision, dimension, chunker and normalization), so they survive any re-index and a vector made under other settings is never reused; an edit embeds only the sections whose text is new, and re-indexing a card rewrites only the sections that changed, so an append to a long card writes one row instead of rewriting them all. A vector is saved only while a section with its text still exists, and vectors no section uses are removed after an hour. When the index moves on while recall waits or reads, or a change is marked between its wait and its status check, recall waits for the index to catch up and reads again instead of refusing, until one read is current from start to finish or its deadline runs out; while the status stays uncertain it pauses 50 ms between reads, so it never spins. It never answers from an index that moved on, and it embeds the query only once.
+
+If the old table's embeddings are trusted at this build's first start, it copies them into the new one, 2,000 sections per transaction, without asking the embedding service for anything, and copies only those whose section still exists. If they are not trusted then, it never copies them, and embeds every section itself. The old row-keyed `chunk_vecs` table stays for older builds on the same desk, which keep working. While this build owns the index, its readiness controller removes the old rows no build can read on its own timer, not only after a catch-up: each round finds up to 20,000 in one read and deletes them 500 per transaction with a pause between, rounds follow each other while work is left, and once nothing is left it looks again every minute. A round reads every text vector only when a section or text vector was added or removed since the last round, does nothing once a newer build owns the index, even with no desk change, and closing the session stops a round before its next batch. This stops the file from growing while older builds keep adding such rows; it does not shrink the file, and nothing rewrites or vacuums it.
+
+When Ollama answers that a section is too long, in either its older ("input length exceeds the context length") or newer ("input (N tokens) is too large to process") wording, Desk halves the section's text and sends it again, up to six times, so the start of the section stays searchable. A section refused at every length is recorded as skipped for these embedding settings and is not sent again at each catch-up. Shortened and skipped sections count as covered, so they no longer keep meaning-based search from becoming ready. `desk_status` says in plain words how many sections were shortened or skipped, names their cards, and says that exact-word search (`desk_search`) still finds them in full. A failure of the embedding service itself still stops the pass, and nothing is recorded as skipped.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.354 — 2026-10-24
 
 Keep the full existing one-second preparation window after inventory work, rather than halving the remaining allowance again. Alternate which stage runs first so preparation and publication both make progress across turns, within the unchanged one-second stage caps and two-second overall deadline.

@@ -378,6 +378,7 @@ for (const scenario of [
     const root = path.join(directory, "workspace")
     fs.mkdirSync(root)
     let controller
+    const recorded = []
     const desk = await startInProcess({
       argv: ["--root", root, ...(scenario.raw ? ["--person", scenario.raw] : [])],
       env: {},
@@ -392,6 +393,8 @@ for (const scenario of [
           controller = await connectOrStartController({
             ...options, stateHome: path.join(directory, "state"), ephemeral: true,
           })
+          const record = controller.recordChange
+          controller.recordChange = (change) => { recorded.push(change.path); return record(change) }
           return controller
         },
       }),
@@ -404,8 +407,7 @@ for (const scenario of [
       assert.equal(result.payload.path, path.posix.join(...prefix, "ops", "task-bound", "task.md"))
       assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "task-bound", "task.md")), true)
       assert.equal(fs.existsSync(path.join(root, "desks", "bob")), false)
-      await controller.barrier({ capability: "lexical", wait: true })
-      assert.equal((await controller.status()).freshness.cursor.sequence, 1)
+      assert.deepEqual(recorded, [result.payload.path])
     } finally {
       await desk.close()
       await controller?.close()

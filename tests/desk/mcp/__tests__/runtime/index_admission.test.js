@@ -399,11 +399,54 @@ test("with the real runtime inspector and importer, main restores the runtime af
   })
   try {
     // Wait for background convergence too, so nothing is still writing the index when the fixture is removed.
-    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail.controller_state === "LEXICAL_READY", { deadlineMs: 60000 })
+    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.search?.state === "exact_words_only", { deadlineMs: 60000 })
     assert.equal(ready.status, "ok")
     const search = await session.call("desk_search", { query: "lighthouse" })
     assert.equal(search.isError, false)
     assert.match(JSON.stringify(search.payload), /task\.md/u)
+  } finally {
+    await session.close()
+  }
+})
+
+test("desk_status reports search from the session's engine when the runtime status detail misses its budget", {
+  skip: process.versions.modules === "127" ? false : "this platform's committed runtime pack is for Node ABI 127",
+}, async () => {
+  const root = await mkTempRoot("desk-status-search-")
+  const desk = path.join(root, "desk")
+  const { mkdirSync } = await import("node:fs")
+  mkdirSync(desk)
+  writeFileSync(path.join(desk, "task.md"), "# Harbor\n\nThe lighthouse keeper logs ferries.\n")
+  const { startInProcess } = await import("./_in_process_desk.js")
+  const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
+  const session = await startInProcess({
+    argv: ["--root", desk],
+    // The real runtime, except that its full status never answers, as on a large desk where it outlasts every call's budget.
+    runtimeImporter: async (given) => {
+      const runtime = await importRuntimeServer(given)
+      return {
+        ...runtime,
+        callTool: (request) => request.name === "desk_status"
+          ? new Promise((resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }))
+          : runtime.callTool(request),
+      }
+    },
+    runtimeInspector: inspectRuntimeDependencyPack,
+    env: { DESK_RUNTIME_CACHE_DIR: path.join(root, "runtime-cache"), HOME: root },
+    cwd: root,
+    homeDir: root,
+    readinessPolicy: { semantic: "unsupported" },
+  })
+  try {
+    const deadline = Date.now() + 60000
+    let compact
+    for (;;) {
+      compact = (await session.call("desk_status", {})).payload
+      if (compact.state === "ready" && compact.detail_pending === true && compact.search !== "not_checked") break
+      assert.ok(Date.now() < deadline, `desk_status never reported search; last: ${JSON.stringify(compact)}`)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal(compact.search, "Meaning-based search is off for this desk; exact-word search is ready.")
   } finally {
     await session.close()
   }
@@ -446,14 +489,6 @@ test("--degraded takes precedence over --onboarding", async () => {
   } finally {
     await desk.close()
   }
-})
-
-test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
-  const { hungTuning } = await import("../../../../../plugins/desk/mcp/index.js")
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "300" }), { probeMs: 300 })
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "0" }), {})
-  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "soon" }), {})
-  assert.deepEqual(hungTuning({}), {})
 })
 
 test("crash handlers hand uncaught errors and rejections to the session, and are removed on close", async () => {

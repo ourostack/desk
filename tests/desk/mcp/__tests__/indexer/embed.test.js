@@ -7,7 +7,9 @@ import {
   embedChunk,
   embedChunkDetailed,
   embedChunks,
+  embedChunksDetailed,
   EMBEDDING_DIM,
+  isChunkLocalEmbeddingFailure,
   probeEmbeddingService,
   resolveEmbeddingEndpoints,
   resolveEmbeddingModel,
@@ -451,6 +453,44 @@ test("embedChunks continues after an oversized chunk failure", async () => {
   assert.equal(out[2].length, EMBEDDING_DIM)
 })
 
+// Ollama's wording for an oversized input changed; both wordings name one input, not a broken service.
+for (const [wording, error] of [
+  ["older", "the input length exceeds the context length"],
+  ["current", "input (13440 tokens) is too large to process. increase the physical batch size (current batch size: 2048)"],
+]) {
+  test(`embedChunksDetailed treats Ollama's ${wording} too-long wording as one section's problem and embeds the rest`, async () => {
+    const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.5)
+    const calls = []
+    const fetchImpl = async (_url, request) => {
+      const prompt = JSON.parse(request.body).prompt
+      calls.push(prompt)
+      if (prompt === "too large") return { ok: false, status: 500, json: async () => ({ error }) }
+      return { ok: true, json: async () => ({ embedding: vec }) }
+    }
+    const out = await embedChunksDetailed(["small one", "too large", "small two"], {
+      endpoint: "http://127.0.0.1:11434",
+      fetch: fetchImpl,
+    })
+    assert.deepEqual(calls, ["small one", "too large", "small two"])
+    assert.equal(out[1].vector, null)
+    assert.equal(isChunkLocalEmbeddingFailure(out[1].diagnostic), true)
+    assert.equal(out[1].diagnostic.message, error)
+    assert.equal(out[2].vector.length, EMBEDDING_DIM)
+  })
+}
+
+test("embedChunksDetailed still stops the batch on a real service failure", async () => {
+  const calls = []
+  const fetchImpl = async (_url, request) => {
+    calls.push(JSON.parse(request.body).prompt)
+    return { ok: false, status: 500, json: async () => ({ error: "model runner has unexpectedly stopped" }) }
+  }
+  const out = await embedChunksDetailed(["first", "second"], { endpoint: "http://127.0.0.1:11434", fetch: fetchImpl })
+  assert.deepEqual(calls, ["first"])
+  assert.equal(isChunkLocalEmbeddingFailure(out[0].diagnostic), false)
+  assert.equal(out[1].diagnostic.reason, "batch_aborted")
+})
+
 test("embedChunks keeps context-length failures chunk-local when a fallback endpoint is down", async () => {
   const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.25)
   const calls = []
@@ -489,4 +529,24 @@ test("embedChunks happy path returns one vector per chunk", async () => {
   assert.equal(out.length, 2)
   assert.equal(out[0].length, EMBEDDING_DIM)
   assert.equal(out[1].length, EMBEDDING_DIM)
+})
+
+test("an explicit endpoint is used as given when it is a full embeddings URL or not a string", () => {
+  assert.deepEqual(resolveEmbeddingEndpoints({ endpoint: " http://127.0.0.1:9/api/embeddings " }), ["http://127.0.0.1:9/api/embeddings"])
+  const url = new URL("http://127.0.0.1:9/api/embeddings")
+  assert.deepEqual(resolveEmbeddingEndpoints({ endpoint: url }), [url])
+})
+
+test("every embedding entry point works without options, through the global fetch", async (t) => {
+  const original = globalThis.fetch
+  const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.5)
+  let calls = 0
+  globalThis.fetch = async () => { calls += 1; return { ok: true, json: async () => ({ embedding: vec }) } }
+  t.after(() => { globalThis.fetch = original })
+  assert.deepEqual(await embedChunk("x"), vec)
+  assert.deepEqual((await embedChunkDetailed("x")).vector, vec)
+  assert.equal((await probeEmbeddingService()).available, true)
+  assert.deepEqual((await embedChunksDetailed(["x"])).map((result) => result.vector), [vec])
+  assert.deepEqual(await embedChunks(["x"]), [vec])
+  assert.equal(calls, 5)
 })

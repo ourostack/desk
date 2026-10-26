@@ -2,7 +2,7 @@ name: Desk release
 
 # Releases Desk from the changelog fragments merged pull requests leave in plugins/desk/changelog.d/. Pull requests
 # never bump Desk's version or edit the head of its changelog, so they do not conflict with each other; this workflow
-# follows the current alpha/RC line on every release surface, folds pending fragments into one changelog entry and commits the
+# follows the current alpha, RC or stable line on every release surface, folds pending fragments into one changelog entry and commits the
 # release straight to main (scripts/release-desk.cjs). Runs one at a time; a run that finds no fragment, because an
 # earlier run already released them, does nothing.
 #
@@ -34,9 +34,9 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "Release stage (auto follows the current line; rc enters or continues RC)"
+        description: "Release stage (auto follows the current line; rc enters or continues RC; stable releases the plain version)"
         type: choice
-        options: [auto, rc]
+        options: [auto, rc, stable]
         default: auto
         required: true
   # A failed release leaves its fragments pending on main. The daily run releases whatever is still pending, so a fix
@@ -85,12 +85,6 @@ jobs:
       - name: Install Desk MCP dependencies
         working-directory: plugins/desk/mcp
         run: npm ci
-
-      - name: Install broker dependencies
-        run: npm ci --prefix plugins/desk/browser-context-broker
-
-      - name: Install locked maintained browser test input
-        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
 
       # Builds the release on the checked-out main and runs every check on the release commit. The steps live in
       # scripts/build-and-check-release.sh, which pull request CI also runs as a dry run (desk-mcp-tests.yml), so a
@@ -171,7 +165,7 @@ jobs:
           RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
         run: |
           set -euo pipefail
-          case "$RELEASE_STAGE" in auto|rc) ;; *) echo "::error::Unsupported release stage."; exit 1 ;; esac
+          case "$RELEASE_STAGE" in auto|rc|stable) ;; *) echo "::error::Unsupported release stage."; exit 1 ;; esac
           key="$RUNNER_TEMP/release-deploy-key"
           trap 'rm -f "$key"' EXIT
           [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The build job handed over no valid commit."; exit 1; }
