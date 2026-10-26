@@ -57,9 +57,12 @@ function copilotAnswer(tag, since) {
     const text = fs.readFileSync(file, "utf8")
     if (!text.includes(tag)) continue
     const messages = text.split("\n").filter(Boolean).map((line) => { try { return JSON.parse(line) } catch { return null } }).filter(Boolean)
+    // Only the session this script started: its first user message carries the tag (another session may quote it).
+    if (!messages.some((event) => event.type === "user.message" && JSON.stringify(event.data ?? {}).includes(`Black-box check ${tag}`))) continue
     // The answer is the assistant's text, or the summary it passes to task_complete when it ends with that tool.
     const replies = messages.filter((event) => /assistant\.message/u.test(event.type ?? "")).flatMap((event) => [event.data?.content ?? "", ...(event.data?.toolRequests ?? []).map((request) => request.arguments?.summary ?? "")])
     const tools = messages.filter((event) => /tool\.execution_start/u.test(event.type ?? "")).map((event) => event.data?.toolName ?? event.data?.name)
+    if (!tools.some((name) => /desk_status|desk-desk_status/u.test(name))) replies.push("(the desk server's tools were not called; see the tools list)")
     return { sessionId: id, answer: replies.join("\n"), tools }
   }
   return { sessionId: null, answer: "", tools: [] }
