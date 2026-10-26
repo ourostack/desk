@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.14 — 2026-10-26
+
+The session boot is about ten times faster on a busy desk: 4 to 8 s instead of 48 to 50 s with 80 open tasks, measured on a heavily loaded Mac. A boot that names no task no longer checks every task's push route or repo state; it lists the tasks and open pull requests, and once the operator picks one the agent runs `session-boot.js --task "<handle>" --task-only`, which prints only that task's push route, repos and instructions. Open pull requests come from one GitHub search instead of one call per repo. Remotes are read from each clone's Git config file instead of by running `git`. The desk sync no longer blocks the boot's other checks while it runs. The overall budget is 15 s (was 45 s). The Copilot session-start hook prints the Desk foundation within 3.5 s even on a slow machine; past that it leaves out its later lines and does not start factory delivery, which then starts at the next session start. Neither the hooks nor the boot wait on the factory status lock: while another writer holds it, they skip their record. The boot text lists at most 10 tasks (was 15). The removed checks and when to bring them back are in [the boot roadmap](../../docs/roadmap/boot.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.13 — 2026-10-26
 
 On Copilot, the session-end hooks now pick their desk from the folder the server records for the session (the hook payload's folder), not from `CLAUDE_PROJECT_DIR`, so the unpushed-commits check and the factory's session marker always name the desk the server bound. On Copilot 1.0.12 and later the two folders are normally the same; before 1.0.12 Copilot did not set `CLAUDE_PROJECT_DIR` for hooks, and the hooks fell back to the saved binding or the home-folder desk.
