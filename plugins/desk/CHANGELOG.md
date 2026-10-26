@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.23 — 2026-10-26
+
+The workspace tidy guide links to the test files that now hold its boundary, refusal and race checks, after those tests were split in two so the Windows checks finish sooner.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.22 — 2026-10-26
 
 Three rules moved from one operator's desk notes into the shared skills that own them, and visual proof is now the default. [`using-desk`](skills/using-desk/SKILL.md) and [`evidence-discipline`](skills/evidence-discipline/SKILL.md) ask for bounded visual proof, captured as you go, of anything a person sees (screens, settings before and after, replies, refusals, errors, results), not only of a claimed rendered or rollout state. The rule follows what the work touches, not what it is called, and a brief's silence never waives it. The foundation stays the same size. [`interaction-style`](skills/interaction-style/SKILL.md) now says to answer the operator before any blocking wait and, while they are present, to wait in slices of a minute or less. `evidence-discipline` adds a rule: a fact the operator states is recorded at once, dated and attributed. `using-desk` now follows the operator's experience taxonomy: UX is the parent of HX (human experience) and AX (agent experience), so HX is no longer called "formerly UX". The coaching rule for the same correction twice now says to record it with `lesson_add`.
