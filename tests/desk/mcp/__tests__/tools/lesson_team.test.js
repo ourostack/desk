@@ -126,9 +126,12 @@ test("team lesson says Claude Code loads it when the repository's CLAUDE.md impo
 
 test("team lesson starts AGENTS.md in a repository that has none", async () => {
   const repo = await team({ "README.md": "hi\n" })
-  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh }))
+  const tmpRoot = path.join(repo.base, "tmp")
+  await fs.mkdir(tmpRoot)
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh, tmpRoot }))
   assert.equal(result.status, "merged")
   assert.equal(onMain(repo.bare), `## Lessons\n\n${result.line}\n`)
+  assert.deepEqual(await fs.readdir(tmpRoot), [], "the temporary worktree is gone")
 })
 
 test("team lesson replaces the topic's old line and names it", async () => {
@@ -256,6 +259,8 @@ test("team lesson checks its input before any remote work", async () => {
   const gh = async () => assert.fail("no gh call")
   const run = (extra) => addTeamLesson(lesson({ deskRoot: desk, repo: repo.clone, gh, ...extra }))
   await assert.rejects(() => run({ repo: undefined }), /needs `repo`/u)
+  // With nothing injected, the real gh runner and account choice are only set up: input is checked first.
+  await assert.rejects(() => addTeamLesson({ deskRoot: desk, topic: "Rule", body: "Do it." }), /needs `repo`/u)
   await assert.rejects(() => run({ repo: desk }), /not a Git clone/u)
   await assert.rejects(() => run({ source: undefined }), /`source` is required/u)
   await assert.rejects(() => run({ source: "Ari said so" }), /YYYY-MM-DD/u)

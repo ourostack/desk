@@ -5,7 +5,7 @@ import { slugify } from "../util/fm.js"
 import { AGENTS_MD_CAP_BYTES } from "../runtime/agents-md.js"
 
 export const SECTION = "## Lessons"
-export const CAP_WORDS = `${AGENTS_MD_CAP_BYTES / 1024} KB`
+const CAP_WORDS = `${AGENTS_MD_CAP_BYTES / 1024} KB`
 
 export function oneLine(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`lesson_add: \`${name}\` is required (string)`)
