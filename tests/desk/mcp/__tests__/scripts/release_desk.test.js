@@ -220,6 +220,28 @@ test("pending fragments become the next alpha on every surface and one changelog
   assert.deepEqual(release.releaseDesk({ root, date: "2026-10-01" }), { released: false, fragments: [] })
 })
 
+// Git conflicts on changes to neighbouring lines. When the version sat right above a description, every release made
+// an open pull request that edits that description conflict (#486 was rebased three times).
+test("a release merges cleanly with a pull request that edits any description on a release surface", (t) => {
+  const root = fixture(t)
+  const base = Object.fromEntries(release.DESK_VERSION_FILES.map((file) => [file, readFileSync(path.join(root, file), "utf8")]))
+  fragment(root, "change.md", "A change.\n")
+  release.releaseDesk({ root, date: "2026-10-01" })
+  const work = mkdtempSync(path.join(tmpdir(), "desk-release-merge-"))
+  t.after(() => rmSync(work, { recursive: true, force: true }))
+  let edited = 0
+  for (const file of release.DESK_VERSION_FILES.filter((name) => name.endsWith(".json"))) {
+    const ours = base[file].replace(/^(\s*"description": ")/gmu, (match) => { edited += 1; return `${match}Edited. ` })
+    const sides = { base: base[file], ours, theirs: readFileSync(path.join(root, file), "utf8") }
+    for (const [name, text] of Object.entries(sides)) writeFileSync(path.join(work, name), text)
+    const merged = spawnSync("git", ["merge-file", "-p", path.join(work, "ours"), path.join(work, "base"), path.join(work, "theirs")], { encoding: "utf8" })
+    assert.equal(merged.status, 0, `${file}: a release bump conflicts with a description edit; keep the version line away from description lines\n${merged.stdout}`)
+    if (ours !== base[file]) assert.match(merged.stdout, /"description": "Edited\. /u, file)
+    assert.equal(JSON.parse(merged.stdout).version ?? null, JSON.parse(sides.theirs).version ?? null, file)
+  }
+  assert.ok(edited >= 3, "the plugin manifests and the marketplace have descriptions to edit")
+})
+
 test("a bad fragment, date or changelog stops the release before any file changes, and a stale surface list stops it loudly", (t) => {
   for (const [breakFixture, date, pattern] of [
     [(root) => fragment(root, "empty.md", " \n\n"), "2026-10-01", /changelog\.d\/empty\.md is empty/u],
