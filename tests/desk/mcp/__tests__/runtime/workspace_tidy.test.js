@@ -27,7 +27,7 @@ test("removes an exactly released clean merged worktree and its local branch, tw
   for (const branch of ["first", "second"]) {
     const w = await worktree(f, branch)
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 1)
+    assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.equal(result.removed[0].path, w.directory)
     assert.equal(result.removed[0].branchRemoved, true)
     await assert.rejects(fs.stat(w.directory), { code: "ENOENT" })
@@ -67,7 +67,7 @@ for (const [reason, mutate] of refusals) {
     const w = await worktree(f)
     await mutate(f, w)
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.match(result.left.find((entry) => entry.path === w.directory)?.reason ?? "", new RegExp(reason))
     assert.ok((await fs.stat(w.directory)).isDirectory())
   })
@@ -84,7 +84,7 @@ test("a deleted remote branch never authorizes loss of unmerged or local-only co
   w.record.remote = { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /local commits|delivery/)
 })
 
@@ -103,7 +103,7 @@ test("remote-deleted squash delivery removes the worktree but conservatively ret
   w.record.remote = { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.equal(result.removed[0].branchRemoved, false)
   assert.match(result.left[0].reason, /branch.*retained/)
   assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
@@ -172,7 +172,7 @@ test("another checkout acquiring the released branch prevents branch deletion", 
     return result
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.equal(result.removed[0].branchRemoved, false)
   assert.equal(git(other, "symbolic-ref", "HEAD"), "refs/heads/topic")
   assert.doesNotThrow(() => git(f.repo, "rev-parse", "--verify", "topic"))
@@ -187,7 +187,7 @@ test("branch absence after worktree removal is recorded, not mislabeled as a lef
     return result
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.equal(result.removed[0].branchRemoved, true)
   assert.deepEqual(result.left, [])
 })
@@ -201,7 +201,7 @@ test("a receipt cannot borrow another task's repository authority", async () => 
   w.record.task = path.relative(f.desk, other)
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /ownership/)
 })
 
@@ -214,7 +214,7 @@ test("a changed task card revokes an already listed release", async () => {
     return tidyInspectionGit(cwd, args)
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /ownership|task.*changed/)
 })
 
@@ -323,7 +323,7 @@ test("a task card over 64 KiB is read by its front matter alone, so a large body
   // The card still authorizes the exactly released worktree, and a change to its body alone never counts as an ownership change.
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
   assert.deepEqual(result.left, [])
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
   await assert.rejects(fs.stat(w.directory), { code: "ENOENT" })
 })
 
@@ -340,7 +340,7 @@ test("a large card whose front matter changes before removal stops that removal"
   })
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
   mock.mock.restore()
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left.find((entry) => entry.path === w.directory)?.reason ?? "", /task ownership changed/)
   assert.ok((await fs.stat(w.directory)).isDirectory())
 })
@@ -417,7 +417,7 @@ test("malformed release and delivery proof never authorizes deletion", async () 
     mutate(w.record)
     await w.save()
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.match(result.left[0].reason, reason)
   }
 })
@@ -447,7 +447,7 @@ test("remote-deleted squash cleanup refuses missing, wrong, present and unreacha
     w.record.remote = remote
     await w.save()
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.match(result.left[0].reason, /remote/)
   }
   git(f.repo, "remote", "set-url", "origin", path.join(f.root, "absent"))
@@ -523,7 +523,7 @@ test("live descendants veto release even when the original root generation has e
   w.record.release.processes.push({ pid: process.pid, start: await readProcessStart(process.pid) })
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /writer/)
 })
 

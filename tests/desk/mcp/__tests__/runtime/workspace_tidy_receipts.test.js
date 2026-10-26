@@ -26,7 +26,7 @@ for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
     await fs.writeFile(path.join(w.directory, "tracked"), "uncommitted irreplaceable bytes\n")
     assert.equal(git(w.directory, "status", "--porcelain=v1"), "")
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.match(result.left[0].reason, /index.*flags/)
     assert.equal(await fs.readFile(path.join(w.directory, "tracked"), "utf8"), "uncommitted irreplaceable bytes\n")
     assert.equal(git(w.directory, "rev-parse", "HEAD"), w.record.head)
@@ -87,7 +87,7 @@ test("R2 exclusive cleanup claim refuses compliant revocation and consumer reacq
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
   assert.equal(revoked, true)
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
 })
 
 test("R2 revoked release before cleanup preserves a live reacquired consumer", async () => {
@@ -100,7 +100,7 @@ test("R2 revoked release before cleanup preserves a live reacquired consumer", a
   try {
     await once(consumer, "spawn")
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.match(result.left[0].reason, /ownership/)
     assert.ok((await fs.stat(w.directory)).isDirectory())
     assert.equal(consumer.exitCode, null)
@@ -123,7 +123,7 @@ test("R2 raw receipt revocation after final status is observed before removal", 
   }
   try {
     const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
-    assert.equal(result.removed.length, 0)
+    assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
     assert.ok((await fs.stat(w.directory)).isDirectory())
     assert.equal(consumer.exitCode, null)
   } finally { if (consumer) { consumer.kill(); await once(consumer, "exit") } }
@@ -146,7 +146,7 @@ test("R2 atomic expected-head deletion preserves a reacquired ref already merged
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
   assert.equal(changed, true)
-  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed.length, 1, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.equal(result.removed[0].branchRemoved, false)
   assert.equal(git(f.repo, "rev-parse", "topic"), newHead)
 })
@@ -163,7 +163,7 @@ test("R7 push repository, not fetch URL, decides remote deletion", async () => {
   w.record.remote.endpoint = pathToFileURL(fork).href
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /remote branch exists/)
   assert.ok(git(f.root, "--git-dir", fork, "rev-parse", "topic"))
 })
@@ -192,7 +192,7 @@ test("R7 an exact delivery endpoint cannot be rewritten to another repository fo
   git(f.repo, "config", `url.${unrelated}.insteadOf`, pathToFileURL(f.remote).href)
   assert.equal(git(f.repo, "remote", "get-url", "--push", "origin"), f.remote)
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /query endpoint.*changed/)
   assert.ok(git(f.root, "--git-dir", f.remote, "rev-parse", "topic"))
 })
@@ -351,7 +351,7 @@ test("R3 cleanup requires persisted pending evidence before destructive removal"
     onDisposition: async (entry) => { states.push(entry.state); throw new Error("evidence store unavailable") },
   })
   assert.deepEqual(states, ["cleanup_pending"])
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /evidence store/)
   assert.ok((await fs.stat(w.directory)).isDirectory())
 })
@@ -363,7 +363,7 @@ test("R2 legacy receipts and mismatched revocation owners remain report-only", a
   w.record.version = 1
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /ownership/)
 })
 
@@ -380,7 +380,7 @@ test("R2 late changed receipt and failed revocation absence are explicit refusal
     return result
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
-  assert.equal(result.removed.length, 0)
+  assert.equal(result.removed.length, 0, JSON.stringify({ left: result.left, issues: result.issues }))
   assert.match(result.left[0].reason, /release.*changed/)
   const unlink = fs.unlink.bind(fs)
   const mock = t.mock.method(fs, "unlink", (file) => file === w.receipt ? Promise.resolve() : unlink(file))
