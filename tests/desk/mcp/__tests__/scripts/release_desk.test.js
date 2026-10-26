@@ -614,10 +614,10 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("pull request CI dry-runs auto and RC through the full shared helper, and the CI gate waits for both", () => {
+test("pull request CI dry-runs auto, RC and stable through the full shared helper, and the CI gate waits for both", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc"] } })
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc", "stable"] } })
   assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
   assert.equal(job["timeout-minutes"], 15)
   assert.deepEqual(job.permissions, { contents: "read" })

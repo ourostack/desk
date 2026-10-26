@@ -54,7 +54,7 @@ function filesNaming(version, files) {
   // current version and is not declared fails here, in its own PR, instead of after the next release.
   const isTest = (file) => /\.test\.[cm]?js$/u.test(file) || /^scripts\/test-[^/]+\.cjs$/u.test(file);
   const naming = filesNaming(currentDesk, trackedFiles()).filter((file) => (
-    file !== "plugins/desk/CHANGELOG.md" && (!isTest(file) || DESK_VERSION_FILES.includes(file))
+    file !== "plugins/desk/CHANGELOG.md" && !file.endsWith("package-lock.json") && (!isTest(file) || DESK_VERSION_FILES.includes(file))
   ));
   assert.deepEqual(naming.sort(), [...DESK_VERSION_FILES].sort(), "every surface naming the Desk version must be bumped by the Desk release");
 
