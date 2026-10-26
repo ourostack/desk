@@ -63,7 +63,6 @@
   "desk/lifecycle.test.js": 0.2,
   "desk/naming.test.js": 0.7,
   "desk/organization.test.js": 1.6,
-  "desk/status_normalize.test.js": 1.1,
   "desk/steps.test.js": 0.4,
   "desk/tidy.test.js": 34.5,
   "desk/unsigned_deliveries.test.js": 2.2,

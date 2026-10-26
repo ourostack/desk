@@ -289,7 +289,7 @@ test("every migration Detect block that runs node passes --detect under $DESK_PL
       assert.match(line, /\s--detect(\s|$)/u, `${file}: Detect passes --detect`)
     }
   }
-  assert.ok(nodeDetects >= 2, "the tidy and status-normalize Detect blocks are present")
+  assert.ok(nodeDetects >= 1, "the tidy Detect block is present")
   const root = mkdtempSync(path.join(tmpdir(), "desk-detect-driver-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(path.join(root, "migrations"))
