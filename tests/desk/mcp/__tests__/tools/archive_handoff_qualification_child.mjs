@@ -10,7 +10,6 @@ import { task_create, task_update, task_archive } from "../../../../../plugins/d
 import { openArchiveMoveSession } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
 import { readMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
-import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { schedulePush as normalSchedulePush, runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { readOwnProcessStart, readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
@@ -493,17 +492,16 @@ function candidateMoveObserver(observation, source, destination, fixture) {
     async after() { event("move-decorator-finished") },
   }
 }
+// A stand-in for the session's search engine that records each path a write says it changed.
 export async function openReadiness(fixture, name) {
-  const journal = await openChangeJournal({ root: fixture.root, stateDir: path.join(fixture.base, `journal-${name}`) })
+  const changes = []
   return {
-    journal,
-    readiness: {
-      async recordChange(change) {
-        const row = await journal.appendChange(change)
-        record("journal-durable-append", { root: fixture.root, row })
-        return { recorded: true }
+    journal: { replay: () => ({ changes: [...changes] }), close: async () => {} },
+    search: {
+      noteChange(changed) {
+        changes.push(changed)
+        record("search-note-change", { root: fixture.root, name, path: changed })
       },
-      async markUncertain(reason) { record("readiness-mark-uncertain", { reason, root: fixture.root }) },
     },
   }
 }
@@ -552,8 +550,8 @@ export async function requests(fixture) {
   }
   return result
 }
-export async function complete(fixture, readiness) {
-  return task_update(options(fixture, { readiness, input: { track: "t", slug: SLUG, status: "done",
+export async function complete(fixture, search) {
+  return task_update(options(fixture, { search, input: { track: "t", slug: SLUG, status: "done",
     evidence: { kind: "non_code", ref: "proof.md" }, note: "Owned outcome delivered; acceptance is still pending." } }))
 }
 export const readCard = (file) => readMarkdown(file)
@@ -634,7 +632,7 @@ if (process.argv[1] === HELPER) {
           process.exit(37)
         }
       }
-      result = await archiveOwned(owned, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }, { decorateMove })
+      result = await archiveOwned(owned, { search: reader.search, input: { track: "t", slug: SLUG } }, { decorateMove })
     }
   } catch (error) { failure = errorData(error) }
   finally {

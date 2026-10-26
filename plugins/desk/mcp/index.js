@@ -134,7 +134,7 @@ export function resolveMcpServerVersion({ env = process.env } = {}) {
 //
 // main always receives options (the entrypoint passes onClosed), so there is no default for a missing argument, which would bind to the real stdio and home.
 //
-// Before the handshake, main does only what must happen in this process before stdio is answered: check the Node version, and move to a compatible Node (re-exec) when no shipped runtime pack fits this one. Everything else (root resolution, activation, the runtime-pack restore, authority, the state branch and the readiness controller) runs after the handshake as background admission (src/runtime/desk-session.js), which degrades instead of failing and upgrades itself to ready in the same session.
+// Before the handshake, main does only what must happen in this process before stdio is answered: check the Node version, and move to a compatible Node (re-exec) when no shipped runtime pack fits this one. Everything else (root resolution, activation, the runtime-pack restore, authority, the state branch and the search engine) runs after the handshake as background admission (src/runtime/desk-session.js), which degrades instead of failing and upgrades itself to ready in the same session.
 export async function main({
   argv = process.argv.slice(2),
   env = process.env,
@@ -680,7 +680,7 @@ export function runIfEntrypoint({
       })
   }
   try {
-    // The host closing stdin ends the session: exit rather than linger on background admission, a controller socket or a watcher.
+    // The host closing stdin ends the session: exit rather than linger on background admission or a watcher.
     return Promise.resolve(launch({ onClosed: (code = 0) => exit(code), crashHandlers: true })).catch(handleStartupException)
   } catch (err) {
     return handleStartupException(err)

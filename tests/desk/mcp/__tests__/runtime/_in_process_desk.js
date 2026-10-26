@@ -1,6 +1,6 @@
 // Run index.js main() in this process behind the front door, with an MCP SDK client on in-memory streams.
 //
-// Every caller gets a temporary stateHome, so last-start.json, the repair log and readiness controllers stay out of the real ~/.local/state and ~/.cache.
+// Every caller gets a temporary stateHome, so last-start.json and the repair log stay out of the real ~/.local/state and ~/.cache.
 
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
@@ -116,7 +116,7 @@ export async function startInProcess(options = {}, { connect = true } = {}) {
 export async function admitInProcess(options = {}) {
   const desk = await startInProcess(options, { connect: false })
   const snapshot = await desk.settled()
-  // Background convergence starts in a promise after admission: let it report before the session closes.
+  // The search engine warms on a later turn after admission: let it start before the session closes.
   await new Promise((resolve) => setImmediate(resolve))
   const { context } = desk.handle.session
   const result = {
@@ -125,7 +125,7 @@ export async function admitInProcess(options = {}) {
       root: context.root,
       activation: context.activation,
       runtime: context.runtime,
-      admission: context.admission ?? null,
+      search: context.search ?? null,
     },
     snapshot,
     stateHome: desk.stateHome,
@@ -135,53 +135,7 @@ export async function admitInProcess(options = {}) {
   return result
 }
 
-/** The status context a session's tools receive, captured from its admitted context. */
-export function statusContextOf(desk) {
-  const { context } = desk.handle.session
-  return { root: context.root, activation: context.activation, runtime: context.runtime, admission: context.admission ?? null }
-}
-
-/**
- * The real controller runtime on this test's event loop, so injected embedding transports stay local; process isolation is exercised by spawned-session tests.
- * `start(semantic)` runs one admission and resolves with its snapshot; `starts` holds the status context of each ready start.
- */
-export function realRuntimeHarness(root, { stateHome = path.join(root, "controller-state"), argv = ["--root", root] } = {}) {
-  const controllers = []
-  const starts = []
-  const desks = []
-  let convergence
-  return {
-    controllers,
-    starts,
-    converged: () => convergence,
-    async start(semantic) {
-      const server = await import("../../../../../plugins/desk/mcp/src/server.js")
-      const desk = await startInProcess({
-        argv,
-        env: {},
-        readinessPolicy: { semantic },
-        runtimeImporter: async () => ({
-          callTool: server.callTool,
-          async connectOrStartController(options) {
-            const controller = await server.connectOrStartController({ ...options, stateHome, ephemeral: true, controllerLauncher: server.startControllerRuntime })
-            controllers.push(controller)
-            return controller
-          },
-          beginBackgroundConvergence(admission) {
-            convergence = server.beginBackgroundConvergence(admission)
-            return convergence
-          },
-        }),
-      }, { connect: false })
-      desks.push(desk)
-      const snapshot = await desk.settled()
-      if (snapshot.state === "ready") starts.push(statusContextOf(desk))
-      return snapshot
-    },
-    async close() {
-      await convergence
-      for (const desk of desks.splice(0)) await desk.close()
-      for (const controller of controllers.reverse()) await controller.close()
-    },
-  }
+/** A search engine that does nothing, for fake runtimes whose tests never search. */
+export function idleSearchEngine(fields = {}) {
+  return { warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }), ...fields }
 }

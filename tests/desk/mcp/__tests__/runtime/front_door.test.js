@@ -41,8 +41,8 @@ test("initialize advertises configured icons only to icon-capable protocols", as
 test("the tool list is the canonical one, and desk_doctor takes a format and a repair", () => {
   assert.deepEqual(FRONT_DOOR_TOOLS.map((tool) => tool.name), TOOL_NAMES)
   const doctor = FRONT_DOOR_TOOLS.find((tool) => tool.name === "desk_doctor")
-  assert.deepEqual(doctor.inputSchema.properties.repair.enum, ["switch_state_branch", "prune_readiness_state"])
-  assert.deepEqual(DOCTOR_REPAIRS, ["switch_state_branch", "prune_readiness_state"])
+  assert.deepEqual(doctor.inputSchema.properties.repair.enum, ["switch_state_branch"])
+  assert.deepEqual(DOCTOR_REPAIRS, ["switch_state_branch"])
   assert.equal(doctor.inputSchema.additionalProperties, false)
 })
 

@@ -94,7 +94,7 @@ test("an edit embeds only the changed section, and vectors survive a restart", a
   await engine.settled()
   assert.equal(first.calls.length, 3)
   await writeFile(deskRoot, "food/task-b/task.md", `${SOUP}\nKitchen notes.\n`)
-  assert.deepEqual(await engine.recordChange({ path: "food/task-b/task.md" }), { recorded: true })
+  engine.noteChange("food/task-b/task.md")
   await engine.lexical({ query: "kitchen" })
   await engine.settled()
   assert.deepEqual(first.calls.slice(3), [`${SOUP.trim()}\n\nKitchen notes.`])
@@ -222,11 +222,8 @@ test("a changed Markdown file is reread on its own; a folder, a vanished folder 
 
   // A Desk write names its file; a removed file, a file outside the index and a folder named like a file drop out.
   await writeFile(deskRoot, "more/task-g/task.md", "# Plants\n\nmoss\n")
-  await engine.recordChange({ path: "more\\task-g\\task.md" })
-  assert.deepEqual(await hits("moss"), ["more/task-g/task.md"])
-  await writeFile(deskRoot, "more/task-h/task.md", "# Plants\n\nlichen\n")
-  engine.noteChange("more\\task-h\\task.md")
-  assert.deepEqual(await hits("lichen"), ["more/task-h/task.md"], "noteChange is the call a Desk write makes")
+  engine.noteChange("more\\task-g\\task.md")
+  assert.deepEqual(await hits("moss"), ["more/task-g/task.md"], "noteChange is the call a Desk write makes")
   await fs.rm(path.join(deskRoot, "food"), { recursive: true })
   await writeFile(deskRoot, "deps/node_modules/x/task.md", SOUP)
   await fs.mkdir(path.join(deskRoot, "cars", "task-z", "task.md"), { recursive: true })
@@ -236,27 +233,18 @@ test("a changed Markdown file is reread on its own; a folder, a vanished folder 
   // A full read after an edit and a removal picks up both.
   await writeFile(deskRoot, "cars/task-a/task.md", "# Car notes\n\nA bicycle now.\n")
   await fs.rm(path.join(deskRoot, "garden"), { recursive: true })
-  await engine.recordChange({})
+  engine.noteChange(null)
   assert.deepEqual(await hits("bicycle"), ["cars/task-a/task.md"])
   assert.deepEqual(await hits("flowers"), [])
 })
 
-test("the engine answers the calls session admission makes of a search service", async (t) => {
+test("warm reads the desk into the index before the first search", async (t) => {
   const deskRoot = await desk({ "cars/task-a/task.md": CAR })
   const engine = engineFor(t, deskRoot, { semantic: "unsupported", watch: () => ({ close() {} }) })
-  assert.equal(engine.accepted, true)
-  assert.equal(engine.embeddingOverride, null)
-  assert.deepEqual(engine.identity, { semantic_contract: { mode: "unsupported" } })
-  assert.deepEqual(await engine.barrier({ capability: "semantic" }), { capability: "semantic", current: true, certain: true })
-  assert.deepEqual(await engine.barrier(), { capability: undefined, current: true, certain: true })
-  assert.deepEqual(await engine.beginConvergence(), { started: true })
+  assert.equal(engine.warm(), undefined)
   await engine.settled()
-  assert.equal(await engine.markUncertain("x"), undefined)
-  const unsubscribe = engine.onExit(() => assert.fail("never exits"))
-  unsubscribe()
-  const status = await engine.status()
-  assert.equal(status.state, "READY")
-  assert.equal(status.search.state, "exact_words_only")
+  assert.equal(engine.searchStatus().state, "exact_words_only")
+  assert.deepEqual((await engine.lexical({ query: "car" })).results.map((result) => result.path), ["cars/task-a/task.md"])
 })
 
 test("a desk that cannot be read fails the search that needed it, and a background start swallows the failure", async (t) => {
@@ -267,7 +255,7 @@ test("a desk that cannot be read fails the search that needed it, and a backgrou
   process.env.DESK_PLUGIN_ROOT = pluginRoot
   t.after(() => { if (before === undefined) delete process.env.DESK_PLUGIN_ROOT; else process.env.DESK_PLUGIN_ROOT = before })
   const engine = engineFor(t, deskRoot, { semantic: "unsupported" })
-  assert.deepEqual(await engine.beginConvergence(), { started: true })
+  engine.warm()
   await engine.settled()
   await assert.rejects(engine.lexical({ query: "car" }), /tombstone ledger is invalid/)
   assert.deepEqual(engine.searchStatus(), { state: "exact_words_only", message: "Meaning-based search is off for this desk; exact-word search is ready." })

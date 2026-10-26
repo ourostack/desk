@@ -51,13 +51,10 @@ Database.prototype.prepare = function(...args) {
 const handle = await main({
   argv: [], env: process.env,
   admissionKickoffMs: 0, runtimeInspector: null,
-  runtimeImporter: async () => ({
-    ...server,
-    connectOrStartController: (options) => server.connectOrStartController({ ...options, ephemeral: true }),
-  }),
+  runtimeImporter: async () => server,
 })
 await handle.closed
-// A successfully closed session cannot leave status readers or controllers.
+// A successfully closed session cannot leave status readers.
 if (children.size !== 0) {
   process.stderr.write(`status qualification leaked ${children.size} owned children\n`)
   process.exitCode = 1

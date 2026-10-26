@@ -53,24 +53,10 @@ import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 export { waitForStatusInspection } from "./tools/status.js"
 import { doctorRuntime } from "./tools/doctor.js"
-import { CanonicalWriteRecordingError } from "./readiness/journal.js"
-import { createSearchEngine } from "./search/engine.js"
+export { createSearchEngine } from "./search/engine.js"
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
 
-
-// Each session runs Desk search in its own process (src/search/engine.js). Session admission still calls it its
-// "controller": the engine answers the few calls admission makes of one.
-export async function connectOrStartController({ deskRoot, policy, createEngine = createSearchEngine }) {
-  return createEngine({ deskRoot, semantic: policy.semantic })
-}
-
-export async function beginBackgroundConvergence(admission) {
-  if (typeof admission?.controller?.beginConvergence === "function") {
-    return admission.controller.beginConvergence()
-  }
-  return null
-}
 
 // Map tool name → implementation. Every tool now has a real body.
 // Exported so tests can register a probe impl to assert dispatch threading.
@@ -134,10 +120,11 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     }
   }
   try {
-    const readiness = statusContext.admission ? statusContext.admission.controller ?? null : undefined
+    // The session's search engine (src/search/engine.js), once admission has started it: writes tell it what they changed, and searches use it.
+    const search = statusContext.search ?? null
     const result = await impl({
-      deskRoot, input: input ?? {}, person, statusContext, readiness,
-      queryRouter: searchRouter(readiness), signal,
+      deskRoot, input: input ?? {}, person, statusContext, search,
+      queryRouter: searchRouter(search), signal,
     })
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
@@ -145,12 +132,6 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
   } catch (err) {
-    if (err instanceof CanonicalWriteRecordingError) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ ...err.toJSON(), tool: name }) }],
-        isError: true,
-      }
-    }
     return {
       content: [
         {

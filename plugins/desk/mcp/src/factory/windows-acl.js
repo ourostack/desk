@@ -1,5 +1,4 @@
-// Native Windows ACL primitive, shared by every private state root on this
-// machine (the readiness journal via `src/readiness/journal.js` and the
+// Native Windows ACL primitive for private state roots on this machine (the
 // factory outbox via `factory/outbox.js`).
 //
 // POSIX hosts protect a store with owner-only 0700/0600 modes. Windows has no

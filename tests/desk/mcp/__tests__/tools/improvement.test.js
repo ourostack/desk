@@ -177,13 +177,13 @@ test("a crew desk person writes under desks/<alias>", async () => {
   await assert.rejects(open(w, ANDON, { person: "../x" }), /invalid --person/)
 })
 
-test("the card write is recorded with the readiness controller when there is one", async () => {
+test("the card write is reported to the session's search engine when there is one", async () => {
   const w = await where()
   const changes = []
-  const readiness = { recordChange: async (change) => { changes.push(change.path); return { recorded: true } } }
-  const answer = await open(w, ANDON, { readiness })
+  const search = { noteChange: (changed) => { changes.push(changed) } }
+  const answer = await open(w, ANDON, { search })
   assert.deepEqual(changes, [`_meta/improvement/${answer.file_name}`])
-  const refused = await open(w, { source: "nope", id: "x" }, { readiness })
+  const refused = await open(w, { source: "nope", id: "x" }, { search })
   assert.equal(refused.status, "refused")
   assert.equal(changes.length, 1)
 })

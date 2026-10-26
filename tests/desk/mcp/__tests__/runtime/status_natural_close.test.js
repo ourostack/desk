@@ -49,10 +49,7 @@ test(`settled natural-close nonexit gates actual ${mode} until that owned proces
   desk = await startInProcess({
     argv: ["--root", root], env: process.env,
     readinessPolicy: { semantic: "unsupported" },
-    runtimeImporter: async () => ({
-      ...server,
-      connectOrStartController: (options) => server.connectOrStartController({ ...options, ephemeral: true }),
-    }),
+    runtimeImporter: async () => server,
   })
   assert.equal((await desk.settled()).state, "ready")
   const first = await desk.call("desk_status", { detail: true })

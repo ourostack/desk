@@ -969,7 +969,7 @@ test("entrypoint startup root resolution lets host/session root override activat
 })
 
 test("entrypoint main resolves startup root before launching injected runtime server", async () => {
-  const { admitInProcess } = await import("./_in_process_desk.js")
+  const { admitInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   const fixture = makeFixture()
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot, {
@@ -995,13 +995,7 @@ test("entrypoint main resolves startup root before launching injected runtime se
       cwd: fixture.root,
       runtimeImporter: async ({ mcpRoot, runtimeCacheDir }) => {
         calls.push(["runtimeImporter", mcpRoot, runtimeCacheDir])
-        return {
-          connectOrStartController: async () => ({
-            accepted: true,
-            id: "controller-1",
-            beginConvergence() {},
-          }),
-        }
+        return { createSearchEngine: () => idleSearchEngine() }
       },
     })
     assert.deepEqual(calls, [["runtimeImporter", "/fixture/mcp", fixture.runtimeCache]])

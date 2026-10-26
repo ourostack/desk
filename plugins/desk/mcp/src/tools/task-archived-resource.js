@@ -14,9 +14,9 @@ const FRONT = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u
 
 /**
  * Fills the terminal cell of the archived card's existing row, and returns `{ status: "updated", path, resource }`; refuses, changing nothing, for any other call.
- * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush, recordCanonicalChanges }`.
+ * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush }`.
  */
-export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resource, readiness, env, spawnGit, helpers }) {
+export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resource, search, env, spawnGit, helpers }) {
   const refuse = (why) => { throw new Error(`task_update: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`) }
   const extra = Object.keys(values).filter((key) => !["track", "slug", "resource"].includes(key))
   if (extra.length > 0) refuse(`this call also has ${extra.map((key) => `\`${key}\``).join(", ")}`)
@@ -34,7 +34,7 @@ export async function recordArchivedDisposition({ deskRoot, file, track, slug, v
   await writeFileAtomic(file, front + written.body)
   const commit = stage ? helpers.stageAndCommitCard(file, `task_update: ${track}/${slug}`, spawnGit) : undefined
   if (stage && !commit) helpers.schedulePush({ root: deskRoot })
-  await helpers.recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: helpers.relPath(deskRoot, file) }] })
+  search?.noteChange(helpers.relPath(deskRoot, file))
   try {
     recordCleanupCard(deskRoot, helpers.relPath(deskRoot, path.dirname(file)), openResources(written.body).length > 0, env)
   } catch {

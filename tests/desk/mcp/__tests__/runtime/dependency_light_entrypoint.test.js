@@ -21,7 +21,6 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { performance } from "node:perf_hooks"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { assertProcessesGone, controllerPids, waitForProcessesGone } from "./_controller_exit.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -435,8 +434,6 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } }) + "\n")
     status = JSON.parse((await waitForResponse(id)).result.content[0].text)
   }
-  // The session's readiness controller child outlives the session and holds the derived index open; it is named now, while its owner record exists, and waited for once the session has ended.
-  const controllers = controllerPids([path.join(fixture.root, "home"), path.join(fixture.root, "xdg-cache")])
   const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
   try {
     child.stdin.end()
@@ -445,10 +442,8 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     clearTimeout(killTimer)
   }
   assert.deepEqual(closed, { code: 0, signal: null }, stderr || stdout)
-  await waitForProcessesGone(controllers)
   return {
     code: 0,
-    controllers,
     initialize,
     tools,
     status,
@@ -466,7 +461,7 @@ function statusHasConverged(body) {
     && body.document_vectors.vectors_indexed > 0
     && body.document_vectors.missing_vectors === 0
     && body.document_vectors.repairable_missing_vectors === 0
-    // The DB snapshot can converge before a controller status probe does.
+    // The DB snapshot can converge before the search engine's status does.
     // Wait for the same healthy fallback evidence the caller asserts below.
     && body.startup_fallback?.mode === "not_checked"
     && body.startup_fallback.degraded === false
@@ -604,10 +599,8 @@ async function runMcpStatusSession(fixture, {
     })
     return body
   }
-  let controllers = []
   const stopChild = async () => {
     if (closed !== undefined) return
-    controllers = controllerPids([path.join(fixture.root, "home"), path.join(fixture.root, "xdg-cache")])
     const killTimer = setTimeout(() => child.kill("SIGKILL"), 5000)
     try {
       child.stdin.end()
@@ -616,7 +609,6 @@ async function runMcpStatusSession(fixture, {
     } finally {
       clearTimeout(killTimer)
     }
-    await waitForProcessesGone(controllers)
   }
 
   try {
@@ -660,7 +652,6 @@ async function runMcpStatusSession(fixture, {
     await stopChild()
     return {
       code: 0,
-      controllers,
       initialize,
       tools,
       initialStatus,
@@ -921,7 +912,7 @@ test("dependency-isolated runtime children cannot resolve host modules through N
   }
 })
 
-test("restored runtime server import stays dependency-light until connectOrStartController", {
+test("restored runtime server import stays dependency-light until its search engine starts", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${hostTarget}`,
 }, async () => {
   const fixture = makeFixture({ allowLocalIpc: false, deletePreloadAfterLoad: true })

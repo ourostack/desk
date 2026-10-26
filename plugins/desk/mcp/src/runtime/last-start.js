@@ -28,7 +28,7 @@ export function resolveDeskStateDir({ env = process.env, homeDir } = {}) {
   return path.join(stateHome, "ouroboros-skills", "desk")
 }
 
-/** Where readiness controllers keep their owner records and journals, unless a caller passes its own. */
+/** Where older Desk versions' readiness controllers kept their folders, which each session now removes (src/readiness/leftovers.js), unless a caller passes its own. */
 export function resolveReadinessStateHome({ env = process.env, homeDir } = {}) {
   const home = homeDir ?? (hasText(env.HOME) ? env.HOME : os.homedir())
   return path.join(home, ".cache", "ouroboros-skills", "desk", "readiness")

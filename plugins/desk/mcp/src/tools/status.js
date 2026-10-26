@@ -109,7 +109,7 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
     if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const activation = activationStatus(statusContext.activation)
-    const search = await searchStatus(statusContext.admission)
+    const search = await searchStatus(statusContext.search)
 
     return {
       status: root.valid ? "ok" : "error",
@@ -132,8 +132,8 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
 const SEARCH_STARTING = Object.freeze({ state: "starting", message: "Desk search is starting." })
 
 // Search in plain words, from the session's search engine (src/search/engine.js) once admission has started it.
-function searchStatus(admission) {
-  return typeof admission?.controller?.searchStatus === "function" ? admission.controller.searchStatus() : SEARCH_STARTING
+function searchStatus(engine) {
+  return typeof engine?.searchStatus === "function" ? engine.searchStatus() : SEARCH_STARTING
 }
 
 function compactObject(value) {

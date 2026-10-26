@@ -2,55 +2,6 @@ import { ActivationFailure } from "./failures.js"
 import { validateWriteSegment } from "../util/paths.js"
 import { normalizeReadinessPolicy } from "./readiness-policy.js"
 
-export async function admitControlPlane({
-  deskRoot,
-  person = null,
-  policy,
-  runtime,
-  authorityProvider,
-  controllerConnector,
-  stateHome,
-  onRepair,
-  verifyRuntime = async () => runtime ?? { state: "ready" },
-  verifyAuthority = verifyAdmissionAuthority,
-  connectController = controllerConnector,
-} = {}) {
-  policy = normalizeReadinessPolicy(policy)
-  if (typeof connectController !== "function") {
-    throw new ActivationFailure({
-      phase: "VERIFYING",
-      code: "controller_start_failed",
-      observed: { connector: "missing" },
-      summary: "The readiness controller connector is unavailable.",
-    })
-  }
-  const verifiedRuntime = await verifyRuntime({ deskRoot, policy })
-  const authority = await verifyAuthority({
-    deskRoot,
-    person,
-    policy,
-    authorityProvider,
-  })
-  validateAdmissionAuthority({ authority, person, policy })
-  const controller = await connectController({ deskRoot, policy, stateHome, onRepair })
-  if (!controller?.accepted) {
-    throw new ActivationFailure({
-      phase: "VERIFYING",
-      code: "controller_start_failed",
-      observed: controller ?? null,
-      summary: "The readiness controller could not accept ownership.",
-    })
-  }
-  return Object.freeze({
-    state: "CONTROL_READY",
-    root: deskRoot,
-    authority,
-    runtime: verifiedRuntime,
-    controller,
-    automatic_actions: [],
-  })
-}
-
 export function validateAdmissionAuthority({ authority, person = null, policy } = {}) {
   const normalizedPolicy = normalizeReadinessPolicy(policy)
   if (authority?.mode !== normalizedPolicy.write_authority) {

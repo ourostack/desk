@@ -7,7 +7,7 @@ import * as path from "node:path"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import {
-  admitControlPlane, resolveAdmittedPerson, validateAdmissionAuthority, verifyAdmissionAuthority,
+  resolveAdmittedPerson, validateAdmissionAuthority, verifyAdmissionAuthority,
 } from "../../../../../plugins/desk/mcp/src/activation/admit.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -21,11 +21,6 @@ async function deskWithCorruptIndex() {
 }
 
 test("admission authority helpers keep their defaults", async () => {
-  await assert.rejects(admitControlPlane(), (error) => error.code === "controller_start_failed")
-  await assert.rejects(
-    admitControlPlane({ controllerConnector: async () => null }),
-    (error) => error.code === "controller_start_failed" && error.observed !== undefined,
-  )
   assert.throws(() => validateAdmissionAuthority(), (error) => error.code === "authority_invalid")
   assert.throws(() => resolveAdmittedPerson(), (error) => error.code === "authority_invalid")
   await assert.rejects(verifyAdmissionAuthority({ person: " ", policy: { write_authority: "person", authority_provider: null } }), (error) => error.code === "authority_invalid")

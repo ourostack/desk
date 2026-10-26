@@ -30,7 +30,6 @@ import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/path
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { stagingAllowed, stageAndCommitFile, writeCardCommitted, cardCommitMessage } from "./_card-commit.js"
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
 import { factoryStateRoot } from "../factory/outbox.js"
@@ -162,7 +161,7 @@ async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, 
  * { status: "added", path, kaizen: <code>, commit? } when the card was not
  * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, theme } = values
   const { body } = values
@@ -247,7 +246,7 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
     : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
 
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  search?.noteChange(relPath(deskRoot, filePath))
   const written = relPath(deskRoot, filePath)
   let result
   if (card === null) {

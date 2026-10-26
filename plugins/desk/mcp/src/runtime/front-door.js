@@ -1,6 +1,6 @@
 // The front door: a dependency-free MCP server on stdio that Desk starts before anything that can fail or take time.
 //
-// It answers initialize, ping and tools/list at once, always with the full tool set, so the handshake never waits for the runtime pack, the desk root, authority or the readiness controller, and a host that caches the first tools/list never loses a tool once Desk recovers. Every tools/call goes to the `callTool` it is given, which gates tools by admission state.
+// It answers initialize, ping and tools/list at once, always with the full tool set, so the handshake never waits for the runtime pack, the desk root, authority or the search engine, and a host that caches the first tools/list never loses a tool once Desk recovers. Every tools/call goes to the `callTool` it is given, which gates tools by admission state.
 //
 // It imports only the tool names and their dependency-free input schemas, so it runs before the runtime pack (and its native modules) is restored.
 

@@ -177,7 +177,7 @@ test("startup root resolution uses CLAUDE_PROJECT_DIR and the plugin data bindin
 
 test("main serves setup mode instead of exiting when no desk exists yet, and loads a desk created later in the same session", async () => {
   const fixture = makeFixture()
-  const { startInProcess } = await import("./_in_process_desk.js")
+  const { startInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   const { callTool } = await import("../../../../../plugins/desk/mcp/src/server.js")
   let runtimeLoads = 0
   const desk = await startInProcess({
@@ -188,7 +188,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
     mcpRoot: "/fixture/mcp",
     runtimeImporter: async () => {
       runtimeLoads += 1
-      return { callTool, connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }) }
+      return { callTool, createSearchEngine: () => idleSearchEngine() }
     },
   })
   // A work overlay's desk in the home folder: plain Desk with no binding must not bind it.
@@ -227,7 +227,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
 
 test("a ready status whose runtime detail misses its budget says so, names the admitted desk, and carries the rest once the detail lands", async () => {
   const fixture = makeFixture()
-  const { startInProcess } = await import("./_in_process_desk.js")
+  const { startInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   const { callTool } = await import("../../../../../plugins/desk/mcp/src/server.js")
   const created = path.join(fixture.home, "desk")
   mkdirSync(path.join(created, "_meta"), { recursive: true })
@@ -244,7 +244,7 @@ test("a ready status whose runtime detail misses its budget says so, names the a
         await new Promise((resolve) => setTimeout(resolve, 300))
         return callTool(...args)
       },
-      connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
+      createSearchEngine: () => idleSearchEngine(),
     }),
   })
   try {
@@ -283,7 +283,7 @@ test("main reports a wrong explicit root as degraded:root_unavailable, never as 
 
 test("a saved binding to a missing folder degrades to root_unavailable, binds no other desk, and upgrades in place once the folder exists", async () => {
   const fixture = makeFixture()
-  const { startInProcess } = await import("./_in_process_desk.js")
+  const { startInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   const { callTool } = await import("../../../../../plugins/desk/mcp/src/server.js")
   // Both home-folder desks exist, and $DESK names a third: none may stand in for the binding.
   for (const home of ["desk", "ms-desk"]) {
@@ -303,7 +303,7 @@ test("a saved binding to a missing folder degrades to root_unavailable, binds no
     diagnosticServerStarter: () => assert.fail("a binding to a missing folder is not setup mode"),
     runtimeImporter: async () => {
       runtimeLoads += 1
-      return { callTool, connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }) }
+      return { callTool, createSearchEngine: () => idleSearchEngine() }
     },
   })
   try {

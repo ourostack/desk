@@ -1,4 +1,4 @@
-// The background admission state machine: states, backoff, refresh, degrade and the ready-state check, on fake timers.
+// The background admission state machine: states, backoff, refresh and fail, on fake timers.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -71,7 +71,7 @@ test("a degraded machine retries on the backoff until an attempt is ready, and r
   assert.equal(ready.code, null)
   assert.equal(ready.fix, null)
   assert.equal(ready.summary, "Desk is admitted: reads and writes are available.")
-  // With no check, a ready machine schedules nothing.
+  // A ready machine schedules nothing.
   assert.deepEqual(timers.delays(), [])
 })
 
@@ -179,56 +179,15 @@ test("a thrown attempt becomes degraded:admission_exception with the cause and a
   assert.deepEqual(exceptionOutcome("plain").diagnostic.observed, { name: "unknown", message: "plain" })
 })
 
-test("a ready machine checks every 60 s, and a failed check degrades and re-admits at once", async () => {
-  const timers = fakeTimers()
-  const checks = [null, degraded("controller_unavailable")]
-  const outcomes = [{ state: "ready" }, degraded("controller_unavailable"), { state: "ready" }]
-  const machine = createAdmission({
-    timers,
-    now: timers.now,
-    attempt: async () => outcomes.shift(),
-    check: async () => checks.shift(),
-  })
-  await machine.start()
-  assert.deepEqual(timers.delays(), [60000])
-  await timers.fire()
-  assert.equal(machine.snapshot().state, "ready")
-  assert.deepEqual(timers.delays(), [60000], "a passing check schedules the next one")
-  await timers.fire()
-  await flush()
-  // The check failed: degraded, then an immediate re-admission that also failed, now on the backoff.
-  assert.equal(machine.snapshot().state, "degraded:controller_unavailable")
-  assert.equal(machine.snapshot().failures, 2)
-  assert.deepEqual(timers.delays(), [2000])
-  await timers.fire()
-  assert.equal(machine.snapshot().state, "ready")
-})
-
-test("a check that throws is treated as a degraded outcome", async () => {
-  const timers = fakeTimers()
-  const transitions = []
-  const machine = createAdmission({
-    timers,
-    now: timers.now,
-    attempt: async () => ({ state: "ready" }),
-    check: async () => { throw new Error("check broke") },
-    onTransition: (snapshot) => transitions.push(snapshot.state),
-  })
-  await machine.start()
-  await timers.fire()
-  await flush()
-  assert.deepEqual(transitions, ["ready", "degraded:admission_exception", "ready"])
-})
-
 test("dispose stops retries, and later calls answer with the last snapshot", async () => {
   const timers = fakeTimers()
-  const machine = createAdmission({ timers, now: timers.now, attempt: async () => degraded("x"), check: async () => null })
+  const machine = createAdmission({ timers, now: timers.now, attempt: async () => degraded("x") })
   await machine.start()
   assert.equal(timers.pending.size, 1)
   machine.dispose()
   assert.equal(timers.pending.size, 0)
   assert.equal((await machine.start()).state, "degraded:x")
-  assert.equal((await machine.degrade(degraded("y"))).state, "degraded:x")
+  assert.equal(machine.fail(degraded("y")).state, "degraded:x")
   machine.dispose()
 })
 
@@ -242,7 +201,7 @@ test("an outcome that settles after dispose schedules nothing", async () => {
   release(degraded("late"))
   assert.equal((await running).state, "degraded:late")
   assert.equal(timers.pending.size, 0)
-  const readyMachine = createAdmission({ timers, now: timers.now, attempt: () => new Promise((resolve) => { release = resolve }), check: async () => null })
+  const readyMachine = createAdmission({ timers, now: timers.now, attempt: () => new Promise((resolve) => { release = resolve }) })
   const readyRun = readyMachine.start()
   await flush()
   readyMachine.dispose()
@@ -261,7 +220,7 @@ test("the default timers are real and unreferenced", async () => {
   assert.deepEqual(createAdmission({ attempt: async () => ({ state: "ready" }) }).context, {})
 })
 
-test("a bare degraded outcome, an external degrade while a check is pending, and idle during an attempt", async () => {
+test("a bare degraded outcome, and idle during an attempt", async () => {
   const timers = fakeTimers()
   const outcomes = [{ state: "ready" }, { state: "degraded", code: "bare" }, { state: "ready" }]
   let release = null
@@ -272,13 +231,9 @@ test("a bare degraded outcome, an external degrade while a check is pending, and
       const outcome = outcomes.shift()
       return outcome.state === "ready" && outcomes.length === 0 ? new Promise((resolve) => { release = () => resolve(outcome) }) : outcome
     },
-    check: async () => null,
   })
   await machine.start()
-  assert.deepEqual(timers.delays(), [60000])
-  // The caller found the controller gone: the pending check is replaced by an immediate re-admission.
-  const degrading = machine.degrade({ code: "controller_unavailable" })
-  const bare = await degrading
+  const bare = await machine.refresh({ force: true })
   assert.equal(bare.state, "degraded:bare")
   assert.equal(bare.fix, null)
   assert.equal(bare.summary, null)
@@ -293,23 +248,6 @@ test("a bare degraded outcome, an external degrade while a check is pending, and
   release()
   await flush()
   assert.equal(machine.snapshot().state, "ready")
-})
-
-test("a check that finishes after dispose schedules nothing", async () => {
-  const timers = fakeTimers()
-  let finish
-  const machine = createAdmission({
-    timers,
-    now: timers.now,
-    attempt: async () => ({ state: "ready" }),
-    check: () => new Promise((resolve) => { finish = resolve }),
-  })
-  await machine.start()
-  await timers.fire()
-  machine.dispose()
-  finish(null)
-  await flush()
-  assert.equal(timers.pending.size, 0)
 })
 
 test("fail() records a degraded state and waits for the backoff instead of re-admitting at once", async () => {

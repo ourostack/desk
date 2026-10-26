@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
-  controllerStartTimeoutMs, processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText, windowsPowerShellPath,
+  processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText, windowsPowerShellPath,
 } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { killAndWait } from "../_kill_and_wait.js"
 
@@ -119,13 +119,4 @@ test("this process's own start time is read once, and a failed read is no start 
   assert.equal(await readOwnProcessStart({ read: () => { throw new Error("sync boom") } }), null, "a reader that throws at once")
   resetOwnProcessStart()
   assert.equal(await readOwnProcessStart(), await readProcessStart(process.pid), "the defaults read this process")
-})
-
-test("a controller's start window is 10 s, and 30 s on Windows, which covers the capped 5 s process-start read and twice the slowest start seen", () => {
-  assert.equal(controllerStartTimeoutMs("linux"), 10000)
-  assert.equal(controllerStartTimeoutMs("darwin"), 10000)
-  assert.equal(controllerStartTimeoutMs("win32"), 30000)
-  assert.equal(controllerStartTimeoutMs(), controllerStartTimeoutMs(process.platform))
-  assert.ok(controllerStartTimeoutMs("win32") >= 2 * 14896)
-  assert.ok(controllerStartTimeoutMs("win32") > controllerStartTimeoutMs("linux") + 5000)
 })

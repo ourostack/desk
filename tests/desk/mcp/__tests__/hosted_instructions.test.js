@@ -13,7 +13,6 @@ import { startFrontDoor } from "../../../../plugins/desk/mcp/src/runtime/front-d
 import {
   HOSTED_SHELL_SKILLS,
   HOSTED_UNAVAILABLE,
-  HOSTED_UNAVAILABLE_REPAIRS,
   hostedInstructions,
 } from "../../../../plugins/desk/mcp/src/runtime/hosted.js"
 import { syncStatusPath } from "../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
@@ -73,7 +72,7 @@ test("hostedInstructions: the foundation without frontmatter, the desk's AGENTS.
   assert.doesNotMatch(text, /^name: using-desk$/mu, "frontmatter is stripped")
   assert.match(text, /The harbor master logs every ferry\./u)
   assert.ok(text.indexOf("# Using Desk") < text.indexOf("The harbor master"), "the foundation comes before AGENTS.md")
-  for (const [name, reason] of [...Object.entries(HOSTED_UNAVAILABLE), ...Object.entries(HOSTED_UNAVAILABLE_REPAIRS), ...Object.entries(HOSTED_SHELL_SKILLS)]) {
+  for (const [name, reason] of [...Object.entries(HOSTED_UNAVAILABLE), ...Object.entries(HOSTED_SHELL_SKILLS)]) {
     assert.ok(text.includes(name), `names ${name}`)
     assert.ok(text.includes(reason), `gives the reason for ${name}`)
   }
@@ -157,7 +156,7 @@ function startHosted({ desk, pluginRoot, env = { DESK_HOSTED: "1" }, admissionKi
     stderr: { write() { return true } },
     admissionKickoffMs,
     runtimeInspector: null,
-    runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    runtimeImporter: async () => ({ createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }) }),
     spawnDetached: (command, args, options) => {
       syncs.push({ command, args, options })
       return Object.assign(new EventEmitter(), { unref() { syncs.at(-1).unrefed = true } })
@@ -229,7 +228,7 @@ for (const [label, spawnDetached] of [
     stderr: { write(text) { errors.push(text); return true } },
     admissionKickoffMs: 60000,
     runtimeInspector: null,
-    runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    runtimeImporter: async () => ({ createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }) }),
     spawnDetached,
   })
   send(input, { id: 1, method: "tools/list" })
@@ -302,7 +301,7 @@ test("by default a hosted session runs Desk's own session-sync CLI after the han
     stderr: { write() { return true } },
     admissionKickoffMs: 60000,
     runtimeInspector: null,
-    runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    runtimeImporter: async () => ({ createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }) }),
   })
   const status = syncStatusPath({ root: desk, env })
   send(input, { id: 1, method: "tools/list" })

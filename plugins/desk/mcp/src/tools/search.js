@@ -361,7 +361,7 @@ function firstChunkText(row) {
  * Returns:
  *   { results: [...], search_mode: "lexical", latency_ms: number, query: string }
  */
-export async function desk_search({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+export async function desk_search({ deskRoot, input, opts, search, queryRouter, signal }) {
   const request = { ...input }
   // A JSON-string `filters` would otherwise read as no filters at all.
   if (request.filters != null) request.filters = objectInput(request.filters, {
@@ -370,7 +370,7 @@ export async function desk_search({ deskRoot, input, opts, readiness, queryRoute
     effect: "nothing was searched",
     example: '{"track": "desk-plugin", "status": ["implementing", "blocked"]}',
   })
-  return (queryRouter ?? searchRouter(readiness)).lexical({
+  return (queryRouter ?? searchRouter(search)).lexical({
     ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })
 }
@@ -465,8 +465,8 @@ export async function indexedSearch({ deskRoot, input, opts, db }) {
 
 // desk_recall — "do I remember anything about X", ranked by meaning in the session's search engine
 // (src/search/engine.js), which always answers.
-export async function desk_recall({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(readiness)).semantic({
+export async function desk_recall({ deskRoot, input, opts, search, queryRouter, signal }) {
+  return (queryRouter ?? searchRouter(search)).semantic({
     ...input, deskRoot, opts, signal, kind: "recall",
   })
 }
@@ -476,8 +476,8 @@ export async function desk_recall({ deskRoot, input, opts, readiness, queryRoute
 // ---------------------------------------------------------------------------
 
 // desk_similar — "more like this": the documents nearest the average of the seed document's section vectors.
-export async function desk_similar({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(readiness)).semantic({
+export async function desk_similar({ deskRoot, input, opts, search, queryRouter, signal }) {
+  return (queryRouter ?? searchRouter(search)).semantic({
     ...input, deskRoot, opts, signal, kind: "similar",
   })
 }
@@ -494,8 +494,8 @@ export async function desk_similar({ deskRoot, input, opts, readiness, queryRout
  * Input: { from: ISO, to: ISO, query?: string, limit?: number }
  * Returns: { results, search_mode, latency_ms }
  */
-export async function desk_timeline({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(readiness)).lexical({
+export async function desk_timeline({ deskRoot, input, opts, search, queryRouter, signal }) {
+  return (queryRouter ?? searchRouter(search)).lexical({
     ...input, deskRoot, now: opts?.now, opts, signal, kind: "timeline",
   })
 }

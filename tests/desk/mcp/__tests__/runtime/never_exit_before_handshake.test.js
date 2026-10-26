@@ -316,8 +316,8 @@ test("an old Node with no compatible Node serves diagnostic mode, even when runt
   }
 })
 
-test("background convergence that throws synchronously is reported, never turned into a second server", async () => {
-  const { admitInProcess } = await import("./_in_process_desk.js")
+test("a search warm-up that throws synchronously is reported, never turned into a second server", async () => {
+  const { admitInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   const started = await admitInProcess({
     argv: [],
     env: { DESK: await temporaryDesk() },
@@ -325,13 +325,11 @@ test("background convergence that throws synchronously is reported, never turned
     runtimeInspector: null,
     readinessPolicy: {},
     runtimeImporter: async () => ({
-      admitControlPlane: async () => ({ authority: { mode: "workspace", person: null }, controller: null }),
-      beginBackgroundConvergence: () => { throw new Error("sync convergence failure") },
+      createSearchEngine: () => idleSearchEngine({ warm() { throw new Error("sync warm-up failure") } }),
     }),
   })
   assert.equal(started.snapshot.state, "ready")
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.match(started.stderr, /background convergence failed: sync convergence failure/u)
+  assert.match(started.stderr, /search warm-up failed: sync warm-up failure/u)
 })
 
 // ---- spawned: real startup exceptions over stdio ----
@@ -456,12 +454,10 @@ test("Node 16 with no compatible Node anywhere serves diagnostic mode instead of
   assert.doesNotMatch(result.stderr, /structuredClone/u)
 })
 
-// ---- a transient controller election is retried in the background, after the handshake ----
+// ---- a search engine that fails to start is retried in the background, after the handshake ----
 
-const electionTimeout = () => new Error("readiness controller election did not converge")
-
-test("a controller election that times out is retried in the background: degraded first, then ready in the same session", async () => {
-  const { startInProcess } = await import("./_in_process_desk.js")
+test("a search engine that fails to start is retried in the background: degraded first, then ready in the same session", async () => {
+  const { startInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   let attempts = 0
   const desk = await startInProcess({
     argv: [],
@@ -470,17 +466,17 @@ test("a controller election that times out is retried in the background: degrade
     runtimeInspector: null,
     readinessPolicy: {},
     runtimeImporter: async () => ({
-      admitControlPlane: async () => {
+      createSearchEngine: () => {
         attempts += 1
-        if (attempts === 1) throw electionTimeout()
-        return { authority: { mode: "workspace", person: null }, controller: null }
+        if (attempts === 1) throw new Error("native module did not load")
+        return idleSearchEngine()
       },
     }),
   })
   try {
     const degraded = await desk.settled()
-    assert.equal(degraded.state, "degraded:controller_unavailable")
-    assert.match(degraded.fix, /re-elects it in the background after 1, 2, 5, 10 and 30 s/u)
+    assert.equal(degraded.state, "degraded:search_unavailable")
+    assert.match(degraded.fix, /starts it again in the background after 1, 2, 5, 10 and 30 s/u)
     // desk_status retries at once instead of waiting for the backoff.
     const ready = await desk.statusUntil((payload) => payload.state === "ready")
     assert.equal(ready.admission.attempts, 2)
@@ -491,7 +487,7 @@ test("a controller election that times out is retried in the background: degrade
 })
 
 test("an unexpected error thrown inside admission becomes degraded:admission_exception and recovers in place", async () => {
-  const { startInProcess } = await import("./_in_process_desk.js")
+  const { startInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
   let attempts = 0
   const desk = await startInProcess({
     argv: [],
@@ -500,11 +496,12 @@ test("an unexpected error thrown inside admission becomes degraded:admission_exc
     runtimeInspector: null,
     readinessPolicy: {},
     runtimeImporter: async () => ({
-      admitControlPlane: async () => {
+      verifyAuthority: async () => {
         attempts += 1
         if (attempts === 1) throw new TypeError("injected admission failure")
-        return { authority: { mode: "workspace", person: null }, controller: null }
+        return { mode: "workspace" }
       },
+      createSearchEngine: () => idleSearchEngine(),
     }),
   })
   try {

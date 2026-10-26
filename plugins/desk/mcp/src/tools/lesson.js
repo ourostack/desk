@@ -16,7 +16,6 @@ import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.j
 import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 
 function relPath(deskRoot, absPath) {
   return deskRelativePath(deskRoot, absPath)
@@ -135,7 +134,7 @@ function stageAndCommitLesson(root, paths, message, spawnGit) {
  *
  * Returns: { status: "added", path, commit? }
  */
-export async function lesson_add({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function lesson_add({ deskRoot, input, person = null, search, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { topic, body } = values
   if (!topic || typeof topic !== "string") {
@@ -177,10 +176,8 @@ export async function lesson_add({ deskRoot, input, person = null, readiness, sp
 
   if (renameFrom !== null) {
     await fs.rename(renameFrom, filePath)
-    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-      { path: relPath(deskRoot, renameFrom), operation: "delete" },
-      { path: relPath(deskRoot, filePath), operation: "write" },
-    ] })
+    search?.noteChange(relPath(deskRoot, renameFrom))
+    search?.noteChange(relPath(deskRoot, filePath))
   }
 
   const trimmedBody = body.endsWith("\n") ? body : `${body}\n`
@@ -205,7 +202,7 @@ export async function lesson_add({ deskRoot, input, person = null, readiness, sp
     : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
 
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "added", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   return result

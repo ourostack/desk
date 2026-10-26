@@ -1,4 +1,4 @@
-// The session behind the front door, driven directly with fake inputs, runtimes, git, watchers and controller probes: every admission outcome, every gate and every desk_doctor repair.
+// The session behind the front door, driven directly with fake inputs, runtimes, git, watchers and search engines: every admission outcome, every gate and every desk_doctor repair.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -34,20 +34,26 @@ test("session focus distinguishes undeclared from explicitly cleared", () => {
 })
 
 function headMemory() {
-  const state = { text: "ref: refs/heads/main\n", inode: 3, mode: null, opens: 0, closes: 0, reads: 0, active: 0, maxActive: 0, dirVersion: 0 }
-  const stat = file => ({
-    dev: 1, ino: file ? state.inode : 2 + state.dirVersion, mode: file ? 0o100600 : 0o40700,
-    size: file ? Buffer.byteLength(state.text) : 0, mtimeMs: 1, ctimeMs: 1, nlink: 1,
-    isDirectory: () => !file && state.mode !== "root_file", isFile: () => file,
-    isSymbolicLink: () => file ? state.mode === "symlink" : state.mode === "root_link",
-  })
+  const state = { text: "ref: refs/heads/main\n", inode: 3n, mode: null, opens: 0, closes: 0, reads: 0, active: 0, maxActive: 0, dirVersion: 0 }
+  // Like Node's: BigInts when asked for { bigint: true }, else Numbers, which lose a file id's low bits past 2^53.
+  const stat = (file, options, ino = file ? state.inode : 2n + BigInt(state.dirVersion)) => {
+    const exact = options?.bigint === true
+    const number = (value) => exact ? BigInt(value) : Number(value)
+    return {
+      dev: number(1), ino: number(ino), mode: number(file ? 0o100600 : 0o40700),
+      size: number(file ? Buffer.byteLength(state.text) : 0), nlink: number(1),
+      ...(exact ? { mtimeNs: 1000000n, ctimeNs: 1000000n } : { mtimeMs: 1, ctimeMs: 1 }),
+      isDirectory: () => !file && state.mode !== "root_file", isFile: () => file,
+      isSymbolicLink: () => file ? state.mode === "symlink" : state.mode === "root_link",
+    }
+  }
   const io = {
-    async lstat(file) {
+    async lstat(file, options) {
       if (state.mode === "stall_lstat") await new Promise(resolve => { state.release = resolve })
       if (state.mode === "missing") throw Object.assign(new Error("missing"), { code: "ENOENT" })
       // The session joins with the platform separator; Windows spells this
       // path with backslashes, so compare the final component, not "/HEAD".
-      return stat(path.basename(file) === "HEAD")
+      return stat(path.basename(file) === "HEAD", options)
     },
     async open(_file, flags) {
       state.opens += 1
@@ -55,9 +61,9 @@ function headMemory() {
       if (state.mode === "open_error") throw Object.assign(new Error("access"), { code: "EACCES" })
       if (state.mode === "stall_open") await new Promise(resolve => { state.release = resolve })
       return {
-        async stat() {
+        async stat(options) {
           if (state.mode === "stat_error") throw new Error("stat_failed")
-          return { ...stat(true), ...(state.mode === "replaced" ? { ino: state.inode + 1 } : {}) }
+          return stat(true, options, state.mode === "replaced" ? state.inode + 1n : state.inode)
         },
         async read(buffer, offset, length, position) {
           state.reads += 1
@@ -82,15 +88,19 @@ function headMemory() {
   return { state, io }
 }
 
+function fakeEngine(overrides = {}) {
+  return { warm() {}, noteChange() {}, searchStatus: () => ({ state: "ready", message: "Search is ready." }), async close() {}, ...overrides }
+}
+
 function fakeRuntime(overrides = {}) {
   const calls = []
   return {
     calls,
     callTool: async ({ name, input, person, statusContext }) => {
-      calls.push({ name, input, person, admission: statusContext.admission })
+      calls.push({ name, input, person, search: statusContext.search })
       return { content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name, person }) }] }
     },
-    connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
+    createSearchEngine: ({ deskRoot }) => fakeEngine({ deskRoot }),
     ...overrides,
   }
 }
@@ -149,7 +159,7 @@ async function makeSession(t, overrides = {}) {
       const h = headMemory()
       h.state.mode = mode
       if (mode === "oversize") h.state.text = "x".repeat(4097)
-      if (mode === "postread_replacement") h.state.onRead = () => { h.state.inode += 1 }
+      if (mode === "postread_replacement") h.state.onRead = () => { h.state.inode += 1n }
       const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
         git: scriptedGit({ branch: "main", onRemote: true }) })
       await session.start()
@@ -161,11 +171,30 @@ async function makeSession(t, overrides = {}) {
     }
   })
 
-  test("head_close_failure_clears_descriptor_and_dispose_releases_controller", async (t) => {
+  test("head_replacement_with_a_windows_sized_file_id_is_noticed", async (t) => {
+    // A Windows file id can exceed 2^53, where a Number cannot tell n from n + 1: read as Numbers, this HEAD and its replacement look like one file.
+    const id = 2n ** 60n
+    assert.equal(Number(id), Number(id + 1n))
+    for (const mode of [null, "replaced", "postread_replacement"]) {
+      const h = headMemory()
+      h.state.inode = id
+      h.state.mode = mode
+      if (mode === "postread_replacement") h.state.onRead = () => { h.state.inode += 1n }
+      const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+        git: scriptedGit({ branch: "main", onRemote: true }) })
+      await session.start()
+      const snapshot = session.admission.snapshot()
+      if (mode === null) assert.equal(snapshot.state, "ready", "the same file is the same file")
+      else assert.match(snapshot.summary ?? "", /HEAD freshness is unverified/u, mode)
+      await session.dispose()
+    }
+  })
+
+  test("head_close_failure_clears_descriptor_and_dispose_releases_search", async (t) => {
     const h = headMemory()
     h.state.mode = "close_error"
-    let controllerCloses = 0
-    const runtime = fakeRuntime({ connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } }, async close() { controllerCloses += 1 } }) })
+    let engineCloses = 0
+    const runtime = fakeRuntime({ createSearchEngine: () => fakeEngine({ async close() { engineCloses += 1 } }) })
     const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch, runtime,
       git: scriptedGit({ branch: "main", onRemote: true }) })
     await session.start()
@@ -173,7 +202,7 @@ async function makeSession(t, overrides = {}) {
     // head_sample_pending for the descriptor whose close failed.
     await waitUntil(() => session.admission.snapshot().state === "ready")
     await session.dispose()
-    assert.equal(controllerCloses, 1, "dispose releases the controller")
+    assert.equal(engineCloses, 1, "dispose releases the search engine")
     assert.equal(h.state.opens, h.state.closes + 1, "only the failed close is not counted")
   })
 
@@ -253,10 +282,10 @@ async function makeSession(t, overrides = {}) {
       } })
     await session.start()
     held = true
-    h.state.inode += 1
+    h.state.inode += 1n
     callbacks[0]("rename", "HEAD")
     await waitUntil(() => Boolean(release))
-    h.state.inode += 1
+    h.state.inode += 1n
     held = false; release()
     await waitUntil(() => session.admission.snapshot().state === "ready" && !session.admission.running)
     assert.equal(calls, 1)
@@ -272,7 +301,7 @@ async function makeSession(t, overrides = {}) {
         if (!moved && options.args.join(" ") === "rev-parse --verify --quiet HEAD") {
           moved = true
           state.branch = "feature"
-          h.state.text = "ref: refs/heads/feature\n"; h.state.inode += 1
+          h.state.text = "ref: refs/heads/feature\n"; h.state.inode += 1n
         }
         return result
       } })
@@ -404,7 +433,7 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
         requested = true
         return new Promise((_resolve, fail) => { reject = fail })
       }
-      h.state.inode += 1
+      h.state.inode += 1n
       callbacks[0]("rename", "HEAD")
       await waitUntil(() => requested)
       if (late) await session.dispose()
@@ -430,9 +459,9 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
     const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
       watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
       git: scriptedGit({ branch: "main", onRemote: true }),
-      runtime: fakeRuntime({ admitControlPlane: async () => {
+      runtime: fakeRuntime({ verifyAuthority: async () => {
         await new Promise(resolve => { release = resolve })
-        return { authority: { mode: "workspace" }, controller: null }
+        return { mode: "workspace" }
       } }) })
     const started = session.start()
     await waitUntil(() => Boolean(release))
@@ -453,9 +482,9 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
       const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
         git: options => { gitCalls += 1; return scripted(options) },
         watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
-        runtime: fakeRuntime({ admitControlPlane: async () => {
+        runtime: fakeRuntime({ verifyAuthority: async () => {
           if (occupied) await new Promise(resolve => { release = resolve })
-          return { authority: { mode: "workspace" }, controller: null }
+          return { mode: "workspace" }
         } }) })
       const started = session.start()
       if (occupied) await waitUntil(() => Boolean(release)); else await started
@@ -478,7 +507,7 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
       watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() } })
     await session.start()
     const before = h.state.opens
-    h.state.inode += 1; h.state.mode = "stalled"
+    h.state.inode += 1n; h.state.mode = "stalled"
     callbacks[0]("rename", "HEAD")
     await waitUntil(() => Boolean(h.state.release))
     for (let i = 0; i < 10; i += 1) callbacks[0]("rename", "HEAD")
@@ -635,11 +664,11 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
       } })
     await session.start()
     hold = true
-    h.state.inode += 1
+    h.state.inode += 1n
     for (let i = 0; i < 10; i += 1) callbacks[0]("change", "HEAD")
     await waitUntil(() => Boolean(release))
     const before = resolutions
-    h.state.inode += 1; h.state.text = "ref: refs/heads/main\n#changed"
+    h.state.inode += 1n; h.state.text = "ref: refs/heads/main\n#changed"
     for (let i = 0; i < 10; i += 1) callbacks[0]("change", "HEAD")
     await new Promise(resolve => setTimeout(resolve, 1200))
     hold = false; release()
@@ -699,26 +728,26 @@ test("head_sampler_withheld_callback_authoritative_transition", async (t) => {
   assert.ok(watchers.every(watcher => watcher._handle === null))
 })
 
-test("tool requirements: status, doctor, reads, controller and writes", () => {
+test("tool requirements: status, doctor, reads, search and writes", () => {
   assert.equal(toolRequirement("desk_status"), "status")
   assert.equal(toolRequirement("desk_doctor"), "doctor")
   for (const name of ["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"]) assert.equal(toolRequirement(name), "read")
-  assert.equal(toolRequirement("desk_reindex"), "controller")
+  assert.equal(toolRequirement("desk_reindex"), "search")
   for (const name of ["task_create", "track_rename", "friction_add", "lesson_add", "desk_save"]) assert.equal(toolRequirement(name), "write")
   const readable = { runtimeServer: {}, root: {} }
   assert.equal(requirementMet("read", {}), false)
   assert.equal(requirementMet("read", readable), true)
-  assert.equal(requirementMet("controller", readable), false)
-  assert.equal(requirementMet("controller", { ...readable, admission: { controller: {} } }), true)
+  assert.equal(requirementMet("search", readable), false)
+  assert.equal(requirementMet("search", { ...readable, search: {} }), true)
   assert.equal(requirementMet("authority", readable), false)
   assert.equal(requirementMet("authority", { ...readable, authorityAdmitted: true }), true)
-  assert.equal(requirementMet("write", { ...readable, authorityAdmitted: true }), true, "writes never need the controller")
+  assert.equal(requirementMet("write", { ...readable, authorityAdmitted: true }), true, "writes never need the search engine")
   assert.equal(requirementMet("write", { ...readable, authorityAdmitted: true, stateBranch: { ok: false } }), false)
   assert.equal(requirementMet("write", { ...readable, authorityAdmitted: true, launcher: { blocksWrites: true } }), false)
   assert.equal(requirementMet("read", { ...readable, launcher: { mode: "refuse" } }), false)
 })
 
-test("unknown tools are refused; reads and journaled writes dispatch to the runtime once admitted", async (t) => {
+test("unknown tools are refused; reads and writes dispatch to the runtime with the search engine once admitted", async (t) => {
   const { session, runtime } = await makeSession(t)
   assert.equal((await session.callTool({ name: "nope" })).isError, true)
   assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")
@@ -726,7 +755,8 @@ test("unknown tools are refused; reads and journaled writes dispatch to the runt
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
   assert.deepEqual(runtime.calls.map((call) => call.name), ["desk_search", "desk_reindex", "task_create"])
   assert.deepEqual(runtime.calls[2].input, {})
-  assert.equal(typeof runtime.calls[2].admission.controller.status, "function", "a healthy controller journals the write")
+  assert.equal(runtime.calls[2].search, session.context.search, "a write tells the search engine what it changed")
+  assert.equal(typeof runtime.calls[2].search.noteChange, "function")
   assert.equal(session.admission.snapshot().state, "ready")
 })
 
@@ -756,11 +786,11 @@ test("setup, missing roots and activation errors are named degraded states, from
   assert.equal((await session.admission.refresh({ force: true })).diagnostic.observed.name, "unknown")
 })
 
-test("a changed policy or root drops the old authority and controller", async (t) => {
+test("a changed policy or root drops the old authority and search engine", async (t) => {
   let policy = unsupported
   let rootName = "a"
   const closed = []
-  const runtime = fakeRuntime({ connectOrStartController: async () => ({ accepted: true, close: async () => closed.push("closed") }) })
+  const runtime = fakeRuntime({ createSearchEngine: () => fakeEngine({ close: async () => closed.push("closed") }) })
   const { session, base } = await makeSession(t, { runtime, resolveInputs: async () => inputs({ root: path.join(base, rootName), policy }) })
   assert.equal((await session.admission.refresh()).state, "ready")
   policy = { ...unsupported, semantic: "background" }
@@ -779,9 +809,9 @@ test("ordinary gates reconcile a late destination without repeating unchanged ad
   let connects = 0
   let loads = 0
   const runtime = fakeRuntime({
-    connectOrStartController: async () => {
+    createSearchEngine: () => {
       connects += 1
-      return { accepted: true, close() {} }
+      return fakeEngine()
     },
     callTool: async ({ deskRoot, statusContext }) => ({
       content: [{ type: "text", text: JSON.stringify({ root: deskRoot, focus: statusContext.focus.get() }) }],
@@ -797,10 +827,10 @@ test("ordinary gates reconcile a late destination without repeating unchanged ad
   })
   await session.start()
   assert.equal(payload(await session.callTool({ name: "task_update" })).root, path.join(base, "a"))
-  assert.equal(connects, 1, "unchanged destination needs no controller election")
+  assert.equal(connects, 1, "an unchanged destination keeps its search engine")
   destination = path.join(base, "b")
   assert.equal(payload(await session.callTool({ name: "task_update" })).root, destination)
-  assert.equal(connects, 2, "new destination must acquire its own authority/controller")
+  assert.equal(connects, 2, "a new destination gets its own authority and search engine")
   assert.equal(loads, 1, "the runtime pack is not reloaded")
 })
 
@@ -873,7 +903,7 @@ test("a writer keeps its exact destination while revalidation and another operat
       if (request.name === "task_update" && request.input.first) {
         entered = true
         await new Promise((resolve) => { releaseWrite = resolve })
-        assert.equal(request.deskRoot, request.statusContext.admission.root)
+        assert.equal(request.deskRoot, request.statusContext.search.deskRoot)
       }
       return { content: [{ type: "text", text: JSON.stringify({ root: request.deskRoot }) }] }
     },
@@ -892,7 +922,7 @@ test("a writer keeps its exact destination while revalidation and another operat
   releaseWrite()
   assert.equal(payload(await first).root, path.join(base, "a"))
   assert.equal(payload(await second).root, destination)
-  assert.equal(requests[1].statusContext.admission.root, destination)
+  assert.equal(requests[1].statusContext.search.deskRoot, destination)
 })
 
 test("revalidation during an asynchronous write-branch check cannot mix roots", async (t) => {
@@ -926,7 +956,7 @@ test("revalidation during an asynchronous write-branch check cannot mix roots", 
   release()
   assert.equal(payload(await first).root, path.join(base, "a"))
   assert.equal(payload(await second).root, destination)
-  assert.ok(seen.every((request) => request.deskRoot === request.statusContext.admission.root))
+  assert.ok(seen.every((request) => request.deskRoot === request.statusContext.search.deskRoot))
 })
 
 test("status stays bounded while destination resolution is blocked, and disposal prevents late acquisition", async (t) => {
@@ -936,9 +966,9 @@ test("status stays bounded while destination resolution is blocked, and disposal
   let entered = false
   let release
   let connects = 0
-  const runtime = fakeRuntime({ connectOrStartController: async () => {
+  const runtime = fakeRuntime({ createSearchEngine: () => {
     connects += 1
-    return { accepted: true, close() {} }
+    return fakeEngine()
   } })
   const { session, base } = await makeSession(t, {
     // The attempt is held on purpose; the late completion is what this test checks.
@@ -963,8 +993,8 @@ test("status stays bounded while destination resolution is blocked, and disposal
   await session.dispose()
   release()
   await session.admission.idle()
-  assert.equal(connects, 1, "no controller can arrive after resolver disposal")
-  assert.equal(session.context.admission.controller, null)
+  assert.equal(connects, 1, "no search engine can start after resolver disposal")
+  assert.equal(session.context.search, null)
 })
 
 test("same-path activation and person changes invalidate cached ownership", async (t) => {
@@ -980,9 +1010,7 @@ test("same-path activation and person changes invalidate cached ownership", asyn
       if (slow) await new Promise((resolve) => { release = resolve })
       return { content: [{ type: "text", text: JSON.stringify({ person, activation: statusContext.activation }) }] }
     },
-    admitControlPlane: async ({ deskRoot, person }) => ({
-      root: deskRoot, authority: { mode: "workspace" }, controller: { accepted: true, close() {} },
-    }),
+    verifyAuthority: async () => ({ mode: "workspace" }),
   })
   const { session, base } = await makeSession(t, {
     args, runtime, resolveInputs: async () => inputs({ root: path.join(base, "a"), activationStatus }),
@@ -1072,9 +1100,9 @@ test("same-path stronger intent is retained without repeating authority admissio
       ...inputs({ root: path.join(base, changed ? "b" : "a") }),
       root: { root: path.join(base, changed ? "b" : "a"), source },
     }),
-    runtime: fakeRuntime({ connectOrStartController: async () => {
+    runtime: fakeRuntime({ createSearchEngine: () => {
       connects += 1
-      return { accepted: true, close() {} }
+      return fakeEngine()
     } }),
   })
   await session.start()
@@ -1085,7 +1113,7 @@ test("same-path stronger intent is retained without repeating authority admissio
   changed = true
   source = "env:DESK"
   assert.equal((await session.callTool({ name: "task_update" })).isError, true)
-  assert.equal(connects, 1, "weaker evidence cannot acquire a new controller")
+  assert.equal(connects, 1, "weaker evidence cannot start a new search engine")
 })
 
 test("a thrown resolver drops authority and old cached detail, retaining the current diagnostic", async (t) => {
@@ -1107,42 +1135,38 @@ test("a thrown resolver drops authority and old cached detail, retaining the cur
   assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).observed.message, "current resolver failure")
 })
 
-test("disposal while acquiring or reconnecting a controller closes the late controller", async (t) => {
-  for (const reconnect of [false, true]) {
-    let block = false
-    let entered = false
-    let release
-    let closed = 0
-    const { session } = await makeSession(t, {
-      // The attempt is held on purpose; the late completion is what this test checks.
-      disposeAdmissionWaitMs: 0,
-      runtime: fakeRuntime({ connectOrStartController: async () => {
-        if (block) {
-          entered = true
-          await new Promise((resolve) => { release = resolve })
-        }
-        return { accepted: true, close() { closed += 1 } }
-      } }),
-    })
-    if (reconnect) {
-      await session.start()
-      session.context.controllerLost = true
-    }
-    block = true
-    const pending = reconnect ? session.admission.refresh({ force: true }) : session.start()
-    await waitUntil(() => entered)
-    await session.dispose()
-    release()
-    await pending
-    assert.ok(closed >= 1)
-    assert.equal(session.context.admission?.controller ?? null, null)
-    assert.equal((await session.callTool({ name: "desk_doctor" })).isError, true)
-    assert.equal((await session.callTool({ name: "task_update" })).isError, true)
-    session.recordException("late_failure", new Error("disposed exception"))
-  }
+test("disposal while authority is being verified starts no search engine", async (t) => {
+  let entered = false
+  let release
+  let started = 0
+  const { session } = await makeSession(t, {
+    // The attempt is held on purpose; the late completion is what this test checks.
+    disposeAdmissionWaitMs: 0,
+    runtime: fakeRuntime({
+      verifyAuthority: async () => {
+        entered = true
+        await new Promise((resolve) => { release = resolve })
+        return { mode: "workspace" }
+      },
+      createSearchEngine: () => {
+        started += 1
+        return fakeEngine()
+      },
+    }),
+  })
+  const pending = session.start()
+  await waitUntil(() => entered)
+  await session.dispose()
+  release()
+  await pending
+  assert.equal(started, 0)
+  assert.equal(session.context.search, null)
+  assert.equal((await session.callTool({ name: "desk_doctor" })).isError, true)
+  assert.equal((await session.callTool({ name: "task_update" })).isError, true)
+  session.recordException("late_failure", new Error("disposed exception"))
 })
 
-test("disposal during branch inspection cannot start a controller", async (t) => {
+test("disposal during branch inspection cannot start a search engine", async (t) => {
   let entered = false
   let release
   let connects = 0
@@ -1155,9 +1179,9 @@ test("disposal during branch inspection cannot start a controller", async (t) =>
       await new Promise((resolve) => { release = resolve })
       return { ok: false, stdout: "" }
     },
-    runtime: fakeRuntime({ connectOrStartController: async () => {
+    runtime: fakeRuntime({ createSearchEngine: () => {
       connects += 1
-      return { accepted: true }
+      return fakeEngine()
     } }),
   })
   const pending = session.start()
@@ -1197,19 +1221,23 @@ test("hosted refusals run before revalidation, and a named provider is still enf
   assert.equal(calls, 1)
 })
 
-test("null semantic barrier diagnostics and missing controllers remain usable for direct writes", async (t) => {
-  const semantic = await makeSession(t, {
+test("the search engine starts warming on a later turn, and not for a context that changed first", async (t) => {
+  const warmed = []
+  const { session } = await makeSession(t, {
     inputs: { policy: { ...unsupported, semantic: "required" } },
-    runtime: fakeRuntime({ connectOrStartController: async () => ({
-      accepted: true, beginConvergence: async () => {}, barrier: async () => null,
-    }) }),
+    runtime: fakeRuntime({ createSearchEngine: ({ deskRoot, semantic }) => fakeEngine({ deskRoot, semantic, warm() { warmed.push(semantic) } }) }),
   })
-  assert.equal((await semantic.session.start()).diagnostic.observed.barrier, null)
-  const direct = await makeSession(t)
-  await direct.session.start()
-  direct.session.context.admission = { ...direct.session.context.admission, controller: null }
-  assert.equal((await direct.session.admission.refresh({ force: true })).state, "ready")
-  assert.equal((await direct.session.callTool({ name: "task_update" })).isError, undefined)
+  assert.equal((await session.start()).state, "ready")
+  assert.equal(session.context.search.semantic, "required", "the policy's semantic mode reaches the engine")
+  assert.deepEqual(warmed, [], "not in the same turn as the transition to ready")
+  session.recordException("uncaught_exception", new Error("boom"))
+  assert.equal(session.context.search, null, "an exception drops the engine")
+  await flush()
+  assert.deepEqual(warmed, [], "an engine dropped before its turn never warms")
+  assert.equal((await session.admission.refresh({ force: true })).state, "ready")
+  assert.notEqual(session.context.search, null, "re-admission starts a new engine")
+  await flush()
+  assert.deepEqual(warmed, ["required"])
 })
 
 test("focus refuses a settled root-resolution failure without invoking the runtime", async (t) => {
@@ -1281,12 +1309,12 @@ test("status cannot stamp ownership ready while replacement authority is still b
   let block = false
   const { session, base } = await makeSession(t, {
     resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
-    runtime: fakeRuntime({ connectOrStartController: async () => {
+    runtime: fakeRuntime({ verifyAuthority: async () => {
       if (block) {
         entered = true
         await new Promise((resolve) => { release = resolve })
       }
-      return { accepted: true, close() {} }
+      return { mode: "workspace" }
     } }),
   })
   await session.start()
@@ -1384,349 +1412,46 @@ test("runtime failures stop admission and the runtime is loaded only once", asyn
   assert.equal(loads, 2)
 })
 
-test("authority failures refuse writes; a controller failure keeps authority, so writes go straight to the files", async (t) => {
+test("authority failures refuse writes; a search engine that cannot start keeps authority, so writes still reach the files", async (t) => {
   const personPolicy = await makeSession(t, { inputs: { policy: { ...unsupported, write_authority: "person" } } })
   const refused = await personPolicy.session.admission.refresh()
   assert.equal(refused.code, "authority_invalid")
   assert.equal(requirementMet("write", personPolicy.session.context), false)
   assert.equal(requirementMet("read", personPolicy.session.context), true)
   assert.match(refused.fix, /reconnect the Desk MCP server/u, "a --person fix says it needs a reconnect")
-  const cases = [
-    [Object.assign(new Error("different contract"), { code: "controller_semantic_mismatch", diagnostic: { expected: 1 } }), "controller_semantic_mismatch", true],
-    [new Error("readiness controller has unsafe directory ownership or permissions"), "controller_state_unsafe", true],
-    [new Error("readiness controller election did not converge"), "controller_unavailable", true],
-    [Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }), "controller_unavailable", true],
-    [new RangeError("something else"), "admission_exception", true],
-  ]
-  let thrown
-  const runtime = fakeRuntime({ connectOrStartController: async () => { throw thrown } })
+  let thrown = Object.assign(new Error("better_sqlite3.node could not be loaded"), { code: "ERR_DLOPEN_FAILED", diagnostic: { expected: 1 } })
+  const runtime = fakeRuntime({ createSearchEngine: () => { if (thrown) throw thrown; return fakeEngine() } })
   const { session } = await makeSession(t, { runtime })
-  for (const [error, code, writable] of cases) {
-    thrown = error
-    session.context.authorityAdmitted = false
-    const snapshot = await session.admission.refresh({ force: true })
-    assert.equal(snapshot.code, code, error.message)
-    assert.equal(requirementMet("write", session.context), writable, code)
-  }
+  const snapshot = await session.admission.refresh({ force: true })
+  assert.equal(snapshot.code, "search_unavailable")
+  assert.match(snapshot.summary, /better_sqlite3\.node could not be loaded/u)
+  assert.match(snapshot.fix, /read the files directly/u)
+  assert.deepEqual(snapshot.diagnostic.observed.diagnostic, { expected: 1 })
+  assert.equal(requirementMet("write", session.context), true)
+  assert.equal(requirementMet("search", session.context), false)
   const write = await session.callTool({ name: "task_create" })
   assert.equal(payload(write).tool, "task_create")
-  assert.equal(runtime.calls.at(-1).admission, undefined, "without a controller the write is not journaled")
-  assert.match(session.admission.snapshot().fix, /something else|retries admission/u)
-  thrown = cases[0][0]
-  session.context.authorityAdmitted = false
-  assert.deepEqual((await session.admission.refresh({ force: true })).diagnostic.observed.diagnostic, { expected: 1 })
+  assert.equal(runtime.calls.at(-1).search, null, "without a search engine the write changes only its files")
+  assert.equal(payload(await session.callTool({ name: "desk_reindex" })).code, "search_unavailable")
+  thrown = null
+  assert.equal((await session.admission.refresh({ force: true })).state, "ready", "the next attempt starts it")
+  assert.notEqual(session.context.search, null)
 })
 
-test("an admission implementation that fails before verifying authority, or that returns contradicting authority, admits nothing", async (t) => {
-  const failing = await makeSession(t, { runtime: fakeRuntime({ admitControlPlane: async () => { throw new Error("readiness controller election did not converge") } }) })
-  assert.equal((await failing.session.admission.refresh()).code, "controller_unavailable")
+test("an authority check that fails, or that returns contradicting authority, admits nothing", async (t) => {
+  const failing = await makeSession(t, { runtime: fakeRuntime({ verifyAuthority: async () => { throw new Error("provider unreachable") } }) })
+  const failed = await failing.session.admission.refresh()
+  assert.equal(failed.code, "admission_exception")
+  assert.match(failed.summary, /provider unreachable/u)
   assert.equal(failing.session.context.authorityAdmitted, false)
-  const closed = []
+  assert.equal(failing.session.context.search, null)
   const contradicting = await makeSession(t, {
     args: { person: "ari" },
-    runtime: fakeRuntime({ admitControlPlane: async () => ({ authority: { mode: "workspace" }, controller: { close: async () => closed.push(1) } }) }),
+    runtime: fakeRuntime({ verifyAuthority: async () => ({ mode: "workspace" }) }),
   })
   assert.equal((await contradicting.session.admission.refresh()).code, "authority_invalid")
-  assert.equal(contradicting.session.context.admission, null)
-  const verifiedThenFailed = await makeSession(t, {
-    runtime: fakeRuntime({
-      admitControlPlane: async ({ verifyAuthority, policy }) => {
-        await verifyAuthority({ policy })
-        throw Object.assign(new Error("no connector"), { code: "controller_start_failed" })
-      },
-    }),
-  })
-  assert.equal((await verifiedThenFailed.session.admission.refresh()).code, "controller_unavailable")
-  assert.equal(verifiedThenFailed.session.context.authorityAdmitted, true)
-})
-
-test("a lost controller is reconnected on the next attempt, and a reconnect that is not accepted stays degraded", async (t) => {
-  let accept = true
-  let connections = 0
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      connections += 1
-      return accept ? { accepted: true, async status() {} } : accept === null ? null : { accepted: false }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, inputs: { policy: { ...unsupported, semantic: "background" } } })
-  await session.admission.refresh()
-  session.context.controllerLost = true
-  accept = false
-  assert.equal((await session.admission.refresh({ force: true })).code, "controller_unavailable")
-  accept = null
-  assert.equal((await session.admission.refresh({ force: true })).code, "controller_unavailable")
-  accept = true
-  assert.equal((await session.admission.refresh({ force: true })).state, "ready")
-  assert.equal(connections, 4)
-})
-
-test("an embedding override degrades semantic search only: lexical reads, writes and ready stay available", async (t) => {
-  const override = { code: "embedding_override", model: "other", pinned_model: "nomic-embed-text", fix: "remove the override and reconnect" }
-  const controller = { accepted: true, embeddingOverride: override, identity: { id: "c", semantic_contract: { mode: "background" } }, async status() {} }
-  const runtime = fakeRuntime({ connectOrStartController: async () => controller })
-  const { session } = await makeSession(t, { runtime, inputs: { policy: { ...unsupported, semantic: "background" } } })
-  assert.equal((await session.admission.refresh()).state, "ready")
-  await session.callTool({ name: "desk_search", input: { query: "x" } })
-  const view = runtime.calls.at(-1).admission.controller
-  assert.equal(view.identity.semantic_contract.mode, "unsupported", "searches get a lexical-only view of the controller")
-  await session.callTool({ name: "desk_timeline" })
-  assert.equal(runtime.calls.at(-1).admission.controller, view, "the view is cached per controller")
-  const recall = await session.callTool({ name: "desk_recall", input: { topic: "x" } })
-  assert.equal(recall.isError, true)
-  assert.equal(payload(recall).code, "embedding_override")
-  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
-  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", semantic: { current: true } }) }] })
-  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
-  assert.equal(status.state, "ready")
-  assert.equal(status.semantic.status, "unavailable (embedding_override)")
-  assert.equal(status.semantic.current, false)
-
-  const required = await makeSession(t, { runtime: fakeRuntime({ connectOrStartController: async () => controller }), inputs: { policy: { ...unsupported, semantic: "required" } } })
-  const snapshot = await required.session.admission.refresh()
-  assert.equal(snapshot.state, "degraded:embedding_override")
-  assert.equal(requirementMet("write", required.session.context), true)
-})
-
-test("required semantic admission waits for the barrier, and a failed or incomplete barrier degrades with reads and writes still open", async (t) => {
-  const barriers = [
-    () => { throw new Error("embedding offline") },
-    () => ({ capability: "semantic", current: false }),
-    () => ({ capability: "semantic", current: true }),
-  ]
-  const controller = { accepted: true, beginConvergence: async () => {}, barrier: async () => barriers.shift()(), status: async () => ({}) }
-  const { session } = await makeSession(t, {
-    runtime: fakeRuntime({ connectOrStartController: async () => controller }),
-    inputs: { policy: { ...unsupported, semantic: "required" } },
-  })
-  const failed = await session.admission.refresh()
-  assert.equal(failed.state, "degraded:semantic_unavailable")
-  assert.deepEqual(failed.diagnostic.observed, { name: "Error", message: "embedding offline" })
-  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create", "writes stay open")
-  const incomplete = await session.admission.refresh({ force: true })
-  assert.deepEqual(incomplete.diagnostic.observed, { barrier: { capability: "semantic", current: false } })
-  assert.equal((await session.admission.refresh({ force: true })).state, "ready")
-  assert.equal((await session.admission.refresh({ force: true })).state, "ready", "a current semantic barrier is not re-checked")
-})
-
-test("background convergence failures are logged whatever is thrown", async (t) => {
-  for (const [thrown, text] of [["busy", "busy"], [new Error("broken"), "broken"]]) {
-    const { session, log } = await makeSession(t, {
-      runtime: fakeRuntime({ beginBackgroundConvergence: () => { throw thrown } }),
-      inputs: { policy: { ...unsupported, semantic: "background" } },
-    })
-    await session.admission.refresh()
-    await flush()
-    assert.match(log(), new RegExp(`background convergence failed: ${text}`, "u"))
-  }
-})
-
-test("a lost controller is found by desk_status in the background, and a write falls back to the file", async (t) => {
-  let alive = true
-  let connections = 0
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      connections += 1
-      return { accepted: true, async status() { if (!alive) throw new Error("readiness controller connection closed: status") } }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 0 })
-  await session.admission.refresh()
-  alive = false
-  await session.callTool({ name: "desk_status", input: { detail: true } })
-  await waitUntil(() => connections === 2)
-  assert.equal(connections, 2, "the background check re-elected once every check had failed")
-  alive = false
-  const write = await session.callTool({ name: "task_create" })
-  assert.equal(payload(write).tool, "task_create")
-  assert.equal(runtime.calls.at(-1).admission, undefined, "the write went straight to the file")
-  assert.equal(session.admission.snapshot().code, "controller_unavailable")
-})
-
-test("one failed status check never marks a live controller lost: the check repeats and the controller stays", async (t) => {
-  let checks = 0
-  let failures = 2
-  let connections = 0
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      connections += 1
-      return { accepted: true, async status() { checks += 1; if (failures > 0) { failures -= 1; throw new Error("readiness controller request timed out: status") } } }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  await waitUntil(() => checks === 3)
-  await flush()
-  assert.deepEqual([connections, session.admission.snapshot().state], [1, "ready"], "two missed checks and a third that answered leave the same controller serving")
-})
-
-test("a controller that fails every repeat of the status check is lost, and one that exits during the repeats is left to its exit event", async (t) => {
-  let connections = 0
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      connections += 1
-      return { accepted: true, async status() { throw new Error("readiness controller connection closed: status") } }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  await waitUntil(() => connections === 2)
-
-  const listeners = []
-  let exits = 0
-  const exiting = fakeRuntime({
-    connectOrStartController: async () => ({
-      accepted: true,
-      onExit(listener) { listeners.push(listener); return () => {} },
-      async status() { exits += 1; if (exits === 1) listeners.at(-1)(); throw new Error("readiness controller connection closed: status") },
-    }),
-  })
-  const second = await makeSession(t, { runtime: exiting, controllerRecheckMs: 1 })
-  await second.session.admission.refresh()
-  await second.session.callTool({ name: "desk_status" })
-  await waitUntil(() => exits >= 1)
-  await flush()
-  await flush()
-  assert.equal(exits, 1, "the exit event took over: the repeats stopped without asking a controller that was already forgotten")
-})
-
-test("a controller replaced while its last status request is pending is not closed or reported lost by the stale check", async (t) => {
-  const listeners = []
-  const closed = []
-  let connections = 0
-  let attempts = 0
-  let failLast
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      const id = (connections += 1)
-      return {
-        accepted: true,
-        onExit(listener) { listeners.push(listener); return () => {} },
-        async close() { closed.push(id) },
-        status() {
-          if (id !== 1) return Promise.resolve({})
-          attempts += 1
-          if (attempts < 3) return Promise.reject(new Error("readiness controller request timed out: status"))
-          return new Promise((_, reject) => { failLast = () => reject(new Error("readiness controller request timed out: status")) })
-        },
-      }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  await waitUntil(() => attempts === 3)
-  listeners[0]()
-  await waitUntil(() => connections === 2)
-  await session.admission.refresh()
-  failLast()
-  await flush()
-  await flush()
-  assert.deepEqual([connections, closed, session.admission.snapshot().state], [2, [1], "ready"], "only the exited controller was closed; the new one serves")
-})
-
-test("closing the session waits for a lost controller that is still closing, not only the current one", async (t) => {
-  let connections = 0
-  let finishFirstClose
-  const closes = []
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      const id = (connections += 1)
-      return {
-        accepted: true,
-        async status() { if (id === 1) throw new Error("readiness controller connection closed: status") },
-        close() {
-          closes.push(id)
-          return id === 1 ? new Promise((resolve) => { finishFirstClose = resolve }) : Promise.resolve()
-        },
-      }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1, disposeAdmissionWaitMs: 0 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  await waitUntil(() => closes.includes(1))
-  let disposed = false
-  const disposing = session.dispose().then(() => { disposed = true })
-  await new Promise((resolve) => setTimeout(resolve, 30))
-  assert.deepEqual([disposed, connections], [false, 1], "the lost controller's close is still running, so the session has not finished closing")
-  finishFirstClose()
-  await disposing
-  assert.equal(disposed, true)
-})
-
-test("re-election waits until the lost controller has closed, so the new one never races it for the endpoint", async (t) => {
-  let connections = 0
-  let finishFirstClose
-  let firstClosed = false
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      const id = (connections += 1)
-      if (id === 2) assert.equal(firstClosed, true, "the new controller was elected while the lost one still held its endpoint")
-      return {
-        accepted: true,
-        async status() { if (id === 1) throw new Error("readiness controller connection closed: status") },
-        close() {
-          return id === 1 ? new Promise((resolve) => { finishFirstClose = () => { firstClosed = true; resolve() } }) : Promise.resolve()
-        },
-      }
-    },
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  await waitUntil(() => finishFirstClose !== undefined)
-  // The re-election is waiting for that close, so it is started, not awaited.
-  const reelection = session.admission.refresh({ force: true })
-  await new Promise((resolve) => setTimeout(resolve, 30))
-  assert.equal(connections, 1, "no second election while the first controller is closing")
-  finishFirstClose()
-  await reelection
-  await waitUntil(() => connections === 2)
-  await session.admission.refresh()
-  assert.equal(session.admission.snapshot().state, "ready")
-})
-
-test("closing the session waits for a controller whose election finished after the close began", async (t) => {
-  let finishElection
-  let finishClose
-  let closeStarted = false
-  const runtime = fakeRuntime({
-    connectOrStartController: () => new Promise((resolve) => {
-      finishElection = () => resolve({
-        accepted: true,
-        async status() {},
-        close() { closeStarted = true; return new Promise((done) => { finishClose = done }) },
-      })
-    }),
-  })
-  // The attempt wait (50 ms) runs out while the late controller is still closing.
-  const { session } = await makeSession(t, { runtime, disposeAdmissionWaitMs: 50 })
-  void session.admission.refresh()
-  await waitUntil(() => finishElection !== undefined)
-  let disposed = false
-  const disposing = session.dispose().then(() => { disposed = true })
-  finishElection()
-  await waitUntil(() => closeStarted)
-  await new Promise((resolve) => setTimeout(resolve, 120))
-  assert.equal(disposed, false, "the late controller is still closing, so the session has not finished closing")
-  finishClose()
-  await disposing
-  assert.equal(disposed, true)
-})
-
-test("disposing the session during the repeats ends the check without a verdict", async (t) => {
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => ({ accepted: true, async status() { throw new Error("readiness controller request timed out: status") } }),
-  })
-  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 20 })
-  await session.admission.refresh()
-  await session.callTool({ name: "desk_status" })
-  session.dispose()
-  await new Promise((resolve) => setTimeout(resolve, 60))
-  assert.notEqual(session.admission.snapshot().code, "controller_unavailable")
+  assert.equal(contradicting.session.context.authorityAdmitted, false)
+  assert.equal(contradicting.session.context.search, null)
 })
 
 test("refusals while admitting explain that Desk is still admitting", async (t) => {
@@ -2040,7 +1765,7 @@ test("the .git/HEAD watch re-runs admission once for a burst of changes, never s
   assert.equal(watchers[0].options.persistent, false)
   const attempts = session.admission.snapshot().attempts
   state.branch = null
-  h.state.text = "abcdef1234567890\n"; h.state.inode += 1
+  h.state.text = "abcdef1234567890\n"; h.state.inode += 1n
   watchers[0].listener("change", "index")
   watchers[0].listener("rename", null)
   watchers[0].listener("rename", "HEAD")
@@ -2143,28 +1868,49 @@ test("a launcher in read-only mode serves reads and refuses writes with its code
   assert.equal((await handedOff.session.admission.refresh()).state, "ready")
 })
 
-test("desk_doctor: formats, repairs, prune, and the full report in every mode", async (t) => {
-  const { session, base } = await makeSession(t)
+test("desk_doctor: formats, repairs and the full report in every mode", async (t) => {
+  const { session } = await makeSession(t)
   const badFormat = await session.callTool({ name: "desk_doctor", input: { format: "xml" } })
   assert.equal(badFormat.isError, true)
   const badRepair = await session.callTool({ name: "desk_doctor", input: { repair: "rm_rf" } })
   assert.equal(badRepair.isError, true)
-  assert.match(badRepair.content[0].text, /switch_state_branch, prune_readiness_state/u)
+  assert.match(badRepair.content[0].text, /use one of: switch_state_branch$/u)
   assert.equal(payload(await session.callTool({ name: "desk_doctor", input: { format: "preview" } })).runtime_state, "diagnostic")
   const beforeAdmission = payload(await session.callTool({ name: "desk_doctor" }))
   assert.equal(beforeAdmission.state, "admitting")
   assert.equal(beforeAdmission.status, "admitting")
-  assert.deepEqual(beforeAdmission.repairs_available, ["switch_state_branch", "prune_readiness_state"])
+  assert.deepEqual(beforeAdmission.repairs_available, ["switch_state_branch"])
   await session.admission.refresh()
   assert.equal(payload(await session.callTool({ name: "desk_doctor", input: { format: "preview" } })).runtime_state, "ready")
   const full = payload(await session.callTool({ name: "desk_doctor" }))
   assert.equal(full.state, "ready")
   assert.equal(full.tool, "desk_doctor", "a ready doctor is the runtime's report")
-  mkdirSync(path.join(base, "readiness", "a".repeat(64), "journal"), { recursive: true })
-  writeFileSync(path.join(base, "readiness", "a".repeat(64), "journal", "journal.json"), JSON.stringify({ root: path.join(base, "gone") }))
-  const pruned = payload(await session.callTool({ name: "desk_doctor", input: { repair: "prune_readiness_state" } }))
-  assert.equal(pruned.pruned.length, 1)
-  assert.match(pruned.summary, /pruned 1 leftover/u)
+  assert.match((await session.callTool({ name: "desk_doctor", input: { repair: "prune_readiness_state" } })).content[0].text, /unsupported repair/u, "the retired prune repair is gone: a session removes those folders itself")
+})
+
+test("a started session removes older versions' readiness folders once, in the background, and logs what it removed", async (t) => {
+  const calls = []
+  let result = { removed: 2 }
+  const { session, base, log } = await makeSession(t, {
+    leftoversDelayMs: 0,
+    removeLeftovers: async (options) => { calls.push(options); if (result instanceof Error) throw result; return result },
+  })
+  await session.start()
+  await waitUntil(() => calls.length === 1)
+  await waitUntil(() => /removed 2 folder/u.test(log()))
+  assert.deepEqual(calls, [{ stateHome: path.join(base, "readiness") }])
+  session.start()
+  await flush()
+  assert.equal(calls.length, 1, "once per session")
+  result = new Error("EPERM")
+  const failing = await makeSession(t, { leftoversDelayMs: 0, removeLeftovers: async () => { throw result } })
+  await failing.session.start()
+  await waitUntil(() => /could not remove old readiness folders .*EPERM/u.test(failing.log()))
+  const none = await makeSession(t, { readinessStateHome: undefined, removeLeftovers: async () => assert.fail("no state home, nothing to remove") })
+  await none.session.start()
+  const disposed = await makeSession(t, { removeLeftovers: async () => assert.fail("a closed session removes nothing") })
+  await disposed.session.start()
+  await disposed.session.dispose()
 })
 
 test("desk_doctor reports an unexpected validator failure as a tool exception, not an input error", async (t) => {
@@ -2265,16 +2011,16 @@ test("desk_status: a call that arrives while a computation runs waits its own bu
 })
 
 test("desk_status stamps a detail it computed with the admission state it was computed under, never a later ready", async (t) => {
-  let releaseController
-  const controllerGate = new Promise((resolve) => { releaseController = resolve })
-  const runtime = fakeRuntime({ connectOrStartController: async () => { await controllerGate; return { accepted: true, async status() { return { state: "READY" } } } } })
+  let releaseAuthority
+  const authorityGate = new Promise((resolve) => { releaseAuthority = resolve })
+  const runtime = fakeRuntime({ verifyAuthority: async () => { await authorityGate; return { mode: "workspace" } } })
   const { session } = await makeSession(t, { runtime })
   const keepAlive = setInterval(() => {}, 1000)
   t.after(() => clearInterval(keepAlive))
-  // The runtime reads the controller as converging, then readiness arrives before the answer does: the detail is older than the admission state at the end of the call.
+  // The runtime reads the session while it is still admitting, then readiness arrives before the answer does: the detail is older than the admission state at the end of the call.
   runtime.callTool = async () => {
     const detail = JSON.stringify({ status: "ok", readiness: { detail: { controller_state: "LEXICAL_CONVERGING" } } })
-    releaseController()
+    releaseAuthority()
     await waitUntil(() => session.admission.snapshot().state === "ready")
     return { content: [{ type: "text", text: detail }] }
   }
@@ -2352,17 +2098,14 @@ test("a replacement status waits for its aborted owned reader to close, and shut
   assert.equal(calls, 1, "a replacement invalidated by shutdown must never start later")
 })
 
-test("nonexit of a retired reader refuses replacement and fails shutdown while closing the controller", async (t) => {
+test("nonexit of a retired reader refuses replacement and fails shutdown while closing the search engine", async (t) => {
   const keepAlive = setInterval(() => {}, 1000)
   t.after(() => clearInterval(keepAlive))
   const runtime = fakeRuntime()
   let calls = 0
-  let controllerClosed = false
+  let engineClosed = false
   runtime.callTool = () => { calls += 1; return new Promise(() => {}) }
-  runtime.connectOrStartController = async () => ({
-    accepted: true, async status() { return { state: "READY" } },
-    async close() { controllerClosed = true },
-  })
+  runtime.createSearchEngine = () => fakeEngine({ async close() { engineClosed = true } })
   const error = Object.assign(new Error("reader did not exit"), { code: "status_reader_not_exited", pid: 123 })
   runtime.waitForStatusInspection = () => Promise.reject(error)
   const { session } = await makeSession(t, { runtime, statusRunLimitMs: 0 })
@@ -2372,7 +2115,7 @@ test("nonexit of a retired reader refuses replacement and fails shutdown while c
   assert.match(result.status_error, /reader did not exit/u)
   assert.equal(calls, 1)
   await assert.rejects(session.dispose(), { code: "status_reader_not_exited", pid: 123 })
-  assert.equal(controllerClosed, true, "a reader failure must not skip controller cleanup")
+  assert.equal(engineClosed, true, "a reader failure must not skip closing the search engine")
   session.dispose = () => Promise.resolve()
 })
 
@@ -2470,6 +2213,9 @@ for (const change of ["root", "policy", "person"]) {
 test("desk_status answers while an admission attempt is still running", async (t) => {
   let release
   const { session } = await makeSession(t, { loadRuntime: () => new Promise((resolve) => { release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} }) }) })
+  // The status wait's timer is unref'd (a real session's stdin keeps the process alive), so hold the event loop open the way stdin would.
+  const stdin = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(stdin))
   const started = Date.now()
   const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.ok(Date.now() - started < 200, `desk_status took ${Date.now() - started} ms`)
@@ -2485,30 +2231,25 @@ test("a runtime status keeps its own status value when ready", async (t) => {
   const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(status.status, "ok")
   assert.equal(status.admission.writes, "available")
-  assert.equal(status.admission.controller, "connected")
+  assert.equal(status.admission.search, "started")
   assert.equal(status.admission.state_branch.kind, "not_configured")
   assert.equal(status.semantic, undefined)
 })
 
 test("state-directory repairs and last-start records, and an unwritable state directory is logged, never fatal", async (t) => {
-  const repairing = fakeRuntime({
-    connectOrStartController: async (options) => {
-      options.onRepair({ action: "chmod_700", path: "/state/abc", from: "755" })
-      return { accepted: true }
-    },
-  })
-  const { session, base, log } = await makeSession(t, { runtime: repairing })
+  const repairing = { git: scriptedGit({ branch: null, onRemote: true }), inputs: { stateBranch: "main" }, watch: quietWatch }
+  const { session, base, log } = await makeSession(t, repairing)
   const snapshot = await session.admission.refresh()
-  assert.equal(snapshot.repair, "repaired: readiness state directory mode 755 → 700 (/state/abc)")
-  assert.match(readFileSync(path.join(base, "state", "repairs.log"), "utf8"), /mode 755 → 700/u)
-  assert.match(log(), /state: ready \(repaired: readiness state directory/u)
+  assert.equal(snapshot.repair, "repaired: detached HEAD → main (was abcdef123456)")
+  assert.match(readFileSync(path.join(base, "state", "repairs.log"), "utf8"), /detached HEAD → main/u)
+  assert.match(log(), /state: ready \(repaired: detached HEAD/u)
   await session.lastStartWritten()
   assert.equal(JSON.parse(readFileSync(path.join(base, "state", "last-start.json"), "utf8")).repair, snapshot.repair)
 
   const blockedBase = await mkTempRoot("desk-session-unwritable-")
   const blocked = path.join(blockedBase, "file")
   writeFileSync(blocked, "not a directory")
-  const unwritable = await makeSession(t, { runtime: repairing, deskStateDir: path.join(blocked, "state") })
+  const unwritable = await makeSession(t, { ...repairing, git: scriptedGit({ branch: null, onRemote: true }), deskStateDir: path.join(blocked, "state") })
   assert.equal((await unwritable.session.admission.refresh()).state, "ready")
   await unwritable.session.lastStartWritten()
   assert.match(unwritable.log(), /could not append to the repair log/u)
@@ -2577,15 +2318,11 @@ test("closing the session resolves as soon as the running admission attempt fini
   assert.equal(session.admission.running, false)
 })
 
-test("closing the session closes its controller at once, not after the admission attempt wait", async (t) => {
+test("closing the session closes its search engine at once, not after the admission attempt wait", async (t) => {
   let hold = false
   let closedAt = null
   const runtime = fakeRuntime({
-    connectOrStartController: async () => ({
-      accepted: true,
-      async status() { return { state: "READY" } },
-      close() { closedAt ??= Date.now() },
-    }),
+    createSearchEngine: () => fakeEngine({ async close() { closedAt ??= Date.now() } }),
   })
   const { session, root } = await makeSession(t, {
     runtime,
@@ -2594,7 +2331,7 @@ test("closing the session closes its controller at once, not after the admission
   })
   await session.admission.refresh()
   assert.equal(session.admission.snapshot().state, "ready")
-  assert.notEqual(session.context.admission?.controller, null)
+  assert.notEqual(session.context.search, null)
   // An attempt that never finishes is running when the session closes.
   hold = true
   void session.admission.refresh({ force: true, waitMs: 0 })
@@ -2602,8 +2339,8 @@ test("closing the session closes its controller at once, not after the admission
   const started = Date.now()
   await session.dispose()
   const disposedMs = Date.now() - started
-  assert.notEqual(closedAt, null, "the controller was closed")
-  assert.ok(closedAt - started < 300, `the controller closed after ${closedAt - started} ms, not alongside the attempt wait`)
+  assert.notEqual(closedAt, null, "the search engine was closed")
+  assert.ok(closedAt - started < 300, `the search engine closed after ${closedAt - started} ms, not alongside the attempt wait`)
   assert.ok(disposedMs >= 900, "close still waited for the attempt up to its bound")
 })
 
@@ -2621,14 +2358,14 @@ test("closing the session stops waiting for an admission attempt that never fini
   assert.equal(session.admission.running, true, "the stuck attempt is left behind")
 })
 
-test("a controller whose close fails is still forgotten, and dispose closes the controller", async (t) => {
-  const failing = await makeSession(t, { runtime: fakeRuntime({ connectOrStartController: async () => ({ accepted: true, close: async () => { throw new Error("already gone") } }) }) })
+test("a search engine whose close fails is still forgotten, and dispose closes the search engine", async (t) => {
+  const failing = await makeSession(t, { runtime: fakeRuntime({ createSearchEngine: () => fakeEngine({ close: async () => { throw new Error("already gone") } }) }) })
   await failing.session.admission.refresh()
   failing.session.dispose()
   await flush()
-  assert.equal(failing.session.context.admission.controller, null)
+  assert.equal(failing.session.context.search, null)
   const closed = []
-  const { session } = await makeSession(t, { runtime: fakeRuntime({ connectOrStartController: async () => ({ accepted: true, close: async () => closed.push(1) }) }) })
+  const { session } = await makeSession(t, { runtime: fakeRuntime({ createSearchEngine: () => fakeEngine({ close: async () => closed.push(1) }) }) })
   await session.admission.refresh()
   session.dispose()
   await flush()
@@ -2656,55 +2393,11 @@ test("the default stderr and git probes are real", async (t) => {
   assert.match(writes.join(""), /\[desk-mcp\] state: degraded:activation_config_invalid/u)
 })
 
-test("a required-semantic session that lost its controller reconnects without starting background convergence", async (t) => {
-  let connections = 0
-  let background = 0
-  const controller = () => ({ accepted: true, beginConvergence: async () => {}, barrier: async () => ({ capability: "semantic", current: true }) })
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => { connections += 1; return controller() },
-    beginBackgroundConvergence: () => { background += 1 },
-  })
-  const { session } = await makeSession(t, { runtime, inputs: { policy: { ...unsupported, semantic: "required" } } })
-  assert.equal((await session.admission.refresh()).state, "ready")
-  session.context.controllerLost = true
-  assert.equal((await session.admission.refresh({ force: true })).state, "ready")
-  assert.equal(connections, 2)
-  assert.equal(background, 0)
-})
-
-test("a local child exit triggers re-election without a status call and stale exit callbacks cannot evict its replacement", async (t) => {
-  const callbacks = []
-  let disconnected = 0
-  let connections = 0
-  const runtime = fakeRuntime({
-    connectOrStartController: async () => {
-      connections += 1
-      return {
-        accepted: true,
-        onExit(callback) { callbacks.push(callback); return () => { disconnected += 1 } },
-        async close() {},
-      }
-    },
-  })
-  const { session } = await makeSession(t, { runtime })
-  await session.admission.refresh()
-  callbacks[0]()
-  await waitUntil(() => connections === 2 && session.admission.snapshot().state === "ready")
-  const replacement = session.context.admission.controller
-  callbacks[0]()
-  assert.equal(session.context.admission.controller, replacement)
-  assert.equal(connections, 2)
-  session.dispose()
-  callbacks[1]()
-  assert.equal(connections, 2)
-  assert.equal(disconnected, 2)
-})
-
 test("task_focus answers without write authority or a write gate, and one focus is held for the whole session", async (t) => {
   const seen = []
   const runtime = fakeRuntime({
     callTool: async ({ name, statusContext }) => {
-      seen.push({ name, focus: statusContext.focus, admission: statusContext.admission })
+      seen.push({ name, focus: statusContext.focus })
       return { content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name }) }] }
     },
   })

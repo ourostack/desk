@@ -16,18 +16,12 @@ export function isHosted(env) {
 }
 
 const NO_EMBEDDINGS = "Hosted Desk has no embedding endpoint; use desk_search."
-const HOST_MACHINE = "This repair acts on the machine Desk runs on, which is the hosted service, not yours."
 
 // Tools a hosted Desk refuses outright.
 export const HOSTED_UNAVAILABLE = Object.freeze({
   improvement_next: "A claimed improvement card needs a coding harness to work it; a hosted chat claim would only hold the card.",
   desk_recall: NO_EMBEDDINGS,
   desk_similar: NO_EMBEDDINGS,
-})
-
-// desk_doctor repairs that act on the machine Desk runs on. switch_state_branch is not here: it only switches the desk checkout back to its state branch, and that checkout is the operator's desk, which the hosted service holds on their behalf.
-export const HOSTED_UNAVAILABLE_REPAIRS = Object.freeze({
-  prune_readiness_state: HOST_MACHINE,
 })
 
 // Skills whose body needs a shell, git, gh or the plugin's own scripts: a hosted chat has none of them.
@@ -49,9 +43,6 @@ export const HOSTED_SHELL_SKILLS = Object.freeze({
 export function hostedRefusal(name, input, env) {
   if (!isHosted(env)) return null
   const reason = HOSTED_UNAVAILABLE[name]
-    ?? (name === "desk_doctor" && typeof input?.repair === "string" && Object.hasOwn(HOSTED_UNAVAILABLE_REPAIRS, input.repair)
-      ? HOSTED_UNAVAILABLE_REPAIRS[input.repair]
-      : undefined)
   return reason === undefined ? null : { status: "refused", code: "hosted_unavailable", tool: name, reason }
 }
 
@@ -92,7 +83,6 @@ export function hostedInstructions({ root, pluginRoot }) {
     CLIENT_MEMORY,
     SKILLS,
     `Tools Desk refuses here:\n${list(HOSTED_UNAVAILABLE)}`,
-    `desk_doctor repairs Desk refuses here:\n${list(HOSTED_UNAVAILABLE_REPAIRS)}`,
     `Skills to skip, because they need a shell:\n${list(HOSTED_SHELL_SKILLS)}`,
     DESK_STATUS_FIRST,
   ].join("\n\n"))

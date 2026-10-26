@@ -26,7 +26,6 @@ import {
 } from "../util/fm.js"
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
@@ -415,7 +414,7 @@ function trueOrAbsent(tool, field, value) {
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function task_move({ deskRoot, input, person = null, readiness, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_move({ deskRoot, input, person = null, search, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = taskMoveSource(deskRoot, person, values)
   rejectTraversalShapedInput("task_move", "track", track)
@@ -621,14 +620,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, sta
     exclude: touched,
   })
 
-  await recordCanonicalChanges({
-    root: deskRoot,
-    readiness,
-    changes: [
-      { path: relPath(deskRoot, srcDir), operation: "delete" },
-      ...updatedFiles.map((p) => ({ path: p, operation: "write" })),
-    ],
-  })
+  for (const changed of [relPath(deskRoot, srcDir), ...updatedFiles]) search?.noteChange(changed)
 
   const result = {
     from: shownRelPath(deskRoot, srcDir),
@@ -670,7 +662,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, sta
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function track_rename({ deskRoot, input, person = null, search, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (!Object.hasOwn(values, "to")) {
     throw new Error("track_rename: `to` is required, with `track` or `handle`")
@@ -735,14 +727,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     exclude: new Set([path.join(destDir, "track.md"), ...taskFiles]),
   })
 
-  await recordCanonicalChanges({
-    root: deskRoot,
-    readiness,
-    changes: [
-      { path: relPath(deskRoot, srcDir), operation: "delete" },
-      ...updatedFiles.map((p) => ({ path: p, operation: "write" })),
-    ],
-  })
+  for (const changed of [relPath(deskRoot, srcDir), ...updatedFiles]) search?.noteChange(changed)
 
   const result = {
     from: shownRelPath(deskRoot, srcDir),

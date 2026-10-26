@@ -64,7 +64,7 @@ test("an explicit root still wins over an onboarding request", async () => {
   const desk = path.join(root, "desk")
   mkdirSync(desk)
   try {
-    const { admitInProcess } = await import("./_in_process_desk.js")
+    const { admitInProcess, idleSearchEngine } = await import("./_in_process_desk.js")
     const started = await admitInProcess({
       argv: ["--root", desk, "--onboarding", "crew:join-crew"],
       env: {},
@@ -72,11 +72,7 @@ test("an explicit root still wins over an onboarding request", async () => {
       homeDir: home,
       mcpRoot: "/fixture/mcp",
       diagnosticServerStarter: () => assert.fail("an explicit root must not enter setup mode"),
-      runtimeImporter: async () => ({
-        async connectOrStartController() {
-          return { accepted: true, id: "controller-1", beginConvergence() {} }
-        },
-      }),
+      runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
     })
     assert.equal(started.snapshot.state, "ready")
     assert.equal(started.statusContext.root.root, desk)
