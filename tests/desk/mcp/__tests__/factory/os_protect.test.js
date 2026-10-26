@@ -5,7 +5,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { promises as fs } from "node:fs"
-import { mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -296,19 +296,30 @@ test("an ACL in a batch leaves every member for ordinary inspection and clearing
   })
 })
 
-for (const change of ["rewrite", "replace", "remove"]) {
+for (const change of ["rewrite", "replace", "remove", "rewrite with unchanged change time", "same-size rewrite with unchanged change time"]) {
   test(`a file ${change} during native batch observation cannot inherit a clean identity`, async (t) => {
     await scratch(async (base) => {
       const file = path.join(base, "leaf.json")
       const replacement = path.join(base, "replacement.json")
       await fs.writeFile(file, "original", { mode: 0o600 })
       await fs.writeFile(replacement, "replacement", { mode: 0o600 })
+      if (change.endsWith("unchanged change time")) {
+        const lstat = fs.lstat
+        t.mock.method(fs, "lstat", async (target, ...args) => {
+          const stat = await lstat(target, ...args)
+          if (target === file) stat.ctimeMs = 1
+          return stat
+        })
+      }
       let calls = 0
       t.mock.method(childProcess, "execFileSync", () => {
         if (++calls === 1) {
-          if (change === "rewrite") writeFileSync(file, "changed bytes")
-          else if (change === "replace") renameSync(replacement, file)
-          else unlinkSync(file)
+          if (change === "replace") renameSync(replacement, file)
+          else if (change === "remove") unlinkSync(file)
+          else {
+            writeFileSync(file, change.startsWith("same-size") ? "modified" : "changed bytes")
+            if (change.endsWith("unchanged change time")) utimesSync(file, 5, 5)
+          }
         }
         return "regular file\n"
       })

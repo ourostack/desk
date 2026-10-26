@@ -7,10 +7,11 @@ on:
       - "plugins/desk/mcp/src/factory/**"
       - "tests/desk/mcp/__tests__/factory/os_protect.test.js"
       - "tests/desk/mcp/__tests__/factory/marker_identity.test.js"
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native-macos-protection:

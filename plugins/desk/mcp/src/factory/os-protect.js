@@ -99,6 +99,7 @@ export async function realpathExistingPrefix(target) {
 const aclFreePaths = new Map()
 // The change time is the signal: `chmod`, an ACL edit and a rename-over each move it, and a mode change always moves it too, so the mode needs no part in the key.
 const identityKey = (stat) => `${stat.dev}:${stat.ino}:${stat.ctimeMs}`
+const leafObservationKey = (stat) => `${identityKey(stat)}:${stat.size}:${stat.mtimeMs}`
 
 /**
  * macOS ACL grants can survive `chmod 0700`/`0600`; a no-op on every other platform. Listing the ACL first and clearing it
@@ -147,7 +148,7 @@ export async function primeAclFreeFiles(files, platform, naming) {
     const witnessed = []
     for (const entry of batch) {
       const current = await lstatIfPresent(entry.file, naming)
-      if (current !== null && identityKey(current) === identityKey(entry.stat)) witnessed.push(entry)
+      if (current !== null && leafObservationKey(current) === leafObservationKey(entry.stat)) witnessed.push(entry)
     }
     if (witnessed.length > 0) {
       const output = childProcess.execFileSync("/bin/ls", ["-ldeq", ...witnessed.map(({ file }) => file)], {
@@ -157,7 +158,7 @@ export async function primeAclFreeFiles(files, platform, naming) {
         const clean = []
         for (const { file, stat } of witnessed) {
           const current = await lstatIfPresent(file, naming)
-          if (current !== null && identityKey(current) === identityKey(stat)) clean.push({ file, stat })
+          if (current !== null && leafObservationKey(current) === leafObservationKey(stat)) clean.push({ file, stat })
         }
         let stable = true
         for (const [dir, identity] of ancestors) {
