@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.16 — 2026-10-26
+
+Inspect unchanged macOS marker permissions in bounded native batches while retaining every per-read guard. Reuse a clean result only when the file and its full ancestry stayed unchanged; failed or ACL-bearing inspections never count as verified.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.15 — 2026-10-26
 
 Bind the same desk on Claude Code and Copilot. A session whose project folder is itself a desk now uses that desk on both hosts; before, Claude Code bound the saved desk instead and wrote to it, while Copilot bound the project desk. The saved binding and `$DESK` still win over a bare launch folder and the home fallbacks, and the documented order in the README, the server README and SETUP now agree.
