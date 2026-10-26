@@ -61,6 +61,10 @@ async function canonicalFile(deskRoot, person, file, kind, required = true) {
   return target
 }
 
+// work-orchestration's visual-proof sentence, verbatim. It is in every brief because a child follows its brief, and
+// a child briefed on "look into" or "review" work otherwise returns no screenshots of what it saw.
+export const VISUAL_PROOF_RULE = "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into an `evidence/` folder beside your brief file (or the task's desk folder when the brief is not a file), and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this."
+
 // The person-scoped write authority resolves symlinks against the person root, not this task, so a
 // same-person link inside the task can still name a neighbouring task's record. Compare resolved
 // paths so an escaping link is refused rather than adopted as this task's progress and rulings.
@@ -163,6 +167,7 @@ export async function resolveSuperpowersContext(input) {
       // work-orchestration's scratch sentence, verbatim: a reviewer dispatched from a review skill never reads that skill.
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+      VISUAL_PROOF_RULE,
     ],
     cleanupPaths: [],
   }

@@ -88,6 +88,7 @@ test("Superpowers context prints exact paths without introducing a second progre
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+      "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into an `evidence/` folder beside your brief file (or the task's desk folder when the brief is not a file), and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this.",
     ],
     cleanupPaths: [],
   })
@@ -547,7 +548,7 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule an
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
     assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
-    assert.equal(briefRules.length, 4)
+    assert.equal(briefRules.length, 5)
   }
 })
 
@@ -563,4 +564,13 @@ test("the brief a Superpowers mapping produces forbids task_signoff", async () =
     seedCanonicalFiles(moved)
     assert.equal((await resolve(moved)).briefRules[0], "Never call task_signoff.", "a task path the binder would not accept still carries the sign-off rule")
   }
+})
+
+// work-orchestration tells a root that writes its own brief to carry the same sentence, so the two must not drift.
+test("the visual-proof rule in every mapped brief is work-orchestration's sentence, word for word", async () => {
+  const { VISUAL_PROOF_RULE } = await import("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js")
+  const output = await resolve(context())
+  assert.equal(output.briefRules.at(-1), VISUAL_PROOF_RULE)
+  const skill = readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/skills/work-orchestration/SKILL.md", import.meta.url)), "utf8")
+  assert.ok(skill.includes(`"${VISUAL_PROOF_RULE}"`), "work-orchestration quotes the mapper's visual-proof sentence")
 })
