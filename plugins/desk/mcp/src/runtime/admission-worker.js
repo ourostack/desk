@@ -5,7 +5,6 @@
 // The worker imports only dependency-free modules; the restored native modules are loaded by path at run time. It never imports index.js, which would start Desk inside the worker.
 
 import { readFileSync } from "node:fs"
-import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parentPort, Worker, workerData } from "node:worker_threads"
 import { normalizeReadinessPolicy } from "../activation/readiness-policy.js"
@@ -49,32 +48,10 @@ export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadin
   }
 }
 
-/**
- * Load the restored runtime's native modules (better-sqlite3 and the sqlite-vec extension) once on this worker thread and open an in-memory database with them.
- * A native library is loaded once per process, so the thread that answers the host later finds both already loaded: the first load of freshly restored files (60 to 80 ms here, more while the OS checks new files) happens here instead of at the transition to ready. Returns whether the warm-up ran; a failure is harmless, because the session loads the modules itself either way.
- */
-export function warmNativeModules(sourceMirrorPath, { requireFrom = createRequire, platform = process.platform } = {}) {
-  // Not on Windows: loading better-sqlite3 and sqlite-vec on this worker thread ended Desk servers with an access violation (0xC0000005) after the handshake, with the addon built against Node 24.18.0 headers as well as newer ones, and made the worker test hang. The session loads the modules itself, so the only cost is the first load happening later.
-  if (platform === "win32") return false
-  try {
-    const load = requireFrom(path.join(sourceMirrorPath, "src", "db", "init.js"))
-    const Database = load("better-sqlite3")
-    const db = new Database(":memory:")
-    try {
-      load("sqlite-vec").load(db)
-    } finally {
-      db.close()
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
 /** Inspect (when asked) and restore the runtime. Returns `{ inspection, prepared }`, or the inspection, `inspectionError` or `restoreError` that stopped it. */
 export function prepareRuntimeInputs({
   mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect,
-  inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime, warm = warmNativeModules,
+  inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime,
 }, { onPhase = () => {} } = {}) {
   let inspection = null
   if (inspect) {
@@ -94,7 +71,6 @@ export function prepareRuntimeInputs({
   } catch (error) {
     return { inspection, restoreError: { ...serializeError(error), ...publicationLock(error) } }
   }
-  warm(prepared.sourceMirrorPath)
   return { inspection, prepared }
 }
 
