@@ -165,7 +165,7 @@ Reuse a previous validation result only while its source/diff fingerprint, exact
 
 ### Commands are repo-specific
 
-Exact build / test / formatter commands live under `../repo-knowledge/<repo>/` (see `repo-handling` for the auto-loader). Each repo's `pre-push-gates.md` (or equivalent) captures the safe-default build line, test-project cut-lines, and formatter fallback. For repos without `repo-knowledge` content, consult the repo's own build / test docs before the first push.
+Exact build / test / formatter commands live under `../repo-knowledge/<repo>/` (`repo-handling` "Repo knowledge" loads them). Each repo's `pre-push-gates.md` (or equivalent) captures the safe-default build line, test-project cut-lines, and formatter fallback. For repos without `repo-knowledge` content, consult the repo's own build / test docs before the first push.
 
 ## Test scope — cover consumers, not just the unit under change
 
