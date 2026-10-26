@@ -22,7 +22,7 @@ for (const [file, flagged] of [
   ["plugins/desk/mcp/__tests__/a.test.js", true],
   ["plugins/desk/somepkg/test/fixtures/x.mjs", true],
   ["plugins/desk/hooks/boot-checks.test.cjs", true],
-  ["plugins/desk/mcp/src/coverage/runner.js", false],
+  ["plugins/desk/mcp/src/runtime/bootstrap.js", false],
   ["plugins/desk/mcp/src/testing-notes.js", false],
 ]) {
   assert.equal(isTestPath(file), flagged, file);

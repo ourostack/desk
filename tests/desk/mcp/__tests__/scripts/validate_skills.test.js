@@ -24,8 +24,8 @@ const expectedSkillNames = [
 ]
 
 const requiredPackageScripts = {
-  "activation:support-matrix:generate": "node scripts/generate-support-matrix.js",
-  "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
+  "activation:support-matrix:generate": "node ../../../tools/desk-build/scripts/generate-support-matrix.js",
+  "activation:copilot-bundle:generate": "node ../../../tools/desk-build/scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
 }
@@ -89,7 +89,7 @@ function createFixtureRepo(root) {
   for (const command of Object.values(requiredPackageScripts)) {
     writeText(
       root,
-      path.join("plugins", "desk", "mcp", command.replace(/^node\s+scripts\//u, "scripts/")),
+      path.join("plugins", "desk", "mcp", command.replace(/^node\s+/u, "")),
       "#!/usr/bin/env node\nprocess.exit(0)\n",
     )
   }
@@ -381,7 +381,7 @@ test("validateDeskMcpPackageScripts catches missing scripts, command drift, and 
           "plugins",
           "desk",
           "mcp",
-          command.replace(/^node\s+scripts\//u, "scripts/"),
+          command.replace(/^node\s+/u, ""),
         ),
       ),
       (root) => validator.validateDeskMcpPackageScripts({ repoRoot: root }),

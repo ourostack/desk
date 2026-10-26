@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url"
 import {
   buildRuntimeSupportMatrix,
   deriveRuntimeSupportMatrixPath,
-} from "../src/runtime/runtime-deps.js"
-import { runIfEntrypoint } from "../index.js"
+} from "../../../plugins/desk/mcp/src/runtime/runtime-deps.js"
+import { runIfEntrypoint } from "../../../plugins/desk/mcp/index.js"
 
-const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "plugins", "desk", "mcp")
 
 export function generateRuntimeSupportMatrixCli({ mcpRoot = MCP_ROOT } = {}) {
   const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../tools/desk-build/activation/copilot-bundle.js"
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"))

@@ -1,0 +1,6 @@
+{
+  "name": "@ourostack/desk-build-tools",
+  "private": true,
+  "type": "module",
+  "description": "Build and CI tools for the Desk plugin: the coverage gate and the generators and checks for the activation support matrix, the Copilot bundle and the runtime support matrix. They run from the repository, never from an installed plugin, so they live outside plugins/desk. They use the Desk MCP package's code and its installed dev dependencies (plugins/desk/mcp/node_modules)."
+}

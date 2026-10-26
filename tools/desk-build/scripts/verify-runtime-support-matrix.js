@@ -3,10 +3,10 @@
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { verifyRuntimeSupportMatrix } from "../src/runtime/runtime-deps.js"
-import { runIfEntrypoint } from "../index.js"
+import { verifyRuntimeSupportMatrix } from "../../../plugins/desk/mcp/src/runtime/runtime-deps.js"
+import { runIfEntrypoint } from "../../../plugins/desk/mcp/index.js"
 
-const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "plugins", "desk", "mcp")
 
 export function verifyRuntimeSupportMatrixCli({ mcpRoot = MCP_ROOT } = {}) {
   const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))

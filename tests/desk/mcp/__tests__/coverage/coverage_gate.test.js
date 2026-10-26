@@ -19,13 +19,14 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
+const toolRoot = path.join(repoRoot, "tools", "desk-build")
 
 async function loadGate() {
-  return import("../../../../../plugins/desk/mcp/src/coverage/gate.js")
+  return import("../../../../../tools/desk-build/coverage/gate.js")
 }
 
 async function loadRunner() {
-  return import("../../../../../plugins/desk/mcp/src/coverage/runner.js")
+  return import("../../../../../tools/desk-build/coverage/runner.js")
 }
 
 function makeTempDir() {
@@ -297,7 +298,7 @@ test("coverage command parity rejects CI/local drift", async () => {
       "package.json",
       JSON.stringify({
         scripts: {
-          "test:coverage": "node scripts/run-coverage.js",
+          "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js",
         },
       }, null, 2),
     )
@@ -388,7 +389,7 @@ test("coverage command parity rejects CI/local drift", async () => {
       workflowPath: goodWorkflowPath,
     })
     assert.equal(badPackage.ok, false)
-    assert.match(badPackage.issues.join("\n"), /node scripts\/run-coverage\.js/i)
+    assert.match(badPackage.issues.join("\n"), /node \.\.\/\.\.\/\.\.\/tools\/desk-build\/scripts\/run-coverage\.js/i)
 
     const missingRootScriptPathFilter = writeFixture(
       tmp,
@@ -895,7 +896,7 @@ test("coverage runner filters documented exclusions before maintained instrument
     const packageJsonPath = writeFixture(
       fixtureRoot,
       "plugins/desk/mcp/package.json",
-      JSON.stringify({ scripts: { "test:coverage": "node scripts/run-coverage.js" } }),
+      JSON.stringify({ scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" } }),
     )
     const workflowPath = writeFixture(
       fixtureRoot,
@@ -997,7 +998,7 @@ test("coverage runner returns child status, coverage failures, and success codes
     const packageJsonPath = writeFixture(
       fixtureRoot,
       "plugins/desk/mcp/package.json",
-      JSON.stringify({ scripts: { "test:coverage": "node scripts/run-coverage.js" } }),
+      JSON.stringify({ scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" } }),
     )
     const workflowPath = writeFixture(
       fixtureRoot,
@@ -1176,7 +1177,7 @@ test("coverage runner and entrypoint refuse recursive execution without claiming
   process.env.DESK_COVERAGE_RUNNER_CHILD = "1"
   try {
     assert.equal(runCoverageCommand(), 1)
-    await import(`${pathToFileURL(path.join(mcpRoot, "scripts", "run-coverage.js")).href}?child-refusal=${Date.now()}`)
+    await import(`${pathToFileURL(path.join(toolRoot, "scripts", "run-coverage.js")).href}?child-refusal=${Date.now()}`)
     assert.equal(process.exitCode, 1)
     assert.equal(diagnostics.length, 3)
     assert.ok(diagnostics.every(text => text.includes("no coverage was measured")))
@@ -1272,19 +1273,19 @@ test("coverage required-file discovery admits the offline evaluation implementat
 })
 
 test("coverage runner exists and delegates to the coverage gate", () => {
-  const runnerPath = path.join(mcpRoot, "scripts", "run-coverage.js")
-  const runnerModulePath = path.join(mcpRoot, "src", "coverage", "runner.js")
+  const runnerPath = path.join(toolRoot, "scripts", "run-coverage.js")
+  const runnerModulePath = path.join(toolRoot, "coverage", "runner.js")
 
   assert.ok(
     existsSync(runnerPath),
-    "scripts/run-coverage.js must exist as the non-recursive local coverage entrypoint",
+    "tools/desk-build/scripts/run-coverage.js must exist as the non-recursive local coverage entrypoint",
   )
 
   const runner = readFileSync(runnerPath, "utf8")
   const runnerModule = readFileSync(runnerModulePath, "utf8")
   assert.match(
     runner,
-    /from\s+["'][^"']*src\/coverage\/runner\.js["']/,
+    /from\s+["'][^"']*coverage\/runner\.js["']/,
     "coverage runner script must delegate to the tested runner module",
   )
   assert.match(
@@ -1321,7 +1322,7 @@ test("Desk MCP package exposes the local test:coverage command contract", () => 
 
   assert.equal(
     packageJson.scripts?.["test:coverage"],
-    "node scripts/run-coverage.js",
+    "node ../../../tools/desk-build/scripts/run-coverage.js",
   )
 })
 

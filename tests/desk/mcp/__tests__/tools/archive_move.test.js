@@ -339,7 +339,8 @@ test("released missing ACK is uncertain even while the original source identity 
     sourceIdentity: `${stat.dev}:${stat.ino}:${stat.mode & 0o170000n}`, moved: false, published: false })
   assert.equal(error.archive_phase, "relocation_outcome_uncertain")
   assert.equal(error.possible_late_effect, true)
-  assert.equal(error.actual_path, path.join(src, "task.md"))
+  // The reported path is the resolved one; on macOS the temp folder /var/... resolves to /private/var/....
+  assert.equal(error.actual_path, path.join(await fs.realpath(src), "task.md"))
 })
 
 test("never-released precondition and separate close failure remain distinguishable in the public message", async () => {

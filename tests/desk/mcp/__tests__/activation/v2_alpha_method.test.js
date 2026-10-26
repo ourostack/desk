@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../tools/desk-build/activation/copilot-bundle.js"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
 const readJson = (relativePath) => JSON.parse(readFileSync(new URL(relativePath, repoRoot), "utf8"))

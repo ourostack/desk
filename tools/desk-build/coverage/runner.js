@@ -21,14 +21,16 @@ import {
   evaluateCoverageReport,
   isOfflineEvaluationScope,
 } from "./gate.js"
-import { removeWithRetry } from "../util/remove-retry.js"
+import { removeWithRetry } from "../../../plugins/desk/mcp/src/util/remove-retry.js"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const defaultMcpRoot = path.resolve(moduleDir, "..", "..")
-const defaultRepoRoot = path.resolve(defaultMcpRoot, "..", "..", "..")
+const toolRoot = path.resolve(moduleDir, "..")
+const defaultRepoRoot = path.resolve(toolRoot, "..", "..")
+const defaultMcpRoot = path.join(defaultRepoRoot, "plugins", "desk", "mcp")
 // The tests live outside the shipped plugin folder, in tests/desk/mcp, which mirrors plugins/desk/mcp.
 const defaultTestRoot = path.join(defaultRepoRoot, "tests", "desk", "mcp", "__tests__")
-const require = createRequire(import.meta.url)
+// nyc and the ESM loader hook are dev dependencies of the Desk MCP package, installed in its node_modules.
+const require = createRequire(path.join(defaultMcpRoot, "package.json"))
 
 export function runCoverageCommand(options = {}) {
   const env = options.env ?? process.env
@@ -520,8 +522,8 @@ function defaultPaths() {
   return {
     repoRoot: defaultRepoRoot,
     mcpRoot: defaultMcpRoot,
-    configPath: path.join(defaultMcpRoot, "config", "coverage-gate.json"),
-    shardWeightsPath: path.join(defaultMcpRoot, "config", "coverage-shards.json"),
+    configPath: path.join(toolRoot, "config", "coverage-gate.json"),
+    shardWeightsPath: path.join(toolRoot, "config", "coverage-shards.json"),
     packageJsonPath: path.join(defaultMcpRoot, "package.json"),
     workflowPath: path.join(defaultRepoRoot, ".github", "workflows", "desk-mcp-tests.yml"),
   }

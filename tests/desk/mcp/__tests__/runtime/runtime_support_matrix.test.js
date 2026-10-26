@@ -229,11 +229,11 @@ test("runtime support matrix generation and verification are package scripts CI 
   const packageJson = loadJson(path.join(mcpRoot, "package.json"))
   assert.equal(
     packageJson.scripts["runtime:support-matrix:generate"],
-    "node scripts/generate-runtime-support-matrix.js",
+    "node ../../../tools/desk-build/scripts/generate-runtime-support-matrix.js",
   )
   assert.equal(
     packageJson.scripts["runtime:support-matrix:verify"],
-    "node scripts/verify-runtime-support-matrix.js",
+    "node ../../../tools/desk-build/scripts/verify-runtime-support-matrix.js",
   )
   const workflow = readFileSync(
     path.join(mcpRoot, "..", "..", "..", ".github", "workflows", "desk-mcp-tests.yml"),

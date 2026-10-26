@@ -15,7 +15,7 @@ import {
   parseCoverageArguments,
   partitionCoverageTestFiles,
   runCoverageCommand,
-} from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
+} from "../../../../../tools/desk-build/coverage/runner.js"
 
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const realRepoRoot = path.resolve(mcpRoot, "..", "..", "..")
@@ -55,7 +55,7 @@ function fixtureRepo(t, { weights, tests = testFiles } = {}) {
       exclusions: [],
     })),
     packageJsonPath: write(repoRoot, "plugins/desk/mcp/package.json", JSON.stringify({
-      scripts: { "test:coverage": "node scripts/run-coverage.js" },
+      scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
     })),
     workflowPath: write(repoRoot, ".github/workflows/desk-mcp-tests.yml", [
       "on:",
@@ -218,7 +218,7 @@ test("the partition runs every file in exactly one shard and balances the record
 })
 
 test("the committed shard weights are expected seconds per repository-relative test file", () => {
-  const weights = JSON.parse(readFileSync(path.join(mcpRoot, "config", "coverage-shards.json"), "utf8"))
+  const weights = JSON.parse(readFileSync(path.join(mcpRoot, "..", "..", "..", "tools", "desk-build", "config", "coverage-shards.json"), "utf8"))
   assert.equal(weights.schema_version, 1)
   assert.equal(typeof weights.default_seconds, "number")
   assert.ok(Object.keys(weights.file_seconds).length > 100, "the weights must come from a real run")
@@ -454,7 +454,7 @@ test("real shards each cover part of a file, and only their merged coverage pass
     })),
     packageJsonPath: write(repoRoot, "plugins/desk/mcp/package.json", JSON.stringify({
       type: "module",
-      scripts: { "test:coverage": "node scripts/run-coverage.js" },
+      scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
     })),
     workflowPath: write(repoRoot, ".github/workflows/desk-mcp-tests.yml", [
       "on:",
@@ -563,7 +563,7 @@ test("a real shard's own processinfo bookkeeping, genuinely undeletable, warns w
     })),
     packageJsonPath: write(repoRoot, "plugins/desk/mcp/package.json", JSON.stringify({
       type: "module",
-      scripts: { "test:coverage": "node scripts/run-coverage.js" },
+      scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
     })),
     workflowPath: write(repoRoot, ".github/workflows/desk-mcp-tests.yml", [
       "on:",

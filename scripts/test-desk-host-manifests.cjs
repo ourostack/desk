@@ -9,6 +9,8 @@ const { pathToFileURL } = require("node:url");
 
 const defaultRepoRoot = path.resolve(__dirname, "..");
 const defaultMcpRoot = path.join(defaultRepoRoot, "plugins", "desk", "mcp");
+// The bundle generator is a build tool outside the shipped plugin; a fixture repository still checks against this one.
+const copilotBundleModule = path.join(defaultRepoRoot, "tools", "desk-build", "activation", "copilot-bundle.js");
 const activationManifestPath = "plugins/desk/activation/desk.activation.json";
 const copilotBundlePath = "plugins/desk/activation/copilot-root.flattened-bundle.json";
 const evidencePath = "plugins/desk/activation/host-capability-evidence.md";
@@ -158,11 +160,9 @@ function checkSupportMatrix({ repoRoot, errors, checked }) {
   }
 }
 
-async function checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked }) {
+async function checkCopilotBundle({ repoRoot, methodId, errors, checked }) {
   checked.push("copilot-bundle");
-  const { buildCopilotBundle, validateCopilotPackagingContract } = await import(pathToFileURL(
-    path.join(mcpRoot, "src", "activation", "copilot-bundle.js"),
-  ).href);
+  const { buildCopilotBundle, validateCopilotPackagingContract } = await import(pathToFileURL(copilotBundleModule).href);
   const activation = readJson(repoRoot, activationManifestPath);
   const bundle = readJson(repoRoot, copilotBundlePath);
   pushMismatch(errors, "copilot-bundle", bundle, buildCopilotBundle({ activation }));
@@ -544,7 +544,7 @@ async function verifyDeskHostManifests(options = {}) {
     const activation = readJson(repoRoot, activationManifestPath);
     const methodId = selectEngineeringMethod(activation.provides.activation_targets.find((target) => target.id === "desk:worker").depends_on);
     checkSupportMatrix({ repoRoot, errors, checked });
-    await checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked });
+    await checkCopilotBundle({ repoRoot, methodId, errors, checked });
     checkClaudePlugin({ repoRoot, methodId, errors, checked });
     checked.push("factory-hooks");
     errors.push(...validateFactoryHooks(readJson(repoRoot, "plugins/desk/hooks/hooks.json"), readJson(repoRoot, "plugins/desk/hooks/copilot-hooks.json")));

@@ -231,7 +231,7 @@ contract("CI runs these Desk content contracts", () => {
 
 contract("coverage exclusion list has no campaign additions", () => {
   assert.deepEqual(
-    json("plugins/desk/mcp/config/coverage-gate.json").exclusions.map(({ path: file }) => file).sort(),
+    json("tools/desk-build/config/coverage-gate.json").exclusions.map(({ path: file }) => file).sort(),
     ["scripts/validate-skills.cjs"],
   );
 });

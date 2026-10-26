@@ -31,7 +31,7 @@ const requiredHosts = [
 ]
 
 async function loadSupportMatrix() {
-  return import("../../../../../plugins/desk/mcp/src/activation/support-matrix.js")
+  return import("../../../../../tools/desk-build/activation/support-matrix.js")
 }
 
 function loadJson(relativePath) {
@@ -345,10 +345,10 @@ test("support matrix package script is wired to regenerate the artifact", async 
 
   assert.equal(
     packageJson.scripts["activation:support-matrix:generate"],
-    "node scripts/generate-support-matrix.js",
+    "node ../../../tools/desk-build/scripts/generate-support-matrix.js",
   )
 
-  await import(`${pathToFileURL(path.join(mcpRoot, "scripts", "generate-support-matrix.js")).href}?test=unit3b`)
+  await import(`${pathToFileURL(path.join(mcpRoot, "..", "..", "..", "tools", "desk-build", "scripts", "generate-support-matrix.js")).href}?test=unit3b`)
 
   assert.equal(process.exitCode, 0)
   assert.deepEqual(loadJson(generatedMatrixPath), expectedSupportMatrix())

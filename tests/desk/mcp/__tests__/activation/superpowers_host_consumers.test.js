@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { validateClaudePackagingContract } from "./_contracts/claude-packaging.js"
 import { validateOuroborosStdioPackagingContract } from "./_contracts/ouroboros-stdio-packaging.js"
-import { buildCopilotBundle } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { buildCopilotBundle } from "../../../../../tools/desk-build/activation/copilot-bundle.js"
 import { validateActivationManifest } from "../../../../../plugins/desk/mcp/src/activation/validate.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
