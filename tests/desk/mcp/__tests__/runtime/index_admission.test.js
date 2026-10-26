@@ -9,6 +9,7 @@ import { main, parseArgs, resolveStartupStateBranch } from "../../../../../plugi
 import { resolveAdmissionInputs } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { idleSearchEngine } from "./_in_process_desk.js"
 import { osEnv } from "../_os_env.js"
 
 // Keep root resolution, the hook record, admission and protocol projection real.
@@ -76,7 +77,7 @@ async function freshHostStatus(t, pauseAt) {
       importing()
       await runtimeGate
       // Teardown releases the held import only after closing the front door.
-      // No ready runtime, controller or fabricated read result is needed.
+      // No ready runtime, search engine or fabricated read result is needed.
       return {}
     },
   })
@@ -232,7 +233,7 @@ test("main answers the handshake, starts admission on its own without a client, 
     stderr: { write() { return true } },
     admissionKickoffMs: 5,
     runtimeInspector: null,
-    runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
     onClosed: () => { closed = true },
   })
   // The first tools/list starts admission; the kickoff timer that follows finds it already started.
@@ -269,8 +270,8 @@ test("the default stateHome follows HOME and XDG_STATE_HOME", async () => {
   assert.equal(existsSync(path.join(root, "xdg-state", "ouroboros-skills", "desk", "last-start.json")), true)
 })
 
-test("input close waits for the owned controller to finish closing before the entrypoint exits", { timeout: 10000 }, async (t) => {
-  const root = await mkTempRoot("desk-main-close-controller-")
+test("input close waits for the search engine to finish closing before the entrypoint exits", { timeout: 10000 }, async (t) => {
+  const root = await mkTempRoot("desk-main-close-search-")
   const input = new PassThrough()
   let release
   let started
@@ -283,10 +284,7 @@ test("input close waits for the owned controller to finish closing before the en
     admissionKickoffMs: 0, runtimeInspector: null,
     readinessPolicy: { semantic: "unsupported" },
     runtimeImporter: async () => ({
-      connectOrStartController: async () => ({
-        accepted: true,
-        async close() { started(); await closing },
-      }),
+      createSearchEngine: () => idleSearchEngine({ async close() { started(); await closing } }),
     }),
     onClosed: () => { exited = true },
   })
@@ -298,13 +296,13 @@ test("input close waits for the owned controller to finish closing before the en
   assert.equal(handle.admission.snapshot().state, "ready")
   input.end()
   await closeStarted
-  assert.equal(exited, false, "a controller can still own fixture files while its close is pending")
+  assert.equal(exited, false, "a search engine can still own fixture files while its close is pending")
   release()
   await handle.closed
   assert.equal(exited, true)
 })
 
-async function pendingControllerClose(t, options = {}) {
+async function pendingSearchClose(t, options = {}) {
   const root = await mkTempRoot("desk-main-close-wait-")
   const input = new PassThrough()
   const messages = []
@@ -319,10 +317,7 @@ async function pendingControllerClose(t, options = {}) {
     admissionKickoffMs: 0, runtimeInspector: null,
     readinessPolicy: { semantic: "unsupported" },
     runtimeImporter: async () => ({
-      connectOrStartController: async () => ({
-        accepted: true,
-        async close() { started(); await closing },
-      }),
+      createSearchEngine: () => idleSearchEngine({ async close() { started(); await closing } }),
     }),
     onClosed: (code = 0) => { exits.push(code) },
     ...options,
@@ -336,8 +331,8 @@ async function pendingControllerClose(t, options = {}) {
   return { handle, input, release, closeStarted, messages, exits }
 }
 
-test("a stalled controller close ends at the shutdown deadline with a reported failure", { timeout: 10000 }, async (t) => {
-  const closing = await pendingControllerClose(t)
+test("a stalled search engine close ends at the shutdown deadline with a reported failure", { timeout: 10000 }, async (t) => {
+  const closing = await pendingSearchClose(t)
   t.mock.timers.enable({ apis: ["setTimeout"] })
   closing.input.end()
   await closing.closeStarted
@@ -351,11 +346,11 @@ test("a stalled controller close ends at the shutdown deadline with a reported f
   await closing.handle.closed
   closing.release()
   await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(closing.exits, [1], "a late controller close must not trigger a second exit")
+  assert.deepEqual(closing.exits, [1], "a late search engine close must not trigger a second exit")
 })
 
-test("a controller that closes before the deadline exits cleanly without retaining its timer", { timeout: 10000 }, async (t) => {
-  const closing = await pendingControllerClose(t)
+test("a search engine that closes before the deadline exits cleanly without retaining its timer", { timeout: 10000 }, async (t) => {
+  const closing = await pendingSearchClose(t)
   const timeoutCount = () => process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length
   const before = timeoutCount()
   closing.input.end()
@@ -367,10 +362,10 @@ test("a controller that closes before the deadline exits cleanly without retaini
   assert.doesNotMatch(closing.messages.join(""), /shutdown.*timed out/u)
 })
 
-test("crash handlers keep recording errors during the controller close wait", { timeout: 10000 }, async (t) => {
+test("crash handlers keep recording errors during the search engine close wait", { timeout: 10000 }, async (t) => {
   const previous = new Set(process.listeners("uncaughtException"))
   const previousRejections = new Set(process.listeners("unhandledRejection"))
-  const closing = await pendingControllerClose(t, { crashHandlers: true })
+  const closing = await pendingSearchClose(t, { crashHandlers: true })
   const handler = process.listeners("uncaughtException").find((listener) => !previous.has(listener))
   const rejection = process.listeners("unhandledRejection").find((listener) => !previousRejections.has(listener))
   assert.equal(typeof handler, "function")
@@ -379,11 +374,11 @@ test("crash handlers keep recording errors during the controller close wait", { 
   await closing.closeStarted
   assert.ok(process.listeners("uncaughtException").includes(handler), "the close wait must retain its crash handler")
   assert.ok(process.listeners("unhandledRejection").includes(rejection), "the close wait must retain its rejection handler")
-  handler(new Error("error during controller close"))
-  rejection("rejection during controller close")
+  handler(new Error("error during search engine close"))
+  rejection("rejection during search engine close")
   assert.deepEqual(closing.handle.session.context.exceptions.slice(-2).map(({ kind, message }) => ({ kind, message })), [
-    { kind: "uncaught_exception", message: "error during controller close" },
-    { kind: "unhandled_rejection", message: "rejection during controller close" },
+    { kind: "uncaught_exception", message: "error during search engine close" },
+    { kind: "unhandled_rejection", message: "rejection during search engine close" },
   ])
   assert.doesNotMatch(closing.messages.join(""), /Desk keeps serving and re-admits/u, "a disposed session must not promise re-admission")
   closing.release()
@@ -404,11 +399,8 @@ test("with the real runtime inspector and importer, main restores the runtime af
   const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
   const session = await startInProcess({
     argv: ["--root", desk],
-    // The real runtime and inspector, except that the controller is started ephemeral: the client then ends the controller child when this session closes, so the test needs no signal to end it.
-    runtimeImporter: async (given) => {
-      const runtime = await importRuntimeServer(given)
-      return { ...runtime, connectOrStartController: (options) => runtime.connectOrStartController({ ...options, ephemeral: true }) }
-    },
+    // The real runtime and inspector.
+    runtimeImporter: importRuntimeServer,
     runtimeInspector: inspectRuntimeDependencyPack,
     env: { DESK_RUNTIME_CACHE_DIR: path.join(root, "runtime-cache"), HOME: root },
     cwd: root,
@@ -528,7 +520,7 @@ test("crash handlers hand uncaught errors and rejections to the session, and are
   const handle = await main({
     argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
     input, output: new PassThrough(), stderr: { write() { return true } }, admissionKickoffMs: 0,
-    runtimeInspector: null, runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    runtimeInspector: null, runtimeImporter: async () => ({ createSearchEngine: () => idleSearchEngine() }),
     crashHandlers: true,
   })
   const before = process.listenerCount("uncaughtException")

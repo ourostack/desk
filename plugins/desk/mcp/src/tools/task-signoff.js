@@ -14,7 +14,6 @@ import { readMarkdown, patchMarkdownFrontmatter } from "../util/fm.js"
 import { validateWriteSegment } from "../util/paths.js"
 import { readRecord, toFrontmatter, sign, refuse, STATUSES, REFUSAL_REASONS, RETURN_REASONS } from "../factory/outcome.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
 import { task_move } from "./move.js"
@@ -66,7 +65,7 @@ function sentence({ slug, outcome, reason, changed }) {
  * `say` is the sentence the agent includes in its reply. Every refusal of the call writes nothing.
  */
 export async function taskSignoff({
-  deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync,
+  deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync,
   schedulePush = schedulePushDefault, now = Date.now, finalize = requestTaskFinalize, refreshSignoff = refreshSignoffStatus,
 }) {
   const values = input ?? {}
@@ -109,7 +108,7 @@ export async function taskSignoff({
   }
   if (refused && found.archived) {
     try {
-      await task_move({ deskRoot, input: { track, slug, unarchive: true }, person, readiness, statusContext, spawnGit, schedulePush })
+      await task_move({ deskRoot, input: { track, slug, unarchive: true }, person, search, statusContext, spawnGit, schedulePush })
     } catch (error) {
       throw new Error(`task_signoff: the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_move (unarchive: true), then call task_signoff again.`)
     }
@@ -123,7 +122,7 @@ export async function taskSignoff({
   const commit = stage ? stageAndCommitCard(file, `task_signoff: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
   const deskCommit = stage && !commit ? headSha(path.dirname(file), spawnGit) : null
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, file) }] })
+  search?.noteChange(relPath(deskRoot, file))
   await finalize({ deskRoot, env, identity: await taskJobOrNull({ deskRoot, person, track, slug }) })
   try {
     await refreshSignoff(env, deskRoot, { now: atMs })

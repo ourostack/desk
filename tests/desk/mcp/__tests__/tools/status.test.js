@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url"
 import fsNative from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 
-import { closeDb, indexDbPath, openDb, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
@@ -309,7 +309,7 @@ test("desk_status reports search in plain words from the session's engine, with 
     const search = { state: "preparing", message: "Search is preparing 3 of 10 sections for meaning-based search; exact-word search is ready.", old_index_removed: "Desk removed its old search index (9.7 GB), which this version no longer uses." }
     const body = parseToolResult(await callTool({
       deskRoot: root, name: "desk_status", input: {},
-      statusContext: { admission: { controller: { searchStatus: () => search } } },
+      statusContext: { search: { searchStatus: () => search } },
     }))
     assert.deepEqual(body.search, search)
     assert.match(body.summary, /Search is preparing 3 of 10 sections.*Desk removed its old search index \(9\.7 GB\)/u)

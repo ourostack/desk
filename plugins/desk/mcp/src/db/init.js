@@ -73,17 +73,3 @@ export function closeDb(db) {
     db.close()
   }
 }
-
-/** Read a meta key. Returns null if absent. */
-export function getMeta(db, key) {
-  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key)
-  return row ? row.value : null
-}
-
-/** Set (or upsert) a meta key. */
-export function setMeta(db, key, value) {
-  db.prepare(
-    "INSERT INTO meta (key, value) VALUES (?, ?) " +
-      "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(key, value)
-}

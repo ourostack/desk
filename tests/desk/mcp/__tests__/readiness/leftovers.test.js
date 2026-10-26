@@ -1,85 +1,99 @@
-// Leftover readiness-controller folders are pruned only when their owner is dead and their root is gone.
+// Folders older Desk versions' readiness controllers left are removed once no live process owns them and they have been idle for an hour.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
-import * as net from "node:net"
+import { existsSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { onUnmountedVolume, processIsAlive, pruneReadinessLeftovers, socketAccepts } from "../../../../../plugins/desk/mcp/src/readiness/leftovers.js"
+import { processIsAlive, removeReadinessLeftovers } from "../../../../../plugins/desk/mcp/src/readiness/leftovers.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { otherFile } from "../_file_identity.js"
 
 const id = (digit) => digit.repeat(64)
+// Two hours from now: every fixture folder looks an hour idle.
+const later = () => Date.now() + 2 * 60 * 60 * 1000
 
-function controllerDir(stateHome, name, { owner, journalRoot } = {}) {
+function controllerDir(stateHome, name, owner) {
   const dir = path.join(stateHome, name)
   mkdirSync(path.join(dir, "journal"), { recursive: true })
+  writeFileSync(path.join(dir, "journal", "changes.jsonl"), "")
   if (owner !== undefined) writeFileSync(path.join(dir, "owner.json"), typeof owner === "string" ? owner : JSON.stringify(owner))
-  if (journalRoot !== undefined) writeFileSync(path.join(dir, "journal", "journal.json"), JSON.stringify({ id: "j", root: journalRoot }))
   return dir
 }
 
-test("prunes dead-owner folders whose root is gone, and keeps everything else", async () => {
+test("removes idle folders no live process owns, and keeps everything else", async () => {
   const base = await mkTempRoot("desk-leftovers-")
   const stateHome = path.join(base, "readiness")
-  const liveRoot = path.join(base, "live-root")
-  mkdirSync(liveRoot)
-  const goneRoot = path.join(base, "gone-root")
   const dead = 999999
   const alive = (pid) => pid === process.pid
-  const prunedOwner = controllerDir(stateHome, id("a"), { owner: { identity: { root: goneRoot }, owner: { pid: dead } } })
-  const prunedJournal = controllerDir(stateHome, id("b"), { journalRoot: goneRoot })
-  const liveOwner = controllerDir(stateHome, id("c"), { owner: { identity: { root: goneRoot }, owner: { pid: process.pid } } })
-  const rootExists = controllerDir(stateHome, id("d"), { owner: { identity: { root: liveRoot }, owner: { pid: dead } } })
-  const unknownRoot = controllerDir(stateHome, id("e"), { owner: "{corrupt", journalRoot: goneRoot })
-  const notAController = controllerDir(stateHome, "notes", { journalRoot: goneRoot })
+  const deadOwner = controllerDir(stateHome, id("a"), { owner: { pid: dead } })
+  const closedCleanly = controllerDir(stateHome, id("b"))
+  const liveOwner = controllerDir(stateHome, id("d"), { owner: { pid: process.pid } })
+  const unreadable = controllerDir(stateHome, id("e"), "{corrupt")
+  const kept = [
+    liveOwner, unreadable,
+    controllerDir(stateHome, id("c"), { owner: {} }),
+    controllerDir(stateHome, id("1"), { owner: { pid: String(dead) } }),
+    controllerDir(stateHome, id("2"), { owner: { pid: 0 } }),
+    controllerDir(stateHome, id("3"), { owner: { pid: -1 } }),
+    controllerDir(stateHome, id("4"), "null"),
+    controllerDir(stateHome, id("5"), { pid: dead }),
+    controllerDir(stateHome, "notes"),
+  ]
   writeFileSync(path.join(stateHome, id("f")), "a file, not a folder")
-  symlinkSync(prunedOwner, path.join(stateHome, id("9")))
+  symlinkSync(liveOwner, path.join(stateHome, id("9")))
 
-  const result = await pruneReadinessLeftovers({ stateHome, isAlive: alive })
-  assert.deepEqual(result.pruned.map((entry) => entry.id).sort(), [id("a"), id("b")])
-  assert.deepEqual(result.pruned.find((entry) => entry.id === id("a")), { id: id("a"), root: goneRoot, pid: dead })
-  assert.deepEqual(result.pruned.find((entry) => entry.id === id("b")), { id: id("b"), root: goneRoot, pid: null })
-  assert.equal(result.kept, 6)
-  assert.equal(existsSync(prunedOwner), false)
-  assert.equal(existsSync(prunedJournal), false)
-  for (const dir of [liveOwner, rootExists, unknownRoot, notAController]) assert.equal(existsSync(dir), true)
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome, isAlive: alive, now: later }), { removed: 2, kept: 11 })
+  for (const dir of [deadOwner, closedCleanly]) assert.equal(existsSync(dir), false, dir)
+  for (const dir of [...kept, path.join(stateHome, id("9"))]) assert.equal(existsSync(dir), true, dir)
 })
 
-test("a stale socket the dead owner published is removed with its folder; a replaced one is kept", { skip: process.platform === "win32" ? "unix sockets" : false }, async () => {
-  const base = await mkTempRoot("desk-leftovers-socket-")
+test("a folder with anything changed in the last hour is kept: an older controller may be starting in it", async () => {
+  const base = await mkTempRoot("desk-leftovers-recent-")
   const stateHome = path.join(base, "readiness")
-  const endpoint = path.join(base, "s.sock")
-  const server = net.createServer()
-  await new Promise((resolve) => server.listen(endpoint, resolve))
-  const { dev, ino } = lstatSync(endpoint)
-  // Keep the file while closing the listener, the way a crashed process leaves it.
-  const keep = path.join(base, "keep.sock")
-  linkSync(endpoint, keep)
-  await new Promise((resolve) => server.close(resolve))
-  renameSync(keep, endpoint)
-  const gone = path.join(base, "gone")
-  controllerDir(stateHome, id("b"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: otherFile({ dev, ino }) } })
-  controllerDir(stateHome, id("d"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: null } })
-  controllerDir(stateHome, id("c"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint: path.join(base, "missing.sock"), socket: { dev, ino } } })
-  assert.equal((await pruneReadinessLeftovers({ stateHome, isAlive: () => false })).pruned.length, 3)
-  assert.equal(existsSync(endpoint), true, "a socket that is not the recorded one is kept")
-  controllerDir(stateHome, id("a"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint, socket: { dev, ino } } })
-  assert.equal((await pruneReadinessLeftovers({ stateHome, isAlive: () => false, uid: undefined })).pruned.length, 1)
-  assert.equal(existsSync(endpoint), false, "the socket matching the record is removed")
+  const old = (Date.now() - 2 * 60 * 60 * 1000) / 1000
+  const age = (file) => utimesSync(file, old, old)
+  const starting = controllerDir(stateHome, id("a"))
+  const journalWrite = controllerDir(stateHome, id("b"))
+  for (const file of [path.join(journalWrite, "journal"), journalWrite]) age(file)
+  const idle = controllerDir(stateHome, id("c"))
+  for (const file of [path.join(idle, "journal", "changes.jsonl"), path.join(idle, "journal"), idle]) age(file)
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome, isAlive: () => false }), { removed: 1, kept: 2 })
+  assert.equal(existsSync(starting), true, "a folder just created")
+  assert.equal(existsSync(journalWrite), true, "a journal file changed just now")
+  assert.equal(existsSync(idle), false)
 })
 
-test("a missing state home prunes nothing", async () => {
-  assert.deepEqual(await pruneReadinessLeftovers(), { state_home: undefined, pruned: [], kept: 0, skipped: [] })
-  assert.deepEqual(await pruneReadinessLeftovers({ stateHome: "/nonexistent/desk-readiness" }), { state_home: "/nonexistent/desk-readiness", pruned: [], kept: 0, skipped: [] })
+test("the state home goes once it is empty, and a missing one removes nothing", async () => {
+  const base = await mkTempRoot("desk-leftovers-empty-")
+  const stateHome = path.join(base, "readiness")
+  controllerDir(stateHome, id("a"))
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome, now: later }), { removed: 1, kept: 0 })
+  assert.equal(existsSync(stateHome), false)
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome }), { removed: 0, kept: 0 })
 })
 
-test("a folder owned by someone else is kept", async () => {
+test("a folder owned by someone else is kept, and a failure on one folder never stops the rest", async () => {
   const base = await mkTempRoot("desk-leftovers-owner-")
-  controllerDir(base, id("a"), { journalRoot: path.join(base, "gone") })
-  const result = await pruneReadinessLeftovers({ stateHome: base, uid: -1 })
-  assert.deepEqual(result.pruned, [])
-  assert.equal(result.kept, 1)
+  const stateHome = path.join(base, "readiness")
+  controllerDir(stateHome, id("a"), { owner: { pid: 999999 } })
+  controllerDir(stateHome, id("b"), { owner: { pid: 999999 } })
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome, uid: -1, isAlive: () => false, now: later }), { removed: 0, kept: 2 })
+  let calls = 0
+  const result = await removeReadinessLeftovers({
+    stateHome,
+    now: later,
+    isAlive: () => { calls += 1; if (calls === 1) throw new Error("probe failed"); return false },
+  })
+  assert.deepEqual(result, { removed: 1, kept: 1 })
+})
+
+test("without process.getuid (Windows), a folder is judged by its owner record alone", async (t) => {
+  const base = await mkTempRoot("desk-leftovers-nouid-")
+  const stateHome = path.join(base, "readiness")
+  controllerDir(stateHome, id("a"))
+  const getuid = process.getuid
+  process.getuid = undefined
+  t.after(() => { process.getuid = getuid })
+  assert.deepEqual(await removeReadinessLeftovers({ stateHome, now: later }), { removed: 1, kept: 0 })
 })
 
 test("processIsAlive treats EPERM as alive and ESRCH as dead", () => {
@@ -87,53 +101,4 @@ test("processIsAlive treats EPERM as alive and ESRCH as dead", () => {
   assert.equal(processIsAlive(1, () => { throw Object.assign(new Error("perm"), { code: "EPERM" }) }), true)
   assert.equal(processIsAlive(1, () => { throw Object.assign(new Error("gone"), { code: "ESRCH" }) }), false)
   assert.equal(processIsAlive(1, () => { throw null }), false)
-})
-
-test("a folder whose recorded socket still accepts connections is kept, and an error on one folder never stops the rest", async () => {
-  const base = await mkTempRoot("desk-leftovers-live-")
-  const gone = path.join(base, "gone")
-  controllerDir(base, id("a"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint: "/live.sock" } })
-  controllerDir(base, id("b"), { owner: { identity: { root: gone }, owner: { pid: 999999 }, endpoint: "/broken.sock" } })
-  controllerDir(base, id("c"), { journalRoot: gone })
-  const result = await pruneReadinessLeftovers({
-    stateHome: base,
-    isAlive: () => false,
-    accepts: async (endpoint) => {
-      if (endpoint === "/broken.sock") throw new Error("probe broke")
-      return true
-    },
-  })
-  assert.deepEqual(result.pruned.map((entry) => entry.id), [id("c")])
-  assert.deepEqual(result.skipped, [{ id: id("b"), message: "probe broke" }])
-  assert.equal(result.kept, 2)
-  const thrown = await pruneReadinessLeftovers({ stateHome: base, isAlive: () => false, accepts: async () => { throw "not an error" } })
-  assert.deepEqual(thrown.skipped.map((entry) => entry.message), ["not an error", "not an error"])
-})
-
-test("a root on an unmounted volume is not treated as gone", async () => {
-  const exists = (target) => target === "/Volumes" || target === "/media/ari"
-  assert.equal(onUnmountedVolume("/Volumes/Backup/desk", exists), true)
-  assert.equal(onUnmountedVolume("/media/ari/usb/desk", exists), true)
-  assert.equal(onUnmountedVolume("/mnt/share/desk", exists), true)
-  assert.equal(onUnmountedVolume("/run/media/ari/usb/desk", exists), true)
-  assert.equal(onUnmountedVolume("/Volumes/Backup/desk", () => true), false, "a mounted volume whose root is gone")
-  assert.equal(onUnmountedVolume("/tmp/desk-test/desk", exists), false)
-  assert.equal(onUnmountedVolume("/Volumes", exists), false)
-  assert.equal(typeof onUnmountedVolume("/Volumes/desk-test-missing-volume-3a2/desk"), "boolean", "the default check reads the real file system")
-  const base = await mkTempRoot("desk-leftovers-volume-")
-  controllerDir(base, id("a"), { journalRoot: "/Volumes/desk-test-missing-volume-3a2/desk" })
-  const result = await pruneReadinessLeftovers({ stateHome: base })
-  assert.deepEqual(result.pruned, [])
-})
-
-test("socketAccepts answers true for a listener, false for nothing or a silent timeout", { skip: process.platform === "win32" ? "unix sockets" : false }, async () => {
-  const base = await mkTempRoot("desk-leftovers-accepts-")
-  const endpoint = path.join(base, "s.sock")
-  const server = net.createServer((socket) => socket.destroy())
-  await new Promise((resolve) => server.listen(endpoint, resolve))
-  assert.equal(await socketAccepts(endpoint), true)
-  await new Promise((resolve) => server.close(resolve))
-  assert.equal(await socketAccepts(endpoint), false)
-  const { EventEmitter } = await import("node:events")
-  assert.equal(await socketAccepts("/x", { timeoutMs: 5, connect: () => Object.assign(new EventEmitter(), { destroy() {} }) }), false)
 })

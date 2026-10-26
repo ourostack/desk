@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
+import { appendFileSync } from "node:fs"
 import path from "node:path"
 import { git,interrupted,retry,assertPendingUnchanged } from "./_archive_state_helpers.js"
 
@@ -57,15 +58,13 @@ test("recovery does not adopt a card-body edit that arrives after its initial ad
   const card = path.join(f.destination,"task.md")
   let injected = false
   let result, failure
-  try { result = await retry(f,{ readiness:{
-    async recordChange(change) {
-      if (change.path === "t/_archive/mode-proof" && change.operation === "write") {
-        await fs.appendFile(card,"\nFOREIGN_AFTER_ADMISSION\n")
+  try { result = await retry(f,{ search:{
+    noteChange(changed) {
+      if (changed === "t/_archive/mode-proof") {
+        appendFileSync(card,"\nFOREIGN_AFTER_ADMISSION\n")
         injected = true
       }
-      return { recorded:true }
     },
-    async markUncertain() { assert.fail("the controlled journal acknowledgement did not fail") },
   } }) } catch (error) { failure = error }
   assert.equal(injected,true)
   assert.ok(failure?.actual_path || result?.status === "archive_pending","late card changes must remain an explicit retained uncertainty")

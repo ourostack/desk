@@ -142,10 +142,10 @@ export function createSearchEngine(options) {
       return null
     }
   }
-  // `changed` is a desk-relative path with either separator, or null when the change cannot be placed (the whole desk is read again).
+  // `changed` is a desk-relative path with either separator. A change that cannot be placed (null, or a path that leaves the desk) reads the whole desk again.
   function noteChange(changed) {
-    const rel = typeof changed === "string" ? changed.replaceAll("\\", "/") : null
-    if (rel === null) {
+    const rel = typeof changed === "string" && !path.win32.isAbsolute(changed) && !path.posix.isAbsolute(changed) ? changed.replaceAll("\\", "/") : null
+    if (rel === null || rel.split("/").includes("..")) {
       fullScan = true
     } else if (IGNORED.has(rel.split("/")[0])) {
       return
@@ -354,17 +354,9 @@ export function createSearchEngine(options) {
   }
 
   return {
-    // What the session's admission expects of its search service.
-    accepted: true,
-    identity: Object.freeze({ semantic_contract: Object.freeze({ mode: semantic }) }),
-    embeddingOverride: null,
-    status: async () => ({ state: "READY", convergence: { status: "ready" }, search: searchStatus() }),
-    beginConvergence: () => { refresh().catch(() => {}); return Promise.resolve({ started: true }) },
-    barrier: async ({ capability } = {}) => ({ capability, current: true, certain: true }),
-    recordChange: async ({ path: rel }) => { noteChange(rel); return { recorded: true } },
-    markUncertain: async () => { markChanged() },
-    onExit: () => () => {},
-    // What a Desk write calls with each path it changed, so the next search reads it again.
+    // Reads the desk into the index in the background, so the first search does not wait for it. A failed read is tried again at the next search.
+    warm() { refresh().catch(() => {}) },
+    // What a Desk write calls with each desk-relative path it changed, so the next search reads it again.
     noteChange,
     // What the search tools call.
     lexical,

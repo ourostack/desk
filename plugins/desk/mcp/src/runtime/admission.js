@@ -1,8 +1,8 @@
 // The background admission state machine.
 //
-// Desk answers the MCP handshake first. Everything that can fail (root resolution, activation, the runtime pack, write authority, the state branch and the readiness controller) runs afterwards, as attempts of this machine. Its state is `admitting` until the first attempt settles, then `ready` or `degraded:<code>`.
+// Desk answers the MCP handshake first. Everything that can fail (root resolution, activation, the runtime pack, write authority, the state branch and the search engine) runs afterwards, as attempts of this machine. Its state is `admitting` until the first attempt settles, then `ready` or `degraded:<code>`.
 //
-// A degraded machine retries on its own: after 1, 2, 5, 10 and 30 s, then every 60 s. `refresh()` (called on every desk_status, on a .git/HEAD change and before a gated tool) retries at once. A ready machine re-checks its controller every 60 s, and `degrade()` lets a caller report a loss (for example a controller that stopped answering), which starts re-admission at once. No state ever needs a restart, and the tool list never changes.
+// A degraded machine retries on its own: after 1, 2, 5, 10 and 30 s, then every 60 s. `refresh()` (called on every desk_status, on a .git/HEAD change and before a gated tool) retries at once, and `fail()` lets a caller report a failure that the next attempt retries. No state ever needs a restart, and the tool list never changes.
 
 export const ADMISSION_BACKOFF_MS = Object.freeze([1000, 2000, 5000, 10000, 30000])
 export const ADMISSION_STEADY_MS = 60000
@@ -23,14 +23,12 @@ const defaultTimers = {
 
 /**
  * `attempt(context)` runs one admission attempt. It may update `context` as it goes, so tools can use what is already admitted (for example the runtime and root) while the rest is still running. It resolves with an outcome: `{ state: "ready", repair? }` or `{ state: "degraded", code, fix, summary, blockers?, diagnostic?, repair? }`. A thrown error becomes `degraded:admission_exception`.
- * `check(context)` (optional) runs every 60 s while ready and resolves with an outcome or null when all is well.
  * `revalidate(context)` (optional) verifies current destination inputs at ordinary gates and ready status calls. Null keeps the admitted state and retry schedule; a changed destination returns an admission outcome.
  * `onTransition(snapshot)` fires whenever the state, code or repair changes.
  */
 export function createAdmission({
   attempt,
   revalidate = null,
-  check = null,
   onTransition = () => {},
   timers = defaultTimers,
   now = Date.now,
@@ -81,11 +79,7 @@ export function createAdmission({
       next_retry_at: null,
     }
     if (!disposed) {
-      if (ready) {
-        if (check !== null) schedule(ADMISSION_STEADY_MS, runCheck)
-      } else {
-        schedule(admissionRetryDelay(failures), run)
-      }
+      if (!ready) schedule(admissionRetryDelay(failures), run)
     }
     if (previous.state !== current.state || previous.code !== current.code || previous.repair !== current.repair) {
       onTransition(snapshot())
@@ -111,30 +105,13 @@ export function createAdmission({
     return running
   }
 
-  function runCheck() {
-    return Promise.resolve()
-      .then(() => check(context))
-      .catch((error) => exceptionOutcome(error))
-      .then((outcome) => {
-        if (outcome) degrade(outcome)
-        else if (!disposed && current.state === "ready") schedule(ADMISSION_STEADY_MS, runCheck)
-      })
-  }
-
-  function degrade(outcome) {
-    if (disposed) return Promise.resolve(snapshot())
-    settle({ ...outcome, state: "degraded" })
-    // Re-admission starts at once; if it fails, the backoff continues from the failure count.
-    return run()
-  }
-
   // Report a failure without re-admitting at once: the state shows it, and the next attempt comes on the backoff (or on desk_status).
   function fail(outcome) {
     if (disposed) return snapshot()
     return settle({ ...outcome, state: "degraded" }) && snapshot()
   }
 
-  /** Run or join bounded admission work. Ready sessions revalidate inputs when a resolver is supplied; `revalidateOnly` also checks usable degraded contexts without repeating controller/semantic work. `fresh` samples again after a pre-existing attempt without forcing full admission; `force` requests full admission after a doctor repair or HEAD change. */
+  /** Run or join bounded admission work. Ready sessions revalidate inputs when a resolver is supplied; `revalidateOnly` also checks usable degraded contexts without repeating runtime or search work. `fresh` samples again after a pre-existing attempt without forcing full admission; `force` requests full admission after a doctor repair or HEAD change. */
   // `joinMs` bounds the wait when an attempt was already running before this call (default: `waitMs`): a caller that must answer at once joins a long attempt without waiting on it.
   async function refresh({ waitMs = 3000, force = false, fresh = false, joinMs = waitMs, revalidateOnly = false } = {}) {
     const ready = !force && current.state === "ready"
@@ -167,7 +144,6 @@ export function createAdmission({
     start: run,
     refresh,
     idle,
-    degrade,
     fail,
     snapshot,
     get running() {

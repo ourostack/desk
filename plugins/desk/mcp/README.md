@@ -84,7 +84,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 
 **Status:**
 - `desk_status` — session-start-safe MCP health. Compact by default (one health word, why it is not ready, what to do, one sentence about search, root, sync and pointers); `detail: true` returns the full root, activation, runtime and search payload
-- `desk_doctor` — healthy-runtime confirmation or precise failure diagnosis and remediation; `{"repair":"switch_state_branch"}` and `{"repair":"prune_readiness_state"}` run the repairs described under [Handshake first, then admission](#handshake-first-then-admission); it also counts the private partitions the retired manual measurement ledger left under `<state home>/ouroboros-skills/desk/work-ledger/`, without opening, moving or deleting them
+- `desk_doctor` — healthy-runtime confirmation or precise failure diagnosis and remediation; `{"repair":"switch_state_branch"}` runs the repair described under [Handshake first, then admission](#handshake-first-then-admission); it also counts the private partitions the retired manual measurement ledger left under `<state home>/ouroboros-skills/desk/work-ledger/`, without opening, moving or deleting them
 
 **Skills:**
 - `desk_skill` — reads Desk's skills through the server, for a client that cannot load them as plugin skills (claude.ai, ChatGPT); no name lists them, a name returns that skill's text. A hosted Desk refuses the skills that need a shell.
@@ -157,7 +157,7 @@ Search runs inside each Desk server; there is no separate controller process. At
 
 - Until the vectors are ready, `desk_recall` answers with exact-word matches and says so; `desk_status` reports `Search is preparing N of M sections…` and then `Search is ready.`
 - Older builds kept a search index in `$DESK/.state/desk-index.sqlite`. The server removes it at start when no process has it open, and `desk_status` says how much space that freed.
-- `desk_doctor {"repair":"prune_readiness_state"}` removes folders that older builds' readiness controllers left behind.
+- Older builds also ran a readiness controller that kept a folder per desk under `~/.cache/ouroboros-skills/desk/readiness`. Each session removes, 30 seconds after it starts, the ones no running process owns that have not changed for an hour.
 
 ### The state branch
 

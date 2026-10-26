@@ -5,8 +5,8 @@ import { searchRouter } from "../search/files-router.js"
 // against the tool's declared schema in tool-schemas.js by __tests__/tool_schema_parity.test.js.
 export const DESK_REINDEX_FIELDS = ["force"]
 
-export async function desk_reindex({ deskRoot, input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(readiness)).reindex({
+export async function desk_reindex({ deskRoot, input, search, queryRouter, signal }) {
+  return (queryRouter ?? searchRouter(search)).reindex({
     ...input, deskRoot, signal,
   })
 }

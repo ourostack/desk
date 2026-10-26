@@ -11,13 +11,11 @@ import { createDeskSession } from "../../../../plugins/desk/mcp/src/runtime/desk
 import {
   HOSTED_SHELL_SKILLS,
   HOSTED_UNAVAILABLE,
-  HOSTED_UNAVAILABLE_REPAIRS,
   TOOL_ANNOTATIONS,
   hostedRefusal,
   isHosted,
 } from "../../../../plugins/desk/mcp/src/runtime/hosted.js"
 import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
-import { DOCTOR_REPAIRS } from "../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempRoot } from "./_temp_roots.js"
 
 const hosted = { DESK_HOSTED: "1" }
@@ -42,13 +40,7 @@ test("hostedRefusal refuses the listed tools with the exact reason and leaves th
   assert.equal(hostedRefusal("desk_recall", {}, { DESK_HOSTED: "0" }), null)
 })
 
-test("hostedRefusal refuses only the host-machine doctor repairs", () => {
-  for (const repair of Object.keys(HOSTED_UNAVAILABLE_REPAIRS)) {
-    const refused = hostedRefusal("desk_doctor", { repair }, hosted)
-    assert.equal(refused.code, "hosted_unavailable")
-    assert.equal(refused.reason, "This repair acts on the machine Desk runs on, which is the hosted service, not yours.")
-    assert.equal(hostedRefusal("desk_doctor", { repair }, {}), null)
-  }
+test("hostedRefusal never refuses a desk_doctor repair", () => {
   assert.equal(hostedRefusal("desk_doctor", {}, hosted), null)
   assert.equal(hostedRefusal("desk_doctor", null, hosted), null)
   assert.equal(hostedRefusal("desk_doctor", { repair: "switch_state_branch" }, hosted), null)
@@ -58,7 +50,6 @@ test("hostedRefusal refuses only the host-machine doctor repairs", () => {
 
 test("the lists name real tools, repairs and skills", () => {
   for (const name of Object.keys(HOSTED_UNAVAILABLE)) assert.ok(TOOL_NAMES.includes(name), name)
-  for (const repair of Object.keys(HOSTED_UNAVAILABLE_REPAIRS)) assert.ok(DOCTOR_REPAIRS.includes(repair), repair)
   for (const skill of Object.keys(HOSTED_SHELL_SKILLS)) assert.ok(existsSync(path.join(skillsDir, skill, "SKILL.md")), skill)
   for (const reason of Object.values(HOSTED_SHELL_SKILLS)) assert.ok(reason.length > 0)
 })
@@ -87,7 +78,7 @@ async function sessionWith(t, env) {
       calls.push(name)
       return { content: [{ type: "text", text: JSON.stringify({ status: "ok", tool: name }) }] }
     },
-    connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
+    createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }),
   }
   const session = createDeskSession({
     args: { person: null },
@@ -102,14 +93,11 @@ async function sessionWith(t, env) {
   return { session, calls }
 }
 
-test("a hosted session refuses improvement_next and a host-machine repair before any implementation runs", async (t) => {
+test("a hosted session refuses improvement_next before any implementation runs", async (t) => {
   const { session, calls } = await sessionWith(t, hosted)
   const result = await session.callTool({ name: "improvement_next" })
   assert.equal(result.isError, true)
   assert.deepEqual(JSON.parse(result.content[0].text), hostedRefusal("improvement_next", {}, hosted))
-  const repair = await session.callTool({ name: "desk_doctor", input: { repair: "prune_readiness_state" } })
-  assert.equal(repair.isError, true)
-  assert.equal(JSON.parse(repair.content[0].text).code, "hosted_unavailable")
   assert.deepEqual(calls, [])
   assert.equal(JSON.parse((await session.callTool({ name: "desk_search", input: { query: "x" } })).content[0].text).tool, "desk_search")
 })

@@ -29,7 +29,6 @@ import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
@@ -677,7 +676,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_create({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -779,7 +778,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit)
     if (!commit) schedulePush({ root: deskRoot })
   }
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   result.work_context = { status: data.status, planning_complete: data.planning_complete === true }
   if (commit) result.commit = commit
@@ -927,7 +926,7 @@ function refuseBodyOnlyKeys(frontmatter) {
   }
 }
 
-export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
+export async function task_update({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -998,7 +997,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (!(await pathExists(filePath)) && resource !== undefined) {
     const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
     if (await pathExists(archived)) {
-      return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, readiness, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush, recordCanonicalChanges } })
+      return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, search, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush } })
     }
   }
   if (!(await pathExists(filePath))) {
@@ -1142,10 +1141,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   if (stage && !commit) schedulePush({ root: deskRoot })
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-    { path: relPath(deskRoot, filePath) },
-    ...(trackRow === null ? [] : [{ path: relPath(deskRoot, trackRow) }]),
-  ] })
+  search?.noteChange(relPath(deskRoot, filePath))
+  if (trackRow !== null) search?.noteChange(relPath(deskRoot, trackRow))
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
@@ -1251,7 +1248,7 @@ async function archivedTaskStatus(archivedFile) {
 // called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
 // Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
 // `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
-async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
+async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush }) {
   let existing, before
   try {
     before = await fs.readFile(archivedFile, "utf8")
@@ -1279,7 +1276,7 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
   try {
     await patchMarkdownFrontmatter(publication.file, fields)
     patched = true
-    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+    search?.noteChange(relPath(deskRoot, archivedFile))
     commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
   } catch (error) {
     commit = { status: "failed", reason: error.message }
@@ -1347,7 +1344,7 @@ function withArchiveFocus(statusContext, target, result) {
  *
  * Returns: { status: "archived" | "already_archived" | "archive_pending", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive, openArchiveMove = openArchiveMoveDefault }) {
+export async function task_archive({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive, openArchiveMove = openArchiveMoveDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1399,7 +1396,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
       return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
     } else {
-      const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
+      const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
       if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
         ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
           refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
@@ -1410,10 +1407,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       } catch {
         // Missing or unreadable legacy cards retain the existing idempotent archive result.
       }
-      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-        { path: relPath(deskRoot, srcDir), operation: "delete" },
-        { path: relPath(deskRoot, archiveDir), operation: "write" },
-      ] })
+      search?.noteChange(relPath(deskRoot, srcDir))
+      search?.noteChange(relPath(deskRoot, archiveDir))
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
       return withArchiveFocus(statusContext, { track, slug }, {
         status: "already_archived",
@@ -1519,10 +1514,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       },
     })
     await prepared.afterMove()
-    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-      { path: relPath(deskRoot, srcDir), operation: "delete" },
-      { path: relPath(deskRoot, archiveDir), operation: "write" },
-    ] })
+    search?.noteChange(relPath(deskRoot, srcDir))
+    search?.noteChange(relPath(deskRoot, archiveDir))
 
     const filePath = await target([track, "_archive", slug, "task.md"])
     let finalStatus = null
@@ -1554,21 +1547,21 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (Object.keys(patchFields).length > 0) {
         expected = patchedCardText(expected, existing, patchFields)
         await patchMarkdownFrontmatter(filePath, patchFields)
-        await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+        search?.noteChange(relPath(deskRoot, filePath))
       }
       if (archiveBump?.derived !== undefined) {
         const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(expected)
         const derived = setDerived(expected.slice(head.length), archiveBump.derived.changes)
         if (derived.written.length > 0) expected = head + derived.body
         if (await writeDerivedCells(filePath, archiveBump.derived))
-          await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+          search?.noteChange(relPath(deskRoot, filePath))
       }
       await prepared.cardWritten(expected)
     }
     if (trackPlan) {
       await prepared.assertTrack()
       await writeFileAtomic(trackPlan.file, trackPlan.after)
-      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, trackPlan.file) }] })
+      search?.noteChange(relPath(deskRoot, trackPlan.file))
     }
     const commit = await prepared.publish(`task_archive: ${track}/${slug}`)
     published = prepared.git !== null && commit === undefined

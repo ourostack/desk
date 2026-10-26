@@ -69,22 +69,7 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 
 ### Live readiness diagnostics
 
-`desk_status` answers compactly unless called with `{ detail: true }`: `state` (the boot script's own words: `ready`, `degraded`, `admitting`, `setup_required`) says whether Desk works, `degraded` and `fix` say why and what to do, and `search` is the index word below. In the full payload, `readiness.state` is one word for agents: `ready`, `converging`, `degraded`, `unavailable` or `not_checked`. It describes the search index's readiness controller only; the top-level `state` (admission) decides whether Desk's tools work, so a `ready` admission with a `degraded` readiness means tools work and search falls back to direct reads. `readiness.meaning` says so in a sentence. The controller's own state name (`READY`, `LEXICAL_READY`, `RECOVERING`, and so on) is `readiness.detail.controller_state`.
-`readiness.detail.convergence` contains only the latest convergence
-snapshot: `status` (`not_checked`, `pending`, `succeeded`, or `failed`),
-`semantic` coverage, and a failure `diagnostic` when present. A disconnected
-controller reports `unavailable` with a diagnostic, not a stale ready state.
-Diagnostic text fields are capped at 2,048 characters. Controller tokens and
-owner metadata are not included in the tool response.
-
-Background startup exposes the server before convergence. Initial query
-embedding availability is `not_checked`; once the controller finishes,
-`query_embedding.available` and its diagnostic reflect the active query probe.
-A failed probe leaves the controller `LEXICAL_READY` (`readiness.detail.controller_state`), reports availability
-`false`, and adds `query_embedding_unavailable` to `degraded_modes`. Complete
-semantic coverage with a successful probe produces `READY`. Required mode
-finishes convergence before exposing the server. A convergence exception adds
-`convergence_failed`; an unreachable controller adds `readiness_unavailable`.
+`desk_status` answers compactly unless called with `{ detail: true }`: `state` (the boot script's own words: `ready`, `degraded`, `admitting`, `setup_required`) says whether Desk works, `degraded` and `fix` say why and what to do, and `search` describes the session's search engine. Search never moves `state`: until the search engine is ready, exact-word search reads the files directly and meaning-based search answers with exact-word matches. In the full payload, `search.state` is one of `exact_words_only` (meaning-based search is off for this desk), `getting_ready`, `preparing` (with `sections_ready` of `sections_total`), `ready` or `model_unavailable`, and `search.message` says what it means in a sentence.
 
 `startup_fallback.mode: not_checked` still means no legacy startup `ensureIndex`
 record exists; it does not mean background convergence is pending.

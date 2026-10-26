@@ -17,7 +17,7 @@
 
 import { flag, integer, list, oneOf, schema, text } from "./tool-schema-parts.js"
 
-export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "prune_readiness_state"])
+export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch"])
 
 // Tools that take no input at all. Only these may declare no properties.
 export const NO_INPUT_TOOLS = Object.freeze([])
@@ -300,7 +300,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     depth: integer("Maximum hop distance; defaults to 4."),
     direction: { type: "string", enum: ["forward", "backward", "both"], description: "Which edges to follow; defaults to both." },
   }, ["start_path"]),
-  desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing. Reindex always joins the shared controller's convergence and never deletes a live index.") }),
+  desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing.") }),
   desk_status: schema({
     detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),
     has_instructions: flag("Hosted Desk only (claude.ai, ChatGPT): pass true when an earlier desk_status answer in this conversation already gave you Desk's instructions, so this answer leaves them out. A local Desk ignores it."),

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
-import { closeDb, indexDbPath, openDb, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 
 test("status's direct API defaults its context without provisioning missing state", async (t) => {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "status-default-context-"))

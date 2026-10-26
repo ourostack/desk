@@ -19,6 +19,6 @@ const filesRouter = Object.freeze({
 })
 
 /** The search a tool call uses: the session's engine once admission has started it, else the files. */
-export function searchRouter(controller) {
-  return typeof controller?.lexical === "function" ? controller : filesRouter
+export function searchRouter(engine) {
+  return typeof engine?.lexical === "function" ? engine : filesRouter
 }

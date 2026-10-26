@@ -17,8 +17,8 @@ const update = { track: "work", slug: "one", status: "processing" }
 const text = "---\nname: One\nstatus: drafting\n---\n\n# One\n"
 const payload = (result) => JSON.parse(result.content[0].text)
 const assertWritten = (result) => assert.notEqual(result.isError, true, JSON.stringify(result))
-// A loaded runner may legitimately re-elect B's controller (a write's 1 s controller ping can miss), so the
-// connections are A once, then only B: never A again after the session moved to B.
+// A search engine may legitimately be started again for B (a failed start retries), so the starts are A once,
+// then only B: never A again after the session moved to B.
 const assertAThenOnlyB = (f, message) => {
   assert.equal(f.connectedRoots[0], f.a, message)
   assert.ok(f.connectedRoots.length > 1, message)
@@ -94,22 +94,18 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     })
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`)
   })
-  const controllers = []
   const focuses = []
-  const endpoints = []
   const connectedRoots = []
   const resolutionTrace = []
   const dispatchTrace = []
   const statusTrace = []
-  const convergenceTrace = []
   let hold = false
   let held = null
   let retainPastHook = false
   let pastHook = null
-  // The session's real search engine, recorded so the test can tell which desk each admission connected.
-  const connector = async (options) => {
-    const engine = await server.connectOrStartController(options)
-    controllers.push(engine)
+  // The session's real search engine, recorded so the test can tell which desk each admission started it for.
+  const createSearchEngine = (options) => {
+    const engine = server.createSearchEngine(options)
     connectedRoots.push(options.deskRoot)
     return engine
   }
@@ -134,20 +130,9 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
       return value
     }, runtimeInspector: null,
     runtimeImporter: async () => ({
-      ...server, connectOrStartController: connector,
-      beginBackgroundConvergence: async (admitted) => {
-        const trace = { root: admitted.root, started: new Date().toISOString() }
-        convergenceTrace.push(trace)
-        try {
-          return await server.beginBackgroundConvergence(admitted)
-        } finally {
-          trace.finished = new Date().toISOString()
-        }
-      },
+      ...server, createSearchEngine,
       callTool: async (options) => {
-        dispatchTrace.push({ name: options.name, root: options.deskRoot,
-          admissionRoot: options.statusContext.admission?.root,
-          authority: options.statusContext.admission?.authority, person: options.person })
+        dispatchTrace.push({ name: options.name, root: options.deskRoot, person: options.person })
         focuses.push(options.statusContext.focus)
         return server.callTool(options)
       },
@@ -158,7 +143,6 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     assert.equal(handle.admission.running, false)
     input.end()
     await handle.closed
-    for (const engine of controllers) await engine.close()
   })
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "late-context-fixture", version: "1" } })
   await rpc("tools/list", {})
@@ -184,7 +168,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     const budget = (elapsedMs) => JSON.stringify({
       message: "every status request retains its budget", elapsedMs, times,
       admission: handle.admission.snapshot(), phase: handle.session.context.phase,
-      resolution: resolutionTrace, dispatch: dispatchTrace, statusTrace, convergenceTrace,
+      resolution: resolutionTrace, dispatch: dispatchTrace, statusTrace,
     })
     while (Date.now() < deadline) {
       const started = Date.now()
@@ -373,8 +357,8 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     }
     assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
     assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
-    assertAThenOnlyB(f, "no A authority/controller is acquired after losing B")
-    assert.equal(f.connectedRoots.length, connectionsWhileLost, "no controller is acquired while B's association is lost")
+    assertAThenOnlyB(f, "no A authority or search engine is acquired after losing B")
+    assert.equal(f.connectedRoots.length, connectionsWhileLost, "no search engine is started while B's association is lost")
     const status = payload(await f.call("desk_status", { detail: true }))
     assert.equal(status.code, "root_unavailable")
     assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
@@ -383,7 +367,7 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assertWritten(await f.call("task_update", update))
     assert.equal(f.handle.session.context.root.root, f.b)
     assertAThenOnlyB(f, "re-association reconnects only B")
-    assert.ok(f.connectedRoots.length > connectionsWhileLost, "the lost B controller is acquired again after re-association")
+    assert.ok(f.connectedRoots.length > connectionsWhileLost, "B's search engine is started again after re-association")
   })
 }
 

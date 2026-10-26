@@ -26,7 +26,7 @@ export function controllerRecords(roots, { depth = 8, read = readFileSync, list 
         if (remaining > 0 && entry.name !== "node_modules") walk(file, remaining - 1)
       } else if (entry.name === "owner.json") {
         try {
-          const { owner } = JSON.parse(read(file, "utf8"))
+          const { owner } = JSON.parse(read(file, "utf8")) ?? {}
           if (owner?.kind === "controller_child" && Number.isInteger(owner.pid)) found.push({ pid: owner.pid, processStart: typeof owner.process_start === "string" ? owner.process_start : null, parentPid: Number.isInteger(owner.parent_pid) ? owner.parent_pid : null })
         } catch (error) {
           if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error

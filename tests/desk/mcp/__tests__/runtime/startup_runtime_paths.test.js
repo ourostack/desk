@@ -9,7 +9,7 @@ import {
   resolveMcpServerVersion,
   resolveRuntimeInspector,
 } from "../../../../../plugins/desk/mcp/index.js"
-import { admitInProcess } from "./_in_process_desk.js"
+import { admitInProcess, idleSearchEngine } from "./_in_process_desk.js"
 import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
@@ -36,10 +36,9 @@ test("startup reads the diagnostic server version from plugin.json without makin
 test("startup assembles inspected runtime status and falls back to diagnostics when restoration fails", async () => {
   const root = makeRoot("desk-startup-inspected-runtime-")
   const startCalls = []
+  const engine = idleSearchEngine()
   const runtimeServer = {
-    async connectOrStartController() {
-      return { accepted: true, id: "controller-1" }
-    },
+    createSearchEngine: () => engine,
   }
   try {
     startCalls.push(await admitInProcess({
@@ -68,14 +67,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
       runtime_cache_path: null,
       support_matrix_path: "/plugin/support-matrix.json",
     })
-    assert.deepEqual(startCalls[0].statusContext.admission, {
-      state: "CONTROL_READY",
-      root,
-      authority: { mode: "workspace" },
-      runtime: startCalls[0].statusContext.runtime,
-      controller: { accepted: true, id: "controller-1" },
-      automatic_actions: [],
-    })
+    assert.equal(startCalls[0].statusContext.search, engine)
 
     let calls = 0
     const failedRestore = await admitInProcess({

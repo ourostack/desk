@@ -4,13 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { admitInProcess } from "./_in_process_desk.js"
+import { admitInProcess, idleSearchEngine } from "./_in_process_desk.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-startup-control-ready-"))
 }
 
-test("startup admits and registers before background convergence without indexing", async () => {
+test("startup admits, then starts its search engine and warms it in the background", async () => {
   const root = makeRoot()
   const events = []
   try {
@@ -21,59 +21,19 @@ test("startup admits and registers before background convergence without indexin
       homeDir: root,
       readinessPolicy: { write_authority: "person" },
       runtimeImporter: async () => ({
-        async admitControlPlane({ deskRoot, person, policy }) {
-          events.push("admit")
+        createSearchEngine({ deskRoot, semantic }) {
+          events.push("start")
           assert.equal(deskRoot, root)
-          assert.equal(person, "ari")
-          assert.equal(policy.lexical, "required")
-          return {
-            state: "CONTROL_READY",
-            root: deskRoot,
-            authority: { mode: "person", person },
-            runtime: { state: "ready" },
-            controller: { accepted: true, id: "controller-1" },
-            automatic_actions: [],
-          }
-        },
-        beginBackgroundConvergence(admission) {
-          events.push("converge")
-          assert.equal(admission.controller.id, "controller-1")
+          assert.equal(semantic, "background")
+          return idleSearchEngine({ warm() { events.push("warm") } })
         },
       }),
     })
 
-    // The server was answering before admission began; convergence starts after admission, in the background.
     assert.equal(started.snapshot.state, "ready")
-    assert.equal(started.statusContext.admission.state, "CONTROL_READY")
-    assert.deepEqual(events, ["admit", "converge"])
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test("default admission performs no workspace discovery, network, hashing, or indexing", async () => {
-  const root = makeRoot()
-  try {
-    const started = await admitInProcess({
-      argv: ["--root", root],
-      env: {},
-      cwd: root,
-      homeDir: root,
-      runtimeImporter: async () => ({
-        _deskRuntime: { state: "ready" },
-        async connectOrStartController() {
-          return {
-            accepted: true,
-            id: "controller-1",
-            beginConvergence() {},
-          }
-        },
-      }),
-    })
-
-    assert.equal(started.statusContext.admission.state, "CONTROL_READY")
-    assert.equal(started.statusContext.admission.root, root)
-    assert.deepEqual(started.statusContext.admission.automatic_actions, [])
+    assert.equal(started.person, "ari")
+    assert.notEqual(started.statusContext.search, null)
+    assert.deepEqual(events, ["start", "warm"])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -89,8 +49,8 @@ test("startup refuses writes for an unresolved configured authority provider", a
       homeDir: root,
       runtimeImporter: async () => ({
         _deskRuntime: { state: "ready" },
-        async connectOrStartController() {
-          assert.fail("no controller before authority is admitted")
+        createSearchEngine() {
+          assert.fail("no search engine before authority is admitted")
         },
       }),
       readinessPolicy: {
@@ -102,7 +62,7 @@ test("startup refuses writes for an unresolved configured authority provider", a
       },
     })
     assert.equal(started.snapshot.state, "degraded:authority_invalid")
-    assert.equal(started.statusContext.admission, null)
+    assert.equal(started.statusContext.search, null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

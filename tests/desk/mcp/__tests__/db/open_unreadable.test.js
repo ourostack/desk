@@ -1,4 +1,4 @@
-// An index database that is not a database fails openDb on its first pragma. The failed call must not leave the file open: the readiness controller moves a corrupt index aside and rebuilds it, and Windows refuses to rename a file that still has an open handle.
+// An index database that is not a database fails openDb on its first pragma. The failed call must not leave the file open: a corrupt database is moved aside and rebuilt, and Windows refuses to rename a file that still has an open handle.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"

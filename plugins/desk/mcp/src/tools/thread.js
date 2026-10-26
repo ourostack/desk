@@ -163,8 +163,8 @@ function bfs(db, startDocId, depth, direction) {
  * @param {"forward"|"backward"|"both"} [args.input.direction] — default "both"
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
-export async function desk_thread({ deskRoot, input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(readiness)).lexical({
+export async function desk_thread({ deskRoot, input, search, queryRouter, signal }) {
+  return (queryRouter ?? searchRouter(search)).lexical({
     ...input, deskRoot, signal, kind: "thread",
   })
 }

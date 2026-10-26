@@ -45,11 +45,10 @@ function input(value) {
 }
 const update = { track: "work", slug: "one", status: "processing" }
 
-// Admission, journal, front door, card validation and Git writes are production.
+// Admission, front door, card validation and Git writes are production.
 async function launch(options) {
   const toServer = new PassThrough()
   const fromServer = new PassThrough()
-  const controllers = []
   const handle = await main({
     ...options, input: toServer, output: fromServer,
     stateHome: path.join(options.cwd, ".session-state"),
@@ -57,31 +56,18 @@ async function launch(options) {
     offload: runAdmissionJob,
     runtimeInspector: null,
     readinessPolicy: options.readinessPolicy ?? { semantic: "unsupported" },
-    runtimeImporter: async () => ({
-      ...server,
-      connectOrStartController: async (settings) => {
-        const controller = await server.connectOrStartController(settings)
-        controllers.push(controller)
-        return controller
-      },
-    }),
+    runtimeImporter: async () => server,
   })
   return {
     input: toServer, output: fromServer,
     close: async () => {
-      // A refusal may arrive before controller admission settles. This fixture
-      // owns that asynchronous in-process launch as well as the front door.
-      try {
-        // `idle` waits for the attempt running when it is called, and a degraded session starts another at once, so ask until none is running.
-        const settleBy = Date.now() + 15000
-        while (handle.admission.running && Date.now() < settleBy) await handle.admission.idle({ waitMs: settleBy - Date.now() })
-        assert.equal(handle.admission.running, false, "fixture admission must settle before controller disposal")
-        toServer.end()
-        await handle.closed
-      } finally {
-        // Closed whatever happened above: a server left listening keeps this file's process alive until the job's time limit.
-        await Promise.allSettled(controllers.map((controller) => controller.close()))
-      }
+      // A refusal may arrive before admission settles. This fixture owns that asynchronous in-process launch as well as the front door.
+      // `idle` waits for the attempt running when it is called, and a degraded session starts another at once, so ask until none is running.
+      const settleBy = Date.now() + 15000
+      while (handle.admission.running && Date.now() < settleBy) await handle.admission.idle({ waitMs: settleBy - Date.now() })
+      assert.equal(handle.admission.running, false, "fixture admission must settle before the session closes")
+      toServer.end()
+      await handle.closed
     },
   }
 }
@@ -472,65 +458,51 @@ if (threads.isMainThread) {
     ? new URL("./_prewarmed_recovery.js", import.meta.url)
     : new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url)
   const { fileURLToPath } = await import("node:url")
-  const { controllerRecords, waitForProcessesGone } = await import("./_controller_exit.js")
-  try {
-    const result = spawnSync(process.execPath, [
-      fileURLToPath(script), ...args(root), "--activation-config", activation, "--input-file", file,
-    ], {
-      cwd: root, encoding: "utf8", timeout: 75000,
-      env: {
-        ...env(), HOME: home, USERPROFILE: home,
-        XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
-        XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
-        XDG_RUNTIME_DIR: path.join(home, "runtime"),
-        ...(delayedResolution ? {
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}`,
-          DESK_FIXTURE_DELAY_MARKER: delayMarker, DESK_FIXTURE_COMPLETED_STATUS: completedStatus,
-        } : {}),
-      },
-    })
-    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
-    const report = JSON.parse(result.stdout)
-    if (delayedResolution) {
-      const completed = JSON.parse(readFileSync(completedStatus, "utf8"))
-      assert.equal(completed.state, "ready")
-      assert.equal(completed.root, root)
-      assert.ok(completed.elapsedMs < 200, "observable completed status retains the unchanged cap")
-      assert.equal(report.preflight.statusDetail, "cached_in_owned_session")
-      assert.ok(Date.parse(report.preflight.statusDetailFrom) > 0)
-      const observed = readFileSync(statusEvidence, "utf8").trim().split("\n").map(JSON.parse)
-      // Several pending-marked details can be answered while resolution is delayed, and the client keeps polling until a ready status
-      // also passes its write-scope check, so its preflight need not be the first one: on Linux CI it was one computed about 0.7 s
-      // later. The preflight must be one of the pending-marked details answered after the prewarm finished.
-      const answered = observed.filter((status) => Date.parse(status.at) >= Date.parse(completed.completedObservedAt) &&
-        status.detail?.includes("Destination verification is pending") && status.detail.startsWith("cached:"))
-      assert.ok(answered.length > 0, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
-      const pending = answered.find((status) => status.from === report.preflight.statusDetailFrom)
-      assert.ok(pending, `the preflight must use a pending-marked detail: ${JSON.stringify({ preflight: report.preflight, answered })}`)
-      assert.equal(pending.writes, "refused")
-      assert.equal(pending.root, root)
-      assert.ok(Date.parse(pending.from) > 0)
-      if (completed.from) assert.ok(Date.parse(pending.from) >= Date.parse(completed.from), "pending detail never predates the observed completed cache")
-      const delayed = readFileSync(resolverEvidence, "utf8").trim().split("\n").map(JSON.parse)
-      assert.ok(delayed.length > 0)
-      assert.ok(delayed.every((job) => job.observedCompletedStatus && job.injectedDelayMs === 150 &&
-        Date.parse(job.at) >= Date.parse(completed.completedObservedAt)))
-    }
-    assert.equal(report.actualRoot, root)
-    assert.equal(report.effects.commit, "observed")
-    assert.equal(git(root, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
-    assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), beforeCount + 1, "no mutation replay")
-    assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
-  } finally {
-    // Ordinary runtime controllers are persistent. This fixture owns each
-    // recorded controller; verify its exact command before ending it.
-    const records = controllerRecords([home])
-    for (const record of records) {
-      const command = spawnSync("ps", ["-p", String(record.pid), "-o", "command="], { encoding: "utf8", timeout: 5000 }).stdout.trim()
-      if (!command) continue
-      assert.ok(command.includes(home), `fixture must own controller PID ${record.pid}`)
-      process.kill(record.pid, "SIGTERM")
-    }
-    await waitForProcessesGone(records.map((record) => record.pid), { timeoutMs: 10000 })
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(script), ...args(root), "--activation-config", activation, "--input-file", file,
+  ], {
+    cwd: root, encoding: "utf8", timeout: 75000,
+    env: {
+      ...env(), HOME: home, USERPROFILE: home,
+      XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
+      XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
+      XDG_RUNTIME_DIR: path.join(home, "runtime"),
+      ...(delayedResolution ? {
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}`,
+        DESK_FIXTURE_DELAY_MARKER: delayMarker, DESK_FIXTURE_COMPLETED_STATUS: completedStatus,
+      } : {}),
+    },
+  })
+  assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+  const report = JSON.parse(result.stdout)
+  if (delayedResolution) {
+    const completed = JSON.parse(readFileSync(completedStatus, "utf8"))
+    assert.equal(completed.state, "ready")
+    assert.equal(completed.root, root)
+    assert.ok(completed.elapsedMs < 200, "observable completed status retains the unchanged cap")
+    assert.equal(report.preflight.statusDetail, "cached_in_owned_session")
+    assert.ok(Date.parse(report.preflight.statusDetailFrom) > 0)
+    const observed = readFileSync(statusEvidence, "utf8").trim().split("\n").map(JSON.parse)
+    // Several pending-marked details can be answered while resolution is delayed, and the client keeps polling until a ready status
+    // also passes its write-scope check, so its preflight need not be the first one: on Linux CI it was one computed about 0.7 s
+    // later. The preflight must be one of the pending-marked details answered after the prewarm finished.
+    const answered = observed.filter((status) => Date.parse(status.at) >= Date.parse(completed.completedObservedAt) &&
+      status.detail?.includes("Destination verification is pending") && status.detail.startsWith("cached:"))
+    assert.ok(answered.length > 0, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
+    const pending = answered.find((status) => status.from === report.preflight.statusDetailFrom)
+    assert.ok(pending, `the preflight must use a pending-marked detail: ${JSON.stringify({ preflight: report.preflight, answered })}`)
+    assert.equal(pending.writes, "refused")
+    assert.equal(pending.root, root)
+    assert.ok(Date.parse(pending.from) > 0)
+    if (completed.from) assert.ok(Date.parse(pending.from) >= Date.parse(completed.from), "pending detail never predates the observed completed cache")
+    const delayed = readFileSync(resolverEvidence, "utf8").trim().split("\n").map(JSON.parse)
+    assert.ok(delayed.length > 0)
+    assert.ok(delayed.every((job) => job.observedCompletedStatus && job.injectedDelayMs === 150 &&
+      Date.parse(job.at) >= Date.parse(completed.completedObservedAt)))
   }
+  assert.equal(report.actualRoot, root)
+  assert.equal(report.effects.commit, "observed")
+  assert.equal(git(root, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
+  assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), beforeCount + 1, "no mutation replay")
+  assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
 })

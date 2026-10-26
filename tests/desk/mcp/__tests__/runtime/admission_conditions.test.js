@@ -112,8 +112,7 @@ test("invalid write authority: reads serve, writes refuse with degraded:authorit
   })
 })
 
-// ---- readiness controller faults: controller-free reads, background re-election ----
-
+// ---- the state branch ----
 
 test("a clean detached HEAD on a remote branch is switched back to the state branch, keeping untracked files", async (t) => {
   const fixture = await warmGitDesk()
@@ -236,8 +235,6 @@ test("the state branch can come from the activation config instead of the flag",
   })
 })
 
-// ---- the controller rendezvous ignores XDG_RUNTIME_DIR ----
-
 test("--degraded with an integrity code starts connected and refuses every data tool", async (t) => {
   const fixture = await warmGitDesk()
   await withDesk(t, fixture, { args: ["--root", fixture.desk, "--degraded", "lifecycle_conflict", "--degraded-reason", "two providers claim worker"] }, async (session) => {
@@ -316,7 +313,7 @@ test("a 30 s restore on the admission worker never delays tools/list, ping or de
   assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting", "the restore is still stalled")
 })
 
-test("the transition to ready never delays tools/list, ping or desk_status: the runtime import, the controller election and the start of convergence", async (t) => {
+test("the transition to ready never delays tools/list, ping or desk_status: the runtime import and the start of the search engine", async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   const preload = new URL("./fixtures/slow-restore-preload.mjs", import.meta.url).href

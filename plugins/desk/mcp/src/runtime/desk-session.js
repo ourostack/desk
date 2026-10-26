@@ -1,12 +1,12 @@
 // One Desk MCP session after the handshake: the admission pipeline, the tool gates, desk_status and desk_doctor.
 //
-// index.js answers the handshake through the front door first, then hands every tools/call here. Admission runs in the background (see admission.js) and fills a context as it goes: the desk root, activation, the runtime (restored from the offline pack), the state-branch check, admitted write authority and the readiness controller. Nothing here blocks the thread that answers the host: file reads and the runtime restore run on a worker thread (admission-worker.js), Git and the controller are asynchronous, and desk_status answers within a bounded time whatever admission is doing.
+// index.js answers the handshake through the front door first, then hands every tools/call here. Admission runs in the background (see admission.js) and fills a context as it goes: the desk root, activation, the runtime (restored from the offline pack), the state-branch check, admitted write authority and the session's search engine (src/search/engine.js, in this process). Nothing here blocks the thread that answers the host: file reads and the runtime restore run on a worker thread (admission-worker.js), Git is asynchronous, and desk_status answers within a bounded time whatever admission is doing.
 //
 // Each tool needs part of that context:
 // - desk_status and desk_doctor always answer, and each desk_status retries admission when Desk is not ready;
-// - reads (search, recall, similar, timeline, thread) need the runtime and a root; without a readiness controller, lexical search and timeline read the files directly;
-// - desk_reindex also needs a readiness controller;
-// - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never need the readiness controller: with one, the change is journaled; without one, it goes straight to the file and the next controller's watcher or scan picks it up.
+// - reads (search, recall, similar, timeline, thread) need the runtime and a root; before the search engine has started, exact-word search and timeline read the files directly;
+// - desk_reindex also needs the search engine;
+// - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never wait for the search engine: a write tells it which files changed when it has started, and its file watcher or first read picks the change up otherwise.
 // A tool whose needs are not met answers `{ status: "degraded", code, fix }` with a fix the agent can act on in this session, and a tool that throws answers the same way instead of failing the call.
 //
 // This module must not import anything from the runtime pack: it runs before the pack is restored.
@@ -15,7 +15,7 @@ import { statSync, unwatchFile, watchFile, promises as headFileSystem, constants
 import { createHash } from "node:crypto"
 import * as path from "node:path"
 
-import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
+import { validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
 import { createAdmission, exceptionOutcome } from "./admission.js"
 import { redactMachineText } from "./argv-safe-reason.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
@@ -26,11 +26,11 @@ import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
-import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
+import { removeReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
+import { EXACT } from "../util/file-identity.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
-const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
 // Resolver sources, weakest first, in the shared resolver's order (util/paths.js). The host's project folder, when it is a desk,
 // outranks the saved binding and $DESK; a bare launch folder (`hint`, reported as "host-project" too) stays below them, so losing an
 // association never reselects it. Neither kind of folder replaces another of its kind.
@@ -53,7 +53,7 @@ const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
 const STATUS_BUDGET_MS = 90
-// How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
+// How long one runtime status computation may run before desk_status stops waiting on it and starts another, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
 // How many background attempts that start between a gated call's own admission check and its dispatch it joins before refusing.
 const GATE_REJOINS = 3
@@ -63,13 +63,10 @@ const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
 // How often the HEAD watch checks .git/HEAD. A HEAD change is noticed within this time plus the debounce.
 const HEAD_POLL_MS = 500
-const WRITE_PING_MS = 1000
 // How long closing the session waits for a running admission attempt (Git in the desk, the runtime import) to finish, so a closed session has stopped touching the desk. Below the front door's shutdown limit, and bounded because an attempt can wait on something that never answers.
 const DISPOSE_ADMISSION_WAIT_MS = 2000
-// A status check that fails is repeated this many more times, this far apart, before the controller counts as lost. One failed request proves little: a busy controller or machine can miss a 2 s window, and a pipe can refuse one connection under load, while the controller is alive. A controller that is really gone fails every attempt, and a controller process that exits is reported at once by its exit event, so the repeats only delay a loss nothing else reported.
-const CONTROLLER_RECHECKS = 2
-const CONTROLLER_RECHECK_MS = 250
-const CONTROLLER_FAILURE = /readiness controller|ECONNREFUSED|ECONNRESET|ENOENT|EPIPE|ETIMEDOUT|EADDRINUSE/u
+// How long after start the session removes the folders older Desk versions' readiness controllers left (src/readiness/leftovers.js): late enough not to compete with admission.
+const LEFTOVERS_DELAY_MS = 30000
 
 // Launcher codes (--degraded) that still allow reads: write identity or the checkout state is unproven. Every other code is an integrity failure: the running code or its authority data cannot be trusted, so every data tool refuses.
 export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
@@ -97,13 +94,13 @@ export function createFocusHolder() {
   }
 }
 
-/** What a tool needs from admission: "status", "doctor", "read", "controller" or "write". */
+/** What a tool needs from admission: "status", "doctor", "focus", "read", "search" or "write". */
 export function toolRequirement(name) {
   if (name === "desk_status" || name === "desk_doctor") return name.slice(5)
   // Focus is held in this session and read from the card on disk: it needs the desk and the runtime, never write authority.
   if (name === "task_focus") return "focus"
   if (READ_TOOLS.has(name)) return "read"
-  if (name === "desk_reindex") return "controller"
+  if (name === "desk_reindex") return "search"
   return "write"
 }
 
@@ -113,7 +110,7 @@ export function requirementMet(requirement, context) {
   if (context.launcher?.mode === "refuse") return false
   const readable = Boolean(context.runtimeServer && context.root)
   if (requirement === "read" || requirement === "focus") return readable
-  if (requirement === "controller") return readable && Boolean(context.admission?.controller)
+  if (requirement === "search") return readable && Boolean(context.search)
   const authorized = readable && context.authorityAdmitted === true
   if (requirement === "authority") return authorized
   return authorized && context.stateBranch?.ok !== false && !context.launcher?.blocksWrites
@@ -125,8 +122,9 @@ export function watchGitHead(gitDir, options, listener) {
   const head = path.join(gitDir, "HEAD")
   const identity = () => {
     try {
-      const stats = statSync(head)
-      return `${stats.ino}:${stats.mtimeMs}`
+      // Read as BigInts: a Windows file id can exceed 2^53, where a Number cannot tell the old HEAD from its replacement.
+      const stats = statSync(head, EXACT)
+      return `${stats.dev}:${stats.ino}:${stats.mtimeNs}`
     } catch {
       return "missing"
     }
@@ -174,12 +172,11 @@ export function createDeskSession(deps) {
     notifyToolsChanged = () => {},
     launcher = null,
     statusRunLimitMs = STATUS_RUN_LIMIT_MS,
-    controllerRecheckMs = CONTROLLER_RECHECK_MS,
+    removeLeftovers = removeReadinessLeftovers,
     env = process.env,
     headIO = headFileSystem,
   } = deps
-  const context = { pendingRepairs: [], exceptions: [], launcher, phase: null }
-  const lexicalViews = new WeakMap()
+  const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
   const focus = createFocusHolder()
   let headWatch = null
   let headTimer = null
@@ -188,7 +185,7 @@ export function createDeskSession(deps) {
   let headGeneration = 0
   const headDescriptors = new Set()
   let disposed = false
-  let unwatchController = null
+  let leftoversTimer = null
   // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget. `at` is when its computation started and `seq` orders computations, so a detail is only ever replaced by a newer one.
   let lastStatusDetail = null
   // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work: `{ promise, at, started, seq }`. One older than statusRunLimitMs is abandoned in favor of a new one.
@@ -199,7 +196,7 @@ export function createDeskSession(deps) {
   let resolvedInputs = null
   let resolvedOwnershipKey = null
   // Admission may resolve in parallel, but never replaces a destination while
-  // an operation is using its authority, controller, or write branch.
+  // an operation is using its authority, search engine, or write branch.
   let operationTail = Promise.resolve()
 
   function invalidateStatus() {
@@ -259,7 +256,6 @@ export function createDeskSession(deps) {
     timers,
     attempt: () => admitOnce(),
     revalidate: () => admitOnce(true),
-    check: checkController,
     onTransition(snapshot) {
       log(snapshot.state === "ready"
         ? `state: ready${snapshot.repair ? ` (${snapshot.repair})` : ""}`
@@ -280,48 +276,20 @@ export function createDeskSession(deps) {
     return line
   }
 
-  // Closes this session started and has not seen finish. A controller forgotten as lost (its status checks all failed) can still be shutting its child down when the session closes, and the session must not report itself closed while a child it owns runs.
-  const controllerCloses = new Set()
-  function forgetController() {
-    unwatchController?.()
-    unwatchController = null
-    const controller = context.admission?.controller
-    if (context.admission) context.admission = { ...context.admission, controller: null }
-    if (controller) context.controllerLost = true
-    context.semanticCurrent = false
-    return closeTracked(controller)
-  }
-
-  function closeTracked(controller) {
-    const closing = Promise.resolve().then(() => controller?.close?.()).catch(() => {})
-    controllerCloses.add(closing)
-    void closing.finally(() => controllerCloses.delete(closing))
-    return closing
-  }
-
-  // Closes can start while the session waits, such as an election that finished after disposal began, so wait until none remain.
-  async function controllerClosesSettled() {
-    while (controllerCloses.size > 0) await Promise.all([...controllerCloses])
-  }
-
-  function watchController(controller) {
-    unwatchController?.()
-    unwatchController = controller?.onExit?.(() => {
-      if (disposed || context.admission?.controller !== controller) return
-      forgetController()
-      admission.fail(controllerLostOutcome(new Error("readiness controller child exited")))
-      void admission.refresh({ force: true })
-    }) ?? null
+  // Every search engine this session closed; dispose waits for them, so a closed session has released the engine's files and watcher.
+  let searchClosed = Promise.resolve()
+  function forgetSearch() {
+    const engine = context.search
+    context.search = null
+    if (engine) searchClosed = Promise.all([searchClosed, Promise.resolve().then(() => engine.close()).catch(() => {})])
   }
 
   function forgetAuthority() {
     invalidateStatus()
-    forgetController()
-    context.admission = null
+    forgetSearch()
     context.authority = null
     context.person = null
     context.authorityAdmitted = false
-    context.controllerLost = false
   }
 
   function forgetDesk() {
@@ -491,198 +459,85 @@ export function createDeskSession(deps) {
     }
     context.stateBranch = inspection
 
-    const onRepair = (repair) => repairs.push(recordRepair(`repaired: readiness state directory mode ${repair.from} → 700 (${repair.path})`))
-    let controllerProblem = null
     setPhase("admitting_authority")
     if (!context.authorityAdmitted) {
-      const admitted = await admitAuthority({ deskRoot, policy, onRepair })
+      const refused = await admitAuthority(policy)
       if (disposed) return null
-      if (admitted.outcome) return { ...admitted.outcome, repair: repairs.at(-1) }
-      controllerProblem = admitted.controllerProblem
-    } else if (context.controllerLost) {
-      controllerProblem = await reconnectController({ deskRoot, policy, onRepair })
+      if (refused) return { ...refused, repair: repairs.at(-1) }
     }
-
-    setPhase("checking_semantic_readiness")
-    let semanticProblem = null
-    const controller = context.admission?.controller
-    if (policy.semantic === "required" && controller && !context.semanticCurrent) {
-      semanticProblem = controller.embeddingOverride
-        ? overrideOutcome(controller.embeddingOverride)
-        : await semanticBarrier(controller)
-    }
+    const searchProblem = context.search ? null : startSearch(deskRoot, policy)
 
     const repair = repairs.at(-1)
     if (launcher?.blocksWrites) return { ...launcherReadOnlyOutcome(launcher), repair }
     if (branchProblem !== null) return { state: "degraded", ...branchProblem, repair }
-    if (controllerProblem !== null) return { ...controllerProblem, repair }
-    if (semanticProblem !== null) return { ...semanticProblem, repair }
-    // A signal can revoke this inspection while authority/semantic work is
+    if (searchProblem !== null) return { ...searchProblem, repair }
+    // A signal can revoke this inspection while authority work is
     // awaited. Only the queued, fresh Git attempt may restore readiness.
     if (context.stateBranch.ok === false) return { state: "degraded", ...headUncertainOutcome(), repair }
     return { state: "ready", repair }
   }
 
-  // Write authority, then the readiness controller. A controller failure never takes authority away: writes go straight to the files.
-  async function admitAuthority({ deskRoot, policy, onRepair }) {
-    let verified = null
-    let controllerFailure = null
-    const connector = context.runtimeServer.connectOrStartController
+  // Write authority. Resolves with a degraded outcome when it is refused, else null. Tests replace the check through the runtime's `verifyAuthority`.
+  async function admitAuthority(policy) {
+    setPhase("verifying_authority")
+    const verify = context.runtimeServer.verifyAuthority ?? verifyAdmissionAuthority
     const authorityProvider = policy.authority_provider === null ? null : authorityProviders[policy.authority_provider]
-    let admitted
     try {
-      admitted = await (context.runtimeServer.admitControlPlane ?? admitControlPlane)({
-        deskRoot,
-        person: args.person,
-        policy,
-        runtime: context.runtime,
-        authorityProvider,
-        stateHome: readinessStateHome,
-        onRepair,
-        verifyAuthority: async (options) => {
-          setPhase("verifying_authority")
-          verified = await verifyAdmissionAuthority(options)
-          return verified
-        },
-        connectController: async (options) => {
-          setPhase("connecting_controller")
-          try {
-            return await connector(options)
-          } catch (error) {
-            controllerFailure = { error }
-            return { accepted: true, unavailable: true }
-          }
-        },
-      })
-    } catch (error) {
-      if (error?.code === "authority_invalid" || verified === null) {
-        return { outcome: admissionOutcome(error) }
-      }
-      // Authority was verified; only the controller failed to start.
-      admitted = { state: "CONTROL_READY", root: deskRoot, authority: verified, runtime: context.runtime, controller: null, automatic_actions: [] }
-      controllerFailure = { error }
-    }
-    if (disposed) {
-      await closeTracked(admitted?.controller)
-      return { outcome: null }
-    }
-    try {
-      context.person = validateAdmissionAuthority({ authority: admitted?.authority, person: args.person, policy })
-    } catch (error) {
-      forgetController()
-      return { outcome: admissionOutcome(error) }
-    }
-    context.authority = admitted.authority
-    context.authorityAdmitted = true
-    if (controllerFailure !== null) {
-      context.admission = { ...admitted, controller: null }
-      context.controllerLost = true
-      return { controllerProblem: admissionOutcome(controllerFailure.error) }
-    }
-    context.admission = admitted
-    context.controllerLost = false
-    watchController(admitted.controller)
-    if (policy.semantic !== "required") startBackgroundConvergence(admitted)
-    return { controllerProblem: null }
-  }
-
-  async function reconnectController({ deskRoot, policy, onRepair }) {
-    // A lost controller can still be closing, with its child holding the endpoint. Electing now would start a child that fails with EADDRINUSE and then join the one that is exiting; its close is bounded (the child is killed after 1 s).
-    await controllerClosesSettled()
-    if (disposed) return null
-    try {
-      const connector = context.runtimeServer.connectOrStartController
-      const controller = await connector({ deskRoot, policy, stateHome: readinessStateHome, onRepair })
-      if (disposed) {
-        await closeTracked(controller)
-        return null
-      }
-      if (!controller?.accepted) throw Object.assign(new Error("The readiness controller could not accept ownership."), { code: "controller_start_failed" })
-      context.admission = { ...context.admission, controller }
-      context.controllerLost = false
-      watchController(controller)
-      if (policy.semantic !== "required") startBackgroundConvergence(context.admission)
+      const authority = await verify({ deskRoot: context.root.root, person: args.person ?? null, policy, authorityProvider })
+      if (disposed) return null
+      context.person = validateAdmissionAuthority({ authority, person: args.person ?? null, policy })
+      context.authority = authority
+      context.authorityAdmitted = true
       return null
     } catch (error) {
       return admissionOutcome(error)
     }
   }
 
-  async function semanticBarrier(controller) {
-    let barrier = null
-    let failure = null
+  // The session's search engine, in this process. A failure never takes reads or writes away: searches read the files directly, and the next attempt starts it again.
+  function startSearch(deskRoot, policy) {
+    setPhase("starting_search")
+    let engine
     try {
-      await controller.beginConvergence()
-      barrier = await controller.barrier({ capability: "semantic", wait: true })
+      engine = context.runtimeServer.createSearchEngine({ deskRoot, semantic: policy.semantic })
     } catch (error) {
-      // Anything can be thrown, including null: keep what was thrown.
-      failure = { error }
+      return searchUnavailableOutcome(error)
     }
-    if (barrier?.capability !== "semantic" || barrier.current !== true) return semanticOutcome(failure, barrier)
-    context.semanticCurrent = true
-    return null
-  }
-
-  function startBackgroundConvergence(admitted) {
-    const runtimeServer = context.runtimeServer
+    context.search = engine
     const generation = contextGeneration
-    // Started on a later turn of the event loop, so its first synchronous stretch (opening the index database) never joins the transition to ready in one block; inside a promise, so a synchronous throw is reported like a rejection.
-    new Promise((resolve) => setImmediate(resolve))
-      .then(() => {
-        if (!disposed && generation === contextGeneration) return runtimeServer.beginBackgroundConvergence?.(admitted)
-      })
-      .catch((error) => log(`background convergence failed: ${error?.message ?? String(error)}`))
-  }
-
-  // Every 60 s while ready: a controller that stopped answering starts re-election.
-  async function checkController() {
-    const controller = context.admission?.controller
-    if (typeof controller?.status !== "function") return null
-    let failure
-    for (let attempt = 0; attempt <= CONTROLLER_RECHECKS; attempt += 1) {
-      if (attempt > 0 && controllerRecheckMs > 0) await new Promise((resolve) => setTimeout(resolve, controllerRecheckMs).unref())
-      // Replaced or forgotten while waiting (its exit event, a write that found it silent, a re-election): the newer path owns the outcome.
-      if (disposed || context.admission?.controller !== controller) return null
+    // Its first read of the desk starts on a later turn of the event loop, so that read's first synchronous stretch never joins the transition to ready in one block.
+    setImmediate(() => {
+      if (disposed || generation !== contextGeneration || context.search !== engine) return
       try {
-        await controller.status()
-        return null
+        engine.warm()
       } catch (error) {
-        failure = error
+        log(`search warm-up failed: ${describe(error)}`)
       }
-    }
-    // The last request can outlive the controller: if it exited and another was elected meanwhile, this stale chain must not close the new one or degrade the session.
-    if (disposed || context.admission?.controller !== controller) return null
-    forgetController()
-    return controllerLostOutcome(failure)
-  }
-
-  let checking = null
-  function backgroundControllerCheck() {
-    checking ??= checkController()
-      .then((lost) => lost && admission.degrade(lost))
-      .finally(() => { checking = null })
+    })
+    return null
   }
 
   const headUncertainOutcome = () => exceptionOutcome(new Error("HEAD freshness is unverified; authoritative Git inspection must settle a current observation"))
   const currentHead = binding => !disposed && headBinding === binding && binding.generation === headGeneration
-  const statIdentity = stat => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs, stat.nlink].join(":")
+  // Stats are read as BigInts (EXACT): a Windows file id can exceed 2^53, where Numbers cannot tell a file from its replacement.
+  const statIdentity = stat => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(":")
   async function readHead(binding) {
     let descriptor = null
     try {
-      const rootBefore = await headIO.lstat(binding.root)
-      const dirBefore = await headIO.lstat(binding.gitDir)
+      const rootBefore = await headIO.lstat(binding.root, EXACT)
+      const dirBefore = await headIO.lstat(binding.gitDir, EXACT)
       if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink() || !dirBefore.isDirectory() || dirBefore.isSymbolicLink())
         throw new Error("head_destination")
       const destination = [rootBefore.dev, rootBefore.ino, dirBefore.dev, dirBefore.ino].join(":")
       if (binding.destination !== null && binding.destination !== destination) throw new Error("head_destination_changed")
       const file = path.join(binding.gitDir, "HEAD")
-      const before = await headIO.lstat(file)
-      if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 4096) throw new Error("head_file")
+      const before = await headIO.lstat(file, EXACT)
+      if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || before.size > 4096n) throw new Error("head_file")
       if (!currentHead(binding)) throw new Error("head_cancelled")
       const handle = await headIO.open(file, headConstants.O_RDONLY | headConstants.O_NOFOLLOW)
       descriptor = { handle }; headDescriptors.add(descriptor)
       if (!currentHead(binding)) throw new Error("head_cancelled")
-      if (statIdentity(await handle.stat()) !== statIdentity(before)) throw new Error("head_replaced")
+      if (statIdentity(await handle.stat(EXACT)) !== statIdentity(before)) throw new Error("head_replaced")
       const bytes = Buffer.alloc(4097)
       let length = 0
       while (length < bytes.length) {
@@ -690,10 +545,10 @@ export function createDeskSession(deps) {
         if (bytesRead === 0) break
         length += bytesRead
       }
-      if (length > 4096 || length !== before.size) throw new Error("head_size")
-      if (statIdentity(await handle.stat()) !== statIdentity(before) ||
-          statIdentity(await headIO.lstat(file)) !== statIdentity(before)) throw new Error("head_replaced")
-      const rootAfter = await headIO.lstat(binding.root), dirAfter = await headIO.lstat(binding.gitDir)
+      if (length > 4096 || BigInt(length) !== before.size) throw new Error("head_size")
+      if (statIdentity(await handle.stat(EXACT)) !== statIdentity(before) ||
+          statIdentity(await headIO.lstat(file, EXACT)) !== statIdentity(before)) throw new Error("head_replaced")
+      const rootAfter = await headIO.lstat(binding.root, EXACT), dirAfter = await headIO.lstat(binding.gitDir, EXACT)
       if ([rootAfter.dev, rootAfter.ino, dirAfter.dev, dirAfter.ino].join(":") !== destination ||
           !rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !dirAfter.isDirectory() || dirAfter.isSymbolicLink())
         throw new Error("head_destination_changed")
@@ -859,38 +714,24 @@ export function createDeskSession(deps) {
     headWatch = null
   }
 
-  // The controller a read sees: with an embedding override, a lexical-only view, so this session never embeds a query with the wrong model.
-  function readerController() {
-    const controller = context.admission?.controller ?? null
-    if (!controller?.embeddingOverride) return controller
-    let view = lexicalViews.get(controller)
-    if (!view) {
-      view = Object.create(controller, {
-        identity: { value: { ...controller.identity, semantic_contract: { mode: "unsupported", embedding_spec: null } } },
-      })
-      lexicalViews.set(controller, view)
-    }
-    return view
-  }
-
-  // `admissionContext` null leaves admission out: the runtime then writes files without journaling them.
-  function statusContext(admissionContext) {
+  // `search` null leaves the search engine out: a write then changes only its files, which the engine's watcher or next read picks up.
+  function statusContext(search) {
     return {
       root: context.root,
       activation: context.activation,
       runtime: context.runtime,
       focus,
-      ...(admissionContext === null ? {} : { admission: admissionContext }),
+      search,
     }
   }
 
-  function runtimeCall(name, input, signal, admissionContext = { ...context.admission, controller: readerController() }) {
+  function runtimeCall(name, input, signal, search = context.search) {
     return context.runtimeServer.callTool({
       deskRoot: context.root.root,
       name,
       input,
       person: context.person ?? null,
-      statusContext: statusContext(admissionContext),
+      statusContext: statusContext(search),
       signal,
     })
   }
@@ -957,14 +798,11 @@ export function createDeskSession(deps) {
       return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
     }
     if (!requirementMet(requirement, context)) return refusal(name, requirement)
-    if (SEMANTIC_TOOLS.has(name) && context.admission?.controller?.embeddingOverride) {
-      return degradedResult(name, overrideOutcome(context.admission.controller.embeddingOverride), "semantic search")
-    }
     if (requirement === "write") return write(name, input, signal)
     return runtimeCall(name, input, signal)
   }
 
-  // Right before a write, HEAD must still be on the state branch; it can move under a ready session. The controller only decides whether the change is journaled.
+  // Right before a write, HEAD must still be on the state branch; it can move under a ready session.
   async function write(name, input, signal) {
     const inspection = await inspectStateBranch({ root: context.root.root, branch: context.stateBranchName, git })
     if (!inspection.ok) {
@@ -978,23 +816,7 @@ export function createDeskSession(deps) {
     if (!branch.ok) {
       return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
-    const controller = context.admission?.controller
-    if (controller && await controllerAnswers(controller)) return runtimeCall(name, input, signal, context.admission)
-    // No controller to journal through: write the file directly. A controller's watcher, or the next one's convergence scan, picks the change up.
-    return runtimeCall(name, input, signal, null)
-  }
-
-  // A quick check before journaling a write through the controller; a controller that does not answer is dropped, and the write goes to the file.
-  async function controllerAnswers(controller) {
-    if (typeof controller.status !== "function") return true
-    try {
-      await controller.status(WRITE_PING_MS)
-      return true
-    } catch (error) {
-      forgetController()
-      admission.fail(controllerLostOutcome(error))
-      return false
-    }
+    return runtimeCall(name, input, signal)
   }
 
   function refusal(name, requirement) {
@@ -1020,14 +842,13 @@ export function createDeskSession(deps) {
   }
 
   async function deskStatus(input, signal) {
-    // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it, and the whole answer shares one time budget. A ready session also checks its controller in the background, so a lost one is re-elected without waiting for the 60 s check.
+    // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it, and the whole answer shares one time budget.
     const deadline = Date.now() + STATUS_BUDGET_MS
-    // An attempt that was already running (a slow restore, the import of the runtime, the controller election) is joined, not waited on.
+    // An attempt that was already running (a slow restore, the import of the runtime) is joined, not waited on.
     await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
     const snapshot = statusSnapshot()
-    if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
-    // The admission state the payload is stamped with. A detail computed by this very call is read after `snapshot` was taken, so it can describe a controller that was still converging when admission reaches ready a moment later; stamping it with the later state would report ready next to a LEXICAL_CONVERGING controller with nothing to say so. It is stamped with the state it was computed under instead, and the next call reports the newer one.
+    // The admission state the payload is stamped with. A detail computed by this very call is read after `snapshot` was taken, so it can describe a session that was still admitting when admission reaches ready a moment later; stamping it with the later state would report ready next to detail from before it. It is stamped with the state it was computed under instead, and the next call reports the newer one.
     let stamped = null
     let detailFrom = null
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
@@ -1071,8 +892,7 @@ export function createDeskSession(deps) {
     }
     // Search status comes straight from the session's search engine, which answers at once. The runtime status run
     // also carries it, but on a large desk that run rarely finishes within this call's budget.
-    const engine = context.admission?.controller
-    if (typeof engine?.searchStatus === "function") payload = { ...payload, search: engine.searchStatus() }
+    if (context.search) payload = { ...payload, search: context.search.searchStatus() }
     const full = withAdmission(payload, stamped ?? statusSnapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     return jsonResult(input?.detail === true ? full : compactStatus(full))
@@ -1111,7 +931,7 @@ export function createDeskSession(deps) {
     // Capture before the asynchronous status call yields to a new admission.
     const request = {
       deskRoot: context.root.root, name: "desk_status", input, person: context.person ?? null,
-      statusContext: statusContext({ ...context.admission, controller: readerController() }),
+      statusContext: statusContext(context.search),
       signal: run.signal,
     }
     const runtimeServer = context.runtimeServer
@@ -1171,15 +991,6 @@ export function createDeskSession(deps) {
       return jsonResult(previewRuntimeSnapshot(admission.snapshot().state === "ready" ? "ready" : "diagnostic"))
     }
     if (input.repair === STATE_BRANCH_REPAIR) return switchStateBranch(release)
-    if (input.repair === "prune_readiness_state") {
-      const result = await pruneReadinessLeftovers({ stateHome: readinessStateHome })
-      return jsonResult({
-        status: "ok",
-        repair: "prune_readiness_state",
-        summary: `pruned ${result.pruned.length} leftover readiness controller folder(s) whose owner is dead and whose root is gone; kept ${result.kept}.`,
-        ...result,
-      })
-    }
     const snapshot = statusSnapshot()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
@@ -1229,7 +1040,8 @@ export function createDeskSession(deps) {
       return
     }
     log(`caught ${kind} after the handshake: ${message}; Desk keeps serving and re-admits`)
-    forgetController()
+    // The search engine runs in this process and may be what failed: re-admission starts a new one.
+    forgetSearch()
     return admission.fail({
       code: "runtime_exception",
       summary: `Desk caught an unexpected ${kind.replace("_", " ")} after the handshake: ${message}`,
@@ -1240,13 +1052,8 @@ export function createDeskSession(deps) {
 
   function withAdmission(payload, snapshot) {
     const ready = snapshot.state === "ready"
-    const override = context.admission?.controller?.embeddingOverride ?? null
-    const semantic = override
-      ? { ...payload.semantic, current: false, status: "unavailable (embedding_override)", fix: override.fix }
-      : payload.semantic
     return {
       ...payload,
-      ...(semantic === undefined ? {} : { semantic }),
       status: ready ? payload.status ?? "ok" : STATUS_BY_STATE[snapshot.code] ?? (snapshot.state === "admitting" ? "admitting" : "degraded"),
       state: snapshot.state,
       code: snapshot.code,
@@ -1266,7 +1073,7 @@ export function createDeskSession(deps) {
         phase: context.phase?.name ?? null,
         phase_since: context.phase?.since ?? null,
         state_branch: branchSummary(context.stateBranch),
-        controller: context.admission?.controller ? "connected" : "absent",
+        search: context.search ? "started" : "not_started",
         writes: !disposed && !admission.running && requirementMet("write", context) ? "available" : "refused",
         exceptions: context.exceptions,
         launcher: launcher === null ? null : { code: launcher.code, reason: launcher.reason, mode: launcher.mode },
@@ -1279,38 +1086,51 @@ export function createDeskSession(deps) {
 
   recordLastStart(admission.snapshot())
 
+  // Older Desk versions ran a readiness controller that kept a folder per desk under readinessStateHome. Desk no longer creates them; older versions still running may.
+  function scheduleLeftoverRemoval() {
+    if (typeof readinessStateHome !== "string" || leftoversTimer !== null) return
+    leftoversTimer = setTimeout(() => {
+      void Promise.resolve().then(() => removeLeftovers({ stateHome: readinessStateHome }))
+        .then((result) => { if (result.removed > 0) log(`removed ${result.removed} folder(s) older Desk versions' readiness controllers left in ${readinessStateHome}`) })
+        .catch((error) => log(`could not remove old readiness folders in ${readinessStateHome}: ${describe(error)}`))
+    }, deps.leftoversDelayMs ?? LEFTOVERS_DELAY_MS)
+    leftoversTimer.unref?.()
+  }
+
   return {
     admission,
     context,
     callTool,
     recordException,
-    start: () => admission.start(),
+    start: () => {
+      scheduleLeftoverRemoval()
+      return admission.start()
+    },
     /** Resolves once every start record so far is written. For tests that read a record right after a state change; dispose waits on the writer itself. */
     lastStartWritten: () => lastStart.written(),
     dispose() {
       disposed = true
       invalidateStatus()
       const attempt = admission.dispose()
-      unwatchController?.()
-      unwatchController = null
+      clearTimeout(leftoversTimer)
       closeHeadWatch()
       let attemptTimer
       const attemptStopped = Promise.race([
         attempt,
         new Promise((resolve) => { attemptTimer = setTimeout(resolve, deps.disposeAdmissionWaitMs ?? DISPOSE_ADMISSION_WAIT_MS) }),
       ]).finally(() => clearTimeout(attemptTimer))
-      // The controller closes as soon as operations, the pending HEAD sample and status readers are done, alongside the
-      // attempt wait, so the front door's shutdown limit is never spent waiting for admission first. A late attempt that
-      // acquires a controller after disposal closes it itself. The retained HEAD sample closes and forgets its own
-      // descriptor in its finally, so after it settles nothing can throw before the controller is released.
-      const retired = Promise.all([operationTail, headSample, statusReaderOutcome()]).then(async ([, , retirementError]) => {
-        forgetController()
-        await controllerClosesSettled()
+      // The search engine closes as soon as operations, the pending HEAD sample and status readers are done, alongside the
+      // attempt wait, so the front door's shutdown limit is never spent waiting for admission first. The retained HEAD
+      // sample closes and forgets its own descriptor in its finally, so after it settles nothing can throw before the
+      // engine is released.
+      const retired = Promise.all([operationTail, headSample, statusReaderOutcome()]).then(([, , retirementError]) => {
+        forgetSearch()
         return retirementError
       })
-      // An attempt that finished during the attempt wait may have closed a late controller; each close ends within the child's kill bound.
       return Promise.all([retired, attemptStopped, lastStart.written()]).then(async ([retirementError]) => {
-        await controllerClosesSettled()
+        // An attempt that finished during the attempt wait may have started an engine after disposal began.
+        forgetSearch()
+        await searchClosed
         if (retirementError) throw retirementError
       })
     },
@@ -1321,10 +1141,10 @@ const STATUS_BY_STATE = { no_desk_root: "setup_required" }
 const REQUIREMENT_TEXT = {
   read: "the desk root and the Desk runtime",
   focus: "the desk root and the Desk runtime",
-  controller: "the shared readiness controller",
+  search: "the session's search engine",
   write: "admitted write authority and the checkout on its state branch",
 }
-const CONTROLLER_FIX = "Desk serves reads and writes without the shared readiness controller (lexical search and timeline read the files directly; writes go straight to the files) and re-elects it in the background after 1, 2, 5, 10 and 30 s, then every 60 s. Call desk_status to retry now; only desk_reindex and semantic search wait for a controller."
+const SEARCH_FIX = "Desk serves reads and writes without its search engine (exact-word search and timeline read the files directly) and starts it again in the background after 1, 2, 5, 10 and 30 s, then every 60 s. Call desk_status to retry now; only desk_reindex waits for the search engine, and recall answers with exact-word matches until it starts."
 function degradedResult(name, fields, needs) {
   return {
     content: [{
@@ -1451,57 +1271,16 @@ function admissionOutcome(error) {
       diagnostic: { mode: "degraded", observed: observed(error) },
     }
   }
-  if (error?.code === "controller_semantic_mismatch") {
-    return {
-      state: "degraded",
-      code: "controller_semantic_mismatch",
-      summary: `${message} Lexical reads and writes are available; semantic search waits for a controller this session can share.`,
-      fix: "Another Desk session on this root runs the readiness controller with a different semantic policy. Desk retries in the background and takes over when that session ends; align the desk_runtime.semantic policy of both sessions to share one controller, then call desk_status.",
-      diagnostic: { mode: "degraded", observed: observed(error) },
-    }
-  }
-  if (/unsafe directory ownership or permissions|unsafe OS-user ownership|unsafe runtime directory ancestry/u.test(message)) {
-    return {
-      state: "degraded",
-      code: "controller_state_unsafe",
-      summary: `${message} Reads and writes are available; semantic search and reindexing wait.`,
-      fix: "A readiness state directory is not a private directory owned by this user (a symlink, or another owner). Remove the stray entry or fix its owner, and make it mode 700, then call desk_status.",
-      diagnostic: { mode: "degraded", observed: observed(error) },
-    }
-  }
-  if (error?.code === "controller_start_failed" || CONTROLLER_FAILURE.test(message) || CONTROLLER_FAILURE.test(error?.code ?? "")) {
-    return controllerLostOutcome(error)
-  }
   return exceptionOutcome(error)
 }
 
-function controllerLostOutcome(error) {
+function searchUnavailableOutcome(error) {
   return {
     state: "degraded",
-    code: "controller_unavailable",
-    summary: `The shared readiness controller did not answer (${describe(error)}).`,
-    fix: CONTROLLER_FIX,
+    code: "search_unavailable",
+    summary: `Desk's search engine could not start (${describe(error)}).`,
+    fix: SEARCH_FIX,
     diagnostic: { mode: "degraded", observed: observed(error) },
-  }
-}
-
-function overrideOutcome(override) {
-  return {
-    state: "degraded",
-    code: "embedding_override",
-    summary: `Semantic search is unavailable in this session: its embedding model is ${JSON.stringify(override.model)}, not the pinned ${override.pinned_model}. Lexical search and writes are available.`,
-    fix: override.fix,
-    diagnostic: { mode: "degraded", observed: { embedding_override: override } },
-  }
-}
-
-function semanticOutcome(failure, barrier) {
-  return {
-    state: "degraded",
-    code: "semantic_unavailable",
-    summary: "Required semantic convergence is not complete. Lexical reads and writes are available.",
-    fix: "Desk keeps converging semantic search in the background and retries; call desk_status to check. If it stays unavailable, check the embedding service named in readiness.convergence.",
-    diagnostic: { mode: "degraded", observed: failure ? observed(failure.error) : { barrier: barrier ?? null } },
   }
 }
 

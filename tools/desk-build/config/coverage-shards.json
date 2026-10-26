@@ -286,8 +286,6 @@
     "tests/desk/mcp/__tests__/indexer/text_hash.test.js": 0.5,
     "tests/desk/mcp/__tests__/launch/bootstrap.test.js": 2.6,
     "tests/desk/mcp/__tests__/launch/web.test.js": 29.2,
-    "tests/desk/mcp/__tests__/readiness/journal.test.js": 12.6,
-    "tests/desk/mcp/__tests__/readiness/journal_integrity.test.js": 1.2,
     "tests/desk/mcp/__tests__/readiness/leftovers.test.js": 0.5,
     "tests/desk/mcp/__tests__/readiness/process_start.test.js": 2.4,
     "tests/desk/mcp/__tests__/release/release_coupling.test.js": 2.6,

@@ -10,8 +10,6 @@ import {
   openDb,
   closeDb,
   runMigrations,
-  getMeta,
-  setMeta,
 } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -34,7 +32,7 @@ test("openDb creates parent .state dir + applies schema idempotently", async () 
   }
 })
 
-test("openDb installs all required tables (docs, chunks, refs_graph, meta)", async () => {
+test("openDb installs all required tables (docs, chunks, refs_graph)", async () => {
   const root = await tmpRoot()
   const db = openDb(root)
   try {
@@ -42,7 +40,7 @@ test("openDb installs all required tables (docs, chunks, refs_graph, meta)", asy
       .prepare("SELECT name FROM sqlite_master WHERE type IN ('table','virtual') ORDER BY name")
       .all()
       .map((r) => r.name)
-    for (const t of ["docs", "chunks", "refs_graph", "meta"]) {
+    for (const t of ["docs", "chunks", "refs_graph"]) {
       assert.ok(rows.includes(t), `missing table ${t}; got: ${rows.join(", ")}`)
     }
   } finally {
@@ -100,16 +98,11 @@ test("insert into chunks triggers a chunks_fts row via the AFTER INSERT trigger"
   }
 })
 
-test("meta key set/get roundtrips", async () => {
-  const root = await tmpRoot()
+test("closeDb is safe with no handle and on a handle already closed", async () => {
+  const root = await mkTempRoot("desk-db-close-")
+  closeDb(null)
   const db = openDb(root)
-  try {
-    assert.equal(getMeta(db, "k"), null)
-    setMeta(db, "k", "v")
-    assert.equal(getMeta(db, "k"), "v")
-    setMeta(db, "k", "v2")
-    assert.equal(getMeta(db, "k"), "v2")
-  } finally {
-    closeDb(db)
-  }
+  closeDb(db)
+  closeDb(db)
+  assert.equal(db.open, false)
 })

@@ -17,7 +17,7 @@ test("reindex re-reads the desk into the session's search engine", async (t) => 
   t.after(() => engine.close())
   assert.equal((await engine.lexical({ query: "before" })).results.length, 1)
   await writeFile(root, "track/work/task.md", "after")
-  const result = await desk_reindex({ deskRoot: root, readiness: engine, input: { force: true } })
+  const result = await desk_reindex({ deskRoot: root, search: engine, input: { force: true } })
   assert.equal(result.status, "ok")
   assert.equal(result.action, "reindexed")
   assert.equal((await engine.lexical({ query: "after" })).results.length, 1)

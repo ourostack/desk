@@ -221,12 +221,12 @@ async function terminalWorkflow(name, onGit) {
     await io.writeFile(f.card, original)
     git(f.root, "add", "--", path.relative(f.root, f.card))
   }
-  const updated = await complete(f, reader.readiness)
+  const updated = await complete(f, reader.search)
   const before = await io.readFile(f.card)
   const frontBefore = (await readCard(f.card)).data
   const trackBeforeArchive = await io.readFile(f.track, "utf8")
   const requestsBefore = await requests(f)
-  const archived = await archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } })
+  const archived = await archiveOwned(f, { search: reader.search, input: { track: "t", slug: SLUG } })
   const firstArchiveHead = onGit ? git(f.root, "rev-parse", "HEAD") : null
   const after = await io.readFile(f.archived)
   const frontAfter = (await readCard(f.archived)).data
@@ -238,7 +238,7 @@ async function terminalWorkflow(name, onGit) {
   const journal = reader.journal.replay()
   const requestsAfter = await requests(f)
   const retryBefore = await requests(f)
-  const retried = await archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } })
+  const retried = await archiveOwned(f, { search: reader.search, input: { track: "t", slug: SLUG } })
   const retryAfter = await requests(f)
   const finalHead = onGit ? git(f.root, "rev-parse", "HEAD") : null
   return {
@@ -260,9 +260,8 @@ async function terminalWorkflow(name, onGit) {
       trackTaskLinkResolvesAfterArchive: Boolean(link && exists(path.resolve(path.dirname(f.track), link))),
       trackOtherCellsPreserved: track === trackBeforeArchive.replace(
         `[task](${SLUG}/task.md)`, `[task](_archive/${SLUG}/task.md)`),
-      journalCoversBothMoveSubtrees: journal.changes.some((item) => item.path === `t/${SLUG}` && item.operation === "delete") &&
-        journal.changes.some((item) => item.path === `t/_archive/${SLUG}` && item.operation === "write"),
-      journalCoversActuallyChangedTrackRow: journal.changes.some((item) => item.path === "t/track.md"),
+      journalCoversBothMoveSubtrees: journal.changes.includes(`t/${SLUG}`) && journal.changes.includes(`t/_archive/${SLUG}`),
+      journalCoversActuallyChangedTrackRow: journal.changes.includes("t/track.md"),
       cleanupLiveKeyResolvesArchivedCard: cleanupKeys.includes(`t/${SLUG}`) && boot.cleanup?.items === 1 &&
         boot.cleanup.finished.some((item) => item.due === 1),
       retryNoSecondGitCommitOrCompletion: retried.status === "already_archived" && firstArchiveHead === finalHead &&
@@ -335,13 +334,12 @@ scenario("04-crash-after-real-rename-normal-retry-recovers-publication", async (
   const headAfterCrashBeforeRetry = git(f.root, "rev-parse", "HEAD")
   const foundBeforeRetry = await findCard({ deskRoot: f.root, track: "t", slug: SLUG })
   const reader = await readiness(f, "fresh-retry")
-  const retried = await attempt(() => archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }))
+  const retried = await attempt(() => archiveOwned(f, { search: reader.search, input: { track: "t", slug: SLUG } }))
   const published = git(f.root, "ls-tree", "-r", "--name-only", "HEAD").split("\n")
   const status = git(f.root, "status", "--short")
   const journal = reader.journal.replay()
   const repaired = published.includes(`t/_archive/${SLUG}/task.md`) && !published.includes(`t/${SLUG}/task.md`) &&
-    journal.changes.some((row) => row.path === `t/${SLUG}` && row.operation === "delete") &&
-    journal.changes.some((row) => row.path === `t/_archive/${SLUG}` && row.operation === "write")
+    journal.changes.includes(`t/${SLUG}`) && journal.changes.includes(`t/_archive/${SLUG}`)
   const honestPending = retried.result?.status === "archive_pending" &&
     retried.result.path === `t/_archive/${SLUG}/task.md` &&
     ["pending", "unknown"].includes(retried.result.publication?.status) &&

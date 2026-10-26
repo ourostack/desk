@@ -38,8 +38,7 @@ const STEP_WORDS = {
   inspecting_state_branch: "checking the desk's Git branch",
   admitting_authority: "checking write access",
   verifying_authority: "checking write access",
-  connecting_controller: "starting search",
-  checking_semantic_readiness: "waiting for meaning-based search",
+  starting_search: "starting search",
 }
 
 function startingSummary(admission) {

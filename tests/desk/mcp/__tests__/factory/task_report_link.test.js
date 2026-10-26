@@ -9,7 +9,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { promises as fs } from "node:fs"
+import { promises as fs, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import matter from "gray-matter"
 
@@ -363,27 +363,25 @@ for (const mode of ["head","journal","target"]) {
     await task_archive({ deskRoot:desk,env,input:{track:"track",slug:"finished-work"},schedulePush:() => {} })
     await visibility(env,"private")
     const file = "track/_archive/finished-work/task.md"
-    let records = 0, changed = false, uncertain = false
+    let records = 0, changed = false
     const result = await task_archive({ deskRoot:desk,env,input:{track:"track",slug:"finished-work"},
       schedulePush:() => assert.fail("an unqualified refill is never pushed"),
-      readiness:{
-        async recordChange(change) {
+      search:{
+        noteChange(changed_path) {
           records++
-          if (mode === "journal") throw new Error("owned journal acknowledgement failure")
-          if (!changed && change.path === file) {
+          if (mode === "journal") throw new Error("owned search notification failure")
+          if (!changed && changed_path === file) {
             if (mode === "head") {
-              await fs.writeFile(path.join(desk,"unrelated.txt"),"owned concurrent work\n")
+              writeFileSync(path.join(desk,"unrelated.txt"),"owned concurrent work\n")
               git(desk,"add","--","unrelated.txt")
               git(desk,"commit","-q","-m","unrelated during refill")
             } else {
-              await fs.rename(path.join(desk,file),path.join(base,"retained-refilled-card.md"))
-              await fs.writeFile(path.join(desk,file),"FOREIGN_REPLACEMENT\n")
+              renameSync(path.join(desk,file),path.join(base,"retained-refilled-card.md"))
+              writeFileSync(path.join(desk,file),"FOREIGN_REPLACEMENT\n")
             }
             changed = true
           }
-          return {recorded:true}
         },
-        async markUncertain() { uncertain = true },
       },
     })
     assert.equal(result.status,"archive_pending")
@@ -406,8 +404,7 @@ for (const mode of ["head","journal","target"]) {
       assert.equal(changed,true)
       assert.match(result.commit.reason,/HEAD changed/u)
     } else if (mode === "journal") {
-      assert.equal(uncertain,true)
-      assert.equal(records,1,"a failed journal is not called again to decorate the pending result")
+      assert.equal(records,1,"a failed notification is not repeated to decorate the pending result")
     }
   }))
 }

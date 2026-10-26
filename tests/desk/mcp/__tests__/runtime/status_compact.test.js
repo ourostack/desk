@@ -46,7 +46,7 @@ test("a repair Desk made at this session's start is one of the notes, in the wor
   // The first answer of a session, before the runtime detail is loaded, already says it.
   assert.deepEqual(compactStatus({ status: "ok", state: "ready", detail_pending: true, repair: line, admission: { summary: "ok", blockers: [] } }).notes, [line])
   // A desk that is not ready says it too: the repair happened whatever the attempt ended in.
-  const degraded = compactStatus({ ...ready, status: "degraded", state: "degraded", code: "controller_unavailable", repair: line })
+  const degraded = compactStatus({ ...ready, status: "degraded", state: "degraded", code: "search_unavailable", repair: line })
   assert.equal(degraded.state, "degraded")
   assert.deepEqual(degraded.notes, [line])
 })
@@ -170,7 +170,7 @@ async function makeSession(t, runtimePayload) {
   mkdirSync(root, { recursive: true })
   const runtime = {
     callTool: async () => ({ content: [{ type: "text", text: JSON.stringify(runtimePayload) }] }),
-    connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
+    createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }),
   }
   const session = createDeskSession({
     args: { person: null },
@@ -227,7 +227,7 @@ async function revalidatingSession(t, { resolve }) {
     },
     loadRuntime: async () => ({ runtimeServer: {
       callTool: async () => ({ content: [{ type: "text", text: JSON.stringify(ready) }] }),
-      connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
+      createSearchEngine: () => ({ warm() {}, noteChange() {}, async close() {}, searchStatus: () => ({ state: "idle" }) }),
     }, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
   })
@@ -246,7 +246,7 @@ test("desk_status does not say ready while admission is still running", async (t
   // Each step is named in plain words, or not at all.
   const step = (phase, extra = {}) => compactStatus({ status: "admitting", admission: { starting: true, phase, ...extra } }).summary
   assert.equal(step("resolving_inputs"), "Desk is still starting (finding this session's desk). Call desk_status again in about 10 s.")
-  assert.equal(step("connecting_controller", { phase_since: "not a date" }), "Desk is still starting (starting search). Call desk_status again in about 10 s.")
+  assert.equal(step("starting_search", { phase_since: "not a date" }), "Desk is still starting (starting search). Call desk_status again in about 10 s.")
   assert.equal(step("some_future_step"), "Desk is still starting. Call desk_status again in about 10 s.")
   assert.equal(step(null), "Desk is still starting. Call desk_status again in about 10 s.")
   // An admitted desk that re-admits after a change keeps its own words: it is not starting.

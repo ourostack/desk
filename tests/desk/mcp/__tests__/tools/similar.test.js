@@ -33,5 +33,5 @@ test("desk_similar routes similarity requests through the public query router", 
 
 test("without a query router, desk_similar asks the session's search engine", async () => {
   const engine = { lexical: async () => ({}), semantic: async (request) => ({ engine: true, kind: request.kind }) }
-  assert.deepEqual(await desk_similar({ deskRoot: "/tmp/desk", input: { path: "a.md" }, readiness: engine }), { engine: true, kind: "similar" })
+  assert.deepEqual(await desk_similar({ deskRoot: "/tmp/desk", input: { path: "a.md" }, search: engine }), { engine: true, kind: "similar" })
 })
