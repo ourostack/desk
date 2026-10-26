@@ -1,33 +1,24 @@
 ---
 name: session-start-migrations
-description: Auto-heal a machine's local state when it's stale relative to canonical names (workspace dir renamed, plugin moved, symlink target changed, etc.). Walks every enabled plugin's `migrations/` dir at session start; for each migration whose Detect block fires, runs Safety check + Migrate + Announce, then halts the session for restart when the migration needs one. Self-evidencing predicates (no marker file). Used by `desk:session-start` early in its flow, before any path-dependent work.
+description: Run the plugins' local-state migrations at session start (renamed folders, moved plugins, changed links), each with its safety check, and halt for a restart when one needs it. Used by `desk:session-start`.
 ---
 
 # Session-start migrations
 
-plugins evolve faster than operator machines do. when a plugin renames its canonical workspace dir, moves its on-disk clone, or otherwise changes a name a long-running session expects to find, the affected machine is silently broken until the operator notices a confused error two layers downstream. the cost of "operator notices" climbs steeply with fleet size — across personal machines, headless VMs, and remote fleet hosts, even one wrong default snowballs.
+A plugin that renames its workspace folder, moves its clone or changes a link leaves older machines broken until someone notices. Each plugin can ship `migrations/<NN>-<slug>.md` files in its plugin root. At session start this skill runs each migration's `Detect` block and, for each one that fires, runs `Safety check`, `Migrate` and `Announce`, then stops for a restart when the migration needs one. It is silent when nothing is needed.
 
-this skill is the auto-heal lane. every plugin can drop `migrations/<NN>-<slug>.md` files into its plugin root. at session start, this skill walks every enabled plugin's `migrations/` dir, runs each migration's `Detect` block, and — for the ones whose Detect fires — runs `Safety check` + `Migrate` + `Announce`, then hard-stops the session for restart so the new preamble loads against canonical paths. small ceremony, run every time, silent on the happy path.
+- **It lives in Desk, not an overlay,** so an overlay's own rename migration never renames the framework out from under itself.
+- **Detect inspects real state** (`[ -d ~/old-dir ]`, a link's target), never a "has run" marker that a restored backup could make wrong.
 
-**lives in `desk` (substrate), not in any overlay plugin.** if this framework lived in an overlay, the overlay's own rename migration would have to rename the framework out from under itself mid-execution. substrate-resident means the framework outlives any overlay's identity churn.
-
-**self-evidencing predicates, no marker file.** a migration's `Detect` block answers "is this machine still in the pre-migration state?" by inspecting the actual state — `[ -d ~/old-dir ]`, `[ -L ~/some-symlink ] && readlink ~/some-symlink | grep -q old-target`, etc. there's no "I've already run" cookie that can desync from reality on a restored backup, a partially-restored Time Machine snapshot, or a borrowed home dir. if the predicate says "needed," it's needed; if it says "not needed," it's truly already done.
-
-Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. This skill owns stale-path repair only; if a workspace is already present at the canonical path but still needs the V1-to-V2 Desk bootstrap, `desk:session-start` routes that same workspace through `desk:first-run-bootstrap` Entrance B before ordinary resumption. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption; later sessions should resume work against the repaired paths instead of re-running first-run choreography.
+Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. This skill owns stale-path repair only; if a workspace is already present at the canonical path but still needs the V1-to-V2 Desk bootstrap, `desk:session-start` routes that same workspace through `desk:first-run-bootstrap` Entrance B before ordinary resumption. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption.
 
 ## When this skill fires
 
-- at the top of `desk:session-start`, before any other path-dependent skill work or startup scans — specifically before Step 0.75's boot script (whose prereq probe, sync and scans all assume `$DESK/` resolves correctly) and any of the later scans.
-- re-runs on every session start. idempotent: a migration that already ran returns non-zero from its `Detect` block on the next session, so the skill skips it silently.
+At the top of `desk:session-start`, before the boot script (whose checks assume `$DESK/` resolves) and every other scan, on every session start. A migration that already ran fails its `Detect` next time and is skipped silently.
 
 ## Migration file format
 
-Every migration file lives at `<plugin-root>/migrations/<NN>-<slug>.md`. `NN` is a 2-digit sequence within that plugin; the slug is a short kebab-case description. Examples:
-
-```
-plugins/<overlay-a>/migrations/01-rename-workspace-dir.md
-plugins/<overlay-b>/migrations/02-move-plugin-clone.md
-```
+Each migration lives at `<plugin-root>/migrations/<NN>-<slug>.md`, with a two-digit `NN` and a short kebab-case slug.
 
 ### Frontmatter (YAML)
 
@@ -69,43 +60,28 @@ Each section is a level-2 markdown heading. `Detect`, `Safety check` and `Migrat
 
 The `## Announce` block is plain markdown text, not a code fence. The driver reads everything between `## Announce` and end-of-file (trimmed) and prints it verbatim. A migration whose outcome differs by machine prints a report of what it changed on stdout from Migrate; the driver shows that report first, then the Announce text, so Announce stays true on every machine.
 
-### Why exactly four sections
-
-each section maps cleanly to one concern:
-
-- **Detect**: "does this machine need the migration?" — pure predicate, no side effects.
-- **Safety check**: "is it safe to run RIGHT NOW?" — guards against partial state, mid-flight processes, uncommitted work. prints a human-readable reason on non-zero so the operator knows what to clean up.
-- **Migrate**: "do the thing." idempotent against partial runs so a re-invocation after a recovered failure converges.
-- **Announce**: "tell the operator what just happened." operator-facing text only; the driver pipes it to stdout after a successful Migrate.
-
-splitting these out means the driver can run Detect cheaply against every migration on every session-start (the common case is "all detects return non-zero, skill exits silently"), surface Safety failures distinct from Migrate failures, and keep the operator-facing announcement separate from the imperative bash.
+Detect is a side-effect-free predicate, so the driver can run every Detect cheaply on every start. Safety check prints why it stopped, so a safety stop is told apart from a failed Migrate. Migrate must converge when re-run after a partial failure.
 
 ## Driver flow
 
-1. **discover migrations across every enabled plugin.**
-   - walk every plugin root. the skill is engine-agnostic — it queries the filesystem rather than asking the harness — so the same logic works under Claude Code, Copilot CLI, and any future engine.
-   - **canonical plugin roots to walk (in order):**
-     - `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/` — Claude Code's user-level plugin install dir, under the Claude config directory (`$CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude`)
-     - `~/.claude-plugin/plugins/` — older Claude Code convention; check if present
-     - `~/.copilot/plugins/` — Copilot CLI's user-level plugin install dir
-     - `~/.ouro-cli/plugins/` — ouro daemon's per-machine plugin install dir (relevant when this skill runs in an ouro-agent context)
-     - Agency's plugin cache: run `node <desk plugin>/mcp/scripts/migrations.js roots` (add `--engine <prefix>` for a host other than Copilot; the default is `copilot`) and walk each folder it prints. Agency installs every plugin it fetches under `~/.local/agency/plugins/cache/entries/<dir_name>/` and keeps the old fetches there, so an overlay such as `ms-desk` is found only here, and walking the folders blindly would find stale copies. The command applies the selection rule to `~/.local/agency/plugins/cache/cache_index.json`: it reads `entries[spec].dir_name` and `fetched_at`; keeps only specs that start with the running engine's prefix (`copilot:`); skips Desk's own plugin, whose migrations the startup hooks already run; and, for each remaining plugin name (from the folder's `plugin.json`, else its `agency.json`), takes the one entry with the newest `fetched_at` that has a `migrations/` folder. An unreadable index prints nothing.
-     - `~/code/<plugin-id>/` and `~/code/<plugin-id>.ouro/` — local dev clones the operator symlinks into a plugin engine (a common pattern for plugin authors developing out of `~/code/`)
-     - any plugin root surfaced by a consumer engine's plugin-list command if that engine is on PATH (each engine has its own listing command; parse its output for plugin install dirs)
-   - for each plugin root, the rule is: if a `migrations/` subdir exists, every `*.md` file inside it is a candidate migration. dedupe by absolute path in case the same plugin is found under multiple roots (e.g. installed system-wide AND symlinked from `~/code/`). then dedupe by migration `id` as well: when two roots hold a migration with the same `id` (a plugin installed for Claude Code and also in the Agency cache, say), run it once, from the first root in the order above.
-   - across plugins, sort the full migration list alphabetically by filename. with the `<NN>-<slug>.md` convention, this gives global ordering by `NN` regardless of which plugin owns each file. (implementation note: sort by the leaf filename, not the full path, so a migration named `02-plugin-rename.md` in plugin B sorts after `01-rename-workspace-dir.md` in plugin A.)
+1. **Find migrations in every enabled plugin root**, by reading the filesystem so it works on every host, in this order:
+   - `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/` and the older `~/.claude-plugin/plugins/`;
+   - `~/.copilot/plugins/`;
+   - `~/.ouro-cli/plugins/` (in an Ouro agent context);
+   - Agency's plugin cache: walk only the folders that `node <desk plugin>/mcp/scripts/migrations.js roots` prints (add `--engine <prefix>` for a host other than Copilot). Agency keeps old fetches under `~/.local/agency/plugins/cache/entries/`, so walking it blindly finds stale copies. The command reads `~/.local/agency/plugins/cache/cache_index.json` (`entries[spec].dir_name` and `fetched_at`), keeps specs for the running engine (`copilot:`), skips Desk's own plugin, and for each plugin takes the entry with the newest `fetched_at` that has a `migrations/` folder; an unreadable index prints nothing;
+   - `~/code/<plugin-id>/` and `~/code/<plugin-id>.ouro/`, for plugin authors' local clones;
+   - any root a host's plugin-list command reports.
 
-2. **for each migration in id-order across all plugins:**
-   - parse the frontmatter and the four body code blocks.
-   - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, once `desk_status` is callable, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` it reports (the desk MCP's own `--root` and `--person`; leave `DESK_TOOLS_PERSON` empty when it reports none).
-   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: the boot script of `desk:session-start` names it in its `instructions`, to run once this session's own desk is known, rather than running it during the migration check. for Desk's own, the startup context's `Desk migrations:` line gives the command (see **Desk's own migrations at startup**).
-   - run **Detect**. exit 0 = migration is needed; non-zero = skip silently.
-   - run **Safety check**. exit 0 = safe. non-zero = surface the printed reason to the operator and **hard-stop** (do NOT run Migrate; do NOT continue to subsequent migrations — the operator needs to resolve the safety issue first).
-   - run **Migrate**. if it exits non-zero, surface the stdout+stderr and **hard-stop** with a clear "Migration `<id>` failed mid-run; manual intervention needed" message.
-   - on Migrate success, show Migrate's stdout (the migration's report of what it changed on this machine, if any), then print the **Announce** text verbatim. for an `agent_work: true` migration, Migrate's stdout is the work: do it, then send the Announce text with its placeholders filled in.
-   - if frontmatter `needs_restart: true`, **hard-stop the session** with a clean "please restart this session" message after the announcement.
+   Every `*.md` in a root's `migrations/` folder is a candidate. Dedupe by absolute path, then dedupe by migration `id` (the first root in the order above wins). Sort all of them by leaf filename, so `NN` orders migrations across plugins.
 
-3. **after all applicable migrations applied (or none needed)**, continue with normal `desk:session-start` flow.
+2. **For each migration in that order**, parse the frontmatter and blocks and run every block with `DESK_PLUGIN_ROOT` set to the plugin's root and, once `desk_status` answers, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to its `root.path` and `write_scope.person` (empty when none). An `agent_work: true` migration waits until the desk is synced and bound; the boot names it in its `instructions`.
+   - **Detect:** exit 0 means needed; anything else skips silently.
+   - **Safety check:** on non-zero, show its reason and stop: run neither Migrate nor any later migration.
+   - **Migrate:** on non-zero, show its output and stop with "Migration `<id>` failed mid-run; manual intervention needed".
+   - On success, show Migrate's output, then the Announce text (for agent work, do the printed work, then send the Announce text with its placeholders filled in).
+   - If `needs_restart: true`, stop after the announcement and say: "Please start a new session so my preamble loads against the migrated paths." On several hosts, each host runs its own pass.
+
+3. **Then** continue with `desk:session-start`.
 
 ## Desk's own migrations at startup
 
@@ -117,37 +93,16 @@ Desk does not leave its own migrations to this skill being followed: a session t
 - **`needs_restart: true`**: the hook cannot restart the session, so the line tells the agent to run the command right away, before other work and whether or not anyone is watching — it completes on its own, with no human needed to run it. Once it is done, show the human what it printed and ask them to start a new session; with no human in this session, just say a restart is needed and move on.
 - **anything else** (a safety other than `safe`, a Safety check that stops it, a Migrate that fails, a block that runs out of time): the line gives the command, so the agent runs it and sees why.
 
-`migrations.js run <id>` follows the driver flow below for that one migration, and prints everything the migration prints, however long: it prints that nothing is needed when Detect does not fire (or the hold's reason when it is held), the Safety check's reason when it stops, Migrate's output, and then the Announce text (as the template to fill in, after an agent-work migration's steps). The Detect blocks run in the hook without `DESK_TOOLS_ROOT` or `DESK_TOOLS_PERSON`: each resolves the desk and person the way the Desk MCP does. A host without `bash` gets no line, and this skill remains the way to run migrations there. Other plugins' migrations are still found and run only through this skill.
+`migrations.js run <id>` follows the driver flow above for that one migration, and prints everything the migration prints, however long: it prints that nothing is needed when Detect does not fire (or the hold's reason when it is held), the Safety check's reason when it stops, Migrate's output, and then the Announce text (as the template to fill in, after an agent-work migration's steps). The Detect blocks run in the hook without `DESK_TOOLS_ROOT` or `DESK_TOOLS_PERSON`: each resolves the desk and person the way the Desk MCP does. A host without `bash` gets no line, and this skill remains the way to run migrations there. Other plugins' migrations are still found and run only through this skill.
 
 ## Safety semantics
 
-- `safety: safe` — auto-run with announcement. **this is the only value implemented today.**
-- `safety: confirm` — would ask the operator before running. not implemented today; if encountered, surface a one-line "migration `<id>` requires `safety: confirm` which is not yet implemented; skipping" and continue.
-- `safety: manual` — would just announce that the operator should run something manually. not implemented today; if encountered, surface the announcement and continue without running Migrate.
+Only `safety: safe` (run and announce) is implemented. For `confirm` or `manual`, say in one line that migration `<id>` needs a safety mode that is not implemented, skip it and continue.
 
-future implementations of `confirm` and `manual` extend this skill; today's contract is "if it's not `safe`, the driver skips with a clear message."
+## Ordering and scope
 
-## Cross-plugin ordering
+Plugins coordinate global order only through the `NN` they choose; there is no registry. Past 99 migrations, everyone moves to a three-digit prefix. Each machine migrates its own state; nothing is shared between machines, nothing is previewed (a migration that passes Detect and Safety check runs), and a plugin without a `migrations/` folder is fine. Migrations should be idempotent and reversible where possible, for example `mv` rather than delete and recreate.
 
-alphabetical sort across all plugins' migration filenames. plugins coordinate by choosing each new migration's `NN` to lexically reflect intended global order. there's no central registry; the convention is the coordination.
+## Adding a migration
 
-for example, if overlay A ships `01-rename-workspace-dir.md` and overlay B then ships `02-move-plugin-clone.md`, sorting by filename gives `01`-then-`02` — even though they live in different plugin roots. subsequent migrations pick `03`, `04`, etc. by convention.
-
-the 2-digit NN handles realistic plugin-lifetime migration counts (up to 99 per migration cohort). if a plugin needs 100+ migrations someday, it switches to a 3-digit prefix and the alphabetical sort still works (because `100-foo` sorts after `099-bar` lexically as well as numerically — as long as everyone agrees on the digit width going forward).
-
-## Restart UX
-
-- "hard-stop" means an explicit error/exit that the engine's skill-invocation harness treats as terminating the current turn cleanly. the exact mechanism depends on the engine — for a skill, this means the agent stops calling more tools and yields to the operator.
-- print the **Announce** text first, **then** halt. the operator needs to see what changed before they're told to restart.
-- the halt message should tell the operator literally: "Please start a new session so my preamble loads against the migrated paths." operators on multi-host setups may need to restart the session per-host; that's expected — each host needs its own migration pass.
-
-## What this skill does NOT do
-
-- it does NOT touch any centralized registry of "has run" markers. predicates are self-evidencing.
-- it does NOT cross-talk between machines. each host runs its own migrations against its own state.
-- it does NOT attempt to "preview" a migration. if a migration's Detect returns 0 and Safety is green, the Migrate block runs. migrations are responsible for being idempotent and reversible-where-possible (e.g. by using `mv` rather than `rm` + recreate).
-- it does NOT enforce that overlay plugins ship migrations. a plugin with no `migrations/` dir is fine — the skill just finds nothing to do for that plugin.
-
-## Adding a migration (plugin-author quick reference)
-
-see the `README.md` next to this skill for the plugin-author quick reference. the 30-second version: drop `migrations/<NN>-<slug>.md` in your plugin root with the four code blocks above; pick the next available `NN` across all active plugins; mark `safety: safe` and `needs_restart: true` for any path-rename migration.
+See the `README.md` beside this skill. In short: add `migrations/<NN>-<slug>.md` to your plugin root with the four sections, pick the next free `NN` across active plugins, and mark a path-rename migration `safety: safe` and `needs_restart: true`.

@@ -1,6 +1,6 @@
 ---
 name: evaluate-release
-description: For `desk:observer` evaluating an Agentic Engineering V2 release alongside a human evaluator, or in an agent dry run of the same packet. Works through an evaluation packet from a cold start on the named host, records each step's outcome with evidence, times each scenario, classifies every problem as a defect, a confusion or a gap, and reports without fixing anything. Do NOT use for labeling a finished job's waste, for reviewing a pull request, or for any work observer did itself.
+description: For `desk:observer` only. Evaluate a Desk release by working through an evaluation packet from a cold start on a named host, recording evidence and fixing nothing.
 ---
 
 # Evaluate a release

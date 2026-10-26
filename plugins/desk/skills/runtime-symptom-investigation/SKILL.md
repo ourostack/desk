@@ -1,6 +1,6 @@
 ---
 name: runtime-symptom-investigation
-description: Invoke ONLY when the operator describes a runtime symptom that seems wrong — error responses, things that worked before now don't, unexpected outputs, performance changes — and worker would otherwise default to depth-first source-code reading. Triggered by phrases like "X is returning Y but shouldn't", "this used to work", "do not return until you understand exactly why X". Do NOT invoke for implementation tasks, design questions, or generic code-walking questions where no runtime behavior is in question.
+description: Use when the operator reports a runtime symptom (an error, a regression, unexpected output, a slowdown), to investigate the running system before reading source. Not for implementation or design questions.
 ---
 
 # Runtime-symptom investigation

@@ -1,22 +1,13 @@
 ---
 name: repo-handling
-description: Find or set up local clones for code repos referenced by a task card. Handles the multi-computer workflow where operators create task cards on one machine and resume on another with different directory layouts. Probes the current working directory, its parent, and common conventions before falling back to a two-option clone/provide flow. Also manages machine-local overrides, large-repo fallbacks, a repo-knowledge auto-loader, and the rules for reading other people's repositories and clones (read-only, never rearranged).
+description: Find or set up local clones of a task's repos across machines with different folder layouts, and the rules for reading other people's repos. Use when a task needs a repo locally.
 ---
 
 # Repo handling
 
 > Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
-When a task references a code repo, the agent needs to know where the code lives locally. Operators routinely move between machines with different layouts (`~/code/` on Mac, `Q:\src\` on Windows, `/repos/` on a Linux dev box) — task cards committed on one machine shouldn't block resume on another. This skill handles the cross-machine reality gracefully.
-
-> **overlay users**: consumer overlays often ship a richer repo-discovery skill — non-GitHub MCP fallback for the org's work-item tracker, cross-org MCP routing, and per-tracker REST PR fan-out. This skill stays generic.
-
-## When to invoke
-
-- A task card has a `repos[].local_path` of `""` and `mode: local` — clone needs to be located.
-- A task card's `local_path` exists in YAML but the directory doesn't resolve on this machine (machine-portability case).
-- Operator asks "where's repo X" or "do I have repo Y cloned."
-- Setting up a fresh machine that doesn't have any of the operator's usual clones.
+Machines lay code out differently (`~/code/` on a Mac, `Q:\src\` on Windows, `/repos/` on a Linux box), and a task card written on one must still resume on another. Use this skill when a card's `local_path` is empty or does not resolve here, when the operator asks where a repo is, or on a fresh machine. Overlays may ship a richer discovery skill (another tracker, cross-org routing); this one stays generic.
 
 ## Other people's repositories and clones
 
@@ -29,31 +20,24 @@ A clone you only read, or a repository someone else owns, is not yours to rearra
 - **Never create, move or delete a clone without explicit authorization.** If the source is not cloned anywhere, ask first and propose a scratch location outside the operator's project folders.
 - When the operator explains how their machine is laid out, record it (`.machine-local.yml` below, or their rules in the desk) so the next session inherits it.
 
-The resolution flow below applies to the task's own repositories; its clone step still needs the operator's choice in the two-option flow.
+The resolution flow below applies to the task's own repositories; its clone step still needs the operator's choice ("When nothing resolves").
 
 ## Resolution order
 
-For each repo entry that needs resolving, try in order — stop at the first success:
+For each repo entry, stop at the first that resolves to a Git repository whose origin matches the expected repository (`git -C <path> remote get-url origin`; a path that holds a different repository is a miss):
 
-1. **Machine-local override** (per-machine YAML; see below)
-2. **The literal `local_path` in the task card** (tilde-expanded)
-3. **Auto-discovery** across PWD, PWD's parent, and common conventions (see below)
-4. **Operator-provided path** (two-option flow)
+1. **`$DESK/.machine-local.yml`**, the per-machine override.
+2. **The card's `local_path`**, with `~` expanded.
+3. **Auto-discovery:** `$PWD/<repo>`, then `$PWD/../<repo>` and `$PWD/../../<repo>` (a sibling of the repo you started in), then `~/code`, `~/repos`, `~/src`, `~/dev` and `~` itself.
+4. **Ask the operator** (below).
 
-When steps 1–3 all fail, that's a genuine "I don't know where this is" — fall through to step 4. When steps 2 or 3 succeed with a path different from what's on the task card, propose adding it to `.machine-local.yml` so future sessions on this machine skip the discovery.
+When step 2 or 3 finds a path other than the card's, propose recording it in `.machine-local.yml` so the next session here skips discovery.
 
----
+## Machine-local override
 
-## 1. Machine-local override
-
-**This is THE workaround for per-machine drive/layout differences.** Operators routinely have different preferred drives across machines: `~/code/` on personal Mac, `~/src/` on Linux, `Q:\src\` or `C:\src\` on Windows. The committed task card's `local_path` is the portable default (tilde form) — `.machine-local.yml` is the per-machine escape hatch.
-
-**Convention**: A git-ignored file at `$DESK/.machine-local.yml` lets a given machine override `local_path` per repo without touching the committed task card. Each machine maintains its own copy (file is gitignored precisely because it's machine-specific).
-
-### Schema
+`$DESK/.machine-local.yml` is ignored by Git (add it to `$DESK/.gitignore` if missing) because each machine keeps its own. It is opt-in: create it when the operator hits a path that differs between machines.
 
 ```yaml
-# $DESK/.machine-local.yml — per-machine, gitignored
 repos:
   OrderService: /Users/<alias>/work/OrderService
   OrderUI: ~/dev/OrderUI
@@ -62,179 +46,22 @@ defaults:
   clone_root: ~/code   # where new clones go on this machine (default: ~/code)
 ```
 
-### Resolution
+**A committed `local_path` is always in tilde form.** An absolute path on a card (`C:\src\...`, `/Users/<alias>/...`) is a bug that breaks every other machine. Move it to this machine's `.machine-local.yml` and set the card back to `~/code/<repo-name>` with `task_update` (the whole corrected `repos` list in `frontmatter`, plus a `note`); `task_update` commits the card, and the desk's pre-commit hook refuses a hand commit of one. Say in one line that you did it. When discovery finds an operator-specific path, record it in `.machine-local.yml` rather than on the card; when it finds a portable one, record it on the card with `mode: local`.
 
-When resolving a repo entry, the effective path is determined IN THIS ORDER — stop at the first hit:
+## When nothing resolves
 
-1. **`.machine-local.yml`** → use that path (after tilde expansion). Hostname-scoped only if the file has a hostname section; otherwise the file applies to the current machine.
-2. **Task card `local_path`** → tilde-expand and check if it resolves to a git repo with the expected remote.
-3. **Auto-discovery** (see section 3 below) — PWD first, then common conventions.
-4. **Two-option flow** (see section 4) — operator provides path or worker clones.
+Ask in one sentence whether the operator has it cloned somewhere (give the path) or wants you to clone it. A path they give is checked for the expected origin, recorded on the card with `mode: local`, and offered for `.machine-local.yml` when it is not in `~/code/`. To clone, take the URL from the card's `url` (boot's missing-clone instruction gives the exact `git clone <url> <path>`), the hosting service or the operator, and save an operator-supplied URL on the card. Clone into `defaults.clone_root` (default `~/code/`), record the path through `task_update`, and warn that a large repository takes a while.
 
-### Absolute path in `local_path` is ALWAYS a bug
+For a repository tens of gigabytes in size, warn before cloning and consider working remotely; record known large repositories in `$DESK/_meta/large-repos.md` (repo, approximate size, recommendation) so the next session warns without measuring again.
 
-If the committed task card's `local_path` is an absolute path (`C:\src\...`, `Q:\src\...`, `/Users/<alias>/...`) — that's a bug. It means a previous session baked one machine's layout into the shared task card, breaking every other machine.
+## Open pull requests across `repos[]`
 
-**When you encounter one during a session**:
-1. Surface it to the operator: "`task.md` has `local_path: <absolute-path>` — that's specific to one machine and breaks cross-machine portability. Want me to move it to `.machine-local.yml` on this machine and revert `task.md` to tilde form?"
-2. On yes: write the absolute path to `.machine-local.yml` for this repo, put the card's `local_path` back to `~/code/<repo-name>` tilde form with `task_update` (`frontmatter: { repos: [...] }` with the whole corrected list, and a `note` such as `reverted local_path to tilde form; absolute path kept in .machine-local.yml for this machine`). `task_update` writes the card and commits it itself; never hand-edit `task.md` and `git commit` it, because the desk's pre-commit hook refuses a hand commit of a card.
-3. Push.
+Look up open PRs in every repo a task lists, not just the one whose PR is already known (for GitHub, `gh pr list --repo <org>/<repo> --author @me --state open --json number,title,url,isDraft`); session start does this for active tasks. Keep the list for the session; write a PR onto the card only when it is confirmed as the task's PR.
 
-The rule: **committed `local_path` is always tilde form. Absolute paths go in `.machine-local.yml`.** No exceptions.
+## Repo knowledge
 
-### Setup
+When an active task lists a repo, read every `.md` file in `<plugin>/repo-knowledge/<repo-name>/` if that folder exists (for example `code-standards.md`, `pipeline-notes.md`), and say nothing when it does not. Folders are keyed by repo name; on the first real collision across organizations, prefix the organization (`acme-OrderService`). Put only what is specific to that repo and would otherwise be re-learned each session (build gotchas, pipeline IDs, review rules), written without host-specific tool names; cross-cutting rules belong in a skill.
 
-If the file doesn't exist, do nothing — the convention is opt-in. If the operator hits the "different path on different machines" problem, propose creating the file:
+## Before implementation
 
-```
-I notice your task card says ~/code/<repo-name>, but the path doesn't exist on this machine.
-On this machine you have it at /Users/<alias>/work/<repo-name>. Want me to add a machine-local
-override at $DESK/.machine-local.yml so I'll find it here without changing the
-committed task card? (y/n)
-```
-
-### Why git-ignored
-
-The override is per-machine. Committing it would defeat the purpose. Add `.machine-local.yml` to `$DESK/.gitignore` if it doesn't already include it.
-
----
-
-## 2. Task card local_path
-
-Use the value as-is, expanding `~` to `$HOME`. If the path resolves to a git repo with the expected remote, you're done. If not, fall through to auto-discovery.
-
-**Verify the remote matches** before trusting the path:
-```bash
-git -C <path> remote get-url origin 2>/dev/null | grep -qiE "<org>.*<repo-name>|<repo-name>.*<org>"
-```
-
-A path that exists but points at a different repo is a fail — don't use it.
-
----
-
-## 3. Auto-discovery
-
-Probe candidates in this order, stopping at the first match:
-
-1. **Current working directory** (`$PWD/<repo-name>`). Operators often run worker from the directory that contains their clones — don't miss the obvious.
-2. **PWD's parent and grandparent** (`$PWD/../<repo-name>`, `$PWD/../../<repo-name>`). Covers the case where worker is invoked from inside one repo and needs to find its sibling (e.g., running from `~/code/service-a` and needing `~/code/service-b`).
-3. **Common home-directory conventions**:
-   - `~/code/<repo-name>`
-   - `~/repos/<repo-name>`
-   - `~/src/<repo-name>`
-   - `~/dev/<repo-name>`
-   - `~/<repo-name>`
-
-For each candidate, verify it's a git repo whose origin matches the expected upstream repo (same remote check as section 2).
-
-### On success
-
-1. Update the task card's `repos[].local_path` **only if the discovered path matches a portable form** (`~/code/<repo-name>` or similar). If the discovered path is operator-specific (`/Users/<alias>/work/<repo-name>`, `Q:\src\<repo-name>`), prefer writing it to `.machine-local.yml` instead and leave `local_path` as the portable default.
-2. Set `mode: local` on the task card if it wasn't already.
-3. Commit the task card change.
-
----
-
-## 4. Two-option flow (discovery failed)
-
-If nothing resolves, present two options:
-
-```
-I can't find a local clone of <repo-name> (<org>/<repo>).
-
-Two options:
-1. "I have it cloned at <path>" — tell me where it is
-2. "Clone it for me" — I'll run git clone (may take a while for large repos)
-
-Which one?
-```
-
-(overlay users may have a third option — work via the org's tracker MCP only — when the consumer overlay provides remote-tracker fallback.)
-
-### Option 1: User provides path
-
-1. User gives a local path.
-2. Verify it's a git repo with the expected remote.
-3. Update task card: `local_path: "<user-provided-path>"`, `mode: local`.
-4. Offer to add to `.machine-local.yml` if the path doesn't match the `~/code/` convention (so other machines aren't affected).
-
-### Option 2: Clone for me
-
-1. Obtain the clone URL: the repo's `url` on the task card first (boot's missing-clone instruction already gives the exact `git clone <url> <path>` when it is there), then the hosting platform UI, then the operator. When the operator supplies it, save it on the card as the repo's `url` through `task_update` so the next session clones without asking.
-2. Clone to the machine's preferred root (default `~/code/`, or `defaults.clone_root` from `.machine-local.yml` if set):
-   ```bash
-   git clone <clone-url> ~/code/<repo-name>
-   ```
-3. Update task card (through `task_update`, like every card write): `local_path: "~/code/<repo-name>"`, `mode: local`.
-4. Warn the operator: this can take a long time for large repos.
-
----
-
-## Large repo handling
-
-Some repos are too large to clone practically (for example, repos in the 10s of GB).
-
-For repos you know are large (or when `git clone` takes more than a few minutes):
-- **Warn the operator before cloning** and consider whether a remote-only workflow is viable (overlay users may have a remote-tracker MCP fallback via their consumer overlay).
-  ```
-  <repo-name> is a very large repo (~NNGB). Cloning will take a long time and significant disk space.
-  ```
-- If the operator confirms, proceed with Option 2 but set a longer timeout.
-
-### Tracking known-large repos
-
-Keep a list in `$DESK/_meta/large-repos.md` per operator, so worker can warn on first encounter without re-discovering the size. Format:
-
-```markdown
-| Repo | Approx size | Recommendation |
-|------|-------------|----------------|
-| <repo-name> | <size> | remote-only / skip-clone |
-```
-
----
-
-## Fan PR lookups across `repos[]`
-
-Every non-terminal task card declares a `repos[]` array. Session probes (`session-start`) and status queries (`status`) need to surface PR state across **every** repo the task touches — not just the entry whose PR ID is already cached.
-
-For each active task card, iterate every entry in `repos[]` and run the appropriate hosting-platform PR list call scoped to the current user. For GitHub repos:
-
-```bash
-gh pr list --repo <org>/<repo-name> --author @me --state open --json number,title,url,isDraft
-```
-
-(overlay users: non-GitHub work-item trackers use their own REST endpoints instead — consumer overlays extend this fan-out.)
-
-Cache the returned PR metadata on the task-scan output for downstream consumers (status skill, session-start skill-routing prompts). Do NOT update task-card frontmatter on every fan-out — the cached list is ephemeral per session; only persist to the card when the operator confirms a new PR is the task's PR.
-
-## Repo-knowledge auto-loader
-
-`<plugin>/repo-knowledge/<repo-name>/*.md` holds repo-specific guidance that the agent loads automatically when an active task references a repo of that name.
-
-**Loader contract** (prose, not a separate script — this is the agent's file-read behavior during session-start):
-
-1. For each active task's `repos[].name`, check whether the directory `<plugin>/repo-knowledge/<repo-name>/` exists.
-2. If it exists: load every `.md` file in that directory into context. Common filenames: `code-standards.md`, `pipeline-notes.md`, `conventions.md`, etc. No fixed schema — each repo's knowledge directory is owned by whoever encoded it.
-3. If it doesn't exist: **silently no-op.** Do not warn, do not log an error, do not prompt the operator. An unknown repo is the default state; the agent has guidance for a small number of repos and general instincts for the rest.
-
-### Namespace is repo-name only
-
-The knowledge directory is keyed by repo `name` (e.g., `repo-knowledge/OrderService/`), not `<org>/<repo>`. Collisions across orgs with identically-named repos are not pre-designed around; handle at first collision by prepending the org to the directory name (e.g., `repo-knowledge/acme-OrderService/`) when the collision actually surfaces. Don't over-engineer ahead of first collision.
-
-### What goes in repo-knowledge
-
-Only content that is truly specific to that repo and that the agent would otherwise re-learn on every session — build gotchas, pipeline IDs, code-review rules specific to the repo's coding style, engineer-specific conventions. Cross-cutting rules go in the applicable skill; they do NOT belong in repo-knowledge.
-
-Content must be engine-agnostic (REST API names, not harness MCP tool names) — repo-knowledge is loaded into every session regardless of the active harness.
-
-## Pre-work hygiene (before implementation starts)
-
-Before implementation starts on a repo, ensure the local state is clean:
-
-1. `cd <repo-local-path>`
-2. `git fetch origin`
-3. If on a feature branch from prior work: `git rebase origin/main` (or merge, depending on repo convention)
-4. If on main: `git pull origin main`
-5. Check for uncommitted changes — warn the operator if found, do not silently overwrite.
-
-Skip this if the repo has no local clone to manage.
+Bring the task's own checkout up to date and check for uncommitted changes through `git-hygiene` ("Code repos") before the first edit; never overwrite uncommitted work silently.

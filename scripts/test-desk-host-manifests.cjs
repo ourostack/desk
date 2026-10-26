@@ -351,14 +351,21 @@ function checkObserverSources({ repoRoot, errors, checked }) {
 
 function checkHumanizePackaging({ repoRoot, errors, checked }) {
   checked.push("humanize-skill");
-  const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "humanize");
+  // The vendored humanize guidance lives beside operator-voice-comments, which owns the voice rules, with its MIT license.
+  const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "operator-voice-comments");
   const standaloneSkillRoot = path.join(repoRoot, "skills", "humanize");
   const manifest = readJsonIfPresent(repoRoot, "manifest.json") ?? { skills: [] };
 
-  for (const file of ["SKILL.md", "LICENSE"]) {
+  for (const file of ["human-voice.md", "LICENSE-humanize"]) {
     if (!fs.existsSync(path.join(deskSkillRoot, file))) {
       errors.push(`humanize-skill Desk bundle missing ${file}`);
     }
+  }
+  // A pointer skill keeps overlay calls to `humanize` by name working; the guidance itself has one home.
+  const pointer = path.join(repoRoot, "plugins", "desk", "skills", "humanize", "SKILL.md");
+  const pointerText = fs.existsSync(pointer) ? fs.readFileSync(pointer, "utf8") : "";
+  if (!pointerText.includes("../operator-voice-comments/human-voice.md") || pointerText.split(/\s+/u).length > 120) {
+    errors.push("humanize-skill pointer skill missing or no longer a short pointer to human-voice.md");
   }
   if (fs.existsSync(standaloneSkillRoot)) {
     errors.push("humanize-skill remains in the standalone skill catalog");

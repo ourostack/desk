@@ -1,6 +1,6 @@
 ---
 name: session-start
-description: Session-start. Invoke as the FIRST thing in every agent session. Runs one script that does every mechanical startup step (migrations, host, prerequisites, sync, task index, card validation, push accounts, repo state, open PRs) and prints readable text that leads with the work, starting with one status line (status, desk path, host, sync), the active tasks grouped by state with each task's push route, open pull requests and repos, then only the numbered instructions that apply, and the desk's `AGENTS.md`. Missing prerequisites constrain dependent operations, not independent authorized work. If no desk is bound, hands off to `first-run-bootstrap`. If the operator names a task, hands off to `session-resumption`.
+description: Run first in every session, and when the operator asks for status or 'where are we'. Runs the boot script and turns its output into the first reply.
 ---
 
 # Session start
@@ -50,7 +50,9 @@ If the desk already exists and still shows V1 evidence (durable desk state such 
 
 **Delivered, awaiting sign-off.** A boot section by that name and one numbered instruction list delivered tasks the operator has not answered; `details.md` says what to do with them, in short: after what the operator asked, raise them once, together.
 
-**Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `dual-input`. For the fuller dashboard, invoke `status`.
+**Resume.** Hand a chosen task to `session-resumption`; its state machine lives in `task-lifecycle`. To start new work, follow `start-task`.
+
+**Status on request.** When the operator asks "status" or "where are we" later in the session, answer from `desk_status` with `{ detail: true }`: its `active_tasks` (by track, newest first, at most 20, then a count), each task's blocker or waiting reason, the local repos of open tasks with uncommitted or unpushed work (`git -C <path> status --porcelain`), and the last three entries in `$DESK/_meta/friction.md`. It is read-only: do not sync first, fetch trackers or change anything; end by asking which task to resume or whether to start new.
 
 **More detail, only when it applies** (all in `details.md`): the Desk MCP repair path, a crew workspace, the friction backlog, the workspace MCP link, the factory label clauses, and the routing prompts for `curator` and `pr-feedback-on-own-pr`.
 

@@ -1,6 +1,6 @@
 ---
 name: track-card-format
-description: Schema + body template for `track.md` — the per-track dashboard at the root of each track directory — including the one-line `scope:` that routes new work to a track. Use when creating a new track, reading an existing track, deciding whether work belongs in a track, or updating a track card's frontmatter, scope line or tasks table.
+description: Schema for a track's `track.md`, including the `scope:` line that routes work to it. Use when creating, reading or updating a track, or deciding whether work belongs in one.
 ---
 
 # Track card format

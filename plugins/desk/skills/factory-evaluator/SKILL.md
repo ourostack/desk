@@ -1,6 +1,6 @@
 ---
 name: factory-evaluator
-description: For `desk:observer` labeling the waste in a finished job's sessions from evaluator briefs that Desk prepared when the task reached `done`. Classifies each stretch of a session as value, support, muda or unknown with a confidence, names the waste, flags mura and muri, classifies why the agent stopped before each wait for the operator, cites evidence as exact fact intervals and writes labels with no free text. Do NOT use for evaluating a release, for reviewing a pull request, or for any job observer did or helped with.
+description: For `desk:observer` only. Label the waste in a finished job's sessions from the evaluator briefs Desk prepares when a task reaches `done`.
 ---
 
 # Label a finished job's waste

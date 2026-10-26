@@ -1,10 +1,6 @@
 ---
 name: factory-work
-description: >-
-  Invoke before designing, planning, changing or reviewing the factory:
-  derive, binding, reconcile, flush, the store pipeline and site, kaizen
-  cards, andon, waste labels, or the factory docs. Carries the Lean reading
-  and the terrarium checks every factory design, plan and review must pass.
+description: Invoke before designing, planning, changing or reviewing the factory (derive, binding, reconcile, flush, the store and site, kaizen cards, andon, waste labels, its docs). Carries the Lean reading and terrarium checks.
 ---
 
 # Factory work

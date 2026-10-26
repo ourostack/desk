@@ -1,6 +1,6 @@
 ---
 name: pr-reviewer-audit
-description: Audit which reviewers are required on a PR (by files touched) and which are active approvers in the current PR's vote state. Produces a file→required-groups map + approver ranking. Use when operator asks "who needs to approve this PR," "what's the reviewer situation," or when drafting a who-to-ping message for a long-sitting PR.
+description: Work out which reviewers a PR requires, by files touched, and who actively approves. Use for 'who needs to approve this PR' or a who-to-ping message.
 ---
 
 # PR reviewer audit

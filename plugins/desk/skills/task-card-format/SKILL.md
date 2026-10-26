@@ -1,6 +1,6 @@
 ---
 name: task-card-format
-description: Schema for `task.md` — the per-task card inside a task directory. Covers required fields, adoption signals (`planning_complete`, `adopted_at`), local-path portability via tilde paths, and adopted doc filename conventions. Use when creating, reading, or updating a task card.
+description: Schema for a task's `task.md` card. Use when creating, reading or updating one.
 ---
 
 # Task card format

@@ -1,6 +1,6 @@
 ---
 name: session-resumption
-description: Checkpoint and resume an authorized non-terminal task, including a fresh-process handover after interruption, verified resource exhaustion or runtime pressure. Preserve actual source, unfinished work, work identity and authority; admit a replacement writer only after the prior owner is released. Also owns where private or sensitive operational evidence (raw transcripts, credentials, private measurement, customer data) is kept.
+description: Checkpoint and resume a non-terminal task, including a fresh-process handover after interruption or resource pressure. Also owns where private operational evidence (raw transcripts, credentials, customer data) is kept.
 ---
 
 # Session resumption

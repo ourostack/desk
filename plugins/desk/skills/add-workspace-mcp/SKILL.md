@@ -1,6 +1,6 @@
 ---
 name: add-workspace-mcp
-description: Add a new MCP to the operator's workspace runtime config so it auto-loads on every agent session via the workspace-config link. Use when the operator asks to "add an MCP", "configure an MCP", "I want to use the X tool" (where X is an MCP server), or otherwise needs a tool that isn't currently loaded. Covers both runtime-native builtin MCPs (under `[mcps.builtins.<alias>]`) and external npm-distributed stdio MCPs (under `[mcps.servers.<alias>]`). Handles the TOML schema choice, the comment convention, the verification step, and the commit-push-relaunch flow.
+description: Add an MCP server to the workspace runtime config so every session loads it. Use when the operator asks to add or configure an MCP, or needs a tool that is not loaded.
 ---
 
 # Add a workspace MCP

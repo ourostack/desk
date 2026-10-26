@@ -1,17 +1,6 @@
 ---
 name: content-routing
-description: >-
-  Decide where durable content belongs: the product repository, an operator's
-  workspace, a generic plugin, or a context overlay. Invoke before encoding
-  product behavior, interfaces, installation contracts, defaults,
-  compatibility promises, release rules, a friction disposition, a captured
-  lesson, an operator preference, a repo-specific gotcha, a reusable artifact
-  just drafted, or a new skill's layer. Within a plugin, also decides the
-  always-on foundation vs a triggered skill and whether to split a generic
-  engine from a context skin. Do NOT
-  invoke for file placement inside a workspace (that's `directory-structure`),
-  beyond deciding that a just-drafted reusable artifact belongs in the desk at
-  all, or for human-facing voice.
+description: Decide where durable content belongs (product repo, the operator's desk, a generic plugin or an overlay; foundation or triggered skill) before encoding product behavior, interfaces, installation contracts, defaults, compatibility promises, release rules, a lesson, a preference or a new skill. Not for placement inside a desk.
 ---
 
 # Content routing — where does this belong?
