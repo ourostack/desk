@@ -169,8 +169,8 @@ test("the close wait for a desk_status call that never settles ends in an error"
   const run = new AbortController()
   const reading = Promise.withResolvers()
   const release = Promise.withResolvers()
-  const admission = { controller: { searchStatus: async () => { reading.resolve(); await release.promise; throw new Error("released") } } }
-  const stuck = desk_status({ deskRoot, env, signal: run.signal, statusContext: { admission } }).then(() => "answered", () => "rejected")
+  const search = { searchStatus: async () => { reading.resolve(); await release.promise; throw new Error("released") } }
+  const stuck = desk_status({ deskRoot, env, signal: run.signal, statusContext: { search } }).then(() => "answered", () => "rejected")
   await reading.promise
   run.abort(new Error("runtime status context ended"))
   await assert.rejects(waitForStatusInspection(run.signal, { callSettleMs: 50 }), { code: "status_call_not_settled" })

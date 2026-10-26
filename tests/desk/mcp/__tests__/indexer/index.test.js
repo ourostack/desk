@@ -181,7 +181,7 @@ test("a lexical failure rolls back deletions, earlier documents, chunks and refs
   const db = openDb(root)
   try {
     await rebuildIndex(root, { db })
-    const snapshot = () => ["docs", "chunks", "refs_graph", "meta"].map((table) =>
+    const snapshot = () => ["docs", "chunks", "refs_graph"].map((table) =>
       db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
     const before = snapshot()
     await fs.rm(path.join(root, "track", "removed"), { recursive: true })

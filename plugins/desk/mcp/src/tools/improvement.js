@@ -51,7 +51,7 @@ function withCommit(answer, commit, setAside, leftAlone) {
 const messageFor = (verb) => (result) => cardCommitMessage(verb, result.file_name ?? "set_aside")
 
 function record(search, prefix, fileName) {
-  if (fileName) search?.noteChange(path.join(prefix, "_meta", "improvement", fileName))
+  if (fileName) search?.noteChange(path.posix.join(prefix, "_meta", "improvement", fileName))
 }
 
 /**
