@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url"
 import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { createSearchEngine } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import { osEnv } from "../_os_env.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
 
@@ -427,4 +428,17 @@ test("lesson_add personal keeps a blank line before a heading that followed the 
   await fs.writeFile(path.join(root, "AGENTS.md"), "## Lessons\n\n- **Old.** Old. (2026-01-01)\n## Next\n", "utf8")
   await lesson_add({ deskRoot: root, input: personal("New", "New.") })
   assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), new RegExp(`^## Lessons\\n\\n- \\*\\*Old\\.\\*\\* Old\\. \\(2026-01-01\\)\\n- \\*\\*New\\.\\*\\* New\\. \\(${DAY}\\)\\n\\n## Next\\n$`, "u"))
+})
+
+test("lesson_add personal: desk_search finds the lesson right after it is written, in the desk's AGENTS.md and in a person's own", async (t) => {
+  for (const [root, person, where] of [[await mkTempDeskRoot(), null, "AGENTS.md"], [await crewRoot(), "ari", "desks/ari/AGENTS.md"]]) {
+    // The engine a Desk server runs, already holding the desk in its index before the lesson is written.
+    const search = createSearchEngine({ deskRoot: root, semantic: "unsupported", pauseMs: 0, cleanup: () => ({ removed: false, bytes: 0 }), watch: () => ({ close() {} }) })
+    t.after(() => search.close())
+    await fs.mkdir(path.join(root, "ops", "task-a"), { recursive: true })
+    await fs.writeFile(path.join(root, "ops", "task-a", "task.md"), "# Task\n\nSomething else.\n", "utf8")
+    assert.deepEqual((await search.lexical({ query: "bbxfeed1234" })).results, [])
+    await lesson_add({ deskRoot: root, person, search, input: personal("Blackbox bbxfeed1234", "Real-host check bbxfeed1234 secret.") })
+    assert.deepEqual((await search.lexical({ query: "bbxfeed1234" })).results.map((result) => result.path), [where])
+  }
 })
