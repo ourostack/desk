@@ -68,11 +68,11 @@ Detect is a side-effect-free predicate, so the driver can run every Detect cheap
    - `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/` and the older `~/.claude-plugin/plugins/`;
    - `~/.copilot/plugins/`;
    - `~/.ouro-cli/plugins/` (in an Ouro agent context);
-   - Agency's plugin cache: walk only the folders that `node <desk plugin>/mcp/scripts/migrations.js roots` prints (add `--engine <prefix>` for a host other than Copilot). Agency keeps old fetches under `~/.local/agency/plugins/cache/entries/`, so walking it blindly finds stale copies; the command picks, per plugin, the newest `fetched_at` entry for the running engine that has a `migrations/` folder, skips Desk's own plugin and prints nothing when the index is unreadable;
+   - Agency's plugin cache: walk only the folders that `node <desk plugin>/mcp/scripts/migrations.js roots` prints (add `--engine <prefix>` for a host other than Copilot). Agency keeps old fetches under `~/.local/agency/plugins/cache/entries/`, so walking it blindly finds stale copies. The command reads `~/.local/agency/plugins/cache/cache_index.json` (`entries[spec].dir_name` and `fetched_at`), keeps specs for the running engine (`copilot:`), skips Desk's own plugin, and for each plugin takes the entry with the newest `fetched_at` that has a `migrations/` folder; an unreadable index prints nothing;
    - `~/code/<plugin-id>/` and `~/code/<plugin-id>.ouro/`, for plugin authors' local clones;
    - any root a host's plugin-list command reports.
 
-   Every `*.md` in a root's `migrations/` folder is a candidate. Dedupe by absolute path, then by `id` (first root in the order above wins). Sort all of them by leaf filename, so `NN` orders migrations across plugins.
+   Every `*.md` in a root's `migrations/` folder is a candidate. Dedupe by absolute path, then dedupe by migration `id` (the first root in the order above wins). Sort all of them by leaf filename, so `NN` orders migrations across plugins.
 
 2. **For each migration in that order**, parse the frontmatter and blocks and run every block with `DESK_PLUGIN_ROOT` set to the plugin's root and, once `desk_status` answers, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to its `root.path` and `write_scope.person` (empty when none). An `agent_work: true` migration waits until the desk is synced and bound; the boot names it in its `instructions`.
    - **Detect:** exit 0 means needed; anything else skips silently.
