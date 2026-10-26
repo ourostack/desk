@@ -15,6 +15,11 @@ on:
         description: "Only run test files whose path (under tests/desk/mcp/__tests__) matches this regular expression. Empty runs everything."
         required: false
         default: ""
+      repeat:
+        description: "Run each selected file this many times in a row, to measure how often it fails. A file passes only if every run passed."
+        type: number
+        required: false
+        default: 1
       elevated:
         description: "Also run the elevated (administrator) mode. It is a diagnostic: Desk refuses to reuse a path owned by the Administrators group, which is what an administrator's own existing files are."
         type: boolean
@@ -30,19 +35,18 @@ concurrency:
 
 jobs:
   windows-suite:
-    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/8)
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/10)
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # At most three shards of one run hold a Windows runner at once. The organisation shares about 20 concurrent jobs across every repository, and a full set of shards per pull request let three or four open pull requests starve other repositories' queues. The eight shards (about 7 minutes of tests each, from suite-durations.json) are still all queued, so they run in three waves (3, 3 and 2). Each job also spends a few minutes on setup, so the capped run takes roughly 30 to 45 minutes (45 minutes in the run that measured it, with runner queueing) instead of about 15, but never holds more than three runners. A test in scripts/windows_suite_cap.test.js pins this number.
-      max-parallel: 3
+      # Every shard runs at once, in one wave. The organisation is on GitHub Team (60 concurrent jobs), and Windows jobs waited 2 s at the median and 43 s at the 90th percentile for a runner (2026-10-25, 63 jobs), so the old cap of three only turned one wave into four.
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 53 minutes of test time in all, the median over recent runs since #227 made private-store writes cheap, so each of the eight shards is predicted at about 7 minutes of tests). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments and the verdict agree.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # Ten shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 75 minutes of test time in all, so about 7.5 minutes per shard; the longest single file takes about 7.6). More shards would not shorten the run, because no shard can be shorter than that file. A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -57,10 +61,17 @@ jobs:
         with:
           # The Windows runtime pack is built with Node 24.18.0 (desk-mcp-tests.yml, win32-x64-node-137). Node 24.19.0 and later abort when a better-sqlite3 build made against their headers collects a prepared statement (nodejs/node#65446, WiseLibs/better-sqlite3#1515), so this suite pins the version the pack ships with.
           node-version: "24.18.0"
-          cache: "npm"
-          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      # `npm ci` took 1.5 to 2.7 minutes per shard on Windows. The installed tree is restored whole when the Node version and the committed lock are unchanged, and installed from the lock otherwise (the same key scheme as "desk on native Windows" in desk-mcp-tests.yml).
+      - name: Restore installed dependencies
+        id: node-modules
+        uses: actions/cache@v4
+        with:
+          path: plugins/desk/mcp/node_modules
+          key: desk-mcp-node-modules-${{ runner.os }}-${{ runner.arch }}-node-24.18.0-${{ hashFiles('plugins/desk/mcp/package-lock.json') }}
 
       - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
         working-directory: plugins/desk/mcp
         run: npm ci
 
@@ -75,25 +86,27 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "$env:ONLY_FILES"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
+          REPEAT: ${{ inputs.repeat || '1' }}
 
       - name: Run the suite (standard user)
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
+          REPEAT: ${{ inputs.repeat || '1' }}
 
       - name: Show the result in the job summary
         if: always()
         shell: pwsh
         run: |
-          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/8" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/10" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
@@ -142,6 +155,6 @@ jobs:
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 10 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}

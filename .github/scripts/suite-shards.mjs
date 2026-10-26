@@ -6,6 +6,8 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 export const defaultTablePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "suite-durations.json")
+// How many shards the Windows suite workflow runs (desk-windows-suite.yml); scripts/windows_suite_shards.test.js checks that the workflow says the same.
+export const WINDOWS_SHARDS = 10
 
 // A missing table is not an error: every file then weighs the same and the plan is an even split by count.
 export function loadDurations(file = defaultTablePath) {
