@@ -8,7 +8,7 @@ import * as path from "node:path"
 const CONTROLLER_ID = /^[0-9a-f]{64}$/u
 
 /** Resolves with `{ removed, kept }`; never rejects for one folder's failure. */
-export async function removeReadinessLeftovers({ stateHome, isAlive = processIsAlive, uid = process.getuid?.() } = {}) {
+export async function removeReadinessLeftovers({ stateHome, isAlive = processIsAlive, uid = process.getuid?.() }) {
   let entries
   try {
     entries = await readdir(stateHome)

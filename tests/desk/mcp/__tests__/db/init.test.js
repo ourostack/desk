@@ -97,3 +97,12 @@ test("insert into chunks triggers a chunks_fts row via the AFTER INSERT trigger"
     closeDb(db)
   }
 })
+
+test("closeDb is safe with no handle and on a handle already closed", async () => {
+  const root = await mkTempRoot("desk-db-close-")
+  closeDb(null)
+  const db = openDb(root)
+  closeDb(db)
+  closeDb(db)
+  assert.equal(db.open, false)
+})

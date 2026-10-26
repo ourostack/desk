@@ -1092,7 +1092,7 @@ export function createDeskSession(deps) {
     leftoversTimer = setTimeout(() => {
       void Promise.resolve().then(() => removeLeftovers({ stateHome: readinessStateHome }))
         .then((result) => { if (result.removed > 0) log(`removed ${result.removed} folder(s) older Desk versions' readiness controllers left in ${readinessStateHome}`) })
-        .catch((error) => log(`could not remove old readiness folders in ${readinessStateHome}: ${error?.message ?? String(error)}`))
+        .catch((error) => log(`could not remove old readiness folders in ${readinessStateHome}: ${describe(error)}`))
     }, deps.leftoversDelayMs ?? LEFTOVERS_DELAY_MS)
     leftoversTimer.unref?.()
   }
