@@ -1,6 +1,6 @@
 ---
 name: shared-desk-conventions
-description: The multi-person shared-workspace layout variant -- one git repo, N operators, `desks/<alias>/` = one person's full desk, `_shared/{landscape,decisions}/` = team-neutral facts + agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (`desks/<you>/` = direct push; a shared path = auto pull-`main` → branch → write → PR → merge-now, NO human review). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision), or when about to write to a path outside your own `desks/<alias>/` subtree. The multi-person overlay for `desk:directory-structure`.
+description: The multi-person shared-workspace layout variant -- one git repo, N operators, `desks/<alias>/` = one person's full desk, `_shared/{landscape,decisions}/` = team-neutral facts + agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (`desks/<you>/` = direct push; a shared path = auto pull-`main` → branch → write → PR → merge-now, NO human review). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), or when about to write to a path outside your own `desks/<alias>/` subtree. The multi-person overlay for `desk:directory-structure`.
 ---
 
 # Shared-desk conventions
@@ -30,7 +30,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
 ```
 <crew-repo>/                            # one git repo, N operators
   README.md                             # plain-markdown front page (graceful degradation)
-  AGENTS.md                             # crew conventions, auto-imported by the crew worker
+  AGENTS.md                             # crew conventions and team lessons; every agent here reads it
   _meta/
     desks.md                            # the desk registry (one row per desk) -- see desk:session-start
   _shared/                              # the common area -- team-neutral, the contention hotspot
@@ -44,9 +44,9 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
   desks/                                # one subtree per person -- the unit of ownership AND safety
     _template/                          # clean clonable skeleton a new teammate copies in (read desk:first-run-bootstrap shape)
     <alias>/                            # ONE PERSON'S FULL DESK -- identical shape to a single-operator $DESK
+      AGENTS.md                         # this person's preferences and lessons; session start prints it for them
       _meta/
         friction.md
-        tips/
         featured.md                     # this person's pins (per-person, not repo-wide)
       <track-name>/                     # exactly desk:directory-structure layout, rooted here
         track.md
@@ -105,7 +105,7 @@ When an agent writes its own `desks/<you>/`, it is the **sole writer** of that s
 
 ### A shared path → auto pull-`main` → branch → write → PR → merge-now
 
-A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry). When an agent recognizes "this isn't my desk," it **automatically**:
+A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
 
 1. **pulls latest `main`** (so it's writing on top of everyone else's work),
 2. **branches** off that latest `main`,
@@ -121,9 +121,26 @@ There is **NO human review step.** The PR is a serialization primitive, not an a
 | `_shared/...` | multiple writers | auto pull-`main` → branch → write → PR → merge-now (retry if main moved) |
 | `plugins/...` | multiple writers | same conflict-safe protocol |
 | `_shared/tracks/<track>/` | multiple writers | same conflict-safe protocol |
+| `AGENTS.md` (root) | multiple writers | same conflict-safe protocol |
 | `desks/<someone-else>/...` | attributed contribution only when authorized | conflict-safe contribution path; preserve owner meaning, never bypass protected scope |
 
 > **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → establish authority and use the conflict-safe contribution protocol. Another desk requires an authorized, attributed contribution, not a home-organization veto or silent permission expansion. The agent runs this test silently.
+
+## Team lessons -- a correction taught once reaches every teammate's agents
+
+When someone corrects an agent and the correction holds for the whole team's work, it goes in the root `AGENTS.md`, in its `## Lessons` section, one rule per line, attributed: `- **<rule>.** <detail> (<alias>, <date>)`. That file is the one place every agent in the repository reads at the start of its work: Desk's session start prints it, and so do agents that run without Desk, such as a cloud coding agent or an always-on assistant. So nobody has to teach the same thing to their own agents, or a teammate's, again.
+
+Which home a correction gets follows the taxonomy above:
+
+| The correction is | Home | Who it reaches |
+|---|---|---|
+| One person's preference ("I want shorter replies") | that person's `desks/<alias>/AGENTS.md` | that person's agents |
+| Team-neutral and true of the team's work: a fact about a source, tool or customer ("the cloud workspace cannot reach github.com; use the node"), or a team decision applied to how agents work | root `AGENTS.md`, `## Lessons` | every teammate's agents |
+| How Desk or Crew itself behaves | an improvement card against the skill or tool that owns it | everyone who installs the plugin, once it ships |
+
+When in doubt, keep it personal: one person's preference recorded as a team lesson is a false consensus. A team lesson that rests on a fact carries its source, like any fact.
+
+`lesson_add` does the routing. `scope: "personal"` writes the person's own `AGENTS.md` directly, because it is inside their desk. `scope: "team"` writes nothing and returns the attributed line and the section; the agent writes it through the shared-path protocol above, and every teammate's agents load it from their next session after the merge. `scope: "desk"` opens the improvement card. Tell the person what the tool's reply says; a lesson is in effect only when the file that carries it is merged.
 
 ## Shared tracks (when several people work one effort)
 
