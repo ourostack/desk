@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.13 — 2026-10-26
+
+On Copilot, the session-end hooks now pick their desk from the folder the server records for the session (the hook payload's folder), not from `CLAUDE_PROJECT_DIR`, so the unpushed-commits check and the factory's session marker always name the desk the server bound. On Copilot 1.0.12 and later the two folders are normally the same; before 1.0.12 Copilot did not set `CLAUDE_PROJECT_DIR` for hooks, and the hooks fell back to the saved binding or the home-folder desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.12 — 2026-10-26
 
 Keep the improvement loop's machine-wide cards out of other desks, and its commits out of a person's way. The loop's route step (cards for andon issues, failing store builds, Desk problems and this machine's status) and its measure step (the machine's health record and loop alarms) now run only in the person's own desk: the one their saved binding, `$DESK` or home folder names, without the session's project folder (`mcp/src/factory/route-desk.js`). Before, a session opened in a project or throwaway desk received every such card, one commit each. In any other desk both steps report `not_own_desk` and are not recorded, so the own desk's next run still runs them, and a loop alarm that still holds is never reported cleared from another desk. Desk's own writes now wait up to 3 s for a Git lock another process holds, instead of failing; the loop worker runs with `DESK_GIT_YIELD=1`, so its card commits never wait and give way (`deferred`) when the index lock is held, and a later write commits the card.
