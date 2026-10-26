@@ -3,7 +3,9 @@
 // Per planning Unit 4 + desk-search-design §2 + 1.1 archive-search amendment:
 //   In scope: task.md, planning.md, doing.md, feedback.md, friction notes
 //             (cross-cutting at _meta/friction.md + track-local under
-//             _friction/*.md), lesson notes at _meta/tips/*.md. Docs under
+//             _friction/*.md), lesson notes at _meta/tips/*.md, and the
+//             AGENTS.md session start prints (the desk's and a person's
+//             desks/<alias>/AGENTS.md), where lesson_add records lessons. Docs under
 //             any _archive/ ancestor ARE indexed too, but flagged
 //             `is_archived: true` so search tools can scope them in or out.
 //   Skipped: node_modules/, .state/, .git/, and .bak files.
@@ -45,6 +47,9 @@ const TASK_DOC_BASENAMES = new Set([
   "feedback.md",
   "merged-task.md",
 ])
+
+/** The desk's own instructions, at its root or at a person's `desks/<alias>/`. */
+const AGENTS_MD = "AGENTS.md"
 
 /** Directory names that short-circuit recursion (we never descend in). */
 const SKIP_DIRS = new Set([
@@ -232,6 +237,9 @@ export function isIndexable(relPath) {
   const base = segments[segments.length - 1]
   if (TASK_DOC_BASENAMES.has(base)) return true
 
+  // The AGENTS.md session start prints: lesson_add writes lessons there, so search must find them.
+  if (segments.length === 1 && base === AGENTS_MD) return true
+
   // 1.1: any .md file under an _archive/ ancestor counts. Archived = preserved
   // for future recall, the whole point is searchability.
   const underArchive = segments
@@ -297,6 +305,8 @@ export function classify(relPath) {
     }
     return { kind: base.replace(/\.md$/, ""), track: null, task_slug: null }
   }
+
+  if (segments.length === 1 && base === AGENTS_MD) return { kind: "instructions", track: null, task_slug: null }
 
   // 1.1: archived legacy filenames. Infer kind from the basename pattern
   // (`<date>-planning-<topic>.md`, `<date>-doing-<topic>.md`); fall back to

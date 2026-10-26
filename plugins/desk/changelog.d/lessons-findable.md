@@ -1,0 +1,1 @@
+`desk_search`, `desk_recall` and the other search tools now find lessons recorded with `lesson_add`. Since lessons moved into AGENTS.md, search did not index that file, so a lesson written a moment earlier could not be found. Search now indexes the AGENTS.md that session start prints, the desk's own and a person's `desks/<alias>/AGENTS.md`, as kind `instructions`.
