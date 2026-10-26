@@ -9,7 +9,7 @@ import * as path from "node:path"
 // Run on its own, the default-environment test below claims a session id under this machine's real state folder and fails on every later run.
 import "../_isolated_env.mjs"
 
-import { COPILOT_SESSION_DIR, copilotBootClaimFile, copilotSessionFile, markBootDirected, readCopilotSession, recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
+import { COPILOT_SESSION_DIR, copilotBootClaimFile, copilotSessionFile, markBootDirected, readCopilotSession, recordCopilotSession, watchCopilotSessionRecord } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { resolveStartupActivationConfigPath, resolveStartupDeskRoot } from "../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js"
 import { resolveAdmissionInputs } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 
@@ -297,4 +297,33 @@ test("every entry point has a safe default environment: no argument, no session 
   assert.equal(markBootDirected({ sessionId: "default-env-session" }), true)
   assert.equal(markBootDirected({ sessionId: "default-env-session" }), false)
   assert.equal(readCopilotSession({}), null)
+})
+
+test("the server hears about the session record as soon as the hook writes it, once", async () => {
+  const env = envFor({ COPILOT_AGENT_SESSION_ID: "watched" })
+  let heard = 0
+  const stop = watchCopilotSessionRecord({ env, intervalMs: 10, onRecord: () => { heard += 1 } })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(heard, 0, "no record yet")
+    assert.equal(recordCopilotSession({ sessionId: "watched", folder: desk(), env }), true)
+    const until = Date.now() + 5000
+    while (heard === 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(heard, 1)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(heard, 1, "it stops once the record is there")
+  } finally {
+    stop()
+  }
+  // No session id: nothing to watch. A stopped watch never calls back.
+  assert.equal(typeof watchCopilotSessionRecord({ env: envFor(), onRecord: () => assert.fail("no session id") }), "function")
+  // A watch that has run out of time stops looking.
+  const late = envFor({ COPILOT_AGENT_SESSION_ID: "late" })
+  watchCopilotSessionRecord({ env: late, stateDir: stateDirOf(late), limitMs: 0, intervalMs: 10, onRecord: () => assert.fail("past its limit") })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  recordCopilotSession({ sessionId: "late", folder: desk(), env: late })
+  const quiet = envFor({ COPILOT_AGENT_SESSION_ID: "stopped" })
+  watchCopilotSessionRecord({ env: quiet, intervalMs: 10, onRecord: () => assert.fail("stopped") })()
+  recordCopilotSession({ sessionId: "stopped", folder: desk(), env: quiet })
+  await new Promise((resolve) => setTimeout(resolve, 50))
 })

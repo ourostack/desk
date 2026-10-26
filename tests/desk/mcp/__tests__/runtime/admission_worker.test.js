@@ -8,10 +8,10 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createRequire } from "node:module"
-import { MessageChannel } from "node:worker_threads"
+import { MessageChannel, Worker } from "node:worker_threads"
 import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
 import {
-  attachAdmissionWorker, prepareRuntimeInputs, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
+  attachAdmissionWorker, createResolveRunner, prepareRuntimeInputs, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
 } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { resolveStartupDeskRoot } from "../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
@@ -348,11 +348,87 @@ test("attachAdmissionWorker answers one job on its port, and does nothing outsid
   for (const port of [channel.port1, channel.port2, other.port1, other.port2]) port.close()
 })
 
+test("a persistent admission worker answers every job on its port", async () => {
+  const channel = new MessageChannel()
+  assert.equal(attachAdmissionWorker(channel.port1, { deskAdmissionWorker: true, persistent: true }), true)
+  const base = await mkTempRoot("desk-worker-persistent-")
+  for (let i = 0; i < 2; i++) {
+    const reply = new Promise((resolve) => channel.port2.once("message", resolve))
+    channel.port2.postMessage({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })
+    assert.equal((await reply).value.root.root, base)
+  }
+  channel.port1.close()
+  channel.port2.close()
+})
+
+test("the resolve runner ignores phase notes, reports a worker error, and starts a real worker by default", async () => {
+  const fakes = []
+  const runner = createResolveRunner({
+    createWorker: () => {
+      const worker = Object.assign(new EventEmitter(), { unref() {}, terminate() {}, postMessage(job) { this.job = job } })
+      fakes.push(worker)
+      return worker
+    },
+  })
+  const answered = runner.run({ kind: "resolve" })
+  fakes[0].emit("message", { phase: "resolving" })
+  fakes[0].emit("message", { ok: true, value: "done" })
+  assert.equal(await answered, "done")
+  const failed = runner.run({ kind: "resolve" })
+  fakes[0].emit("error", new Error("worker broke"))
+  await assert.rejects(failed, /worker broke/u)
+  fakes[0].emit("exit", 1)
+  runner.close()
+  const base = await mkTempRoot("desk-resolve-runner-default-")
+  const real = createResolveRunner()
+  try {
+    assert.equal((await real.run({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })).root.root, base)
+  } finally {
+    real.close()
+  }
+})
+
 test("runInWorker runs a job on a real worker thread", async () => {
   const base = await mkTempRoot("desk-worker-thread-")
   const result = await runInWorker({ kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } })
   assert.equal(result.root.root, base)
   await assert.rejects(runInWorker({ kind: "nope" }), (error) => error instanceof Error && error.name === "TypeError" && /unknown admission job/u.test(error.message))
+})
+
+test("resolve jobs share one worker that stays up, and a busy or lost worker never holds a job back", async () => {
+  const base = makeDesk(await mkTempRoot("desk-resolve-runner-"))
+  const job = { kind: "resolve", input: { args: { root: base }, env: {}, cwd: base } }
+  const workers = []
+  let freshRuns = 0
+  const runner = createResolveRunner({
+    createWorker: (url, options) => {
+      const worker = new Worker(url, options)
+      workers.push(worker)
+      return worker
+    },
+    fresh: async (next) => {
+      freshRuns += 1
+      return runAdmissionJob(next)
+    },
+  })
+  try {
+    const first = await runner.run(job)
+    assert.equal(first.root.root, base)
+    assert.deepEqual(await runner.run(job), first)
+    await assert.rejects(runner.run({ kind: "nope" }), /unknown admission job/u)
+    assert.deepEqual(await runner.run(job), first, "a failed job leaves the worker serving")
+    assert.equal(workers.length, 1, "consecutive jobs reuse one worker")
+    // A job that arrives while another is running gets its own worker.
+    const both = await Promise.all([runner.run(job), runner.run(job)])
+    assert.deepEqual(both, [first, first])
+    assert.equal(freshRuns, 1)
+    // A worker that is gone is replaced on the next job.
+    await workers[0].terminate()
+    assert.deepEqual(await runner.run(job), first)
+    assert.equal(workers.length, 2)
+  } finally {
+    runner.close()
+  }
 })
 
 test("runInWorker reports a worker that errors or exits before answering, and settles once", async () => {
