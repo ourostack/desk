@@ -127,6 +127,7 @@ const hostManifestFixtureFiles = [
   "plugins/desk/hooks/claude-session-start.cjs",
   "plugins/desk/skills/operator-voice-comments/LICENSE-humanize",
   "plugins/desk/skills/operator-voice-comments/human-voice.md",
+  "plugins/desk/skills/humanize/SKILL.md",
   "plugins/desk/skills/session-start/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/plugin.json",
@@ -1415,12 +1416,12 @@ test("root host verifier rejects a revived output style", async () => {
   })
 })
 
-test("root host verifier detects missing bundled humanize files, a revived Desk skill and a revived standalone export", async () => {
+test("root host verifier detects missing bundled humanize files, a humanize skill that is no longer a pointer, and a revived standalone export", async () => {
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
     for (const file of ["human-voice.md", "LICENSE-humanize"]) rmSync(path.join(root, "plugins/desk/skills/operator-voice-comments", file))
     writeText(root, "skills/humanize/SKILL.md", "fixture standalone copy\n")
-    writeText(root, "plugins/desk/skills/humanize/SKILL.md", "fixture revived Desk skill\n")
+    writeText(root, "plugins/desk/skills/humanize/SKILL.md", "fixture full copy with no pointer\n")
     // An optional loose-skill catalog that exports humanize again.
     writeJson(root, "manifest.json", { skills: [{ name: "humanize" }] })
     const result = await verifier.verifyDeskHostManifests({
@@ -1430,9 +1431,27 @@ test("root host verifier detects missing bundled humanize files, a revived Desk 
     for (const message of [
       "Desk bundle missing human-voice.md", "Desk bundle missing LICENSE-humanize",
       "remains in the standalone skill catalog", "remains exported from the standalone manifest",
-      "is listed as a separate Desk skill again",
+      "pointer skill missing or no longer a short pointer to human-voice.md",
     ]) assert.ok(result.errors.includes(`humanize-skill ${message}`), result.errors.join("\n"))
   })
+})
+
+test("root host verifier requires the humanize pointer skill to exist and stay short", async () => {
+  const verifier = loadHostManifestVerifier()
+  const pointerError = "humanize-skill pointer skill missing or no longer a short pointer to human-voice.md"
+  for (const change of [
+    (root) => rmSync(path.join(root, "plugins/desk/skills/humanize"), { recursive: true }),
+    (root) => writeText(root, "plugins/desk/skills/humanize/SKILL.md", `See ../operator-voice-comments/human-voice.md. ${"padding ".repeat(150)}\n`),
+  ]) {
+    await withHostFreshnessFixture(async (root) => {
+      change(root)
+      const result = await verifier.verifyDeskHostManifests({
+        repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+      })
+      assert.equal(result.ok, false)
+      assert.ok(result.errors.includes(pointerError), result.errors.join("\n"))
+    })
+  }
 })
 
 test("root host verifier retains primitive I/O diagnostics without masking them as TypeErrors", async (t) => {

@@ -79,11 +79,11 @@ Each thread gets one category:
 | Needs human decision | Scope, architecture, product or an ambiguity the diff cannot settle | Write `NEEDS HUMAN: <author> on <file:line> — <summary>` and do nothing else. |
 | Nit or style | Trivial formatting or naming | Apply if clearly better; otherwise ask. |
 
-Each confirmed thread also gets an `action` tag, which phase 9 obeys:
+Each confirmed thread also gets an `action` tag, which phase 9 obeys. Every reply below is posted only after the operator approves its exact text (`operator-voice-comments` owns that rule):
 
-- `post-and-resolve`: an explanation, or a `resolved-by-shape` change. Reply and resolve together.
-- `post-and-stay-active-until-{unit}`: a code change scheduled in a unit. Reply "Addressing by doing X" and leave the thread active; after the unit lands, reply on the same thread with the commit, then resolve. Resolving on the promise lies about the state and breaks the reviewer's filter on active threads.
-- `post-and-leave-open`: an open or human decision. Post the framing ("checking with X") and leave it active.
+- `post-and-resolve`: an explanation, or a `resolved-by-shape` change. Post the approved reply, then resolve.
+- `post-and-stay-active-until-{unit}`: a code change scheduled in a unit. Post the approved "Addressing by doing X" and leave the thread active; after the unit lands, post the approved follow-up with the commit on the same thread, then resolve. Resolving on the promise lies about the state and breaks the reviewer's filter on active threads.
+- `post-and-leave-open`: an open or human decision. Post the approved framing ("checking with X") and leave it active.
 
 A thread leaves this phase `confirmed` with a `proposed_action` and an `action`, `resolved-by-shape`, `pending-clarification`, `draft-reply-pending-operator-approval` or `needs-human-decision`. If two human comments conflict, stop until they are reconciled. With more than 20 human comments, walk them in batches of about ten. For a comment on code the PR only touches nearby, ask whether it is in scope; if not, reply "pre-existing, follow-up tracked in `<tracker-id>`". If an architecture change would undo a unit the PR already built, give the operator the cost before planning.
 
@@ -130,7 +130,7 @@ Diagnoses: `flake (matches prior fingerprint)`, `flake (new)` with enough detail
 
 ## Phase 9: Verify each thread
 
-Pull the threads once more and handle any new one first. Then, for each human thread in dependency order, read the reviewer's ask, the `proposed_action`, the `action` tag, the assigned units and the landed diff. The landed code must satisfy the ask; intent does not count. If it does not, go back to phase 6a or 7, never resolve with caveats. If it does, act on the tag: post a behavioral reply (what changed and why it meets the ask, without restating the reviewer's words or sounding defensive) and resolve, or leave the thread active as the tag says. A synthetic self-review thread has no PR thread: mark its finding addressed instead. The phase ends when no human thread is unresolved; skip a thread the reviewer closed, and mark an operator-skipped one `operator-skip` with a reply pointing at the decision.
+Pull the threads once more and handle any new one first. Then, for each human thread in dependency order, read the reviewer's ask, the `proposed_action`, the `action` tag, the assigned units and the landed diff. The landed code must satisfy the ask; intent does not count. If it does not, go back to phase 6a or 7, never resolve with caveats. If it does, draft a behavioral reply (what changed and why it meets the ask, without restating the reviewer's words or sounding defensive). Show the operator every drafted reply with its thread in one batch, post only what they approve, word for word, under `operator-voice-comments`, then resolve or leave each thread active as its tag says. A synthetic self-review thread has no PR thread: mark its finding addressed instead. The phase ends when no human thread is unresolved; skip a thread the reviewer closed, and mark an operator-skipped one `operator-skip`, with an approved reply pointing at the decision.
 
 - **Links.** Reference other PRs and issues with the host's auto-link syntax (`#<id>` on GitHub; `!<id>` for GitLab merge requests), not raw URLs or "PR <id>". A reply on a thread may cite that thread's file and line; leave out unrelated test counts, unit numbers and timings (`pr-surface-hygiene`).
 - **Duplicates.** After any flow that created threads, list the PR's live threads and look for copies of the new content (a retry can leave an earlier post). Keep the one the description links to or the newest; delete the duplicate's comment and close the empty thread.

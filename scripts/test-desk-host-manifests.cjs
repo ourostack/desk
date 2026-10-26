@@ -361,8 +361,11 @@ function checkHumanizePackaging({ repoRoot, errors, checked }) {
       errors.push(`humanize-skill Desk bundle missing ${file}`);
     }
   }
-  if (fs.existsSync(path.join(repoRoot, "plugins", "desk", "skills", "humanize"))) {
-    errors.push("humanize-skill is listed as a separate Desk skill again");
+  // A pointer skill keeps overlay calls to `humanize` by name working; the guidance itself has one home.
+  const pointer = path.join(repoRoot, "plugins", "desk", "skills", "humanize", "SKILL.md");
+  const pointerText = fs.existsSync(pointer) ? fs.readFileSync(pointer, "utf8") : "";
+  if (!pointerText.includes("../operator-voice-comments/human-voice.md") || pointerText.split(/\s+/u).length > 120) {
+    errors.push("humanize-skill pointer skill missing or no longer a short pointer to human-voice.md");
   }
   if (fs.existsSync(standaloneSkillRoot)) {
     errors.push("humanize-skill remains in the standalone skill catalog");

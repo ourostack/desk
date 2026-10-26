@@ -1,6 +1,6 @@
 ---
 name: git-hygiene
-description: Keep code repos synced and leave no state behind. Use before work in a repo, after every ref change, when a required check fails or validation proof may be reused, before every push, and when work ends.
+description: Keep code repos synced and leave no state behind. Use at session start, before work in a repo, after every ref change, when a required check fails or validation proof may be reused, before every push, and when a task, delegated assignment or session ends.
 ---
 
 # Git hygiene

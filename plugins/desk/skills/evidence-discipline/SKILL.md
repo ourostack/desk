@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Covers citation, primary sources and visual proof. Not needed for a routine status read from its source.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Also before wrapping a command in a poll loop or supervisor, ending processes, copying sign-in state, claiming a precedent or durability, or writing tests, and when the desk's records and a live source disagree. Covers citation, primary sources and visual proof. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline
