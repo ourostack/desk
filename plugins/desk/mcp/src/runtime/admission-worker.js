@@ -1,8 +1,8 @@
 // Admission work that can block, run on a worker thread so the thread that answers the host never waits for it.
 //
-// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock, and loading the restored native modules once so their first load never runs on the thread that answers the host). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
+// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, and restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
 //
-// The worker imports only dependency-free modules; the restored native modules are loaded by path at run time. It never imports index.js, which would start Desk inside the worker.
+// The worker imports only dependency-free modules and never loads a native addon: a worker that ended with better-sqlite3 or sqlite-vec loaded on it crashed the whole server (SIGSEGV in the worker's teardown on macOS, 0xC0000005 on Windows). It never imports index.js, which would start Desk inside the worker.
 
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
