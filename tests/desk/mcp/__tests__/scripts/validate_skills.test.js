@@ -346,10 +346,10 @@ test("validateSkillDescriptionLimits accepts quoted and folded descriptions and 
     })
   }
   for (const [body, expected] of [
-    ["# missing frontmatter\n", /evidence-discipline\/SKILL\.md: missing YAML frontmatter/u],
-    ["---\nname: evidence-discipline\n---\n# Evidence discipline\n", /evidence-discipline\/SKILL\.md: frontmatter description is missing/u],
+    ["# missing frontmatter\n", /evidence-discipline[\\/]SKILL\.md: missing YAML frontmatter/u],
+    ["---\nname: evidence-discipline\n---\n# Evidence discipline\n", /evidence-discipline[\\/]SKILL\.md: frontmatter description is missing/u],
     ["---\nname: evidence-discipline\ndescription: High-risk scenarios: wrappers and warnings\n---\n# Evidence discipline\n", /description inline scalar contains ': '/u],
-    [`---\nname: evidence-discipline\ndescription: ${"x".repeat(1025)}\n---\n# Evidence discipline\n`, /evidence-discipline\/SKILL\.md: frontmatter description exceeds 1024 characters/u],
+    [`---\nname: evidence-discipline\ndescription: ${"x".repeat(1025)}\n---\n# Evidence discipline\n`, /evidence-discipline[\\/]SKILL\.md: frontmatter description exceeds 1024 characters/u],
   ]) {
     await assertThrowsWith(
       (root) => writeText(root, skill, body),
