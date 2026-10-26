@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.7 — 2026-10-26
+
+Removed what only the old shared on-disk search index used: vector packs, index snapshots, the Ollama embedder, the sqlite-vec search path, the artifact publication policy and its scripts, index writer and owner records, and generation identity checks, about 21,000 lines. Search results and scores are unchanged, and stored section vectors still match because each section's text hash is the same. The redaction ledger still keeps listed documents out of search, and the [activation manifest](activation/desk.activation.json) no longer declares embedding or snapshot artifacts. [docs/roadmap/search.md](../../docs/roadmap/search.md) lists each removed capability and the problem it would solve if it came back.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.6 — 2026-10-26
 
 Desk no longer supports Codex. Codex was never qualified as a target ([RFC section 8](docs/agentic-engineering-v2-rfc.md#8-limits)), so the Codex manifests, the `.agents` marketplace, the `worker.toml` and `observer.toml` agent files, the Codex activation adapter, its smoke test and activation ledger, the Codex plugin-cache audit and the `desk:codex-onboarding` skill are gone, along with their tests and docs. Claude Code and Copilot CLI behave exactly as before. A Codex session is now reported as an unknown host, and Desk no longer reads `$CODEX_HOME/desk.activation.json`. [The hosts roadmap](../../docs/roadmap/hosts.md) says what rebuilding it would take.
