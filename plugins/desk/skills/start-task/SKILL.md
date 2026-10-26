@@ -5,7 +5,7 @@ description: Start a task from the operator's description or from work you recog
 
 # Start a task
 
-> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). If it ran with no task named and a task was picked since, run it again with `--task "<handle>" --task-only`: that prints the task's push route and repos. A child agent with a bounded brief follows its brief and skips this.
 
 Resolve the canonical task and its actual intake proposal before entering the adapter. Follow the lookup/create steps below first, then invoke `desk:using-superpowers-with-desk` at its `start` entry for the engineering handoff. Desk retains outcome identity, scope and the explicit go; Superpowers consumes them without another intake or lifecycle.
 

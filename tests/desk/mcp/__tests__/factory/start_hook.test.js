@@ -179,15 +179,21 @@ test("skips are recorded in the protected factory status only when factory state
   assert.equal(existsSync(path.join(base, "state")), false)
   await setConsent(env, { store: STORE, contribute: false })
   await runBootChecks({ env, launchRepair: async () => {}, checks: [check("stalled", () => new Promise(() => {}), 10)] })
-  // The hook waits only briefly for the status lock; on a loaded machine the record lands just after the checks return.
-  let status = await readStatus(env)
-  for (let tries = 0; status?.boot_checks === undefined && tries < 100; tries += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    status = await readStatus(env)
-  }
+  const status = await readStatus(env)
   assert.deepEqual(status.boot_checks.skipped.map(({ id, reason }) => ({ id, reason })), [{ id: "stalled", reason: "budget" }])
   assert.ok(status.boot_checks.skipped[0].elapsed_ms >= 9)
   assert.match(status.boot_checks.at, /^\d{4}-\d{2}-\d{2}T/u)
+}))
+
+test("a skip is not recorded while another writer holds the factory status lock, so session start never waits on it", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: false })
+  const lock = path.join(await factoryStateRoot(env, { create: false }), "status.json.lock")
+  await fs.writeFile(lock, JSON.stringify({ pid: 999999, started_at: new Date().toISOString() }))
+  const started = Date.now()
+  assert.equal(await recordSkipped(env, [{ id: "x", reason: "budget" }]), false)
+  assert.ok(Date.now() - started < 2000, "returned without waiting on the lock")
+  assert.equal(readFileSync(lock, "utf8").includes("999999"), true, "the other writer's lock is left alone")
+  assert.equal((await readStatus(env)).boot_checks, undefined)
 }))
 
 test("launchCommand starts detached with ignored stdio and never waits for the child", async () => {

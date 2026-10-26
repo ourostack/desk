@@ -34,9 +34,28 @@ function configPath(dir) {
   return path.join(common ? path.resolve(gitDir, common) : gitDir, "config")
 }
 
+/** A config value as git reads it: quotes removed, escapes applied, a `#` or `;` comment outside quotes cut off; null for a value this reader does not follow (an open quote or a continued line). */
+function configValue(raw) {
+  let out = ""
+  let quoted = false
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index]
+    if (char === '"') quoted = !quoted
+    else if (!quoted && (char === "#" || char === ";")) break
+    else if (char === "\\") {
+      index += 1
+      if (index === raw.length) return null
+      const next = raw[index]
+      out += next === "n" ? "\n" : next === "t" ? "\t" : next === "b" ? "\b" : next
+    } else out += char
+  }
+  return quoted ? null : out.trim()
+}
+
 /**
  * `{ remotes: { <name>: <url or null> } }` from the clone's config file, or null when the file cannot answer for git
- * (no clone at `dir`, unreadable, or an `[include]` that could add remotes).
+ * (no clone at `dir`, unreadable, an `[include]` that could add remotes, the old `[remote.origin]` section form, or a
+ * url value this reader does not follow).
  */
 export function readRemotes(dir) {
   const file = typeof dir === "string" && dir !== "" ? configPath(dir) : null
@@ -50,14 +69,17 @@ export function readRemotes(dir) {
     const section = /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/u.exec(line)
     if (section !== null) {
       const name = section[1].toLowerCase()
-      if (name === "include" || name === "includeif") return null
+      if (name === "include" || name === "includeif" || name.startsWith("remote.")) return null
       current = name === "remote" && section[2] !== undefined ? section[2] : null
       if (current !== null && !(current in remotes)) remotes[current] = null
       continue
     }
     if (current === null) continue
-    const url = /^url\s*=\s*(.*?)\s*$/iu.exec(line)
-    if (url !== null) remotes[current] = url[1].replace(/^"(.*)"$/u, "$1")
+    const url = /^url\s*=(.*)$/iu.exec(line)
+    if (url === null) continue
+    const value = configValue(url[1])
+    if (value === null) return null
+    remotes[current] = value
   }
   return { remotes }
 }

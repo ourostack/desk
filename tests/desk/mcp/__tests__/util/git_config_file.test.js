@@ -30,6 +30,29 @@ test("readRemotes: a real clone's remotes match what git reports, quoted and unq
   })
 })
 
+test("readRemotes: a url with a trailing comment, quotes or escapes reads as git reads it", async () => {
+  const dir = await mkTempRoot("desk-git-config-")
+  git(dir, "init", "-q")
+  await fs.appendFile(path.join(dir, ".git", "config"), [
+    "[remote \"noted\"]", "\turl = https://example.com/n.git # note", "[remote \"semi\"]", "\turl = https://example.com/s.git;note",
+    "[remote \"hash\"]", "\turl = \"https://example.com/a#b.git\" ; c", "[remote \"escaped\"]", "\turl = https://example.com/e\\\"x\\t.git", "",
+  ].join("\n"))
+  const { remotes } = readRemotes(dir)
+  for (const name of ["noted", "semi", "hash", "escaped"]) assert.equal(remotes[name], git(dir, "config", "--get", `remote.${name}.url`).stdout.replace(/\n$/u, ""), name)
+  assert.equal(remotes.noted, "https://example.com/n.git")
+  assert.equal(remotes.hash, "https://example.com/a#b.git")
+})
+
+test("readRemotes: null for the old [remote.origin] form and for a url this reader does not follow", async () => {
+  const root = await mkTempRoot("desk-git-config-")
+  for (const [name, text] of [["dotted", "[remote.origin]\n\turl = https://example.com/d.git\n"], ["open-quote", "[remote \"origin\"]\n\turl = \"https://example.com/q.git\n"], ["continued", "[remote \"origin\"]\n\turl = https://example.com/\\\n"]]) {
+    const dir = path.join(root, name)
+    await fs.mkdir(path.join(dir, ".git"), { recursive: true })
+    await fs.writeFile(path.join(dir, ".git", "config"), text)
+    assert.equal(readRemotes(dir), null, name)
+  }
+})
+
 test("readRemotes: a clone with no remote has none, and a linked worktree reads its main clone's config", async () => {
   const dir = await mkTempRoot("desk-git-config-")
   git(dir, "init", "-q", "-b", "main")

@@ -145,7 +145,7 @@ test("boot reports the sync summary for a failed sync, a timed-out one and one w
   assert.equal(failed.sync_summary, "sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of 2026-09-30T10:00:00.000Z")
   const unknown = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }), lastSyncFn: () => { throw new Error("no git") } })
   assert.match(unknown.sync_summary, /local desk is as of unknown$/u)
-  const slow = await boot(root, { budgetMs: 1, syncFn: () => new Promise(() => {}) })
+  const slow = await boot(root, { budgetMs: 1, syncBudgetMs: 1, syncFn: () => new Promise(() => {}) })
   assert.match(slow.sync_summary, /did not finish within the boot's time budget/u)
   const threw = await boot(root, { syncFn: async () => { throw new Error("boom") } })
   assert.match(threw.sync_summary, /^sync failed: it did not run/u)
@@ -350,10 +350,10 @@ test("the shipped script prints text by default and JSON with --json", async () 
 // ── Review fixes ────────────────────────────────────────────────────────
 
 test("parseBootArgs: a flag after --task is never the task name", () => {
-  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
+  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
 })
 
 test("boot hands every card to the local-only recorder, and a recorder that throws never degrades the boot", async () => {

@@ -1118,6 +1118,9 @@ test("bootOnce: a push-account step that itself throws degrades only push_accoun
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.startsWith("push_accounts:")))
   assert.deepEqual(result.push_accounts, [])
+  const taskOnly = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, taskQuery: "s", taskOnly: true, walkFn: () => [brokenCard], repoFn: () => ({ states: [], pending: [] }) })
+  assert.ok(taskOnly.degraded.some((line) => line.startsWith("push_accounts:")))
+  assert.deepEqual(taskOnly.push_accounts, [])
 })
 
 test("bootOnce: a push-account store past the wall-clock budget is pending; a gh-missing account answer is degraded by name", async () => {
@@ -1373,11 +1376,12 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
 })
 
 test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
-  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true })
+  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "x", "--task-only"]), { taskQuery: "x", json: false, taskOnly: true })
 })
 
 test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
@@ -1385,6 +1389,9 @@ test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
   const io = { stdout: { write: () => {} } }
   await runBootCli({ argv: ["--task", "x/y"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
   assert.equal(seen.taskQuery, "x/y")
+  assert.equal(seen.taskOnly, false)
+  await runBootCli({ argv: ["--task", "x/y", "--task-only"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
+  assert.equal(seen.taskOnly, true)
 })
 
 // ── resolveTaskQuery ─────────────────────────────────────────────────────
@@ -1617,7 +1624,7 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   assert.ok(result.instructions.some((line) => /from active_tasks and open_prs/u.test(line) && /--task "<its handle>"/u.test(line)))
   const printed = formatBootText(result)
   assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
-  assert.match(printed, /run this boot again with `--task "<its handle>"` before working on it/u)
+  assert.match(printed, /run this boot again with `--task "<its handle>" --task-only` before working on it/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)
@@ -1669,6 +1676,55 @@ test("bootOnce: an ambiguous or unknown --task is reported in instructions, not 
   const missing = await healthyBoot(root, { taskQuery: "zzz-none" })
   assert.equal(missing.task.status, "not_found")
   assert.ok(missing.instructions.some((line) => line.includes("matches no open task")))
+})
+
+test("bootOnce --task-only: prints the named task's push route, repos and instructions, and nothing the first boot already printed", async () => {
+  const root = await mkDeskWorkspace()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "desk rules\n")
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  await writeCard(root, "track-a", "other-task", VALID_CARD)
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  const never = (name) => async () => { throw new Error(`${name} ran`) }
+  const result = await healthyBoot(root, { gh, taskQuery: "push-task", taskOnly: true, syncFn: never("sync"), prFn: never("pull-request search"), migrationsFn: never("migrations"), factoryStatusFn: () => { throw new Error("factory ran") } })
+  assert.equal(result.task_only, true)
+  assert.equal(result.status, "ready", result.degraded.join("|"))
+  assert.equal(result.task.status, "resolved")
+  assert.equal(result.agents_md, null)
+  assert.equal(result.active_tasks, null)
+  assert.deepEqual(result.push_accounts.map((entry) => [entry.store, entry.result]), [["acme/widgets", "account_found"]])
+  assert.ok(result.instructions.some((line) => line.includes("desk:session-resumption") && line.includes("track-a/push-task/task.md")))
+  assert.ok(result.instructions.some((line) => line.includes("acme/widgets")), "the push route or the remote repo is an instruction")
+  const text = formatBootText(result)
+  assert.match(text, /^Desk boot, named task only: ready/u)
+  assert.doesNotMatch(text, /AGENTS\.md|desk rules|Active tasks|other-task/u)
+  assert.match(text, /Push routes:\n- acme\/widgets: push as ari \(route direct\)\./u)
+  assert.ok(text.split(/\s+/u).length < 300, text)
+})
+
+test("bootOnce --task-only: a route no account has, a missing clone, an ambiguous or unknown name and broken steps are each still said", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const denied = await healthyBoot(root, { gh: fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 404 } }), taskQuery: "push-task", taskOnly: true })
+  assert.equal(denied.status, "degraded")
+  assert.ok(denied.instructions.some((line) => line.startsWith("Do not push acme/widgets")))
+  assert.match(formatBootText(denied), /Push routes:\n- acme\/widgets: no signed-in account can push/u)
+  assert.ok(!formatBootText(denied).includes("Do not push acme/widgets"), "the text boot says the route once, in its section")
+  const states = [{ track: "track-a", slug: "push-task", repo: "local-only", local_path: "~/code/local-only", present: false }]
+  const blocked = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, repoFn: () => ({ states, pending: ["fetch: slow"] }) })
+  assert.match(blocked.instructions[0], /local-only/u, "the question about the missing clone comes first")
+  assert.ok(!blocked.instructions.some((line) => line.startsWith("Hand off")), "the question carries the hand-off")
+  assert.ok(blocked.pending.includes("fetch: slow"))
+  const cloneable = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, repoFn: () => ({ states: [{ ...states[0], repo: "acme/gears" }], pending: [] }) })
+  assert.ok(cloneable.instructions.some((line) => line.includes("gh repo clone")))
+  const { root: many } = await taskFixture()
+  const ambiguous = await healthyBoot(many, { taskQuery: "faster", taskOnly: true })
+  assert.ok(ambiguous.instructions.some((line) => line.includes("more than one open task")))
+  assert.doesNotMatch(formatBootText(ambiguous), /Push routes|Active tasks/u)
+  assert.deepEqual((await healthyBoot(many, { taskQuery: "zzz-none", taskOnly: true })).instructions, ["The name matches no open task: use the task list from this session's first boot and ask what to resume or start."])
+  const broken = await healthyBoot(root, { taskQuery: "push-task", taskOnly: true, walkFn: () => { throw new Error("cards gone") }, repoFn: () => { throw new Error("git gone") } })
+  assert.ok(broken.degraded.includes("cards: cards gone"))
+  assert.ok(broken.degraded.includes("repo_states: git gone"))
+  assert.equal(broken.task.status, "not_found")
 })
 
 test("bootOnce: migrations run first; a pending one that needs a restart stops boot before the desk is touched", async () => {
@@ -1838,7 +1894,7 @@ test("bootOnce: undecided factory consent in a noninteractive session emits no c
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {
   const root = await mkDeskWorkspace()
-  const result = await healthyBoot(root, { budgetMs: 30, syncFn: () => new Promise(() => {}) })
+  const result = await healthyBoot(root, { budgetMs: 30, syncBudgetMs: 30, syncFn: () => new Promise(() => {}) })
   assert.ok(result.pending.includes("sync: boot_budget_exceeded"))
   assert.equal(result.sync, null)
 })

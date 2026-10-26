@@ -14,13 +14,13 @@
 // session. `signoffStatus` carries counts and one age and nothing else; it is
 // what `status.json.signoff` holds.
 
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs"
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs"
 import { open, readdir, stat } from "node:fs/promises"
 import * as path from "node:path"
 
 import { loadFrontmatterParser } from "./organization.js"
 import { outcomeState, recordFromLines, SIGNOFF_ALARM_DAYS } from "../factory/outcome.js"
-import { writeStatus } from "../factory/outbox.js"
+import { factoryStateRoot, writeStatus } from "../factory/outbox.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -307,34 +307,27 @@ export async function refreshSignoffStatus(env, deskRoot, { now, scan = unsigned
   return found
 }
 
+/** Whether another writer holds the factory's `status.json` lock right now. */
+async function statusLockHeld(env) {
+  const root = await factoryStateRoot(env, { create: false })
+  return root !== null && existsSync(path.join(root, "status.json.lock"))
+}
+
 /**
  * What boot calls: the scan, with the counts recorded. Recording is a convenience: a state folder that cannot be written never
- * hides the list. Returns the scan, or null when the scan itself failed.
+ * hides the list, and while another writer holds the factory's status lock the counts are left to the next boot rather than
+ * waited for (a holder that crashed keeps the lock for 10 minutes). Returns the scan, or null when the scan itself failed.
  */
-// Boot waits this long for the factory's status lock, which another session's factory work can hold, then shows the list
-// without recording the counts: the next boot records them.
-const BOOT_STATUS_WAIT_MS = 1000
-const LOCK_WAIT_OVER = Symbol("lock wait over")
-
-export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries, waitMs = BOOT_STATUS_WAIT_MS, refresh = refreshSignoffStatus } = {}) {
-  // One scan whatever happens to the write: a busy lock must not cost a second walk of every card.
-  let scanned = null
-  const once = (root, options) => (scanned ??= { value: scan(root, options) }).value
-  let timer
+export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries } = {}) {
   try {
-    const recorded = refresh(env, deskRoot, { now, scan: once })
-    // Past the wait the write is left to finish on its own and the scan is shown.
-    const waited = new Promise((resolve) => { timer = setTimeout(resolve, waitMs, LOCK_WAIT_OVER) })
-    const result = await Promise.race([recorded, waited])
-    return result === LOCK_WAIT_OVER ? once(deskRoot, { now }) : result
+    if (await statusLockHeld(env)) return scan(deskRoot, { now })
+    return await refreshSignoffStatus(env, deskRoot, { now, scan })
   } catch {
     try {
-      return once(deskRoot, { now })
+      return scan(deskRoot, { now })
     } catch {
       return null
     }
-  } finally {
-    clearTimeout(timer)
   }
 }
 

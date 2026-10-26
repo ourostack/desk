@@ -7,7 +7,7 @@ import * as path from "node:path"
 
 import { mkTempRoot } from "../_temp_roots.js"
 import { scratch } from "../factory/_session_helpers.js"
-import { readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import {
   unsignedDeliveries,
   unsignedDeliveriesAsync,
@@ -384,15 +384,18 @@ test("recordUnsigned scans, records the counts and returns the list; a failed wr
   assert.equal(await recordUnsigned(broken, desk, NOW, { scan: () => { throw new Error("x") } }), null)
 }))
 
-test("recordUnsigned shows the list without waiting past its wait for a status write held on the factory lock, and scans once", () => withDesk(async (desk) => {
+test("recordUnsigned shows the list without waiting while another writer holds the factory status lock, and leaves the lock alone", () => scratch(async ({ desk, env }) => {
   await put(desk, ["alpha", "one"], card({ deliveredAt: ago(2) }))
-  let scans = 0
-  const scan = (root, options) => { scans += 1; return unsignedDeliveries(root, options) }
-  // A write that waits on the lock forever, after scanning, as refreshSignoffStatus does.
-  const refresh = async (_env, root, { now, scan: scanned }) => { scanned(root, { now }); return new Promise(() => {}) }
-  const found = await recordUnsigned({}, desk, NOW, { scan, refresh, waitMs: 20 })
-  assert.equal(found.count, 1)
-  assert.equal(scans, 1, "the list shown is the scan the write already made")
+  await recordUnsigned(env, desk, NOW)
+  const lock = path.join(await factoryStateRoot(env, { create: false }), "status.json.lock")
+  await fs.writeFile(lock, JSON.stringify({ pid: 999999, started_at: new Date().toISOString() }))
+  await put(desk, ["alpha", "two"], card({ deliveredAt: ago(3) }))
+  const started = Date.now()
+  const found = await recordUnsigned(env, desk, NOW)
+  assert.ok(Date.now() - started < 2000, "returned without waiting on the lock")
+  assert.equal(found.count, 2)
+  assert.deepEqual((await readStatus(env)).signoff.unsigned, { state: "measured", value: 1 }, "the counts wait for the next boot")
+  assert.match(await fs.readFile(lock, "utf8"), /999999/u)
 }))
 
 test("the scan stays inside the boot budget on a desk with 500 archived cards", () => withDesk(async (desk) => {

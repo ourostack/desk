@@ -85,8 +85,36 @@ async function pathExists(file) {
   }
 }
 
-function pull(root, spawnGit, timeoutMs) {
-  return run(spawnGit, root, ["pull", "--rebase", "--autostash"], timeoutMs)
+/**
+ * `spawnSync`'s result shape, without blocking the event loop: the pull is the one network call here and can take
+ * seconds, and boot's own network checks run while it does. A timeout ends the child with SIGTERM, as `spawnSync` does.
+ */
+export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn } = {}) {
+  return new Promise((resolve) => {
+    const stdout = []
+    const stderr = []
+    let timedOut = false
+    const child = spawnImpl(command, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill("SIGTERM")
+    }, timeout)
+    child.stdout.on("data", (chunk) => stdout.push(chunk))
+    child.stderr.on("data", (chunk) => stderr.push(chunk))
+    child.on("error", (error) => {
+      clearTimeout(timer)
+      resolve({ status: null, signal: null, stdout: "", stderr: "", error })
+    })
+    child.on("close", (status, signal) => {
+      clearTimeout(timer)
+      const result = { status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }
+      resolve(timedOut ? { ...result, error: Object.assign(new Error("git timed out"), { code: "ETIMEDOUT" }) } : result)
+    })
+  })
+}
+
+function pull(root, spawnPull, timeoutMs) {
+  return run(spawnPull, root, ["pull", "--rebase", "--autostash"], timeoutMs)
 }
 
 function abortRebase(root, spawnGit, timeoutMs) {
@@ -324,6 +352,8 @@ export async function syncWorkspace(options) {
 
 async function runSync({
   root, env, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
+  // The pull runs asynchronously unless a caller supplies its own `spawnGit`, which then runs every call.
+  spawnPull = spawnGit === spawnSync ? spawnGitAsync : spawnGit,
 }) {
   // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
   if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
@@ -339,7 +369,7 @@ async function runSync({
   if (remaining() <= 0) return deadlineExceeded([])
 
   const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
-  const first = pull(root, spawnGit, budgetedTimeout())
+  const first = await pull(root, spawnPull, budgetedTimeout())
   if (first.status === 0) {
     const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
     if (!conflicted) return { state: "synced" }
@@ -367,7 +397,7 @@ async function runSync({
   if (remaining() <= 0) return deadlineExceeded(firstConflicted, quarantinedPaths)
 
   const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout())
-  const second = pull(root, spawnGit, budgetedTimeout())
+  const second = await pull(root, spawnPull, budgetedTimeout())
   if (second.status === 0) {
     const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
     if (!conflicted) return { state: "quarantined", quarantinedPaths }
