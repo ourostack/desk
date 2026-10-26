@@ -1,6 +1,6 @@
 ---
 name: desk-problem
-description: Use when a Desk mechanism itself (a hook, boot check, migration, MCP tool call or sync) fails at its own job, with an unexpected exit, an uncaught error, a timeout or a self-reported failure. Not for ordinary task failures such as a failing test.
+description: Use when a Desk mechanism itself (a hook, boot check, migration, MCP tool or sync) fails at its own job. Not for ordinary task failures such as a failing test.
 ---
 
 # Desk problem

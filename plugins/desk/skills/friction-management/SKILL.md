@@ -1,6 +1,6 @@
 ---
 name: friction-management
-description: Keep the friction log of pain points in how the agent worked, including friction with Desk itself, which opens an improvement card. Use when capturing friction, when its fix lands, or when the log grows long. Task content goes on task cards.
+description: Capture friction about how the agent worked or about Desk itself (which opens an improvement card), mark fixes landed and archive old entries. Task content goes on task cards.
 ---
 
 # Friction management

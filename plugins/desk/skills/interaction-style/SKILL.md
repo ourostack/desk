@@ -252,73 +252,11 @@ This section's rules are for the live conversation, not for written artifacts.
 
 ## 8. Remote substrate boundary
 
-When the operator is on a remote substrate (RDP'd VM, SSH session, container shell, dev box, sandbox) and worker is about to dictate a sequence of per-user setup commands — `gh auth login`, `git clone`, `npm install`, package installs, plugin bootstraps, cd-and-run-this-then-that — **stop**. That's worker-as-keyboard-driver, the inverse of worker's job (which is to *reduce* operator cognitive load).
-
-The right move: get a worker-shaped agent running inside the substrate, and let it drive autonomously.
-
-### The detection
-
-The pattern fires when:
-
-1. The operator has just bootstrapped a new substrate session (new RDP profile, new SSH session, new container).
-2. Worker is about to enumerate setup commands the operator will type one-by-one.
-3. The substrate has an agent runtime (or can install it), so a worker-shaped agent could plausibly run inside it.
-
-If all three are true, the next instruction worker writes should be "launch the engine-appropriate agent runtime inside the substrate; that in-substrate worker has the right context for these chores." Not a fourth setup command in the sequence.
-
-### Why the boundary matters
-
-Outside-the-substrate worker doesn't have the per-user PATH, gh keyring, MSAL cache, or live shell context inside the remote substrate. Driving via `run-command invoke` works for SYSTEM-context operations but breaks down for per-user state (auth caches, plugin install paths, env-var inheritance). Hand-walking via the operator's keyboard works mechanically but inverts the worker-reduces-cognitive-load contract.
-
-A substrate-side worker has all the context for free: it IS the user, in the right shell, with the right env. Any setup chore worker would dictate fits naturally inside that worker's first-run-bootstrap or session-start invocation.
-
-### When the boundary doesn't apply
-
-- The substrate doesn't support an agent runtime (no install path, no plugin runtime). Then keyboard-driving is the only option — but flag the limitation explicitly so the operator knows what's happening and can decide whether to reach for a different substrate.
-- The chore is genuinely a single command, not a sequence (one cd, one cat, one curl). A single instruction isn't worker-driving-a-sequence.
-- The operator has explicitly asked worker to walk them through the steps for educational reasons. Honor that.
-
-### Detection signal in worker's draft
-
-If a draft response to the operator contains three or more sequential commands the operator will type into the remote substrate, treat it as a flag. Either:
-
-1. Replace the sequence with the launch-substrate-worker instruction.
-2. Surface the limitation if substrate-worker isn't viable, and explain why worker is driving the chores.
-
-Don't ship the three-command sequence silently.
-
-### Composes with §6 ("Authorization is scope, not single-action approval")
-
-§6 says the obvious next steps under the same authorization don't need re-confirmation. This section adds: when those next steps are *inside a remote substrate*, the right next step is not "run them via the operator's keyboard" — it's "launch substrate-worker, which inherits the same authorization." Both rules push the same direction (act on the authorization), but this one specifies WHO acts when the work is on the substrate side of the boundary.
+When the operator is on a remote substrate (a VM over RDP, an SSH session, a container shell, a dev box or sandbox) and you are about to dictate a sequence of per-user setup commands for them to type (`gh auth login`, `git clone`, installs, plugin bootstraps), stop: that makes the operator your keyboard. Tell them instead to launch the host's agent runtime inside the substrate, where an agent has the user's PATH, keyring, sign-in caches and shell, and inherits the same authorization (§6). Three or more commands for the operator to type into the substrate is the signal. Drive the steps through the operator only when the substrate cannot run an agent (say so), when it is a single command, or when the operator asked to be walked through for learning.
 
 ## 9. Invocation guidance — name the right surface
 
-When telling the operator how to invoke something, the `<plugin>:<name>` colon-syntax means different things on different surfaces. Don't conflate them.
-
-- **Agent launch** (at process start, via the engine's `--agent` flag, or via the parent harness's Agent tool): `<plugin>:<agent-name>` — e.g., `connect-helper:connect-helper`. The thing after the colon is an *agent* defined in the plugin's `agents/` directory.
-- **Skill invocation** (inside a running session, via the Skill tool): `<plugin>:<skill-name>` — e.g., `connect-helper:perspectives`. The thing after the colon is a *skill* defined in the plugin's `skills/` directory.
-
-Same syntax, different surfaces, different things. Mixing them in launch-flavored prose ("relaunch and kick off `connect-helper:perspectives`") implies a perspectives agent that doesn't exist. If the operator believes you, they try to launch a non-existent agent and get an error — or worse, silently misroute.
-
-### The check
-
-Before naming a surface in invocation guidance to the operator, look at which list the name appears in:
-
-- The prompt has separate `available agents` and `available skills` sections.
-- The agents section is what the engine launches (and what the Agent tool accepts as `subagent_type`).
-- The skills section is what the Skill tool invokes inside a running session.
-- If the name is in the skills list only, don't phrase its invocation as a launch step.
-
-### Common-shape trap
-
-Plugins commonly ship one agent + many skills under the same plugin name. A plugin `foo` might have agent `foo:foo` plus skills `foo:prep` / `foo:run` / `foo:cleanup`. Telling the operator to "launch `X:skill`" in this shape reads as "X has a skill agent" — there is no such agent.
-
-Two correct phrasings:
-
-- **Route through the agent.** "Relaunch the connect-helper agent and tell it you're working on perspectives." The agent loads the right skill based on what the operator describes.
-- **Attribute the right surface explicitly.** "Inside the session, invoke skill `connect-helper:perspectives`." This is correct for the Skill tool surface but only inside a running agent.
-
-This rule is downstream of `../evidence-discipline/SKILL.md` → "Messages over models" / "Discover before invent" — the prompt's authoritative lists are right there; check before naming.
+`<plugin>:<name>` names an agent when launching (the host's `--agent` flag or the Agent tool's `subagent_type`) and a skill inside a running session (the Skill tool). Check which list the name is in before you tell the operator how to invoke it. A plugin `foo` with agent `foo:foo` and skills `foo:prep` and `foo:run` has no `foo:prep` agent, so never say "relaunch and kick off `foo:prep`". Say "relaunch the foo agent and tell it you are working on prep", or "inside the session, invoke skill `foo:prep`".
 
 ## 10. Coaching the collaboration
 
