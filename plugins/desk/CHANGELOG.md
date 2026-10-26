@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.3 — 2026-10-26
+
+Fix the Desk MCP server crashing at startup (SIGSEGV on macOS) in about one Copilot session in three on a busy Mac, which left the session with no Desk tools. The admission worker loaded the SQLite native modules to warm them up; when that worker ended before the main thread had loaded them, Node unloaded the addon and the worker's teardown crashed the whole server. The worker no longer loads any native addon.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.2 — 2026-10-26
 
 Removed three dead pieces. The retired `desk:superpowers-integration` skill is gone; every Desk skill and doc already names `desk:using-superpowers-with-desk`, so a standing instruction that still names the old skill should name the new one. The `03-normalize-task-status` migration and its helper are gone, because `task_create` and `task_update` have rejected non-lifecycle statuses since the migration shipped and the desks checked hold only the eight states. The manual `rebuild-index.js` script and two `browser:messaging-assets` npm scripts that pointed at a deleted file are gone as well.
