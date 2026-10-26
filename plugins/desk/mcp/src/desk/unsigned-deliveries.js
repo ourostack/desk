@@ -316,13 +316,13 @@ export async function refreshSignoffStatus(env, deskRoot, { now, scan = unsigned
 const BOOT_STATUS_WAIT_MS = 1000
 const LOCK_WAIT_OVER = Symbol("lock wait over")
 
-export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries, waitMs = BOOT_STATUS_WAIT_MS } = {}) {
+export async function recordUnsigned(env, deskRoot, now, { scan = unsignedDeliveries, waitMs = BOOT_STATUS_WAIT_MS, refresh = refreshSignoffStatus } = {}) {
   // One scan whatever happens to the write: a busy lock must not cost a second walk of every card.
   let scanned = null
   const once = (root, options) => (scanned ??= { value: scan(root, options) }).value
   let timer
   try {
-    const recorded = refreshSignoffStatus(env, deskRoot, { now, scan: once })
+    const recorded = refresh(env, deskRoot, { now, scan: once })
     // Past the wait the write is left to finish on its own and the scan is shown.
     const waited = new Promise((resolve) => { timer = setTimeout(resolve, waitMs, LOCK_WAIT_OVER) })
     const result = await Promise.race([recorded, waited])

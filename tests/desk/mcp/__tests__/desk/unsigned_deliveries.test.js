@@ -384,6 +384,17 @@ test("recordUnsigned scans, records the counts and returns the list; a failed wr
   assert.equal(await recordUnsigned(broken, desk, NOW, { scan: () => { throw new Error("x") } }), null)
 }))
 
+test("recordUnsigned shows the list without waiting past its wait for a status write held on the factory lock, and scans once", () => withDesk(async (desk) => {
+  await put(desk, ["alpha", "one"], card({ deliveredAt: ago(2) }))
+  let scans = 0
+  const scan = (root, options) => { scans += 1; return unsignedDeliveries(root, options) }
+  // A write that waits on the lock forever, after scanning, as refreshSignoffStatus does.
+  const refresh = async (_env, root, { now, scan: scanned }) => { scanned(root, { now }); return new Promise(() => {}) }
+  const found = await recordUnsigned({}, desk, NOW, { scan, refresh, waitMs: 20 })
+  assert.equal(found.count, 1)
+  assert.equal(scans, 1, "the list shown is the scan the write already made")
+}))
+
 test("the scan stays inside the boot budget on a desk with 500 archived cards", () => withDesk(async (desk) => {
   const body = card({ deliveredAt: ago(2) }) + "x".repeat(40_000)
   for (let n = 0; n < 500; n += 1) await put(desk, [`track-${n % 10}`, "_archive", `task-${n}`], body)

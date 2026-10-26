@@ -807,17 +807,17 @@ function namedCards(resolved, cards) {
 }
 
 /** The GitHub `owner/repo` of every repo of every open task, read from the cards and the clones' config files, never by running git. */
-function taskStores(cards, { root, homeDir = os.homedir() }) {
+function taskStores(cards, { root, homeDir }) {
   const stores = new Set()
   for (const card of cards) {
     // A card that cannot be read here names no repo; card validation reports it.
     try {
-      if (TERMINAL_STATUSES.has(card.data?.status) || !Array.isArray(card.data?.repos)) continue
+      if (TERMINAL_STATUSES.has(card.data.status) || !Array.isArray(card.data.repos)) continue
       for (const repo of card.data.repos) {
         if (repo === null || typeof repo !== "object") continue
         if (repo.mode === "remote" && typeof repo.name === "string" && PATTERNS.prRepo.test(repo.name)) stores.add(repo.name)
         else if (repo.mode === "local") {
-          const store = resolveLocalStore(repo.local_path, { spawnGit: () => null, homeDir, deskRoot: root, timeoutMs: 0, fileOnly: true })
+          const store = resolveLocalStore(repo.local_path, { homeDir, deskRoot: root, fileOnly: true })
           if (store !== null) stores.add(store)
         }
       }
@@ -1447,7 +1447,7 @@ export async function bootOnce({
   let pushAccounts = []
   try {
     // The routes started before the sync stand unless the sync changed the named task's repos.
-    const reposOf = (list) => JSON.stringify(list.map((card) => [card.file, card.data?.repos ?? null]))
+    const reposOf = (list) => JSON.stringify(list.map((card) => [card.file, card.data.repos ?? null]))
     const found = named.length === 0 ? [] : await (pushStarted !== null && reposOf(named) === reposOf(earlyNamed) ? pushStarted : pushFor(named))
     if (found?.error) throw found.error
     pushAccounts = found

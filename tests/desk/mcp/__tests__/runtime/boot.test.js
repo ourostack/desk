@@ -2017,3 +2017,40 @@ test("bootOnce: a sync that changes the named task's repos checks the new repos'
   assert.ok(asked.some((call) => call.includes("acme/gadgets")), asked.join("|"))
   assert.deepEqual(result.open_prs, [], "the search ran for acme/widgets, which no open task names after the sync")
 })
+
+test("bootOnce: the pull-request search covers open tasks' GitHub repos, remote or a local clone's origin, and skips the rest", async () => {
+  const root = await mkDeskWorkspace()
+  const clone = await mkTempRoot("desk-boot-local-clone-")
+  spawnSync("git", ["init", "-q", clone])
+  spawnSync("git", ["-C", clone, "remote", "add", "origin", "https://github.com/acme/local.git"])
+  const repos = (lines) => VALID_CARD.replace("repos: []", `repos:\n${lines}`)
+  await writeCard(root, "track-a", "mixed", repos([
+    "  - name: acme/remote\n    local_path: \"\"\n    mode: remote",
+    `  - name: local\n    local_path: ${clone}\n    mode: local`,
+    "  - name: missing\n    local_path: /no/such/clone\n    mode: local",
+    "  - name: not-a-slug\n    local_path: \"\"\n    mode: remote",
+    "  - just-a-string",
+  ].join("\n")))
+  await writeCard(root, "track-a", "finished", repos("  - name: acme/done\n    local_path: \"\"\n    mode: remote").replace("status: processing", "status: done"))
+  await writeCard(root, "track-a", "no-repos", VALID_CARD.replace("repos: []\n", "").replace("\nrepos: []", ""))
+  let asked = null
+  const result = await healthyBoot(root, { taskQuery: "no-repos", prFn: async ({ stores }) => { asked = stores; return { prs: [], pending: [] } } })
+  assert.deepEqual(asked.sort(), ["acme/local", "acme/remote"])
+  assert.equal(result.task.status, "resolved")
+  assert.deepEqual(result.push_accounts, [])
+})
+
+test("bootOnce: a named task the sync brings in gets its push routes checked after the sync", async () => {
+  const root = await mkDeskWorkspace()
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  const result = await healthyBoot(root, {
+    gh,
+    taskQuery: "pulled-task",
+    syncFn: async () => {
+      await writeCard(root, "track-a", "pulled-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+      return { state: "synced" }
+    },
+  })
+  assert.equal(result.task.status, "resolved")
+  assert.deepEqual(result.push_accounts.map((entry) => [entry.store, entry.result]), [["acme/widgets", "account_found"]])
+})
