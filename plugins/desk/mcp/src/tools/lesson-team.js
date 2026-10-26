@@ -1,12 +1,15 @@
 // lesson_add's team write: a lesson for every teammate's agents goes into the `## Lessons` section of the root AGENTS.md
 // of the repository the team works in, through that repository's own contribution path, done by the tool itself.
 //
-// The repository is any local clone with a GitHub `origin`: a Crew shared workspace (the desk itself, the default there)
-// or a team's code repository that is not a desk at all. The write never touches the clone's checkout: it fetches the
-// default branch, builds the change in a temporary worktree, pushes a branch with a signed-in account that can push,
-// opens a pull request and merges it at once. When the merge meets a conflict (someone else changed AGENTS.md first) it
-// rebuilds the change on the new default branch and tries again. The reply says what happened: merged (with the merge
-// commit), or the pull request left open and why, so nothing is claimed in effect that is not.
+// The repository is the GitHub repository of a local clone: a Crew shared workspace (the desk itself, the default there)
+// or a team's code repository that is not a desk at all. When the clone's origin is a fork, the lesson goes to the
+// repository it was forked from. The write never touches the clone's checkout or uses its remotes: it fetches the
+// default branch from https://github.com/<owner>/<repo>.git with the chosen account, builds the change in a temporary
+// worktree, pushes a branch there, opens a pull request and merges it at once. When the merge meets a conflict (someone
+// else changed AGENTS.md first) it rebuilds the change on the new default branch and tries again. It counts the lesson
+// merged only when GitHub says the pull request is merged: a merge queue or auto-merge that only queued it leaves it
+// open, branch and all. The repository's own commit hooks and signing run as for any commit, and their refusal is
+// reported, never skipped, because Crew's shared-write protocol is an ordinary pull request.
 
 import { promises as fs, existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs"
 import * as os from "node:os"
@@ -17,13 +20,15 @@ import { resolveLocalPath } from "../util/paths.js"
 import { normalizeRemote } from "../factory/binding.js"
 import { chooseAccount as chooseAccountDefault, ghRunner } from "../factory/flush.js"
 import { withAmbientToken } from "../runtime/boot.js"
+import { printedPart } from "../runtime/agents-md.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
-import { SECTION, byteSize, lead, lessonLine, oneLine, refuseOverCap, withLesson } from "./lesson-lines.js"
+import { SECTION, lead, lessonLine, oneLine, withLesson } from "./lesson-lines.js"
 
 const GIT_TIMEOUT_MS = 60_000
 const MERGE_TRIES = 3
+// After a merge command that succeeded, how many times GitHub is asked whether the pull request merged, 2 s apart.
+const MERGE_POLLS = 5
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/u
-const DECISIONS = path.join("_shared", "decisions")
 const CREDENTIALS = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
 
 function runGit(args, { cwd, token, spawnGit }) {
@@ -40,8 +45,8 @@ class Failed extends Error {
   }
 }
 
-function must(result, stage) {
-  if (!result.ok) throw new Failed(stage, result.stderr.split("\n")[0] || `${stage} failed`)
+function must(result, stage, why = "") {
+  if (!result.ok) throw new Failed(stage, `${why}${result.stderr.split("\n")[0] || `${stage} failed`}`)
   return result.stdout
 }
 
@@ -58,21 +63,21 @@ function repoRoot({ deskRoot, repo, spawnGit }) {
 }
 
 /**
- * Where the lesson came from. A team decision lives in the workspace's decision records, so where the repository keeps
- * `_shared/decisions/`, `source` must name one of its files. Elsewhere it names who said it, where and when, with the
- * date as YYYY-MM-DD.
+ * Where the lesson came from, checked against the default branch as fetched into `tree`. A team decision lives in the
+ * repository's decision records, so where the default branch keeps `_shared/decisions/`, `source` must name one of its
+ * files. Elsewhere it names who said it, where and when, with the date as YYYY-MM-DD.
  */
-function sourceOf(top, value) {
-  const source = oneLine(value, "source")
-  if (existsSync(path.join(top, DECISIONS))) {
+function sourceOf(tree, source) {
+  const decisions = path.join(tree, "_shared", "decisions")
+  if (existsSync(decisions)) {
     const rel = source.replace(/\\/gu, "/")
-    const file = path.resolve(top, rel)
-    if (!rel.startsWith("_shared/decisions/") || !file.startsWith(path.join(top, DECISIONS) + path.sep) || !existsSync(file) || !lstatSync(file).isFile()) {
-      throw new Error("lesson_add: this repository keeps team decisions in _shared/decisions/, so `source` must be the path of the decision record this lesson comes from (record the decision there first)")
+    const file = path.resolve(tree, rel)
+    if (!rel.startsWith("_shared/decisions/") || !file.startsWith(decisions + path.sep) || !existsSync(file) || !lstatSync(file).isFile()) {
+      throw new Failed("source", "this repository keeps team decisions in _shared/decisions/ on its default branch, so `source` must be the path of the decision record there that this lesson comes from (record and merge the decision first)")
     }
     return rel
   }
-  if (!DATE.test(source)) throw new Error("lesson_add: `source` must say who said this, where and when, with the date as YYYY-MM-DD (for example \"Ari in the team channel, 2026-10-26\")")
+  if (!DATE.test(source)) throw new Failed("source", "`source` must say who said this, where and when, with the date as YYYY-MM-DD (for example \"Ari in the team channel, 2026-10-26\")")
   return source
 }
 
@@ -103,97 +108,158 @@ function claudeLoads(dir) {
   }
 }
 
-// One attempt: the lesson written on top of the default branch as it is now, committed, and pushed as `branch`.
-async function buildOnBase({ top, tree, base, branch, line, topic, token, spawnGit, first }) {
-  must(runGit(["fetch", "--quiet", "origin", base], { cwd: top, token, spawnGit }), "fetch")
-  if (first) must(runGit(["worktree", "add", "--quiet", "--detach", tree, `origin/${base}`], { cwd: top, spawnGit }), "worktree")
-  else must(runGit(["reset", "--quiet", "--hard", `origin/${base}`], { cwd: tree, spawnGit }), "reset")
+// The lesson written on top of the default branch as it is now. Null when that branch already holds this exact line.
+async function writeLesson(tree, line, topic) {
   const file = path.join(tree, "AGENTS.md")
   const current = existsSync(file) ? await fs.readFile(file, "utf8") : ""
   const { text, replaced } = withLesson(current, line, topic)
-  refuseOverCap(byteSize(text), "the repository's AGENTS.md")
+  if (text === current) return null
+  if (!printedPart(text).includes(line)) throw new Failed("size", "the lesson would fall after the first 16 KB of the repository's AGENTS.md, which is what Desk's session start prints; shorten that file first")
   await fs.writeFile(file, text, "utf8")
-  must(runGit(["add", "AGENTS.md"], { cwd: tree, spawnGit }), "commit")
-  must(runGit(["commit", "--quiet", "-m", `Team lesson: ${topic}`], { cwd: tree, spawnGit }), "commit")
-  must(runGit(["push", "--quiet", "--force", "origin", `HEAD:refs/heads/${branch}`], { cwd: tree, token, spawnGit }), "push")
-  return { replaced, replaces: replaced ? lessonLine(current, topic) : undefined }
+  return { replaces: replaced ? lessonLine(current, topic) : undefined }
 }
 
 const ghText = (answer) => String(answer.stdout ?? "").trim()
-
-async function prState(gh, url, token) {
-  const view = await gh(["pr", "view", url, "--json", "state,mergeable,mergeStateStatus,mergeCommit"], { token })
+const ghJson = (answer) => {
   try {
-    return JSON.parse(ghText(view))
+    return JSON.parse(ghText(answer))
   } catch {
     return {}
   }
 }
 
+const prState = async (gh, url, token) => ghJson(await gh(["pr", "view", url, "--json", "state,mergeable,mergeStateStatus,mergeCommit"], { token }))
+
 /**
  * `addTeamLesson({ deskRoot, person, topic, body, repo, source, ... })`: writes the lesson into the repository's root
  * AGENTS.md through a pull request it merges itself. Input errors throw; once the remote work starts, a failure comes
- * back as `status: "failed"` with the stage it stopped at, and an open pull request as `status: "pr_open"`.
+ * back as `status: "failed"` with the stage it stopped at, a pull request that did not merge as `status: "pr_open"` (its
+ * branch kept), and a default branch that already holds the exact line as `status: "unchanged"`.
  */
 export async function addTeamLesson({ deskRoot, person, topic, body, repo, source, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const top = repoRoot({ deskRoot, repo, spawnGit })
   const crew = path.resolve(top) === path.resolve(deskRoot) && crewWorkspace(deskRoot).crew
   if (crew && (typeof person !== "string" || person === "")) throw new Error("lesson_add: a team lesson in a shared workspace is attributed to its person, and this session has no person")
-  const cited = sourceOf(top, source)
-  const store = githubStore(top, spawnGit)
-  const line = `${lead(topic)} ${body} (${authorOf(person, top, spawnGit)}, ${today()}; ${cited})`
-  const result = { scope: "team", repo: store, path: "AGENTS.md", section: SECTION, line, in_effect: false }
+  const cited = oneLine(source, "source")
+  const origin = githubStore(top, spawnGit)
+  const author = authorOf(person, top, spawnGit)
+  const result = { scope: "team", repo: origin, path: "AGENTS.md", section: SECTION, in_effect: false }
   const tmp = await fs.mkdtemp(path.join(tmpRoot, "desk-lesson-"))
   const tree = path.join(tmp, "tree")
-  // Any failure once the remote work starts is reported, not thrown; anything else (a bug, an over-size file) is thrown.
+  // Any failure once the remote work starts is reported, not thrown; anything else (a bug) is thrown.
   const failed = (error) => {
     if (!(error instanceof Failed)) throw error
-    return { ...result, status: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${result.pr ? ` The pull request ${result.pr} is open.` : ""}` }
+    const open = result.pr ? ` The pull request ${result.pr} is open, on branch ${result.branch}.` : ""
+    return { ...result, status: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }
+  }
+  // A signed-in account that can push to `store`, and its token.
+  const access = async (store) => {
+    const chosen = await chooseAccount({ store, runner: gh })
+    if (chosen.result !== "account_found" || chosen.route !== "direct") throw new Failed("account", `no signed-in GitHub account can push to ${store} (${chosen.result === "account_found" ? "only through a fork" : chosen.result})`)
+    const answer = await gh(["auth", "token", "--user", chosen.account])
+    const token = ghText(answer)
+    if (answer.code !== 0 || token === "") throw new Failed("account", `gh has no token for ${chosen.account}`)
+    return { account: chosen.account, token }
+  }
+  const about = async (store, token) => {
+    const info = ghJson(await gh(["api", `repos/${store}`, "--jq", "{base: .default_branch, parent: .parent.full_name}"], { token }))
+    if (typeof info.base !== "string" || info.base === "") throw new Failed("default_branch", `could not read the default branch of ${store}`)
+    return info
   }
   try {
     return await (async () => {
-      const chosen = await chooseAccount({ store, runner: gh })
-      if (chosen.result !== "account_found" || chosen.route !== "direct") throw new Failed("account", `no signed-in GitHub account can push to ${store} (${chosen.result === "account_found" ? "only through a fork" : chosen.result})`)
-      const tokenAnswer = await gh(["auth", "token", "--user", chosen.account])
-      const token = ghText(tokenAnswer)
-      if (tokenAnswer.code !== 0 || token === "") throw new Failed("account", `gh has no token for ${chosen.account}`)
-      const baseAnswer = await gh(["api", `repos/${store}`, "--jq", ".default_branch"], { token })
-      const base = ghText(baseAnswer)
-      if (baseAnswer.code !== 0 || base === "") throw new Failed("default_branch", `could not read the default branch of ${store}`)
+      let store = origin
+      let { account, token } = await access(store)
+      let info = await about(store, token)
+      // A fork's lesson belongs in the repository the team works in, the one it was forked from.
+      if (typeof info.parent === "string" && info.parent !== "") {
+        store = info.parent
+        ;({ account, token } = await access(store))
+        info = await about(store, token)
+      }
+      result.repo = store
+      result.account = account
+      const remote = `https://github.com/${store}.git`
+      const git = (args, cwd, stage, why) => must(runGit(args, { cwd, token, spawnGit }), stage, why)
+      git(["fetch", "--quiet", remote, info.base], top, "fetch")
+      git(["worktree", "add", "--quiet", "--detach", tree, "FETCH_HEAD"], top, "worktree")
+      const line = `${lead(topic)} ${body} (${author}, ${today()}; ${sourceOf(tree, cited)})`
+      result.line = line
+      const loaders = () => {
+        const claude = crew || claudeLoads(tree)
+        result.claude_code_loads = claude
+        return crew ? "every teammate's Desk session start prints it" : `Copilot CLI and Codex load it in ${store}${claude ? ", and Claude Code does too, through CLAUDE.md" : "; Claude Code does not, because this repository's CLAUDE.md does not import AGENTS.md (add a line `@AGENTS.md` to it)"}`
+      }
+      // Commit and push one build; the repository's hooks and signing apply, and their refusal is reported.
+      const publish = (branch) => {
+        git(["add", "AGENTS.md"], tree, "commit")
+        git(["commit", "--quiet", "-m", `Team lesson: ${topic}`], tree, "commit", "the commit was refused (this repository's commit hooks or signing): ")
+        git(["push", "--quiet", "--force", remote, `HEAD:refs/heads/${branch}`], tree, "push", "the push was refused: ")
+      }
+      const built = await writeLesson(tree, line, topic)
+      if (built === null) {
+        const who = loaders()
+        return { ...result, status: "unchanged", in_effect: true, message: `Already in effect: the default branch of ${store} holds this exact line. ${who}.` }
+      }
+      if (built.replaces !== undefined) result.replaces = built.replaces
       const branch = `lesson/${slugify(topic).slice(0, 40)}-${Date.now().toString(36)}`
-      const built = await buildOnBase({ top, tree, base, branch, line, topic, token, spawnGit, first: true })
-      if (built.replaced) result.replaces = built.replaces
-      result.account = chosen.account
-      const title = `Team lesson: ${topic}`
+      publish(branch)
       const prBody = `Adds a team lesson to the ${SECTION} section of AGENTS.md, written by Desk's lesson_add.\n\n${line}`
-      const created = await gh(["pr", "create", "--repo", store, "--base", base, "--head", branch, "--title", title, "--body", prBody], { token })
+      const created = await gh(["pr", "create", "--repo", store, "--base", info.base, "--head", branch, "--title", `Team lesson: ${topic}`, "--body", prBody], { token })
       const url = ghText(created).split("\n").pop()
-      if (created.code !== 0 || !/^https:\/\/github\.com\//u.test(url)) throw new Failed("pull_request", `could not open the pull request: ${String(created.stderr ?? "").trim().split("\n")[0]}`)
+      if (created.code !== 0 || !/^https:\/\/github\.com\//u.test(url)) {
+        // Nothing should point at a branch no pull request uses.
+        runGit(["push", "--quiet", remote, "--delete", branch], { cwd: top, token, spawnGit })
+        throw new Failed("pull_request", `could not open the pull request: ${String(created.stderr ?? "").trim().split("\n")[0]}`)
+      }
       result.pr = url
+      result.branch = branch
       let state = {}
-      let merged = false
       for (let attempt = 1; ; attempt += 1) {
         const answer = await gh(["pr", "merge", url, "--squash"], { token })
         state = await prState(gh, url, token)
-        merged = answer.code === 0 || state.state === "MERGED"
-        if (merged || attempt === MERGE_TRIES) break
+        // A merge command that succeeded may only have queued the pull request (a merge queue, auto-merge): only GitHub's
+        // own state says it merged.
+        for (let poll = 0; answer.code === 0 && state.state !== "MERGED" && poll < MERGE_POLLS; poll += 1) {
+          await wait(2000)
+          state = await prState(gh, url, token)
+        }
+        if (state.state === "MERGED" || answer.code === 0 || attempt === MERGE_TRIES) {
+          if (state.state !== "MERGED" && answer.code === 0) state = { ...state, mergeStateStatus: "QUEUED" }
+          break
+        }
         // Someone changed the default branch first: build the change again on top of theirs. GitHub not having worked out
         // mergeability yet is a wait, not a failure.
-        if (state.mergeable === "CONFLICTING") await buildOnBase({ top, tree, base, branch, line, topic, token, spawnGit, first: false })
-        else if (state.mergeable === "UNKNOWN") await wait(2000)
+        if (state.mergeable === "CONFLICTING") {
+          // FETCH_HEAD belongs to the worktree that fetched, so the rebuild fetches in its own.
+          git(["fetch", "--quiet", remote, info.base], tree, "fetch")
+          git(["reset", "--quiet", "--hard", "FETCH_HEAD"], tree, "reset")
+          if ((await writeLesson(tree, line, topic)) === null) {
+            // Someone else merged this exact line first: this pull request has nothing left to add.
+            await gh(["pr", "close", url, "--comment", "The default branch already holds this lesson."], { token })
+            runGit(["push", "--quiet", remote, "--delete", branch], { cwd: top, token, spawnGit })
+            delete result.pr
+            delete result.branch
+            const who = loaders()
+            return { ...result, status: "unchanged", in_effect: true, message: `Already in effect: the default branch of ${store} holds this exact line. ${who}.` }
+          }
+          publish(branch)
+        } else if (state.mergeable === "UNKNOWN") await wait(2000)
         else break
       }
-      if (!merged) {
-        return { ...result, status: "pr_open", reason: state.mergeStateStatus ?? "unknown", message: `Not in effect: the pull request ${url} is open and could not be merged now (${state.mergeStateStatus ?? "unknown"}). It takes effect when it merges.` }
+      if (state.state !== "MERGED") {
+        const why = state.mergeStateStatus ?? "unknown"
+        return { ...result, status: "pr_open", reason: why, message: `Not in effect: the pull request ${url} is open on branch ${branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }
       }
-      runGit(["push", "--quiet", "origin", "--delete", branch], { cwd: top, token, spawnGit })
+      runGit(["push", "--quiet", remote, "--delete", branch], { cwd: top, token, spawnGit })
+      delete result.branch
       result.commit = state.mergeCommit?.oid ?? null
-      const claude = claudeLoads(tree)
-      const loaders = crew ? "every teammate's Desk session start prints it" : `Copilot CLI and Codex load it in ${store}${claude ? ", and Claude Code does too, through CLAUDE.md" : "; Claude Code does not, because this repository's CLAUDE.md does not import AGENTS.md (add a line `@AGENTS.md` to it)"}`
-      return { ...result, status: "merged", in_effect: true, claude_code_loads: crew || claude, message: `In effect: merged in ${url}. ${loaders}, from each session that starts after the merge.` }
+      const who = loaders()
+      return { ...result, status: "merged", in_effect: true, message: `In effect: merged in ${url}. ${who}, from each session that starts after the merge.` }
     })().catch(failed)
   } finally {
     if (existsSync(tree)) runGit(["worktree", "remove", "--force", tree], { cwd: top, spawnGit })
     await fs.rm(tmp, { recursive: true, force: true })
+    runGit(["worktree", "prune"], { cwd: top, spawnGit })
   }
 }

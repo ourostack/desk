@@ -2,10 +2,8 @@
 // lesson.js and the team write in lesson-team.js.
 
 import { slugify } from "../util/fm.js"
-import { AGENTS_MD_CAP_BYTES } from "../runtime/agents-md.js"
 
 export const SECTION = "## Lessons"
-const CAP_WORDS = `${AGENTS_MD_CAP_BYTES / 1024} KB`
 
 export function oneLine(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`lesson_add: \`${name}\` is required (string)`)
@@ -62,12 +60,4 @@ export function withLesson(text, line, topic) {
   const rest = lines.slice(last + 1)
   const after = rest.length > 0 && rest[0].trim() !== "" ? ["", ...rest] : rest
   return { text: join([...insert.flat(), ...after]), replaced: false }
-}
-
-export const byteSize = (text) => Buffer.byteLength(text, "utf8")
-
-export function refuseOverCap(bytes, what) {
-  if (bytes > AGENTS_MD_CAP_BYTES) {
-    throw new Error(`lesson_add: ${what} would pass the ${CAP_WORDS} of AGENTS.md that session start prints, so nothing would load this lesson; shorten that file first`)
-  }
 }

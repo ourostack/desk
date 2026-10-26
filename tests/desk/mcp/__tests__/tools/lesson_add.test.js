@@ -125,8 +125,31 @@ test("lesson_add personal asks session start's own lookup, with the call's envir
 test("lesson_add personal counts the desk's AGENTS.md against the shared budget session start prints", async () => {
   const root = await crewRoot()
   await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 40)}\n`, "utf8")
-  await assert.rejects(() => lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") }), /desks\/ari\/AGENTS\.md and the desk's AGENTS\.md together would pass the 16 KB/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") }), /session start prints only the first \d+ bytes of desks\/ari\/AGENTS\.md \(what the desk's AGENTS\.md leaves of the 16 KB both share\)/u)
   assert.equal(await exists(path.join(root, "desks", "ari", "AGENTS.md")), false)
+})
+
+test("lesson_add personal judges a lesson by the part of the file session start prints, even when the lesson fits but the file runs past it", async () => {
+  const root = await mkTempDeskRoot()
+  // The Lessons section comes first, so the new line lands near the top while the file as a whole passes the cap.
+  const long = `# Desk\n\n## Lessons\n\n- **Old.** Kept. (2026-01-01)\n\n## Notes\n\n${"x".repeat(AGENTS_MD_CAP_BYTES)}\n`
+  await fs.writeFile(path.join(root, "AGENTS.md"), long, "utf8")
+  const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") })
+  assert.equal(result.in_effect, true)
+  assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /\*\*Rule\.\*\* Do it\./u)
+})
+
+test("lesson_add personal treats the same lesson twice on one day as already in effect, with nothing to commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const pushes = []
+  const schedulePush = (call) => pushes.push(call)
+  const first = await lesson_add({ deskRoot: root, schedulePush, input: personal("Rule", "Do it.") })
+  const again = await lesson_add({ deskRoot: root, schedulePush, input: personal("Rule", "Do it.") })
+  assert.equal(first.in_effect, true)
+  assert.deepEqual([again.status, again.in_effect, again.commit], ["unchanged", true, undefined])
+  assert.equal(git(root, ["log", "--format=%s"]).trim().split("\n").length, 1)
+  assert.equal(pushes.length, 1)
 })
 
 test("lesson_add personal keeps a CRLF file's line ending and finds its Lessons section", async () => {
@@ -159,7 +182,7 @@ test("lesson_add refuses a lesson that session start would not load because AGEN
   const root = await mkTempDeskRoot()
   const big = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 20)}\n`
   await fs.writeFile(path.join(root, "AGENTS.md"), big, "utf8")
-  await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") }), /16 KB/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") }), new RegExp(`session start prints only the first ${AGENTS_MD_CAP_BYTES} bytes of AGENTS\\.md,`, "u"))
   assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), big)
 })
 
@@ -276,12 +299,17 @@ test("lesson_add desk maps each kind of owner to its plugin and friction class",
   const { calls, addFriction } = frictionSpy({ improvement: "duplicate" })
   const scan = () => ({ dirs: plugins })
   // What a host has installed: a Copilot-style plugin.json, a Claude-style .claude-plugin/plugin.json, two folders of
-  // one plugin (an older version without the skill), and folders with no or a broken manifest.
+  // one plugin, and folders with no or a broken manifest.
   const plugins = [
     await plugin({ "plugin.json": { name: "ms-desk" } }, ["ecs-rollout"]),
     await plugin({ ".claude-plugin/plugin.json": { name: "superpowers" } }, ["brainstorming"]),
-    await plugin({ "plugin.json": { name: "pwf" } }, []),
-    await plugin({ "plugin.json": { name: "pwf" } }, ["adapter-acceptance"]),
+    // A host's cache keeps old versions beside the active one: only the newest counts, and a version beats none.
+    await plugin({ "plugin.json": { name: "pwf" } }, ["removed"]),
+    await plugin({ "plugin.json": { name: "pwf", version: "1.2.0" } }, ["adapter-acceptance"]),
+    await plugin({ "plugin.json": { name: "pwf", version: "1.1.0" } }, ["removed"]),
+    await plugin({ "plugin.json": { name: "pwf" } }, ["removed"]),
+    // An old Desk in the same cache never stands in for the Desk that is running.
+    await plugin({ "plugin.json": { name: "desk", version: "99.0.0" } }, ["stale-only"]),
     await plugin({ "plugin.json": "{not json" }, ["x"]),
     await plugin({ "plugin.json": { version: "1.0.0" } }, ["x"]),
     await plugin({}, ["x"]),
@@ -293,6 +321,9 @@ test("lesson_add desk maps each kind of owner to its plugin and friction class",
     ["desk", "mcp_tool"], ["desk", "skill"], ["desk", "skill"], ["desk", "skill"], ["ms-desk", "skill"], ["superpowers", "skill"], ["pwf", "skill"],
   ])
   await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:superpowers:no-such" }, addFriction }), /the superpowers plugin has no skill named no-such/u)
+  for (const [owner, plugin] of [["skill:pwf:removed", "pwf"], ["skill:desk:stale-only", "desk"]]) {
+    await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: { scope: "desk", topic: "Rule", body: "Do it.", owner }, addFriction }), new RegExp(`the ${plugin} plugin has no skill named`, "u"))
+  }
 })
 
 async function plugin(files, skills) {

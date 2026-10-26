@@ -76,7 +76,7 @@ import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
 import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
-import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
+import { personAgentsCap } from "./agents-md.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -1500,7 +1500,7 @@ export async function bootOnce({
   // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole.
   let personAgentsMd = null
   try {
-    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: Math.max(AGENTS_MD_CAP_BYTES - (agentsMd?.shownBytes ?? 0), 0) })
+    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: personAgentsCap(agentsMd) })
   } catch {
     personAgentsMd = null
   }

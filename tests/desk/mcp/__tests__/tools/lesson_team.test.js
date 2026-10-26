@@ -1,6 +1,7 @@
 // lesson_add team: the tool writes the lesson into the team repository's root AGENTS.md itself, through a pull request it
-// merges, and says what happened. Git runs for real against a local bare repository that stands in for GitHub (the clone's
-// origin is a github.com URL that Git rewrites to it); `gh` and the account choice are fakes that act on that repository.
+// merges, and says what happened. Git runs for real against a local bare repository that stands in for GitHub (Git rewrites
+// https://github.com/acme/cit.git to it, and the clone's origin is never used); `gh` and the account choice are fakes
+// that act on that repository.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -21,8 +22,9 @@ function git(cwd, args) {
   return result.stdout.trim()
 }
 
-// A bare "GitHub" repository holding `files` on main, and a clone of it whose origin reads as github.com/acme/cit.
-async function team(files = { "AGENTS.md": "# Team\n" }, { userName = "Ari Mendelow" } = {}) {
+// A bare "GitHub" repository holding `files` on main, and a clone of it whose origin reads as `origin`. Only the tool's
+// own route, https://github.com/acme/cit.git, reaches the bare repository: the origin itself leads nowhere.
+async function team(files = { "AGENTS.md": "# Team\n" }, { userName = "Ari Mendelow", origin = URL } = {}) {
   const base = await mkTempDeskRoot()
   const bare = path.join(base, "origin.git")
   spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare])
@@ -41,23 +43,29 @@ async function team(files = { "AGENTS.md": "# Team\n" }, { userName = "Ari Mende
   spawnSync("git", ["clone", "-q", bare, clone])
   git(clone, ["config", "user.email", "t@example.com"])
   if (userName !== null) git(clone, ["config", "user.name", userName])
-  git(clone, ["remote", "set-url", "origin", URL])
-  git(clone, ["config", `url.${bare}.insteadOf`, URL])
+  git(clone, ["remote", "set-url", "origin", origin])
+  git(clone, ["config", `url.${bare}.insteadOf`, `${URL}.git`])
   return { base, bare, seed, clone }
 }
 
 const onMain = (bare, file = "AGENTS.md") => spawnSync("git", ["--git-dir", bare, "show", `main:${file}`], { encoding: "utf8" }).stdout
+const lessonBranches = (bare) => spawnSync("git", ["--git-dir", bare, "branch", "--list", "lesson/*"], { encoding: "utf8" }).stdout.trim()
 
 // A fake `gh` that opens and merges pull requests on the bare repository. `merge(state)` decides each merge: by default a
-// branch that contains main is fast-forwarded into it, and one that does not is a conflict.
-function fakeGh(bare, { token = "tok", base = "main", create = { code: 0 }, merge, view } = {}) {
+// branch that contains main is fast-forwarded into it, and one that does not is a conflict. `parents` names the repository
+// a fork was made from.
+function fakeGh(bare, { token = "tok", base = "main", create = { code: 0 }, merge, view, parents = {} } = {}) {
   const calls = []
-  const state = { head: null, merged: false, merges: 0 }
+  const state = { head: null, merged: false, merges: 0, closed: false }
   const gh = async (args, options = {}) => {
     calls.push({ args, token: options.token })
     const [a, b] = args
     if (a === "auth" && b === "token") return token === "" ? { code: 1 } : { code: 0, stdout: `${token}\n` }
-    if (a === "api") return base === "" ? { code: 1, stdout: "" } : { code: 0, stdout: `${base}\n` }
+    if (a === "api") return base === "" ? { code: 1, stdout: "" } : { code: 0, stdout: `${JSON.stringify({ base, parent: parents[b.replace(/^repos\//u, "")] ?? null })}\n` }
+    if (a === "pr" && b === "close") {
+      state.closed = true
+      return { code: 0 }
+    }
     if (a === "pr" && b === "create") {
       state.head = args[args.indexOf("--head") + 1]
       if (create.stdout !== undefined) return create
@@ -96,7 +104,7 @@ test("team lesson in a repository that is not a desk: written, merged and said t
   assert.equal(result.repo, "acme/cit")
   assert.equal(result.pr, PR)
   assert.equal(result.account, "arimendelow")
-  assert.equal(result.commit, git(repo.clone, ["ls-remote", "origin", "main"]).split(/\s/u)[0])
+  assert.equal(result.commit, git(repo.bare, ["rev-parse", "main"]))
   assert.equal(result.claude_code_loads, false)
   assert.match(result.line, new RegExp(`^- \\*\\*Build what was asked\\.\\*\\* When someone asks for a List, build a List\\. \\(Ari Mendelow, ${DAY}; Ari in the CIT channel, 2026-10-26\\)$`, "u"))
   assert.match(result.message, /^In effect: merged in https:\/\/github\.com\/acme\/cit\/pull\/7\. Copilot CLI and Codex load it in acme\/cit; Claude Code does not, because this repository's CLAUDE\.md does not import AGENTS\.md/u)
@@ -107,7 +115,55 @@ test("team lesson in a repository that is not a desk: written, merged and said t
   assert.equal(git(repo.clone, ["status", "--short"]), "")
   assert.equal(git(repo.clone, ["worktree", "list"]).split("\n").length, 1)
   assert.deepEqual(git(repo.clone, ["branch", "--format=%(refname:short)"]).split("\n"), ["main"])
-  assert.equal(spawnSync("git", ["--git-dir", repo.bare, "branch", "--list", "lesson/*"], { encoding: "utf8" }).stdout, "")
+  assert.equal(lessonBranches(repo.bare), "")
+})
+
+test("team lesson goes to github.com with the chosen account even when the clone's origin is an SSH address", async () => {
+  const repo = await team(undefined, { origin: "git@github.com:acme/cit.git" })
+  const accounts = []
+  const chooseAccount = async ({ store }) => (accounts.push(store), direct())
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh, chooseAccount }))
+  assert.deepEqual([result.status, result.repo, accounts], ["merged", "acme/cit", ["acme/cit"]])
+  assert.match(onMain(repo.bare), /Build what was asked/u)
+})
+
+test("team lesson from a fork goes to the repository it was forked from, with an account that can push there", async () => {
+  const repo = await team(undefined, { origin: "https://github.com/me/cit" })
+  const accounts = []
+  const chooseAccount = async ({ store }) => (accounts.push(store), direct())
+  const fake = fakeGh(repo.bare, { parents: { "me/cit": "acme/cit" } })
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fake.gh, chooseAccount }))
+  assert.deepEqual([result.status, result.repo, accounts], ["merged", "acme/cit", ["me/cit", "acme/cit"]])
+  const create = fake.calls.find((call) => call.args[1] === "create").args
+  assert.equal(create[create.indexOf("--repo") + 1], "acme/cit")
+})
+
+test("team lesson already on the default branch is in effect, with no pull request", async () => {
+  const repo = await team()
+  await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh }))
+  const fake = fakeGh(repo.bare)
+  const again = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fake.gh }))
+  assert.deepEqual([again.status, again.in_effect, again.pr], ["unchanged", true, undefined])
+  assert.match(again.message, /^Already in effect: the default branch of acme\/cit holds this exact line\. Copilot CLI and Codex load it/u)
+  assert.equal(fake.calls.some((call) => call.args[1] === "create"), false)
+})
+
+test("team lesson closes its pull request when someone else merged the same line first", async () => {
+  const repo = await team()
+  const fake = fakeGh(repo.bare)
+  let line
+  const gh = async (args, options) => {
+    if (args[0] === "pr" && args[1] === "create") line = args[args.length - 1].split("\n").pop()
+    if (args[0] === "pr" && args[1] === "merge" && fake.state.merges === 0) {
+      await fs.writeFile(path.join(repo.seed, "AGENTS.md"), `# Team\n\n## Lessons\n\n${line}\n`, "utf8")
+      git(repo.seed, ["commit", "-q", "-am", "teammate"])
+      git(repo.seed, ["push", "-q", repo.bare, "main"])
+    }
+    return fake.gh(args, options)
+  }
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh }))
+  assert.deepEqual([result.status, result.in_effect, result.pr, fake.state.closed], ["unchanged", true, undefined, true])
+  assert.equal(lessonBranches(repo.bare), "")
 })
 
 test("team lesson says Claude Code loads it when the repository's CLAUDE.md imports AGENTS.md or links to it", async () => {
@@ -170,8 +226,10 @@ test("team lesson leaves the pull request open, not in effect, when it cannot me
   assert.equal(result.status, "pr_open")
   assert.equal(result.in_effect, false)
   assert.equal(result.reason, "BLOCKED")
-  assert.equal(result.message, `Not in effect: the pull request ${PR} is open and could not be merged now (BLOCKED). It takes effect when it merges.`)
+  assert.equal(result.message, `Not in effect: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). It takes effect when it merges.`)
   assert.equal(blocked.state.merges, 1)
+  // The open pull request keeps its branch.
+  assert.equal(lessonBranches(repo.bare), result.branch)
   // Conflicts every time: three tries, then the pull request is left open.
   const dirty = fakeGh(repo.bare, { merge: () => ({ code: 1 }) })
   const again = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: dirty.gh }))
@@ -182,6 +240,23 @@ test("team lesson leaves the pull request open, not in effect, when it cannot me
   const silent = fakeGh(repo.bare, { merge: () => ({ code: 1 }), view: () => ({ code: 1, stdout: "" }) })
   const unknown = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: silent.gh }))
   assert.equal(unknown.reason, "unknown")
+})
+
+test("team lesson counts a merge command that only queued the pull request as open, not merged", async () => {
+  const repo = await team()
+  const waits = []
+  const open = { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }
+  const queued = fakeGh(repo.bare, { merge: () => ({ code: 0 }), view: () => ({ code: 0, stdout: JSON.stringify(open) }) })
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: queued.gh, wait: async (ms) => waits.push(ms) }))
+  assert.deepEqual([result.status, result.in_effect, result.reason, result.commit], ["pr_open", false, "QUEUED", undefined])
+  assert.match(result.message, /has not merged \(it is queued to merge\)/u)
+  assert.deepEqual(waits, [2000, 2000, 2000, 2000, 2000])
+  assert.equal(lessonBranches(repo.bare), result.branch)
+  // Queued, then merged a moment later: merged.
+  const views = [open, open, { state: "MERGED", mergeCommit: { oid: "abc" } }]
+  const later = fakeGh(repo.bare, { merge: () => ({ code: 0 }), view: () => ({ code: 0, stdout: JSON.stringify(views.shift()) }) })
+  const merged = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: later.gh, topic: "Another" }))
+  assert.deepEqual([merged.status, merged.commit, merged.branch], ["merged", "abc", undefined])
 })
 
 test("team lesson waits while GitHub is still working out whether it can merge", async () => {
@@ -209,6 +284,8 @@ test("team lesson reports where the remote work stopped, with nothing claimed in
   const noPr = await run({ gh: fakeGh(repo.bare, { create: { code: 1 } }).gh })
   assert.deepEqual([noPr.stage, noPr.reason], ["pull_request", "could not open the pull request: GraphQL: no permission"])
   assert.equal(noPr.message, "Not in effect: the team write stopped at pull_request (could not open the pull request: GraphQL: no permission).")
+  // No branch is left behind for a pull request that never opened.
+  assert.equal(lessonBranches(repo.bare), "")
   const noUrl = await run({ gh: fakeGh(repo.bare, { create: { code: 0, stdout: "something else" } }).gh })
   assert.deepEqual([noUrl.stage, noUrl.reason], ["pull_request", "could not open the pull request: "])
   const noFetch = await run({ gh: fakeGh(repo.bare, { base: "no-such-branch" }).gh })
@@ -229,25 +306,46 @@ test("team lesson failure after the pull request opened says the pull request is
   const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fake.gh, spawnGit }))
   assert.equal(result.status, "failed")
   assert.equal(result.stage, "push")
-  assert.equal(result.message, `Not in effect: the team write stopped at push (remote: denied). The pull request ${PR} is open.`)
+  assert.equal(result.message, `Not in effect: the team write stopped at push (the push was refused: remote: denied). The pull request ${PR} is open, on branch ${result.branch}.`)
+  // A commit hook or signing that refuses is reported as such, never skipped.
   const silent = (cmd, args, options) => (args.includes("commit") ? { status: 1 } : spawnSync(cmd, args, options))
   const noCommit = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fake.gh, spawnGit: silent }))
-  assert.deepEqual([noCommit.stage, noCommit.reason], ["commit", "commit failed"])
+  assert.deepEqual([noCommit.stage, noCommit.reason], ["commit", "the commit was refused (this repository's commit hooks or signing): commit failed"])
 })
 
 test("team lesson refuses a change that would pass the AGENTS.md size session start prints", async () => {
-  const repo = await team({ "AGENTS.md": "x".repeat(AGENTS_MD_CAP_BYTES) })
-  await assert.rejects(() => addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh })), /16 KB/u)
+  const big = "x".repeat(AGENTS_MD_CAP_BYTES)
+  const repo = await team({ "AGENTS.md": big })
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh }))
+  assert.deepEqual([result.status, result.stage, result.in_effect], ["failed", "size", false])
+  assert.match(result.reason, /after the first 16 KB/u)
   assert.equal(git(repo.clone, ["worktree", "list"]).split("\n").length, 1)
+  // When the default branch grows past the size while the pull request is open, the reply names the open pull request.
+  const late = await team()
+  const fake = fakeGh(late.bare)
+  const gh = async (args, options) => {
+    if (args[0] === "pr" && args[1] === "merge" && fake.state.merges === 0) {
+      await fs.writeFile(path.join(late.seed, "AGENTS.md"), big, "utf8")
+      git(late.seed, ["commit", "-q", "-am", "teammate"])
+      git(late.seed, ["push", "-q", late.bare, "main"])
+    }
+    return fake.gh(args, options)
+  }
+  const grown = await addTeamLesson(lesson({ deskRoot: late.base, repo: late.clone, gh }))
+  assert.deepEqual([grown.stage, grown.pr], ["size", PR])
+  assert.match(grown.message, new RegExp(`The pull request ${PR} is open, on branch lesson/`, "u"))
 })
 
 test("team lesson in a repository with decision records cites one", async () => {
   const repo = await team({ "AGENTS.md": "# Team\n", "_shared/decisions/2026-10-20-lists.md": "# Lists\n" })
   const run = (source) => addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh, source }))
-  await assert.rejects(() => run("Ari, 2026-10-26"), /_shared\/decisions\//u)
-  await assert.rejects(() => run("_shared/decisions/missing.md"), /decision record/u)
-  await assert.rejects(() => run("_shared/decisions/../../AGENTS.md"), /decision record/u)
-  await assert.rejects(() => run("_shared/decisions"), /decision record/u)
+  // A decision recorded only in this clone, not yet merged, is not the team's decision.
+  await fs.writeFile(path.join(repo.clone, "_shared", "decisions", "2026-10-26-local.md"), "# Local\n", "utf8")
+  for (const source of ["Ari, 2026-10-26", "_shared/decisions/missing.md", "_shared/decisions/../../AGENTS.md", "_shared/decisions", "_shared/decisions/2026-10-26-local.md"]) {
+    const refused = await run(source)
+    assert.deepEqual([refused.status, refused.stage], ["failed", "source"], source)
+    assert.match(refused.reason, /_shared\/decisions\/ on its default branch/u)
+  }
   const result = await run("_shared/decisions/2026-10-20-lists.md")
   assert.match(result.line, /; _shared\/decisions\/2026-10-20-lists\.md\)$/u)
   assert.equal(result.status, "merged")
@@ -263,7 +361,6 @@ test("team lesson checks its input before any remote work", async () => {
   await assert.rejects(() => addTeamLesson({ deskRoot: desk, topic: "Rule", body: "Do it." }), /needs `repo`/u)
   await assert.rejects(() => run({ repo: desk }), /not a Git clone/u)
   await assert.rejects(() => run({ source: undefined }), /`source` is required/u)
-  await assert.rejects(() => run({ source: "Ari said so" }), /YYYY-MM-DD/u)
   const local = await team()
   git(local.clone, ["remote", "set-url", "origin", local.bare])
   await assert.rejects(() => run({ repo: local.clone }), /origin is not on GitHub/u)
@@ -275,6 +372,13 @@ test("team lesson checks its input before any remote work", async () => {
   await fs.mkdir(path.join(repo.clone, "sub"))
   const sub = await addTeamLesson(lesson({ deskRoot: desk, repo: path.join(repo.clone, "sub"), person: "ari", gh: fakeGh(repo.bare).gh }))
   assert.match(sub.line, /\(ari, /u)
+})
+
+test("team lesson without decision records needs a source with a date", async () => {
+  const repo = await team()
+  const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo.clone, gh: fakeGh(repo.bare).gh, source: "Ari said so" }))
+  assert.deepEqual([result.status, result.stage], ["failed", "source"])
+  assert.match(result.reason, /YYYY-MM-DD/u)
 })
 
 test("team lesson in a Crew shared workspace defaults to the desk itself and needs a person", async () => {

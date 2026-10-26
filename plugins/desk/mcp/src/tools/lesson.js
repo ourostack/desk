@@ -25,12 +25,14 @@ import { crewWorkspace } from "../desk/crew-roster.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { deskPluginRoot } from "../package-metadata.js"
+import { compareVersions } from "../runtime/stale-desk.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stagingAllowed, stageAndCommitFile } from "./_card-commit.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { addTeamLesson } from "./lesson-team.js"
-import { byteSize, lead, oneLine, refuseOverCap, topicOf, withLesson } from "./lesson-lines.js"
+import { lead, oneLine, topicOf, withLesson } from "./lesson-lines.js"
+import { AGENTS_MD_CAP_BYTES, personAgentsCap, printedPart, readAgentsMd } from "../runtime/agents-md.js"
 
 // Every field lesson_add reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
@@ -43,11 +45,11 @@ const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/u
 // An empty folder, so Git never sees it; it serialises writes to one AGENTS.md across sessions.
 const LOCK_NAME = ".agents-md.lock"
 
-function pluginName(dir) {
+function pluginManifest(dir) {
   for (const manifest of ["plugin.json", path.join(".claude-plugin", "plugin.json")]) {
     try {
-      const { name } = JSON.parse(readFileSync(path.join(dir, manifest), "utf8"))
-      if (typeof name === "string") return name
+      const { name, version } = JSON.parse(readFileSync(path.join(dir, manifest), "utf8"))
+      if (typeof name === "string") return { name, version: typeof version === "string" ? version : null }
     } catch {
       // No manifest here; try the other place a host keeps it.
     }
@@ -55,16 +57,28 @@ function pluginName(dir) {
   return null
 }
 
+// Whether `next` is a newer install of the same plugin than `kept`: a version beats none, and the higher version wins.
+function newer(next, kept) {
+  if (next.version === null) return false
+  if (kept.version === null) return true
+  return compareVersions(next.version, kept.version) === 1
+}
+
 /**
- * The installed plugins a desk lesson can name, as a map of plugin name to folders: Desk's own plugin folder plus the
- * plugins the host has installed beside it, read the way the factory reads them (`factoryPluginScan`). Built from what
- * is installed, never from a fixed list, so an overlay's skills (MS Desk, Platform Workflows) are owners too.
+ * The installed plugins a desk lesson can name, as a map of plugin name to its active folder: Desk's own plugin folder
+ * plus the plugins the host has installed beside it, read the way the factory reads them (`factoryPluginScan`). Built
+ * from what is installed, never from a fixed list, so an overlay's skills (MS Desk, Platform Workflows) are owners too.
+ * A host's cache keeps old versions beside the active one; only the running Desk and the newest version of each other
+ * plugin count, so a skill an upgrade removed is no owner.
  */
 function installedPlugins(env, scan) {
   const plugins = new Map()
-  for (const dir of [deskPluginRoot(env), ...scan(env).dirs]) {
-    const name = pluginName(dir)
-    if (name !== null) plugins.set(name, [...(plugins.get(name) ?? []), dir])
+  const deskRoot = deskPluginRoot(env)
+  for (const dir of [deskRoot, ...scan(env).dirs]) {
+    const manifest = pluginManifest(dir)
+    if (manifest === null) continue
+    const kept = plugins.get(manifest.name)
+    if (kept === undefined || (kept.dir !== deskRoot && newer(manifest, kept))) plugins.set(manifest.name, { dir, version: manifest.version })
   }
   return plugins
 }
@@ -86,22 +100,14 @@ function ownerOf(owner, { env, scan }) {
   const skill = /^skill:([^:]+):(.+)$/u.exec(owner)
   if (!skill || !NAME.test(skill[1]) || !NAME.test(skill[2])) throw new Error(usage)
   const plugins = installedPlugins(env, scan)
-  const dirs = plugins.get(skill[1])
-  if (dirs === undefined) throw new Error(`lesson_add: no installed plugin is named ${skill[1]} (installed: ${[...plugins.keys()].sort().join(", ")})`)
-  if (!dirs.some((dir) => existsSync(path.join(dir, "skills", skill[2], "SKILL.md")))) throw new Error(`lesson_add: the ${skill[1]} plugin has no skill named ${skill[2]}`)
+  const plugin = plugins.get(skill[1])
+  if (plugin === undefined) throw new Error(`lesson_add: no installed plugin is named ${skill[1]} (installed: ${[...plugins.keys()].sort().join(", ")})`)
+  if (!existsSync(path.join(plugin.dir, "skills", skill[2], "SKILL.md"))) throw new Error(`lesson_add: the ${skill[1]} plugin has no skill named ${skill[2]}`)
   return { owner, plugin: skill[1], frictionClass: "skill" }
 }
 
 async function readIfPresent(file) {
   return (await pathExists(file)) ? fs.readFile(file, "utf8") : ""
-}
-
-async function fileBytes(file) {
-  try {
-    return (await fs.stat(file)).size
-  } catch {
-    return 0
-  }
 }
 
 // Why the reply cannot say "in effect", or null when it can.
@@ -120,30 +126,37 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   const file = await resolveWriteTarget({ deskRoot, person, segments: ["AGENTS.md"] })
   const where = deskRelativePath(deskRoot, file)
   const prefix = deskRelativePath(deskRoot, path.dirname(file))
-  // Session start prints the desk's AGENTS.md and then the person's, from one shared budget.
-  const others = prefix === "" ? 0 : await fileBytes(path.join(deskRoot, "AGENTS.md"))
+  // Session start prints the desk's AGENTS.md and then the person's, from one shared budget; the lesson must be in the
+  // part it prints, judged by the same cut session start makes.
+  const cap = prefix === "" ? AGENTS_MD_CAP_BYTES : personAgentsCap(readAgentsMd(deskRoot))
   // The lock lives beside the file, so its folder must exist first.
   await fs.mkdir(path.dirname(file), { recursive: true })
   const written = await holdLock(path.join(path.dirname(file), LOCK_NAME), { lockWaitMs }, async () => {
-    const { text, replaced } = withLesson(await readIfPresent(file), `${lead(topic)} ${body} (${today()})`, topic)
-    refuseOverCap(others + byteSize(text), prefix === "" ? where : `${where} and the desk's AGENTS.md together`)
+    const current = await readIfPresent(file)
+    const line = `${lead(topic)} ${body} (${today()})`
+    const { text, replaced } = withLesson(current, line, topic)
+    if (!printedPart(text, cap).includes(line)) {
+      throw new Error(`lesson_add: session start prints only the first ${cap} bytes of ${where}${prefix === "" ? "" : " (what the desk's AGENTS.md leaves of the 16 KB both share)"}, and this lesson would fall after them, so nothing would load it; shorten that file first`)
+    }
     // Checked before this call's own write, so an AGENTS.md another session left dirty is never committed as this call's.
     const git = isGitRepository(path.dirname(file), spawnGit)
     const stage = git && stagingAllowed(file, spawnGit)
+    // The same lesson again (same words, same day) changes nothing: it is as committed as the file already is.
+    if (text === current) return { replaced, git, committed: stage, commit: undefined }
     await fs.writeFile(file, text, "utf8")
     const commit = stage ? stageAndCommitFile(file, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
-    return { replaced, git, committed: stage && commit === undefined, commit }
+    return { replaced, git, committed: stage && commit === undefined, commit, changed: true }
   })
   if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
-  if (written.committed) schedulePush({ root: deskRoot })
-  search?.noteChange(where)
+  if (written.committed && written.changed) schedulePush({ root: deskRoot })
+  if (written.changed) search?.noteChange(where)
   const unloaded = notLoaded(await personOf({ deskRoot, env, now: now ?? Date.now() }), prefix)
   const uncommitted = written.git && !written.committed
     ? `it is not committed (${written.commit === undefined ? `${where} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
     : null
   const problems = [uncommitted, unloaded].filter((problem) => problem !== null)
   const result = {
-    status: written.replaced ? "updated" : "added",
+    status: !written.changed ? "unchanged" : written.replaced ? "updated" : "added",
     scope: "personal",
     path: where,
     in_effect: problems.length === 0,

@@ -335,7 +335,7 @@ test("blocked tasks sit under their own marked heading, ahead of the other state
 test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips what it does not have", () => {
   const cut = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "start\n-----\nmiddle", truncated: true, bytes: 30000, shownBytes: 20 } }))
   assert.match(cut, /\[Cut after 18 of 30000 bytes: read the rest at \/work\/desk\/AGENTS\.md\]\n$/u)
-  assert.equal(cut.split("\n")[1], "Session start cut /work/desk/AGENTS.md (18 of 30000 bytes shown), to stay within 16 KB of AGENTS.md and 28000 characters of output: read the rest of each file before relying on its rules.")
+  assert.equal(cut.split("\n")[1], "Session start cut /work/desk/AGENTS.md (18 of 30000 bytes shown), to stay within 16 KB of AGENTS.md and 28000 characters of output. Read the rest of each file before relying on its rules.")
   assert.match(cut, /start\n-----\nmiddle\n\n\[Cut/u, "a rule line inside the file is just text")
   const bare = formatBootText({ status: "ready" })
   assert.equal(bare, "Desk boot: ready\n\nActive tasks: unavailable (see degraded)\n")
@@ -352,16 +352,31 @@ test("formatBootText prints the person's AGENTS.md after the desk's, with the sa
   assert.match(text.split("\n")[1], /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(5 of 30000 bytes shown\)/u)
 })
 
-test("formatBootText keeps the whole output under what a host shows in full, cutting the AGENTS.md files and saying so at the top", () => {
+test("formatBootText shortens a long task list, not the AGENTS.md files, to keep the output under what a host shows in full", () => {
+  // The task section caps itself; open pull requests have no cap of their own.
+  const prs = Array.from({ length: 400 }, (_, i) => ({ store: "acme/w", number: i, title: `Change number ${i} with a long title`, draft: false, review: "REVIEW_REQUIRED", url: `https://github.com/acme/w/pull/${i}` }))
+  const rules = `${"Rule line that binds the session.\n".repeat(350)}Last rule.\n`
+  const text = formatBootText(sampleResult({ open_prs: prs, agents_md: { path: "/work/desk/AGENTS.md", text: rules, truncated: false, bytes: rules.length, shownBytes: rules.length } }))
+  assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
+  assert.match(text.split("\n")[1], /^Session start shortened the task list \(\d+ lines not shown\), to stay within 16 KB of AGENTS\.md and 28000 characters of output\.$/u)
+  assert.match(text, /\n\[Shortened here: \d+ more lines of tasks, deliveries, pull requests and repos not shown\. Call desk_status, or run the boot with --json, for all of them\.\]\n/u)
+  assert.match(text, /- ops\/flash-valves /u, "the tasks come first and are shown")
+  assert.match(text, /- acme\/w#0 Change number 0/u)
+  assert.match(text, /Instructions, in order:\n1\. First thing\.\n2\. Second thing\./u, "the instructions are never shortened")
+  assert.match(text, /Last rule\.\n$/u, "the whole AGENTS.md is shown")
+  assert.equal(text.includes("[Cut after"), false)
+})
+
+test("formatBootText keeps the whole output under what a host shows in full, cutting the AGENTS.md files only when they alone do not fit", () => {
   const big = (name, letter) => ({ path: `/work/desk/${name}`, text: `${`${letter.repeat(99)}\n`.repeat(160)}`, truncated: false, bytes: 16_000, shownBytes: 16_000 })
   const text = formatBootText(sampleResult({ agents_md: big("AGENTS.md", "t"), person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
   const notice = text.split("\n")[1]
-  assert.match(notice, /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(\d+ of 16000 bytes shown\), to stay/u, "the desk's file came first and fit")
+  assert.match(notice, /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/desks\/ari\/AGENTS\.md \(\d+ of 16000 bytes shown\), to stay.* Read the rest of each file before relying on its rules\.$/u, "the desk's file came first and fit")
   assert.match(text, /\n(m{99}\n)+\n\[Cut after \d+ of 16000 bytes: read the rest at \/work\/desk\/desks\/ari\/AGENTS\.md\]/u, "cut at a line end")
   const both = formatBootText(sampleResult({ agents_md: { ...big("AGENTS.md", "t"), text: "t\n".repeat(15_000) }, person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.ok(both.length <= BOOT_TEXT_MAX_CHARS)
-  assert.match(both.split("\n")[1], /^Session start cut \/work\/desk\/AGENTS\.md \(\d+ of 16000 bytes shown\) and \/work\/desk\/desks\/ari\/AGENTS\.md \(0 of 16000 bytes shown\)/u)
+  assert.match(both.split("\n")[1], /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/AGENTS\.md \(\d+ of 16000 bytes shown\) and \/work\/desk\/desks\/ari\/AGENTS\.md \(0 of 16000 bytes shown\)/u)
   // Output already at the limit before any AGENTS.md: the files show nothing, and say so.
   const crowded = formatBootText(sampleResult({ text_instructions: ["x".repeat(BOOT_TEXT_MAX_CHARS)], person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.match(crowded, /## Your own AGENTS\.md \(\/work\/desk\/desks\/ari\/AGENTS\.md\); its rules bind this session\n\n\n\n\[Cut after 0 of 16000 bytes/u)
