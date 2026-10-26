@@ -64,14 +64,17 @@ assert.doesNotMatch(pluginSkill, /vendor|upstream-sources|conformance/iu);
 assert.equal(rootPlugin.hooks, "./hooks/copilot-hooks.json");
 assert.equal(Object.hasOwn(claudePlugin, "hooks"), false);
 assert.equal(copilotHooks.version, 1);
-assert.equal(Array.isArray(copilotHooks.hooks?.sessionStart), true);
-assert.equal(copilotHooks.hooks.sessionStart.length, 1);
-const [sessionStartHook] = copilotHooks.hooks.sessionStart;
-assert.equal(sessionStartHook.type, "command");
-assert.equal(sessionStartHook.bash, "node \"${PLUGIN_ROOT}/hooks/inject.cjs\" sessionStart");
-assert.equal(sessionStartHook.powershell, "node \"${PLUGIN_ROOT}\\hooks\\inject.cjs\" sessionStart");
-assert.equal(typeof sessionStartHook.timeoutSec, "number");
-assert.equal(sessionStartHook.timeoutSec > 0, true);
-assert.equal(sessionStartHook.timeoutSec <= 10, true);
+// Copilot gets the contract at session start and in every subagent, as Claude does through SessionStart and SubagentStart.
+assert.deepEqual(Object.keys(copilotHooks.hooks).sort(), ["sessionStart", "subagentStart"]);
+for (const event of ["sessionStart", "subagentStart"]) {
+  assert.equal(copilotHooks.hooks[event].length, 1);
+  const [hook] = copilotHooks.hooks[event];
+  assert.equal(hook.type, "command");
+  assert.equal(hook.bash, `node "\${PLUGIN_ROOT}/hooks/inject.cjs" ${event}`);
+  assert.equal(hook.powershell, `node "\${PLUGIN_ROOT}\\hooks\\inject.cjs" ${event}`);
+  assert.equal(typeof hook.timeoutSec, "number");
+  assert.equal(hook.timeoutSec > 0, true);
+  assert.equal(hook.timeoutSec <= 10, true);
+}
 
 console.log("plain-language first-party plugin verified.");

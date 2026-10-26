@@ -8,6 +8,14 @@
         "powershell": "node \"${PLUGIN_ROOT}\\hooks\\inject.cjs\" sessionStart",
         "timeoutSec": 5
       }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/inject.cjs\" subagentStart",
+        "powershell": "node \"${PLUGIN_ROOT}\\hooks\\inject.cjs\" subagentStart",
+        "timeoutSec": 5
+      }
     ]
   }
 }

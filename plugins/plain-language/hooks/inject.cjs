@@ -6,7 +6,7 @@ const path = require("node:path");
 
 const event = process.argv[2];
 const claudeEvents = ["SessionStart", "SubagentStart"];
-const copilotEvents = ["sessionStart"];
+const copilotEvents = ["sessionStart", "subagentStart"];
 
 if (![...claudeEvents, ...copilotEvents].includes(event)) {
   console.error(`unsupported Plain Language hook event: ${event || "missing"}`);
@@ -29,10 +29,10 @@ function loadContract() {
 const { contract, failure } = loadContract();
 
 if (copilotEvents.includes(event)) {
-  // Copilot merges every installed plugin's sessionStart output, so one
-  // plugin's failure must never block the rest: any error becomes a
-  // one-line diagnostic in `additionalContext`, and the process still
-  // exits 0.
+  // Copilot merges every installed plugin's sessionStart and subagentStart
+  // output, so one plugin's failure must never block the rest: any error
+  // becomes a one-line diagnostic in `additionalContext`, and the process
+  // still exits 0.
   process.stdout.write(JSON.stringify({ additionalContext: contract ?? failure }));
   process.exit(0);
 }
