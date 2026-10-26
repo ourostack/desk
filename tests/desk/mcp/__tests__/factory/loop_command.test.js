@@ -642,4 +642,13 @@ test("a continuation an earlier Desk left is consumed under the lock and removed
     assert.equal(outcome.steps.evaluate, ran ? "done" : "skipped", state)
     assert.equal((await readStatus(ctx.env)).loop.evaluation_continuation, undefined, "a token is offered once")
   }
+  // A different token that took its place meanwhile is not this worker's to remove.
+  await updateStatus(ctx.env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: { serial: 1 } } }))
+  const impls = fakes([])
+  impls.consumeContinuation = async (env) => {
+    await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: { serial: 2 } } }))
+    return { state: "unknown_token" }
+  }
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", clock: clock.read, impls })
+  assert.deepEqual((await readStatus(ctx.env)).loop.evaluation_continuation, { serial: 2 })
 }))
