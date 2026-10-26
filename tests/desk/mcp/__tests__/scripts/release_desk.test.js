@@ -429,6 +429,10 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
+  // The release's own push starts no second release: only that exact bot commit is skipped, and only on a push.
+  assert.equal(workflow.jobs.build.if, "github.event_name != 'push' || github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com' || !startsWith(github.event.head_commit.message, 'Release Desk ')")
+  assert.match(sharedScript(), /user\.email="41898282\+github-actions\[bot\]@users\.noreply\.github\.com"[\s\S]*commit --quiet --message "Release Desk \$version"/u, "the skip names the author and subject the release commit really has")
+  assert.match(workflow.jobs.report.if, /needs\.build\.result != 'skipped'/u, "a skipped run starts no report runner")
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)

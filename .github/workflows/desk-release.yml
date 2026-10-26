@@ -56,6 +56,10 @@ concurrency:
 jobs:
   build:
     name: Build and check the Desk release
+    # The release's own push (one bot commit "Release Desk <version>" that deletes the fragments it folded) matches the
+    # paths filter but leaves nothing pending, and the run that pushed it has already marked its pull requests. Every
+    # merge queues its own run (queue: max above), so skipping this one loses nothing and frees the queue for the next merge.
+    if: github.event_name != 'push' || github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com' || !startsWith(github.event.head_commit.message, 'Release Desk ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -280,7 +284,7 @@ jobs:
   report:
     name: Report the release outcome
     needs: [build, push, announce]
-    if: always() && needs.build.result != 'cancelled' && needs.push.result != 'cancelled' && needs.announce.result != 'cancelled'
+    if: always() && needs.build.result != 'cancelled' && needs.build.result != 'skipped' && needs.push.result != 'cancelled' && needs.announce.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
