@@ -1,6 +1,6 @@
 ---
 name: using-superpowers-with-desk
-description: Use for any new or resumed engineering work, before brainstorming or another Superpowers skill, and at material redesign. Picks the Superpowers entry from the task's approval; never starts a second lifecycle.
+description: Use for any new or resumed engineering work, before invoking brainstorming or another Superpowers skill, and at material redesign. Picks the Superpowers entry from the task's approval; never starts a second lifecycle.
 ---
 
 # Using Superpowers with Desk

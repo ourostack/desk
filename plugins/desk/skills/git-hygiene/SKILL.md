@@ -117,23 +117,9 @@ When reading source to inform a runtime question — any "why does X behave this
 
 ### When the operator says "pull latest"
 
-Treat it as applying to ALL repos involved in the current investigation, not just one. State repos and code repos (the project repos the agent is reading source from) all need to be current — code repos most of all when their source is being used as evidence for runtime behavior. Code repos are managed manually and may sit on feature branches; they're easy to forget.
+It means every repo in the current investigation, code repos most of all when their source is evidence for runtime behavior; they sit on feature branches and are easy to forget. If unsure which repos, ask. Pull a clone the task does not own only when the instruction names that clone.
 
-If unsure which repos the operator means, ask. For a clone the task does not own, pull only when the operator's instruction names that clone (the exception above); otherwise read its current source without mutating it.
-
-### The smell
-
-Any time the agent finds itself thinking **"the source says X but the runtime behavior is Y, so there must be a non-source mechanism"** — stop. The most common explanation for that gap is "I'm reading stale source," not "there's hidden runtime machinery."
-
-Verify with `git log origin/<branch>..` or `git show origin/<branch>:<path>` before theorizing about non-source mechanisms.
-
-### Why it matters
-
-Theories built on stale source are very expensive to retract. By the time the operator catches them, the agent has burned operator trust ("the agent doesn't know what's in main"), drafted code or PRs based on bad assumptions, sometimes opened those PRs, and built a wrong mental model that propagates to the iteration doc and friction log. The corrective work is much more expensive than `git fetch` would have been at the start. Cheap gate; expensive failure mode if skipped.
-
-### Cross-link
-
-This is the source-currency variant of the broader hypothesis-narrowing principle in `../runtime-symptom-investigation/SKILL.md`. The diagnostic skill captures the meta-rule ("debugging is hypothesis-narrowing, not system-understanding"); this section is one concrete recurring trap that surfaces under that rule.
+**The smell.** "The source says X but runtime does Y, so there must be a hidden mechanism" usually means you are reading stale source. Check `git log origin/<branch>..` or `git show origin/<branch>:<path>` before theorizing (`runtime-symptom-investigation`). Theories built on stale source are expensive to retract.
 
 ## Pre-push gate
 
@@ -183,96 +169,22 @@ Exact build / test / formatter commands live under `../repo-knowledge/<repo>/` (
 
 ## Test scope — cover consumers, not just the unit under change
 
-A filtered test run only discovers tests in the csproj / test project you point it at. That's a silent coverage gap when the change touches an interface, signature, or public surface that other projects consume: the consumer projects' tests never get run, and locally-green pushes go red on CI.
-
-The rule: when the change touches a public surface, the pre-push test scope must cover **every** consumer project's tests — not just the co-located test project.
-
-### Detection heuristic
-
-```bash
-# Enumerate touched files across the branch vs. the merge base:
-git diff --name-only origin/<base>...HEAD
-```
-
-Map each touched production file to its paired test project, using the conventions the repo documents in `repo-knowledge/<repo>/`:
-- Sibling-directory convention: `Src/Foo/Foo/Bar.cs` → tests under `Src/Foo/FooTests/`.
-- Same-library convention: `Src/Common/Common/X.cs` → tests under `Src/Common/CommonTests/`.
-- Package-prefix convention: `Src/.../Partners/SMB/Models/Y.cs` → `Src/.../PartnersTests/SMBTests/ModelsTests/`.
-
-Collect the distinct test csproj files across all mapped test paths. Run the test command once per csproj, filtering appropriately.
-
-### Public-surface changes widen the default
-
-When the diff touches a signature / interface / abstract type / DTO shape, widen the scope further: the safe default becomes the full solution (or equivalent monorepo-spanning test scope). A service-only solution does not include sibling tests, and sibling tests are exactly where interface-drift surfaces.
-
-Repo-specific cut-lines live in `../repo-knowledge/<repo>/`. When a repo defines a "broad" test target for public-surface changes, default to it for any diff that touches signatures / interfaces / DTOs; fall back to per-service solutions only when the change is provably internal (no public-API touch, no shared DTO edit).
+A filtered test run covers only the test project you point it at. When a change touches a public surface, the pre-push run must cover every consumer project's tests. List touched files with `git diff --name-only origin/<base>...HEAD`, map each to its test project by the conventions in `repo-knowledge/<repo>/`, and run each distinct test project. When the diff touches a signature, interface, abstract type or DTO, default to the repo's broad target (often the full solution); use per-service runs only when the change is provably internal.
 
 ## Test-count sanity check
 
-"All tests pass" on a stale DLL is not a successful gate — it's a silent failure. Before trusting a pre-push test-count, verify the passed-count matches the expected delta.
-
-Lightweight mechanism:
-
-1. Track the expected count through the iteration: `expected = previous_count + tests_added − tests_removed`.
-2. After the pre-push test layer runs, diff reported-count vs. expected.
-3. If they match: proceed to push.
-4. If they don't: the gate silently failed to rebuild or to discover the new test. Do **not** push.
-
-Recovery when the counts disagree:
-
-1. Force-rebuild the test project explicitly — drop `--no-build` on the test run; run `dotnet build <tests>.csproj --configuration Release` (or the equivalent for the stack) first so the compiled binary reflects the current source.
-2. Re-run the gate.
-3. If the count still doesn't match, diagnose the discovery issue before pushing.
-
-Typical culprits for a stale or missing-test gate:
-- `--no-build` flag + stale binary left over from a prior iteration.
-- Build incremental-cache confusion after heavy file operations (large rename, tree move, reverted merges).
-- Discovery filter pattern doesn't match the new test's fully-qualified name (test landed in a namespace the filter doesn't cover).
-- Test method not annotated with `[Fact]` / `[Theory]` / the runner's equivalent — it's a plain method and no runner picks it up.
-
-A silently-skipped test is a latent regression: the push succeeds, the pipeline stays green (same stale DLL on CI in the worst case), but the code path the test was supposed to cover is uncovered. The next iteration's change can break it with no alarm and no reviewer signal.
+"All tests pass" on a stale binary is a silent failure. Track `expected = previous + added − removed` and compare it with the reported count before pushing. If they differ, rebuild the test project without `--no-build`, rerun, and if the count still differs, find the discovery problem (a stale binary, an incremental-build cache after big moves, a filter that misses the new test's name, a missing `[Fact]`/`[Theory]` or equivalent) before pushing.
 
 ## Merge-conflict resolution — EOL / BOM artifacts
 
-On Windows clones of repos with `text eol=*` attributes, a merge-from-main can produce conflicts on files whose only "difference" is BOM / CRLF vs. no-BOM / LF. The working-tree bytes disagree with origin's stored blob because `git add` runs the check-in filter, producing an index entry that looks changed even though the underlying content is identical.
-
-Committing that normalized version **"resolves" the conflict but pollutes the PR diff**: origin's blob is unchanged, so every line of the file shows up as insertion+deletion. CODEOWNERS for the path gets added to the PR's reviewer list even though the change was pure filter noise, and reviewers get pulled into a diff that has no semantic content.
-
-### Detection
+On Windows clones with `text eol=*` attributes, a merge from main can conflict on files that differ only in BOM or line endings; a file outside the task's scope with equal insertions and deletions in `git diff --stat origin/<base>...HEAD` is the sign. `git add`, `git stash`, `git checkout origin/<base> -- <path>` and `--skip-worktree` all run the check-in filter and ship the noise into the PR (and pull in that path's code owners). Write origin's blob into the index instead:
 
 ```bash
-# After a merge, inspect the diff-stat. A file with equal
-# insertions and deletions AND not in the semantic change set is
-# the signature of an EOL / BOM filter artifact:
-git diff --stat origin/<base>...HEAD
-```
-
-If a file outside the task's stated scope shows up with insertions equal to deletions, suspect EOL / BOM artifact before suspecting a real change.
-
-### Wrong fix
-
-```bash
-# DO NOT DO THIS for filter-artifact conflicts:
-git add <path>
-git commit -m "normalize EOL"
-```
-
-`git add` runs the check-in filter and writes a new blob — shipping the artifact straight into the PR diff. `git stash`, `git checkout origin/<base> -- <path>`, and `git update-index --skip-worktree` all round-trip through the same filter and fail the same way: they "work" in the sense that the merge completes, but the index disagrees with origin and the reviewer-visible diff is 100% noise.
-
-### Right fix
-
-Rewrite the index entry directly to origin's blob hash, bypassing the check-in filter:
-
-```bash
-# Preserve origin/<base>'s exact bytes in the index regardless of
-# any eol=* attribute:
 BLOB=$(git rev-parse origin/<base>:<path>)
 git update-index --cacheinfo 100644,$BLOB,<path>
 ```
 
-The working tree still shows "M" because checkout-time conversion runs — that's cosmetic and PR-invisible. The index now matches origin exactly; the file shows zero diff on the PR, and CODEOWNERS for that path is not pulled in.
-
-Apply this per conflicted file that is a filter artifact. Files with real semantic conflicts get resolved normally.
+The working tree may still show "M"; that is cosmetic. Resolve real semantic conflicts normally.
 
 ## Never leave state behind
 
@@ -292,201 +204,46 @@ Do not store secrets, credentials or private tokens in the desk.
 
 ## Pre-commit scans (authorship, diff-scope)
 
-Two mandatory scans run before every commit, both procedural (no shipped git hook — the plugin is engine-agnostic and does not ship engine-specific `.git/hooks/` content). Operators who want structural enforcement can install a local hook using the recipes below as a starting point.
+Run both scans before every commit. They are procedures, not shipped hooks; an operator may install a local `commit-msg` hook built from the same pattern.
 
 ### AI-attribution strip
 
 No AI-attribution trailer or credit line appears in any commit message or PR description the agent authors, on any repository. Operator authorship overrides repository conventions: a repository's `CLAUDE.md`, `AGENTS.md` or contributing guide is authoritative for coding standards, build commands and layout, not for the authorship of work the operator ships under their name. If a repository's instructions prescribe AI attribution, flag it on first encounter, and once the operator confirms the override, apply it to every later commit in that repository.
 
-**Forbidden trailers — scan for these before every commit:**
-
 ```bash
-# Scan the staged commit message before finalizing the commit:
 git diff --cached --format=%B HEAD 2>/dev/null | \
   grep -niE "Co-Authored-By:|Co-authored with|Generated (with|by) |Built (by|with) |AI-assisted"
 ```
 
-- `Co-Authored-By:` naming any agent, assistant, model or harness (for example `Co-Authored-By: Claude ...` or `Co-Authored-By: GitHub Copilot ...`)
-- `Co-authored with Claude ...`
-- `Generated with Claude Code`, `Generated with Copilot`, or any other "Generated with …" credit
-- `Built by Copilot`, or any other "Built by …" credit to a tool
-- `AI-assisted`
-- Any variant naming the agent or harness as a contributor.
-
-Review every hit: strip each line that credits an agent, assistant, model or harness, then redo the commit. A human co-author, or the same words in an unrelated sentence, stays.
-
-Same pattern applies to PR descriptions — run the scan on the proposed `pr-description.md` before `gh pr create` or `gh pr edit --body-file`.
-
-**Why a procedure, not a hook:** the plugin ships engine-agnostic content. A `.git/hooks/commit-msg` file is machine-local and per-repo; operators choose whether to install it. Optional local hook recipe (operator-installable, not shipped):
-
-```bash
-#!/usr/bin/env bash
-# ~/.config/git/hooks/commit-msg  (enable via core.hooksPath)
-if grep -qiE "Co-Authored-By: .*(Claude|Copilot|Codex|GPT|Gemini|AI)|Co-authored with|Generated (with|by) (Claude|Copilot|Codex|AI)|Built (by|with) (Claude|Copilot|Codex|AI)|AI-assisted" "$1"; then
-  echo "error: commit message contains a forbidden AI-attribution trailer" >&2
-  grep -niE "Co-Authored-By: .*(Claude|Copilot|Codex|GPT|Gemini|AI)|Co-authored with|Generated (with|by) (Claude|Copilot|Codex|AI)|Built (by|with) (Claude|Copilot|Codex|AI)|AI-assisted" "$1" >&2
-  exit 1
-fi
-```
+Forbidden: `Co-Authored-By:` naming any agent, assistant, model or harness (for example `Co-Authored-By: Claude ...` or `Co-Authored-By: GitHub Copilot ...`); `Co-authored with Claude ...`; `Generated with Claude Code`, `Generated with Copilot` or any "Generated with …" credit; `Built by Copilot` or any "Built by …" credit to a tool; `AI-assisted`; and any variant naming the agent or harness as a contributor. Strip each hit that credits an agent and redo the commit; a human co-author, or the same words in an unrelated sentence, stays. Run the same scan on a PR description before `gh pr create` or `gh pr edit --body-file`.
 
 ### Targeted staging — never `git add -A` in a shared or multi-track workspace
 
-In a workspace where parallel agents (or other tracks) leave untracked or modified state across multiple directories, **stage the explicit list of files your unit wrote** — `git add <path> <path>`, never `git add -A` or `git add .` from a workspace root. `-A` sweeps in another track's or another agent's in-flight untracked file and bundles it into your commit: the commit message then lies by omission (`git show` reveals content the message never mentions), and if that file was being kept untracked intentionally, you've frozen it mid-thought. `git add -A` is convenient for a solo-track repo and dangerous for a shared one. When in doubt, `git status` first and stage by name. (This is the prevention; the diff-scope scan below is the detection.)
+Stage the explicit files your unit wrote (`git add <path> <path>`), never `git add -A` or `git add .` from a workspace root where other agents or tracks leave files: it sweeps their in-flight work into your commit and makes the message lie by omission. When in doubt, `git status` first and stage by name.
 
 ### Diff-scope scan
 
-Lean diffs: every commit contains exactly the lines required for its stated scope and nothing more, with no drive-by prose edits and no "while I'm here" improvements. Extra touched lines cost slower review, more nits, more merge conflicts and more doubt about what the change does. Before every commit, scan the staged diff for prose / xmldoc / comment edits that are not named in the current unit's scope:
-
-```bash
-# Inspect the staged diff; look for changes outside the unit's
-# stated file/line scope — especially to xmldoc <summary>, inline
-# comments, adjacent prose in the same file:
-git diff --cached
-```
-
-Decision rule:
-
-- If the diff contains edits NOT required by the stated scope (adjacent xmldoc rewrite, "while I'm here" prose polish, comment restructuring unrelated to the unit's goal) → **revert those hunks** before committing. They are drive-by churn and violate lean-diffs.
-- Polish is a separate, named activity. If a prose edit is genuinely worth doing, it earns its own unit and its own commit; it does not ride along on a scoped edit.
-
-No ship-ready script for this one — the scan is a review of the staged diff against the unit's stated scope by the agent itself, informed by the unit's `What` and `Output` fields in the doing doc.
+Lean diffs: every commit contains exactly the lines required for its stated scope and nothing more, with no drive-by prose edits and no "while I'm here" improvements. Extra touched lines cost slower review, more nits, more merge conflicts and more doubt about what the change does. Before every commit, read `git diff --cached` against the unit's stated scope and revert hunks it does not need, especially adjacent doc-comment rewrites and prose polish. Polish is a separate, named activity with its own unit and commit.
 
 ### Pre-PR diff-scope check
 
-The same diff-scope discipline applies at the authorized PR boundary. Through `desk:using-superpowers-with-desk`, inspect the full branch diff against the base before opening or syncing a PR:
-
-```bash
-git diff --stat origin/<base>...HEAD
-```
-
-Every file in the output should be either:
-- Named in the task card's `repos[].paths`, or
-- A direct consequence of one of those paths (regenerated lockfile, adjacent test touched because the change required it, etc.).
-
-Files outside that expected set are a stop signal. Investigate before the PR opens. Common culprits:
-
-- EOL / BOM filter artifacts from a merge-from-main (see `## Merge-conflict resolution — EOL / BOM artifacts` above for the detection + fix). A file with equal insertions and deletions that is not in the semantic change set is almost always this.
-- Accidental cross-area commits (a `git add -A` that scooped up an orphaned edit from a different concern).
-- Drive-by churn (formatting, xmldoc polish) that should have been caught by the per-commit `### Diff-scope scan` but wasn't.
-
-Cost: one `git diff --stat` invocation. Value: catches an entire class of PR-surface bugs before human reviewers see the diff — unrelated CODEOWNERS get pulled in, reviewer trust erodes, the PR description ends up describing something the diff doesn't match.
+Before opening or syncing an authorized PR (through `desk:using-superpowers-with-desk`), run `git diff --stat origin/<base>...HEAD`. Every file must be named in the task's `repos[].paths` or follow directly from one (a regenerated lockfile, a test the change required). Anything else stops the PR until explained: usually an EOL or BOM artifact (above), a stray file from `git add -A`, or drive-by churn.
 
 ## Post-commit verify gate
 
-After every `git commit`, before claiming the work is shipped or running `git push`, verify the commit's actual contents match the commit message's claims. The minimum gate:
-
-```bash
-git show --stat HEAD
-```
-
-Or equivalently `git log -1 --stat`. Audit each named bucket in the commit message against the file list:
-
-- "feedback.md updates" → does the file list include `.../feedback.md`?
-- "new friction entry" → does the file list include `.../_friction/<entry>.md`?
-- "regenerated artifacts" → do the artifact paths appear?
-
-Mismatch on any → the commit was incomplete. Stage the missing items, create a NEW commit (do not amend, especially if the prior commit was already pushed), and re-verify. Only after the file list matches the message do `git push` and declare the work landed.
-
-This gate is more rigorous than `git status` immediately after the commit because:
-
-- `git status` shows the *next* state (unstaged, untracked) — useful, but doesn't directly answer "did the commit I just made carry what I claimed?"
-- `git show --stat HEAD` shows the *commit's contents* directly. The staged-vs-committed distinction collapses there.
-
-Applies to every repo the agent writes to — state repos, code repos, and plugin repos. The cost of one `git show --stat` per commit is tiny; the cost of an operator catching a partial commit on the next session (trust hit + extra cycle) is high.
-
----
+After every commit and before pushing or claiming it shipped, run `git show --stat HEAD` and check each thing the message claims ("feedback.md updates", "new friction entry", "regenerated artifacts") against the file list. If something is missing, stage it and make a new commit (do not amend a pushed commit), then re-check. `git status` shows the next state, not what the commit carried.
 
 ## Force-push — safe-conditions procedure
 
-Force-push is destructive. Most of the time the agent should stop and hand the push to the operator. The procedure below documents when force-push is safe for the agent to run without operator re-approval.
+Force-push is destructive; usually hand it to the operator. A version-file conflict between parallel PRs is better solved by merge and a normal push (`work-orchestration`, "Version-file conflicts on parallel PRs — merge, don't rebase"). The agent may force-push without asking again only when all of these hold:
 
-If the trigger for considering force-push is a **parallel-PR conflict on a coordinated file** (e.g., version-file conflicts on a runtime manifest or `plugin.json` after another PR in the same batch merged first), the right shape is usually merge + regular push, not rebase + force-push. See `work-orchestration` → "Parallel-batch dispatch discipline" → "Version-file conflicts on parallel PRs — merge, don't rebase" before applying the safe-conditions procedure below.
+1. The branch is the operator's personal namespace (`user/<alias>/...`); never `main`, `master`, a shared feature branch or a release branch.
+2. It uses `git push --force-with-lease=<branch>:<expected-remote-sha> origin <branch>`, never `--force`.
+3. `git cherry origin/<branch>` shows no `+` line you did not mean to drop.
+4. For rewritten history (a mailmap rename, `git filter-repo`, an AI-attribution strip), `git fetch origin && git log HEAD..origin/<branch>` is empty right before the push, because a rewrite silently drops commits that landed after your last fetch. Prefer rewriting in a fresh `git clone --mirror`. If commits were dropped, fetch the orphaned tip by its hash (GitHub keeps it for about 90 days), rebase the chain onto the rewritten base and push again.
 
-### Safe conditions (ALL must hold)
+Stop and hand the operator the exact command when any condition fails, the push would drop someone else's commit, or the push is denied for permissions; the denial is correct, so do not retry it. For an AI-attribution cleanup, verify `git log --format=%B origin/main..HEAD` passes the scan above before pushing.
 
-1. **Personal branch pattern.** The branch name matches `user/<alias>/...` (operator's personal namespace). Never force-push to `main`, `master`, a shared feature branch, or a release branch.
-2. **`--force-with-lease`, not `--force`.** The `--force-with-lease` variant refuses to push if the remote has moved since the last fetch, so someone else's push cannot be silently overwritten.
-3. **`git cherry` clean.** Every remote commit is either present locally (by content, not by SHA — the rewrite is deliberate), or explicitly intended to be dropped. Verify:
-   ```bash
-   git cherry origin/<branch>
-   ```
-   Lines beginning with `-` (patch already upstream) are fine. Lines beginning with `+` that you did NOT intentionally drop are a stop signal — investigate before pushing.
+## PowerShell from bash
 
-### Exact command
-
-```bash
-git push --force-with-lease=<branch>:<expected-remote-sha> origin <branch>
-```
-
-The `<expected-remote-sha>` is the SHA the operator's local branch most recently saw at the remote. Including it is stricter than plain `--force-with-lease` (which uses the local ref-cache) and is the safest form.
-
-### Stop and hand to operator when
-
-- Any safe-condition above fails.
-- Branch is `main`, `master`, or any shared/protected branch.
-- Force-push would drop a commit that landed via someone else's push.
-- The harness permission layer denies the push (signal: push returns non-zero with a permission / authorization error) — the denial is correct by design; reversing it without authorization is destructive. Do not retry; surface the blocker to the operator with the exact command they'd paste to complete it themselves.
-
-### Common use case — AI-attribution cleanup
-
-History rewrites to strip AI-attribution trailers from committed history need a force-push. Sequence:
-
-1. Rewrite history locally with `git filter-branch --msg-filter` or `git rebase -i` + trailer-strip.
-2. Verify `git log --format=%B origin/main..HEAD | grep -niE "Co-Authored-By:|Co-authored with|Generated (with|by) |Built (by|with) |AI-assisted"` → no hit that credits an agent, assistant, model or harness.
-3. Apply safe-conditions check above (especially the **upstream-currency check** below if rewriting on a shared branch).
-4. Force-push. If harness denies, surface the exact command.
-
-### Mass history rewrites — upstream-currency check is load-bearing
-
-A history rewrite that replaces a swath of commit SHAs (mailmap author rename, `git filter-repo`, BFG, `git filter-branch`, etc.) followed by a force-push to a shared branch will **silently drop** any commits that landed on origin since the local clone last synced.
-
-The trap: the rewrite runs cleanly, the force-push succeeds, every SHA matches what the operator expected — and any commits the upstream advanced past the local snapshot are now orphaned. The "git cherry" safe-condition above catches this only if the local branch knew about those commits; if origin advanced after the last local fetch, `git cherry` has nothing to compare against.
-
-**Standing rule.** Before force-pushing rewritten history to a shared branch (including the rare authorized force-push to `main`):
-
-1. **Upstream-currency check** — must return empty:
-   ```bash
-   git fetch origin && git log HEAD..origin/<branch>
-   ```
-   If non-empty, origin has commits the local clone hasn't seen. Stop. Sync (or recover, below) before pushing.
-
-2. **Even better: start from a fresh mirror clone.** For `git filter-repo` runs in particular:
-   ```bash
-   git clone --mirror https://github.com/<owner>/<repo>.git /tmp/<repo>-rewrite.git
-   cd /tmp/<repo>-rewrite.git
-   git filter-repo --mailmap /path/to/mailmap.txt --force
-   # …verify, re-add origin, push…
-   ```
-   The mirror IS origin's current state at clone time — no stale-checkout window. Still re-run the upstream-currency check right before pushing (origin may have advanced again during the rewrite).
-
-3. **Recovery if commits did get dropped.** GitHub keeps orphaned objects for ~90 days, fetchable by SHA. Rebase the orphan chain onto the rewritten base; force-push again:
-   ```bash
-   git fetch origin <orphaned-sha>:refs/recovered/old-tip
-   git checkout refs/recovered/old-tip
-   git rebase --onto <new-rewritten-base> <old-rewritten-base>
-   git branch -f <branch> HEAD
-   # then re-apply force-push (after upstream-currency check)
-   ```
-   The rebase is clean when the rewrite only changed metadata (mailmap, AI-attribution strip, etc.) — each commit's tree is identical to its rewritten counterpart, so diffs apply on the rewritten base without conflicts.
-
----
-
-## Cross-shell invocation gotcha (bash → PowerShell)
-
-On Windows, you may shell out to `powershell` from within a bash (Git Bash / WSL) Bash tool call to run Windows-only commands. Variables like `$env:PATH`, `$env:LOCALAPPDATA`, `$PSVersionTable` are PowerShell syntax — but bash interpolates them inside double-quoted strings BEFORE handing the command off, leaving garbled syntax.
-
-**Wrong** — bash treats `$env` as an empty shell variable and expands it away:
-```bash
-powershell -NoProfile -Command "$env:PATH -split ';' | Select-String WindowsApps"
-# Becomes: powershell -NoProfile -Command ":PATH -split ';' | Select-String WindowsApps"
-# Error: The term ':PATH' is not recognized...
-```
-
-**Right** — single-quote the outer string so bash leaves PowerShell's `$` alone:
-```bash
-powershell -NoProfile -Command '$env:PATH -split ";" | Select-String WindowsApps'
-```
-
-If inner single quotes are needed, swap them to double-quotes or escape inside. If you need bash-side variables interpolated too, use mixed quoting: bash interpolates `"$foo"` parts while `'$env:VAR'` parts stay literal for PowerShell.
-
-This also applies when Copilot/Claude's Bash tool on Windows is running bash-compatible shell and you invoke PowerShell from it.
+Bash expands `$env:PATH` inside double quotes before PowerShell sees it. Single-quote the PowerShell command: `powershell -NoProfile -Command '$env:PATH -split ";" | Select-String WindowsApps'`.
