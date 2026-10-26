@@ -260,6 +260,9 @@ export function isIndexable(relPath) {
     return true
   }
 
+  // Every other Markdown file inside a track (a task's runbook, notes or evidence, at any depth) is desk context too.
+  if (inTrack(segments) && base.endsWith(".md")) return true
+
   return false
 }
 
@@ -324,8 +327,13 @@ export function classify(relPath) {
     return { kind: "friction", track: segments[0], task_slug: null }
   }
 
+  if (inTrack(segments)) return { kind: "task-file", track: segments[0], task_slug: segments[1].startsWith("_") ? null : segments[1] }
+
   return { kind: "other", track: null, task_slug: null }
 }
+
+// `<track>/<folder>/…/<file>`: below a track's own folder, outside the desk's reserved `_` and `.` folders.
+const inTrack = (segments) => segments.length >= 3 && !/^[_.]/u.test(segments[0])
 
 async function describeDoc(deskRoot, abs, rel, signal) {
   throwIfAborted(signal)

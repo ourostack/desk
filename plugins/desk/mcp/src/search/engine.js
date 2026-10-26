@@ -40,10 +40,41 @@ function tidyRepository(root) {
   })
 }
 
+// Reciprocal rank fusion (Cormack et al., 2009) with its usual constant.
+const FUSION_K = 60
+
+/** Merges ranked result lists by path: each list adds 1 / (FUSION_K + rank) to a document's score. */
+function fuseRankings(lists, limit) {
+  const fused = new Map()
+  for (const list of lists) {
+    list.forEach((result, rank) => {
+      const entry = fused.get(result.path)
+      const add = 1 / (FUSION_K + rank + 1)
+      if (entry === undefined) fused.set(result.path, { ...result, score: add })
+      else fused.set(result.path, { ...entry, score: entry.score + add, match: "meaning_and_exact_words" })
+    })
+  }
+  return [...fused.values()].map((result) => ({ ...result, score: Number(result.score.toFixed(6)) }))
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit)
+}
+
+const words = (text) => String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3)
+
+/** The candidates whose path holds any of the topic's words, most words first: a task's folder and file names say what it is. */
+function rankByPath(topic, candidates) {
+  const wanted = new Set(words(topic))
+  const counts = new Map()
+  for (const result of candidates) counts.set(result.path, { result, count: new Set(words(result.path).filter((word) => wanted.has(word))).size })
+  return [...counts.values()].filter(({ count }) => count > 0).sort((a, b) => b.count - a.count).map(({ result }) => result)
+}
+
 const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
 // A model download that failed is tried again at the next desk change after this long.
 const MODEL_RETRY_MS = 60_000
+// How long a search waits for the model to load. Loading a downloaded model takes well under a second, so a new
+// session's first search on a desk whose vectors are already stored answers by meaning.
+const MODEL_WAIT_MS = 3000
 
 export const SEARCH_WORDING = Object.freeze({
   ready: "Search is ready.",
@@ -57,7 +88,7 @@ export const SEARCH_WORDING = Object.freeze({
 })
 
 export function createSearchEngine(options) {
-  const { deskRoot, stateDir, semantic, loadModel, watch, batchSize, pauseMs, now, cleanup } = {
+  const { deskRoot, stateDir, semantic, loadModel, watch, batchSize, pauseMs, now, cleanup, modelWaitMs } = {
     stateDir: path.join(options.deskRoot, ".state"),
     semantic: "background",
     loadModel: loadEmbedder,
@@ -66,6 +97,7 @@ export function createSearchEngine(options) {
     pauseMs: 25,
     now: Date.now,
     cleanup: removeOldIndex,
+    modelWaitMs: MODEL_WAIT_MS,
     ...options,
   }
   // The index lives in memory, so opening it does not keep `.state/` out of Git or install the card guard. Both run git
@@ -179,6 +211,15 @@ export function createSearchEngine(options) {
     return modelLoading
   }
 
+  // Starts loading the model, if it is not loaded, and resolves once it is or after `ms`, whichever comes first.
+  async function modelWithin(ms) {
+    const loading = ensureModel()
+    if (loading === null) return
+    let timer
+    await Promise.race([loading, new Promise((resolve) => { timer = setTimeout(resolve, ms) })])
+    clearTimeout(timer)
+  }
+
   // Distinct section texts that have no vector yet.
   function pendingTexts() {
     const pending = new Map()
@@ -259,20 +300,20 @@ export function createSearchEngine(options) {
     const topic = String(request.topic ?? "").trim()
     if (!topic) return { topic, results: [], note: "empty topic" }
     const limit = Number.isInteger(request.limit) && request.limit > 0 ? Math.min(request.limit, 50) : DEFAULT_LIMIT
+    const loading = modelWithin(modelWaitMs)
     await current()
+    await loading
     embedInBackground()
     if (model === null) {
       return { topic, results: await exactWords(topic, request.scope, limit), search_mode: "exact_words", note: SEARCH_WORDING.recallGettingReady }
     }
-    const meaning = rankByMeaning(model.embed(topic), sections(), request.scope, limit)
+    // The rankings, fused by reciprocal rank: a document strong on meaning, on exact words and in its file name rises
+    // above one strong on only one of them, and exact words also cover sections that have no vector yet.
+    const pool = Math.max(limit * 5, 50)
+    const rankings = [rankByMeaning(model.embed(topic), sections(), request.scope, pool), await exactWords(topic, request.scope, pool)]
+    const results = fuseRankings([...rankings, rankByPath(topic, rankings.flat())], limit)
     const { pending, total } = sectionCounts()
-    if (pending === 0) return { topic, results: meaning, search_mode: "meaning" }
-    // Some sections have no vector yet: exact-word matches cover them, sharing the list with the best meaning matches.
-    const half = Math.ceil(limit / 2)
-    const seen = new Set()
-    const results = [...meaning.slice(0, half), ...await exactWords(topic, request.scope, limit), ...meaning.slice(half)]
-      .filter((result) => !seen.has(result.path) && seen.add(result.path))
-      .slice(0, limit)
+    if (pending === 0) return { topic, results, search_mode: "meaning" }
     return { topic, results, search_mode: "meaning_and_exact_words", note: SEARCH_WORDING.recallPreparing(pending, total) }
   }
 
@@ -280,7 +321,9 @@ export function createSearchEngine(options) {
     const seed = String(request.path ?? "").trim()
     if (!seed) return { error: "invalid_input", note: "`path` is required" }
     const limit = Number.isInteger(request.limit) && request.limit > 0 ? Math.min(request.limit, 50) : DEFAULT_LIMIT
+    const loading = modelWithin(modelWaitMs)
     await current()
+    await loading
     embedInBackground()
     const doc = db.prepare("SELECT id FROM docs WHERE path = ?").get(seed)
     if (doc === undefined) return { error: "not_found", note: `path not in index: ${seed}` }
