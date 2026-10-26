@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.20 — 2026-10-26
+
+The Desk version line in the plugin manifests and the marketplace no longer sits beside a description, so a release no longer makes an open pull request that edits a description conflict.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.19 — 2026-10-26
 
 The task-only boot (`session-boot.js --task <name> --task-only`) no longer starves its push-access checks. It fetched the task's repos one after another in a way that blocked the checks, so on a busy machine they could run out of time and the boot reported "degraded". The fetches now run at once while the checks proceed: on Ari's desk the task-only boot went from 5–10 s to about 3 s.
