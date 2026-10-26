@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.12 — 2026-10-26
+
+Keep the improvement loop's machine-wide cards out of other desks, and its commits out of a person's way. The loop's route step (cards for andon issues, failing store builds, Desk problems and this machine's status) and its measure step (the machine's health record and loop alarms) now run only in the person's own desk: the one their saved binding, `$DESK` or home folder names, without the session's project folder (`mcp/src/factory/route-desk.js`). Before, a session opened in a project or throwaway desk received every such card, one commit each. In any other desk both steps report `not_own_desk` and are not recorded, so the own desk's next run still runs them, and a loop alarm that still holds is never reported cleared from another desk. Desk's own writes now wait up to 3 s for a Git lock another process holds, instead of failing; the loop worker runs with `DESK_GIT_YIELD=1`, so its card commits never wait and give way (`deferred`) when the index lock is held, and a later write commits the card.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.11 — 2026-10-26
 
 Make the first `desk_status` of a session name its desk sooner, on Copilot above all. Copilot starts the Desk server before its `sessionStart` hook records the session folder, and the server used to notice the record only at its next retry (1, 2, then 5 s later); it now watches for the record and admits the session as soon as it appears. A ready session re-checks its destination on every `desk_status`, and that check started a new worker thread each time, which took 40 to 60 ms on a busy Mac, past the 50 ms `desk_status` waits, so the answer often said the destination was still being verified and named no root. Those checks now share one worker that stays up between them and answer in about a millisecond.
