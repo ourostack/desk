@@ -20,6 +20,16 @@ on:
         type: number
         required: false
         default: 1
+      jobs:
+        description: "EXPERIMENT: files run at once per shard."
+        type: number
+        required: false
+        default: 1
+      defender_off:
+        description: "EXPERIMENT: turn off Defender real-time scanning, to measure its cost."
+        type: boolean
+        required: false
+        default: false
       elevated:
         description: "Also run the elevated (administrator) mode. It is a diagnostic: Desk refuses to reuse a path owned by the Administrators group, which is what an administrator's own existing files are."
         type: boolean
@@ -30,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desk-windows-suite-${{ github.ref }}
+  group: desk-windows-suite-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -78,6 +88,11 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
+      - name: EXPERIMENT turn off Defender real-time scanning
+        if: inputs.defender_off
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Show the account this job runs as
         shell: pwsh
         run: |
@@ -99,11 +114,12 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/10 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT + ' --jobs ' + $env:JOBS
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
           REPEAT: ${{ inputs.repeat || '1' }}
+          JOBS: ${{ inputs.jobs || '1' }}
 
       - name: Show the result in the job summary
         if: always()
