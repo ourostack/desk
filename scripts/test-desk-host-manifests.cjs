@@ -240,11 +240,15 @@ function validateFactoryHooks(claude, copilot) {
         : `factory-hooks ${event} must register only the bounded, silent factory end hook, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
     }
   }
+  // On Windows a session-end hook only spools its work, and PowerShell's Start-Process starts it (hooks/lib/detach-worker.cjs).
+  const spooled = (script) => ({
+    type: "command", bash: `node "\${PLUGIN_ROOT}/hooks/${script}" copilot`,
+    powershell: `node "\${PLUGIN_ROOT}/hooks/${script}" copilot --spool; Start-Process -WindowStyle Hidden -FilePath node -WorkingDirectory "\${PLUGIN_ROOT}/hooks/lib" -ArgumentList detach-worker.cjs`,
+    timeoutSec: 3,
+  });
   for (const event of ["sessionEnd", "agentStop"]) {
     const factoryEnd = { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', timeoutSec: 3 };
-    const expected = event === "sessionEnd"
-      ? [factoryEnd, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', timeoutSec: 3 }]
-      : [factoryEnd];
+    const expected = event === "sessionEnd" ? [spooled("factory-end.cjs"), spooled("sync-end.cjs")] : [factoryEnd];
     if (!sameJson(copilot.hooks?.[event], expected)) {
       errors.push(event === "sessionEnd"
         ? "factory-hooks sessionEnd must register the bounded, silent factory end hook and sync-end.cjs (M4-6 Part 3), and nothing else"

@@ -1,0 +1,1 @@
+On Windows, Copilot's session-end hooks return at once again. A worker started by the hook inherited the output pipe of the PowerShell that runs it, so Copilot waited for the worker to finish. The hooks now leave their work in a spool in the temp folder, and the hook command's own `Start-Process`, which passes on no pipes, starts it.

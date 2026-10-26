@@ -14,13 +14,13 @@
       {
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot --spool; Start-Process -WindowStyle Hidden -FilePath node -WorkingDirectory \"${PLUGIN_ROOT}/hooks/lib\" -ArgumentList detach-worker.cjs",
         "timeoutSec": 3
       },
       {
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/sync-end.cjs\" copilot",
-        "powershell": "node \"${PLUGIN_ROOT}/hooks/sync-end.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/sync-end.cjs\" copilot --spool; Start-Process -WindowStyle Hidden -FilePath node -WorkingDirectory \"${PLUGIN_ROOT}/hooks/lib\" -ArgumentList detach-worker.cjs",
         "timeoutSec": 3
       }
     ],

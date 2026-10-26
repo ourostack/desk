@@ -133,3 +133,32 @@ test("the CLI exits at once and leaves a slow unpushed check running detached", 
   while (readSyncStatus({ root: ctx.desk, env: ctx.env })?.blocked !== true && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason, "unpushed_at_session_end")
 }))
+
+// On Windows a process Node starts inherits the PowerShell output pipe a Copilot hook runs under, and the host waits for it.
+// So with `--spool` the hook starts nothing itself, and the Start-Process that follows it in copilot-hooks.json runs the spool.
+test("with --spool the hook starts no worker, and draining the spool runs the check once", () => scratch(async (ctx) => {
+  await mkDeskRepo(ctx)
+  const originDir = path.join(ctx.base, "origin.git")
+  await fs.mkdir(originDir, { recursive: true })
+  git(originDir, ["init", "-q", "--bare"])
+  git(ctx.desk, ["remote", "add", "origin", originDir])
+  git(ctx.desk, ["push", "-q", "-u", "origin", "HEAD:main"])
+  await writeAndCommit(ctx.desk, "more.md", "more\n", "more")
+  // The spool is under the OS temp folder; the desk's state must stay under it too (test-state-guard.js).
+  const tmp = ctx.base
+  const env = { ...ctx.env, TMPDIR: tmp, TEMP: tmp, TMP: tmp }
+  const result = spawnSync(process.execPath, [SCRIPT, "copilot", "--spool"], { env, input: JSON.stringify({ cwd: ctx.desk, reason: "complete" }), encoding: "utf8", timeout: 5000 })
+  assert.equal(result.status, 0)
+  assert.equal(result.stdout, "")
+  const spool = path.join(tmp, "desk-hook-spool")
+  assert.equal((await fs.readdir(spool)).length, 1)
+  const { readSyncStatus } = await import("../../../../../plugins/desk/mcp/src/runtime/sync-worker.js")
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.notEqual(readSyncStatus({ root: ctx.desk, env: ctx.env })?.blocked, true, "the hook started a worker itself")
+  const drain = path.join(path.dirname(SCRIPT), "lib", "detach-worker.cjs")
+  for (let n = 0; n < 2; n++) assert.equal(spawnSync(process.execPath, [drain], { env, cwd: path.dirname(drain), timeout: 5000 }).status, 0)
+  assert.deepEqual(await fs.readdir(spool), [])
+  const deadline = Date.now() + 30000
+  while (readSyncStatus({ root: ctx.desk, env: ctx.env })?.blocked !== true && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(readSyncStatus({ root: ctx.desk, env: ctx.env })?.reason, "unpushed_at_session_end")
+}))
