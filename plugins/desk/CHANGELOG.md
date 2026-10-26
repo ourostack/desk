@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.6 — 2026-10-26
+
+Desk no longer supports Codex. Codex was never qualified as a target ([RFC section 8](docs/agentic-engineering-v2-rfc.md#8-limits)), so the Codex manifests, the `.agents` marketplace, the `worker.toml` and `observer.toml` agent files, the Codex activation adapter, its smoke test and activation ledger, the Codex plugin-cache audit and the `desk:codex-onboarding` skill are gone, along with their tests and docs. Claude Code and Copilot CLI behave exactly as before. A Codex session is now reported as an unknown host, and Desk no longer reads `$CODEX_HOME/desk.activation.json`. [The hosts roadmap](../../docs/roadmap/hosts.md) says what rebuilding it would take.
+
+Superpowers, Plain Language and Crew each move up one patch version because their Codex manifests are gone; their skills are unchanged, and the Superpowers payload is still the same upstream release. The boot's host line now names only Claude Code and Copilot.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.5 — 2026-10-26
 
 Finish the session-end hooks inside the host's timeout on a busy machine. Both session-end hooks (`hooks/factory-end.cjs` and `hooks/sync-end.cjs`) now read the host's payload, hand it to a detached copy of themselves and exit, so the session's marker and the unpushed-commits check still happen but no longer count against the hook's time. Before, a loaded Mac took 3.6 to 4.4 s for one of them, past Copilot's 3 s limit, and Copilot cut it off. A detached worker stops itself after 60 s. The turn-end (Stop) hook is unchanged, because it can still return a delivery correction.
