@@ -34,9 +34,10 @@ const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
 // Existing resolver sources, from guesses to explicit intent. Both kinds of
 // host-project evidence share one priority; neither alone proves a replacement
 // explicit association.
+// Weakest first, in the shared resolver's order (util/paths.js): a project folder that is itself a desk outranks the saved binding and $DESK.
 const ROOT_SOURCE_PRIORITY = Object.freeze([
-  "home_fallback", "overlay_home_fallback", "host-project", "env:DESK",
-  "activation-config", "host-session-root", "explicit-root",
+  "home_fallback", "overlay_home_fallback", "env:DESK",
+  "activation-config", "host-project", "host-session-root", "explicit-root",
 ])
 // Every field desk_doctor reads off `input`: both are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
@@ -388,8 +389,9 @@ export function createDeskSession(deps) {
     if (resolvedInputs && resolvedInputs.root.root !== inputs.root.root) {
       const previousPriority = ROOT_SOURCE_PRIORITY.indexOf(resolvedInputs.root.source)
       const incomingPriority = ROOT_SOURCE_PRIORITY.indexOf(inputs.root.source)
+      // A home guess never replaces an established root, a weaker source never replaces a stronger one, and one project folder never replaces another.
       if (incomingPriority <= 1 || incomingPriority < previousPriority ||
-          incomingPriority === 2 && incomingPriority === previousPriority) {
+          inputs.root.source === "host-project" && resolvedInputs.root.source === "host-project") {
         forgetDesk()
         context.resolutionFailed = true
         return rootOutcome({

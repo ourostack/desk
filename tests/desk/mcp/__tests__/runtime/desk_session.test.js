@@ -1071,9 +1071,9 @@ test("same-path stronger intent is retained without repeating authority admissio
   assert.equal(connects, 1)
   assert.equal(session.context.root.source, "activation-config")
   changed = true
-  source = "host-project"
+  source = "env:DESK"
   assert.equal((await session.callTool({ name: "task_update" })).isError, true)
-  assert.equal(connects, 1, "weaker folder evidence cannot acquire a new controller")
+  assert.equal(connects, 1, "weaker evidence cannot acquire a new controller")
 })
 
 test("a thrown resolver drops authority and old cached detail, retaining the current diagnostic", async (t) => {

@@ -4,18 +4,21 @@
 // Resolution order:
 //   1. Explicit --root argument
 //   2. Host/session root
-//   3. Activation config desk.root (the saved binding)
-//   4. $DESK env var
-//   4a. Host project directory, only when it is itself a desk workspace
-//   4b. Generic project hint, only when it is itself a desk workspace
-//       (captured launch cwd is weaker than an established desk association)
-//   5. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
+//   3. The project folder the host opened (Claude Code's CLAUDE_PROJECT_DIR,
+//      Copilot's session record), only when it is itself a desk workspace: the
+//      person opened that desk, so it wins over the saved binding on every
+//      host. Any other folder falls through silently.
+//   4. Activation config desk.root (the saved binding)
+//   5. $DESK env var
+//   5a. The launch folder, when no host project folder is known, only when it
+//       is itself a desk workspace (weaker than an established association)
+//   6. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
 //      ms-desk overlay is loaded in the same Agency session as this Desk
-//   6. $HOME/desk/
-//   7. $HOME/worker-workspace/ (legacy operators may still have this)
-//   Steps 5-7 are guesses: each binds only a folder with the desk layout
+//   7. $HOME/desk/
+//   8. $HOME/worker-workspace/ (legacy operators may still have this)
+//   Steps 6-8 are guesses: each binds only a folder with the desk layout
 //   (isDeskWorkspace).
-//   8. Fail — listing every path tried, so the operator can diagnose
+//   9. Fail — listing every path tried, so the operator can diagnose
 //
 // We don't auto-create the dir here; consumers expect to point at an
 // existing desk workspace. An explicit binding (--root, the host/session root,
@@ -124,6 +127,17 @@ export function resolveDeskRootWithSource({
     )
   }
 
+  // The project folder the host opened, when it is itself a desk, wins over the
+  // saved binding and $DESK on every host: the person opened that desk. Host
+  // adapters supply it (Claude Code's CLAUDE_PROJECT_DIR, Copilot's session
+  // record); the shared resolver owns this precedence. Any other folder falls
+  // through silently.
+  if (hasText(hostProjectRoot)) {
+    const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
+    tried.push({ source: "host-project", path: resolved })
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
+  }
+
   // The saved binding is explicit too: a folder that is gone never falls
   // through to $DESK or a home folder, which may be a different desk.
   const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir, read: readActivationConfig })
@@ -155,15 +169,8 @@ export function resolveDeskRootWithSource({
     )
   }
 
-  // Folder evidence cannot replace a known association or mask its refusal.
-  // Host adapters supply context; the shared resolver owns this precedence.
-  if (hasText(hostProjectRoot)) {
-    const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
-    tried.push({ source: "host-project", path: resolved })
-    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
-  }
-
-  // Captured launch-folder evidence can likewise replace only home guesses.
+  // A bare launch folder, with no project folder from the host, is weaker
+  // evidence: it can replace only the home-folder guesses.
   if (hasText(projectRootHint)) {
     const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })

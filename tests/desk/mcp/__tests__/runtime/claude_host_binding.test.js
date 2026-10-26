@@ -69,7 +69,7 @@ test("isDeskWorkspace recognizes solo desks and crew workspaces but not ordinary
   }
 })
 
-test("saved associations outrank a host project even when that folder is a desk", () => {
+test("a host project that is itself a desk outranks the saved binding and $DESK on every host", () => {
   const fixture = makeFixture()
   try {
     const configPath = path.join(fixture.pluginData, "desk.activation.json")
@@ -81,8 +81,8 @@ test("saved associations outrank a host project even when that folder is a desk"
       homeDir: fixture.home,
       hostProjectRoot: fixture.project,
     })
-    assert.equal(result.root, fixture.bound)
-    assert.equal(result.source, "activation-config")
+    assert.equal(result.root, fixture.project)
+    assert.equal(result.source, "host-project")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -118,7 +118,7 @@ test("a host project that is not a desk is recorded and falls through without fa
     })
     assert.equal(result.root, fixture.envRoot)
     assert.equal(result.source, "env:DESK")
-    assert.deepEqual(result.tried.map((entry) => entry.source), ["env:DESK"])
+    assert.deepEqual(result.tried.map((entry) => entry.source), ["host-project", "env:DESK"], "the folder is looked at first and recorded")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -161,8 +161,8 @@ test("startup root resolution uses CLAUDE_PROJECT_DIR and the plugin data bindin
       env: { CLAUDE_PROJECT_DIR: fixture.project, CLAUDE_PLUGIN_DATA: fixture.pluginData },
       homeDir: fixture.home,
     })
-    assert.equal(fromProject.root, fixture.bound)
-    assert.equal(fromProject.source, "activation-config")
+    assert.equal(fromProject.root, fixture.project, "a project folder that is a desk wins over the saved binding")
+    assert.equal(fromProject.source, "host-project")
     const fromBinding = entrypoint.resolveStartupDeskRoot({
       args: {},
       env: { CLAUDE_PROJECT_DIR: fixture.codeRepo, CLAUDE_PLUGIN_DATA: fixture.pluginData },

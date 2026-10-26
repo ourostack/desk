@@ -81,7 +81,7 @@ for (const scenario of [
   }
 }
 
-test("association: invalid saved binding and DESK refuse even with a valid host desk folder", async () => {
+test("association: invalid saved binding and DESK refuse even with a valid launch desk, and the host's own project desk wins over both", async () => {
   const base = await mkTempRoot("desk-launch-known-association-")
   const known = makeDesk(path.join(base, "known"))
   const cwd = makeDesk(path.join(base, "launch"))
@@ -91,10 +91,13 @@ test("association: invalid saved binding and DESK refuse even with a valid host 
     { DESK_ACTIVATION_CONFIG: config },
     { DESK: path.join(base, "missing-env") },
   ]) {
-    const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), CLAUDE_PROJECT_DIR: known, ...extra }
+    const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), ...extra }
     const input = { args: {}, env, cwd, homeDir: base }
-    assert.equal(resolveBootRoot(input).status, "degraded")
+    assert.equal(resolveBootRoot(input).status, "degraded", "a bare launch folder never masks a broken association")
     assert.equal(resolveAdmissionInputs(input).rootError.code, "DESK_ROOT_UNAVAILABLE")
+    const opened = { ...input, env: { ...env, CLAUDE_PROJECT_DIR: known } }
+    assert.equal(resolveBootRoot(opened).path, known, "the project folder the host opened is a desk: the person opened that desk")
+    assert.equal(resolveAdmissionInputs(opened).root.root, known)
   }
   const project = path.join(base, "ordinary-host-project")
   mkdirSync(project)
