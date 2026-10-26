@@ -230,7 +230,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage: [auto, rc]
+        stage: [auto, rc, stable]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
