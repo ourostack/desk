@@ -36,11 +36,14 @@ import {
   readMachineSecret,
   readMarker,
   readStatus,
+  readTriageOutbox,
+  readTriageOutboxState,
   readVisibilityCache,
   requestFinalize,
   setConsent,
   setJobsForFile,
   updateStatus,
+  updateTriageOutbox,
   rebuildJobsIndex,
   writeLocalFacts,
   writeMarker,
@@ -148,6 +151,58 @@ function validMarker(overrides = {}) {
 // ---------------------------------------------------------------------------
 // factoryStateRoot: the protected root.
 // ---------------------------------------------------------------------------
+
+test("retained triage history remains readable and updates preserve acknowledged rows", () => scratch(async (env) => {
+  const store = "owner/repo"
+  const history = { published: Array.from({ length: 37 }, (_, id) => ({ id, acknowledged: true })), pending: [] }
+  assert.equal(await readTriageOutbox(env, store, "state.json"), null)
+  await updateTriageOutbox(env, store, "state.json", (current) => {
+    assert.equal(current, null)
+    return history
+  })
+  assert.deepEqual(await readTriageOutbox(env, store, "state.json"), history)
+  const changed = await updateTriageOutbox(env, store, "state.json", (current) => ({ ...current, pending: ["new"] }))
+  assert.deepEqual(changed.published, history.published)
+  assert.deepEqual(await readTriageOutbox(env, store, "state.json"), changed)
+  await assert.rejects(updateTriageOutbox(env, store, "state.json", () => []), /record/u)
+  assert.deepEqual(await readTriageOutbox(env, store, "state.json"), changed)
+  assert.equal(await readTriageOutbox(env, "owner/other", "state.json"), null)
+  await assert.rejects(readTriageOutbox(env, store, "../state.json"), /name/u)
+}))
+
+test("legacy triage batches distinguish stored null from damaged non-record data", () => scratch(async (env) => {
+  const store = "owner/repo"
+  const name = `${"a".repeat(16)}.json`
+  const record = { legacy: true, rows: [{ accepted: true }] }
+  await updateTriageOutbox(env, store, name, () => record)
+  assert.deepEqual(await readTriageOutbox(env, store, name), record)
+  const file = path.join(await factoryStateRoot(env), "triage-outbox", "owner__repo", name)
+  await fs.writeFile(file, "null\n")
+  assert.equal(await readTriageOutbox(env, store, name), null)
+  assert.deepEqual((await fs.readdir(path.dirname(file))).filter((entry) => entry.includes(".corrupt-json-")), [])
+  await fs.writeFile(file, '"not a record"\n')
+  assert.equal(await readTriageOutbox(env, store, name), null)
+  const [kept] = (await fs.readdir(path.dirname(file))).filter((entry) => entry.startsWith(`${name}.corrupt-json-`))
+  assert.equal(await fs.readFile(path.join(path.dirname(file), kept), "utf8"), '"not a record"\n')
+}))
+
+test("legacy triage state reports damage while preserving refused records for inspection", () => scratch(async (env) => {
+  const store = "owner/repo"
+  const valid = (value) => value !== null && value.schema_version === 1
+  assert.deepEqual(await readTriageOutboxState(env, store, valid), { state: null, damaged: 0 })
+  const record = { schema_version: 1, published: ["acknowledged"] }
+  await updateTriageOutbox(env, store, "state.json", () => record)
+  assert.deepEqual(await readTriageOutboxState(env, store, valid), { state: record, damaged: 0 })
+  const dir = path.join(await factoryStateRoot(env), "triage-outbox", "owner__repo")
+  await fs.writeFile(path.join(dir, "state.json"), '{"schema_version":2}\n')
+  assert.deepEqual(await readTriageOutboxState(env, store, valid), { state: null, damaged: 1 })
+  await fs.writeFile(path.join(dir, "state.json"), "{", { mode: 0o600 })
+  assert.deepEqual(await readTriageOutboxState(env, store, valid), { state: null, damaged: 2 })
+  const kept = (await fs.readdir(dir)).filter((entry) => entry.startsWith("state.json.corrupt-json-"))
+  assert.equal(kept.length, 2)
+  const bytes = await Promise.all(kept.map((entry) => fs.readFile(path.join(dir, entry), "utf8")))
+  assert.deepEqual(bytes.sort(), ["{", '{"schema_version":2}\n'].sort())
+}))
 
 test("factoryStateRoot creates an owner-only directory chain ending in ouroboros-skills/desk/factory", () => scratch(async (env) => {
   const root = await factoryStateRoot(env)

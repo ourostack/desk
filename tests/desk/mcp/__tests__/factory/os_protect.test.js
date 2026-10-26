@@ -236,6 +236,36 @@ test("a parent missing after native inspection cannot make a leaf look verified"
   })
 })
 
+for (const change of ["rewrite", "remove"]) {
+  test(`a leaf ${change} before the native listing is excluded from batch observation`, async (t) => {
+    await scratch(async (base) => {
+      const file = path.join(base, "leaf.json")
+      await fs.writeFile(file, "original", { mode: 0o600 })
+      const lstat = fs.lstat.bind(fs)
+      let changed = false
+      t.mock.method(fs, "lstat", async (target, ...args) => {
+        const stat = await lstat(target, ...args)
+        if (target === base && !changed) {
+          changed = true
+          if (change === "rewrite") await fs.writeFile(file, "changed bytes")
+          else await fs.unlink(file)
+        }
+        return stat
+      })
+      let inspections = 0
+      t.mock.method(childProcess, "execFileSync", () => { inspections += 1; return "regular file\n" })
+      await primeAclFreeFiles([file], "darwin", NAMING)
+      assert.equal(inspections, 0, "no stale leaf reaches the native listing")
+      if (change === "remove") {
+        await assert.rejects(() => protectLeafFile(file, "darwin", NAMING), { code: "ENOENT" })
+        await fs.writeFile(file, "new file", { mode: 0o600 })
+      }
+      await protectLeafFile(file, "darwin", NAMING)
+      assert.equal(inspections, 1, "the earlier observation did not cache the changed leaf")
+    })
+  })
+}
+
 test("ACL observation excludes missing, linked and non-regular paths without repairing them", async (t) => {
   await scratch(async (base) => {
     const files = ["missing", "symlink", "directory", "hardlink", "regular"].map((name) => path.join(base, name))
