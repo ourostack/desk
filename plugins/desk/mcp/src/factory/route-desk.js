@@ -16,9 +16,10 @@ import * as path from "node:path"
 
 import { resolveActivationConfigPath, resolveDeskRootWithSource } from "../util/paths.js"
 
+// The native call also gives a Windows folder its real letter case, so `c:\Users\…` and `C:\Users\…` compare equal.
 const canonical = (folder) => {
   try {
-    return realpathSync(folder)
+    return realpathSync.native(folder)
   } catch {
     return path.resolve(folder)
   }
