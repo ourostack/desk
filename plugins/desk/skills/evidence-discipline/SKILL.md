@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Also before wrapping a command in a poll loop or supervisor, ending processes, copying sign-in state, claiming a precedent or durability, or writing tests, and when the desk's records and a live source disagree. Covers citation, primary sources and visual proof. Not needed for a routine status read from its source.
+description: Use before a recommendation or claim that depends on external, mutable or unverified facts, before quoting an estimate, when the answer you have arrived at is complex, and when writing factual claims into a PR, card, handoff or brief. Also before wrapping a command in a poll loop or supervisor, ending processes, copying sign-in state, claiming a precedent or durability, or writing tests, and when the desk's records and a live source disagree. Covers citation, primary sources, operator-stated facts, kept-lesson claims and visual proof. Not needed for a routine status read from its source.
 ---
 
 # Evidence discipline
@@ -44,6 +44,14 @@ Secondary sources may locate primary evidence, frame questions or reveal competi
 **One-sentence statement.** Decide which evidence answers a claim by the kind of claim, not by a fixed ranking of sources.
 
 **What to do.** The desk's curated records govern intent, approval, authority and the agreed endpoint: what was asked, what was approved, who decides, and where the work ends. Current source systems govern mutable facts, such as a branch head, a work-item state, a published artifact or a live configuration, because those move after any record was written. Bounded session history reconstructs execution only: what actually happened in a run, read within a stated range, never a source of intent or approval. A later source read may update a mutable fact but never erases an approved decision. When a current source contradicts a curated record, record both, the fact as it stands and the decision that still governs, and take the conflict to the decision's owner instead of overwriting it.
+
+## Record what the operator tells you, when they say it
+
+When the operator states a fact (who has access, what was decided, what happened), record it at once on the task card or in the desk, dated and attributed ("Ari, 2026-10-26: the whole team got access together"). It outranks an older second-hand report until a primary source says otherwise; never keep reasoning from the stale report while the note waits.
+
+## A kept lesson is a claim about the future
+
+"That's now a standing lesson" claims that a later session will act on it, so it needs the file or tool that will load it. Record a correction with `lesson_add` and repeat what its reply says (`in_effect` and `message`); a note nothing loads is not kept.
 
 ## Answer the governing question
 
@@ -112,6 +120,6 @@ When writing or auditing tests for a change, cover each category or mark it `N/A
 
 Name tests `{Given}_{When}_{Method}_{Assertion}`, for example `GivenValidPayload_WhenSavedTwice_AddDocument_ReturnsIdempotent`.
 
-## Visual proof when it helps
+## Visual proof
 
-Where a visual would help a human verify a state, capture bounded visual proof at that stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots.
+Capture visual proof by default whenever work touches something a person sees: a screen, a setting before and after a change, an agent's reply, a refusal, an error, a result. The rule follows what the work touches, not what it is called ("spike", "look into", "review"), and a brief's silence never waives it. Capture as you go, at each stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots.

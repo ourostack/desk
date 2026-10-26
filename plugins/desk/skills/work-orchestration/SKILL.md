@@ -82,6 +82,8 @@ A child brief bounds the work and leaves the method to the child; a handoff to a
 
 A worker must not end its turn while any child it launched is still running. An interim child notification, such as "still waiting on CI", is not a terminal result: keep the turn alive by blocking on a foreground wait or monitor until each child returns a terminal result, because a child's final report goes to whoever is still waiting, and a worker that has ended its turn is not that agent. If the turn genuinely must end (a human gate or a hard limit), first record on the task card which children are still running, what each owns (for example its PR URL), and the exact next action on each result, so whoever resumes acts on them.
 
+While the operator is present, wait in short slices and answer them first (`interaction-style`, "The operator comes before a wait").
+
 Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
 
 Pace children as well as choosing their models (see above). Near a usage limit, run fewer children in parallel. Prefer one child per independent unit, and resume an existing child with its context rather than spawning a fresh one for a follow-up fix.
