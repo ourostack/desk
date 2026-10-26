@@ -2,20 +2,26 @@
 //
 // personal: a line in the person's AGENTS.md, which every session start prints.
 // desk: a system friction entry plus an improvement card against the named owner.
-// team: the exact line for the shared workspace's AGENTS.md, written through Crew's shared-path protocol.
+// team: lesson_team.test.js.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
+import { fileURLToPath } from "node:url"
+import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { osEnv } from "../_os_env.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
 
 const DAY = /\d{4}-\d{2}-\d{2}/u.source
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk")
+const SOLO = async () => ({ status: "ok", personPrefix: "" })
+
+// Every call gets a fixed environment and, unless the test says otherwise, a session start that resolves a solo desk.
+const lesson_add = (args) => lessonAdd({ env: {}, personOf: SOLO, ...args })
 
 function initGit(root) {
   const run = (args) => {
@@ -44,7 +50,7 @@ test("lesson_add personal creates AGENTS.md with a Lessons section and says sess
   assert.equal(result.scope, "personal")
   assert.equal(result.path, "AGENTS.md")
   assert.equal(result.in_effect, true)
-  assert.match(result.message, /every session start/u)
+  assert.match(result.message, /session start prints for you/u)
   assert.match(result.message, /AGENTS\.md/u)
   const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
   assert.match(content, new RegExp(`^## Lessons\\n\\n- \\*\\*Answer before a long wait\\.\\*\\* Reply to the operator before starting a blocking wait\\. \\(${DAY}\\)\\n$`, "u"))
@@ -78,10 +84,74 @@ test("lesson_add personal replaces the line for the same topic instead of adding
 })
 
 test("lesson_add personal with a person writes that person's AGENTS.md in a shared workspace", async () => {
-  const root = await mkTempDeskRoot()
-  const result = await lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") })
+  const root = await crewRoot()
+  const result = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "ok", personPrefix: "desks/ari" }), input: personal("Rule", "Do it.") })
   assert.equal(result.path, path.posix.join("desks", "ari", "AGENTS.md"))
+  assert.equal(result.in_effect, true)
   assert.ok(await exists(path.join(root, "desks", "ari", "AGENTS.md")))
+  assert.equal(await exists(path.join(root, "AGENTS.md")), false)
+})
+
+test("lesson_add personal refuses in a shared workspace when the session has no person, so the team's AGENTS.md is never written", async () => {
+  const root = await crewRoot()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "# Crew\n", "utf8")
+  await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("Rule", "I want short replies.") }), /shared workspace and this session has no person/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, person: " ", input: personal("Rule", "I want short replies.") }), /no person/u)
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), "# Crew\n")
+})
+
+test("lesson_add personal is not in effect when session start resolves a different person, or none", async () => {
+  const root = await crewRoot()
+  const other = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "ok", personPrefix: "desks/bo" }), input: personal("Rule", "Do it.") })
+  assert.equal(other.in_effect, false)
+  assert.equal(other.message, "Written to desks/ari/AGENTS.md, but not in effect: session start on this desk prints desks/bo/AGENTS.md, not this file; set DESK_PERSON to the alias this session writes for.")
+  const none = await lesson_add({ deskRoot: root, person: "ari", personOf: async () => ({ status: "unresolved", reason: "login_not_cached" }), input: personal("Rule", "Do it.") })
+  assert.equal(none.in_effect, false)
+  assert.match(none.message, /cannot tell whose desk this is \(login_not_cached\)/u)
+  const solo = await mkTempDeskRoot()
+  const elsewhere = await lesson_add({ deskRoot: solo, person: "ari", input: personal("Rule", "Do it.") })
+  assert.equal(elsewhere.in_effect, false)
+  assert.match(elsewhere.message, /prints only the desk's AGENTS\.md, not this file/u)
+})
+
+test("lesson_add personal asks session start's own lookup, with the call's environment", async () => {
+  const root = await crewRoot()
+  const result = await lessonAdd({ deskRoot: root, person: "ari", env: { DESK_PERSON: "ari" }, input: personal("Rule", "Do it.") })
+  assert.equal(result.in_effect, true)
+  const unset = await lessonAdd({ deskRoot: root, person: "ari", env: { HOME: root }, now: Date.now(), input: personal("Rule", "Do it again.") })
+  assert.equal(unset.in_effect, false)
+})
+
+test("lesson_add personal counts the desk's AGENTS.md against the shared budget session start prints", async () => {
+  const root = await crewRoot()
+  await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 40)}\n`, "utf8")
+  await assert.rejects(() => lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") }), /desks\/ari\/AGENTS\.md and the desk's AGENTS\.md together would pass the 16 KB/u)
+  assert.equal(await exists(path.join(root, "desks", "ari", "AGENTS.md")), false)
+})
+
+test("lesson_add personal keeps a CRLF file's line ending and finds its Lessons section", async () => {
+  const root = await mkTempDeskRoot()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\r\n\r\n## Lessons\r\n\r\n- **Rule.** Old. (2026-01-01)\r\n\r\n## Next\r\n", "utf8")
+  await lesson_add({ deskRoot: root, input: personal("New", "New.") })
+  const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Replaced.") })
+  assert.equal(result.status, "updated")
+  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
+  assert.match(content, new RegExp(`^# Desk\\r\\n\\r\\n## Lessons\\r\\n\\r\\n- \\*\\*Rule\\.\\*\\* Replaced\\. \\(${DAY}\\)\\r\\n- \\*\\*New\\.\\*\\* New\\. \\(${DAY}\\)\\r\\n\\r\\n## Next\\r\\n$`, "u"))
+  assert.equal(content.match(/## Lessons/gu).length, 1)
+})
+
+test("lesson_add personal serialises writes to one AGENTS.md, so two at once both land", async () => {
+  const root = await mkTempDeskRoot()
+  await Promise.all(["One", "Two", "Three", "Four"].map((topic) => lesson_add({ deskRoot: root, input: personal(topic, `${topic} rule.`) })))
+  const content = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
+  for (const topic of ["One", "Two", "Three", "Four"]) assert.match(content, new RegExp(`\\*\\*${topic}\\.\\*\\*`, "u"))
+  assert.equal(await exists(path.join(root, ".agents-md.lock")), false)
+})
+
+test("lesson_add personal refuses, writing nothing, while another session holds the AGENTS.md lock", async () => {
+  const root = await mkTempDeskRoot()
+  await fs.mkdir(path.join(root, ".agents-md.lock", "held"), { recursive: true })
+  await assert.rejects(() => lesson_add({ deskRoot: root, lockWaitMs: 30, input: personal("Rule", "Do it.") }), /another session is writing AGENTS\.md/u)
   assert.equal(await exists(path.join(root, "AGENTS.md")), false)
 })
 
@@ -114,6 +184,8 @@ test("lesson_add personal commits exactly AGENTS.md and schedules one push", asy
   const calls = []
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
   assert.equal(result.commit, undefined)
+  assert.equal(result.in_effect, true)
+  assert.equal(result.message, "In effect: the lesson is in AGENTS.md, which session start prints for you on this desk.")
   assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "lesson_add: personal rule")
   assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean), ["AGENTS.md"])
   assert.match(git(root, ["status", "--short"]), /^A  other\.md$/mu)
@@ -128,7 +200,9 @@ test("lesson_add personal leaves an AGENTS.md that already held unstaged edits u
   git(root, ["commit", "-q", "-m", "init"])
   await fs.writeFile(path.join(root, "AGENTS.md"), "# Desk\n\nAnother session's edit.\n", "utf8")
   const calls = []
-  await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
+  const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
+  assert.equal(result.in_effect, false)
+  assert.equal(result.message, "Written to AGENTS.md, but not in effect: it is not committed (AGENTS.md already held changes from elsewhere, so Desk left it for you to commit), so other machines do not have it.")
   assert.equal(git(root, ["log", "--format=%s"]).trim(), "init")
   assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /Another session's edit\.\n\n## Lessons/u)
   assert.deepEqual(calls, [])
@@ -140,6 +214,8 @@ test("lesson_add personal reports a commit failure without losing the write", as
   const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), spawnGit, schedulePush: () => {} })
   assert.equal(result.commit.status, "failed")
+  assert.equal(result.in_effect, false)
+  assert.match(result.message, /the commit failed: boom/u)
   assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /Do it\./u)
 })
 
@@ -160,9 +236,11 @@ test("lesson_add desk refuses a lesson with no owner, or an owner nothing has", 
   const desk = (owner) => ({ scope: "desk", topic: "Rule", body: "Do it.", owner })
   await assert.rejects(() => lesson_add({ deskRoot: root, input: desk(undefined), addFriction }), /owner/u)
   await assert.rejects(() => lesson_add({ deskRoot: root, input: desk("somewhere"), addFriction }), /owner/u)
-  await assert.rejects(() => lesson_add({ deskRoot: root, input: desk("skill:desk:no-such-skill"), addFriction }), /no-such-skill/u)
+  const scan = () => ({ dirs: [] })
+  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:desk:no-such-skill"), addFriction }), /the desk plugin has no skill named no-such-skill/u)
   await assert.rejects(() => lesson_add({ deskRoot: root, input: desk("tool:no_such_tool"), addFriction }), /no_such_tool/u)
-  await assert.rejects(() => lesson_add({ deskRoot: root, input: desk("skill:elsewhere:x"), addFriction }), /owner/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:elsewhere:x"), addFriction }), /no installed plugin is named elsewhere \(installed: desk\)/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:Bad:x"), addFriction }), /owner/u)
   assert.equal(calls.length, 0)
 })
 
@@ -196,12 +274,57 @@ test("lesson_add desk records system friction against the owner and says it is n
 test("lesson_add desk maps each kind of owner to its plugin and friction class", async () => {
   const root = await mkTempDeskRoot()
   const { calls, addFriction } = frictionSpy({ improvement: "duplicate" })
-  for (const owner of ["tool:lesson_add", "brief", "foundation", "skill:crew:shared-desk-conventions", "skill:superpowers:brainstorming", "skill:plain-language:plain-language"]) {
-    await lesson_add({ deskRoot: root, input: { scope: "desk", topic: "Rule", body: "Do it.", owner }, addFriction })
+  const scan = () => ({ dirs: plugins })
+  // What a host has installed: a Copilot-style plugin.json, a Claude-style .claude-plugin/plugin.json, two folders of
+  // one plugin (an older version without the skill), and folders with no or a broken manifest.
+  const plugins = [
+    await plugin({ "plugin.json": { name: "ms-desk" } }, ["ecs-rollout"]),
+    await plugin({ ".claude-plugin/plugin.json": { name: "superpowers" } }, ["brainstorming"]),
+    await plugin({ "plugin.json": { name: "pwf" } }, []),
+    await plugin({ "plugin.json": { name: "pwf" } }, ["adapter-acceptance"]),
+    await plugin({ "plugin.json": "{not json" }, ["x"]),
+    await plugin({ "plugin.json": { version: "1.0.0" } }, ["x"]),
+    await plugin({}, ["x"]),
+  ]
+  for (const owner of ["tool:lesson_add", "brief", "foundation", "skill:desk:evidence-discipline", "skill:ms-desk:ecs-rollout", "skill:superpowers:brainstorming", "skill:pwf:adapter-acceptance"]) {
+    await lesson_add({ deskRoot: root, scan, input: { scope: "desk", topic: "Rule", body: "Do it.", owner }, addFriction })
   }
   assert.deepEqual(calls.map((call) => [call.input.plugin, call.input.friction_class]), [
-    ["desk", "mcp_tool"], ["desk", "skill"], ["desk", "skill"], ["crew", "skill"], ["superpowers", "skill"], ["plain-language", "skill"],
+    ["desk", "mcp_tool"], ["desk", "skill"], ["desk", "skill"], ["desk", "skill"], ["ms-desk", "skill"], ["superpowers", "skill"], ["pwf", "skill"],
   ])
+  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:superpowers:no-such" }, addFriction }), /the superpowers plugin has no skill named no-such/u)
+})
+
+async function plugin(files, skills) {
+  const dir = await mkTempDeskRoot()
+  for (const [name, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(dir, name)), { recursive: true })
+    await fs.writeFile(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content), "utf8")
+  }
+  for (const skill of skills) {
+    await fs.mkdir(path.join(dir, "skills", skill), { recursive: true })
+    await fs.writeFile(path.join(dir, "skills", skill, "SKILL.md"), "---\nname: x\n---\n", "utf8")
+  }
+  return dir
+}
+
+test("lesson_add desk finds Desk's skills from the installed plugin folder when the code runs from a source mirror", async () => {
+  const cache = await mkTempDeskRoot()
+  const script = `
+    import { importRuntimeServer } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js", import.meta.url).href)}
+    import * as path from "node:path"
+    import { pathToFileURL } from "node:url"
+    const runtime = await importRuntimeServer({ mcpRoot: ${JSON.stringify(path.join(PLUGIN_ROOT, "mcp"))}, runtimeCacheDir: ${JSON.stringify(cache)} })
+    const { lesson_add } = await import(pathToFileURL(path.join(runtime._deskRuntime.source_mirror_path, "src", "tools", "lesson.js")).href)
+    const result = await lesson_add({ deskRoot: ${JSON.stringify(cache)}, env: process.env, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:desk:evidence-discipline" }, addFriction: async () => ({ path: "_meta/friction.md", improvement: "opened" }) })
+    process.stdout.write(JSON.stringify({ mirror: runtime._deskRuntime.source_mirror_path, owner: result.owner }))
+  `
+  // The installed server's entrypoint (mcp/index.js) sets DESK_PLUGIN_ROOT to its own plugin folder on every host.
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, DESK_PLUGIN_ROOT: PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT: "" }, timeout: 120_000 })
+  assert.equal(run.status, 0, run.stderr)
+  const answer = JSON.parse(run.stdout)
+  assert.equal(answer.owner, "skill:desk:evidence-discipline")
+  assert.equal(answer.mirror.startsWith(cache), true)
 })
 
 test("lesson_add desk says plainly when no improvement card opened", async () => {
@@ -228,6 +351,13 @@ test("lesson_add desk opens a real improvement card when the factory state is re
 
 // ── team ────────────────────────────────────────────────────────────────────
 
+test("lesson_add team hands the lesson, repo and source to the team write", async () => {
+  const calls = []
+  const result = await lesson_add({ deskRoot: "/desk", person: "ari", input: { scope: "team", topic: "Rule.", body: "Do it.", repo: "~/code/cit", source: "Ari, 2026-10-26" }, team: async (args) => calls.push(args) && { status: "merged" } })
+  assert.deepEqual(result, { status: "merged" })
+  assert.deepEqual(calls.map(({ deskRoot, person, topic, body, repo, source }) => ({ deskRoot, person, topic, body, repo, source })), [{ deskRoot: "/desk", person: "ari", topic: "Rule", body: "Do it.", repo: "~/code/cit", source: "Ari, 2026-10-26" }])
+})
+
 async function crewRoot() {
   const root = await mkTempDeskRoot()
   await fs.mkdir(path.join(root, "_meta"), { recursive: true })
@@ -235,44 +365,6 @@ async function crewRoot() {
   await fs.writeFile(path.join(root, "_meta", "desks.md"), "| alias | identity |\n| --- | --- |\n| ari | ari@example.com |\n", "utf8")
   return root
 }
-
-test("lesson_add team refuses outside a shared workspace", async () => {
-  const root = await mkTempDeskRoot()
-  await assert.rejects(() => lesson_add({ deskRoot: root, person: "ari", input: { scope: "team", topic: "Rule", body: "Do it." } }), /shared workspace/u)
-})
-
-test("lesson_add team needs a person to attribute the lesson to", async () => {
-  const root = await crewRoot()
-  await assert.rejects(() => lesson_add({ deskRoot: root, input: { scope: "team", topic: "Rule", body: "Do it." } }), /person/u)
-})
-
-test("lesson_add team gives the exact line for the shared AGENTS.md and writes nothing", async () => {
-  const root = await crewRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Crew\n", "utf8")
-  const result = await lesson_add({ deskRoot: root, person: "ari", input: { scope: "team", topic: "Build what was asked", body: "When someone asks for a List, build a List." } })
-  assert.equal(result.status, "shared_write_needed")
-  assert.equal(result.scope, "team")
-  assert.equal(result.path, "AGENTS.md")
-  assert.equal(result.section, "## Lessons")
-  assert.match(result.line, new RegExp(`^- \\*\\*Build what was asked\\.\\*\\* When someone asks for a List, build a List\\. \\(ari, ${DAY}\\)$`, "u"))
-  assert.equal(result.in_effect, false)
-  assert.match(result.message, /shared-path/u)
-  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), "# Crew\n")
-  assert.equal(await exists(path.join(root, "desks", "ari", "AGENTS.md")), false)
-})
-
-test("lesson_add team refuses when the shared AGENTS.md would pass the session start limit", async () => {
-  const root = await crewRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "x".repeat(AGENTS_MD_CAP_BYTES), "utf8")
-  await assert.rejects(() => lesson_add({ deskRoot: root, person: "ari", input: { scope: "team", topic: "Rule", body: "Do it." } }), /16 KB/u)
-})
-
-test("lesson_add team names the line it replaces when the topic is already there", async () => {
-  const root = await crewRoot()
-  await fs.writeFile(path.join(root, "AGENTS.md"), "# Crew\n\n## Lessons\n\n- **Rule.** Old wording. (bo, 2026-01-01)\n", "utf8")
-  const result = await lesson_add({ deskRoot: root, person: "ari", input: { scope: "team", topic: "Rule", body: "New wording." } })
-  assert.equal(result.replaces, "- **Rule.** Old wording. (bo, 2026-01-01)")
-})
 
 test("lesson_add personal refuses an AGENTS.md that is a link out of the desk", async () => {
   const root = await mkTempDeskRoot()
@@ -296,6 +388,7 @@ test("lesson_add refuses a topic with no word in it and a skill owner that is no
   const root = await mkTempDeskRoot()
   await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("!!!", "y") }), /topic/u)
   await assert.rejects(() => lesson_add({ deskRoot: root, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:desk:Bad Name" }, addFriction: async () => ({}) }), /owner/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:desk" }, addFriction: async () => ({}) }), /owner/u)
 })
 
 test("lesson_add personal keeps a blank line before a heading that followed the last lesson directly", async () => {

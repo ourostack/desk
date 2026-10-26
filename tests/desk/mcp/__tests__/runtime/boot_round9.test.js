@@ -10,7 +10,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { osEnv } from "../_os_env.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { BOOT_TEXT_MAX_CHARS, TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
@@ -87,8 +87,30 @@ test("boot also carries the person's own AGENTS.md in a shared workspace, where 
   assert.equal(solo.person_agents_md, null, "a solo desk's own AGENTS.md is the root one")
   const throwing = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" }, personFn: async () => { throw new Error("denied") } })
   assert.equal(throwing.person_agents_md, null)
+  assert.ok(throwing.degraded.includes("improvement: denied"), "the one person lookup's failure is still reported where the improvement cards say it")
+  const unreadable = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" }, agentsFn: (dir) => {
+    if (dir.endsWith("ari")) throw new Error("EACCES")
+    return readAgentsMd(dir)
+  } })
+  assert.equal(unreadable.person_agents_md, null)
+  assert.equal(unreadable.agents_md.text, "Team rule.\n")
   const unresolved = await boot(root, { personFn: async () => ({ status: "unresolved", reason: "login_not_cached" }) })
   assert.equal(unresolved.person_agents_md, null)
+})
+
+test("boot gives the desk's and the person's AGENTS.md one shared size budget, the desk's file first", async () => {
+  const root = await desk()
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `${"m".repeat(999)}\n`)
+  const alone = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(alone.agents_md, null)
+  assert.equal(alone.person_agents_md.truncated, false)
+  await fs.writeFile(path.join(root, "AGENTS.md"), `${"t".repeat(15_999)}\n`)
+  const shared = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(shared.agents_md.shownBytes, 16_000)
+  assert.equal(shared.person_agents_md.truncated, true)
+  assert.equal(shared.person_agents_md.bytes, 1000)
+  assert.ok(shared.person_agents_md.shownBytes <= AGENTS_MD_CAP_BYTES - 16_000)
 })
 
 const CALL_IT = " Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits. If the card cannot be updated, say so in your reply and give the task's real status."
@@ -312,7 +334,8 @@ test("blocked tasks sit under their own marked heading, ahead of the other state
 
 test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips what it does not have", () => {
   const cut = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "start\n-----\nmiddle", truncated: true, bytes: 30000, shownBytes: 20 } }))
-  assert.match(cut, /\[Cut after 20 of 30000 bytes \(limit 16 KB\): read the rest at \/work\/desk\/AGENTS\.md\]\n$/u)
+  assert.match(cut, /\[Cut after 18 of 30000 bytes: read the rest at \/work\/desk\/AGENTS\.md\]\n$/u)
+  assert.equal(cut.split("\n")[1], "Session start cut /work/desk/AGENTS.md (18 of 30000 bytes shown), to stay within 16 KB of AGENTS.md and 28000 characters of output: read the rest of each file before relying on its rules.")
   assert.match(cut, /start\n-----\nmiddle\n\n\[Cut/u, "a rule line inside the file is just text")
   const bare = formatBootText({ status: "ready" })
   assert.equal(bare, "Desk boot: ready\n\nActive tasks: unavailable (see degraded)\n")
@@ -324,8 +347,27 @@ test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips 
 test("formatBootText prints the person's AGENTS.md after the desk's, with the same cut note", () => {
   const text = formatBootText(sampleResult({ person_agents_md: { path: "/work/desk/desks/ari/AGENTS.md", text: "Mine.\n", truncated: true, bytes: 30000, shownBytes: 6 } }))
   const team = text.indexOf("## The desk's AGENTS.md (/work/desk/AGENTS.md)")
-  const mine = text.indexOf("## Your own AGENTS.md (/work/desk/desks/ari/AGENTS.md); its rules bind this session\n\nMine.\n\n[Cut after 6 of 30000 bytes (limit 16 KB): read the rest at /work/desk/desks/ari/AGENTS.md]")
+  const mine = text.indexOf("## Your own AGENTS.md (/work/desk/desks/ari/AGENTS.md); its rules bind this session\n\nMine.\n\n[Cut after 5 of 30000 bytes: read the rest at /work/desk/desks/ari/AGENTS.md]")
   assert.ok(team !== -1 && mine > team)
+  assert.match(text.split("\n")[1], /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(5 of 30000 bytes shown\)/u)
+})
+
+test("formatBootText keeps the whole output under what a host shows in full, cutting the AGENTS.md files and saying so at the top", () => {
+  const big = (name, letter) => ({ path: `/work/desk/${name}`, text: `${`${letter.repeat(99)}\n`.repeat(160)}`, truncated: false, bytes: 16_000, shownBytes: 16_000 })
+  const text = formatBootText(sampleResult({ agents_md: big("AGENTS.md", "t"), person_agents_md: big("desks/ari/AGENTS.md", "m") }))
+  assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
+  const notice = text.split("\n")[1]
+  assert.match(notice, /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(\d+ of 16000 bytes shown\), to stay/u, "the desk's file came first and fit")
+  assert.match(text, /\n(m{99}\n)+\n\[Cut after \d+ of 16000 bytes: read the rest at \/work\/desk\/desks\/ari\/AGENTS\.md\]/u, "cut at a line end")
+  const both = formatBootText(sampleResult({ agents_md: { ...big("AGENTS.md", "t"), text: "t\n".repeat(15_000) }, person_agents_md: big("desks/ari/AGENTS.md", "m") }))
+  assert.ok(both.length <= BOOT_TEXT_MAX_CHARS)
+  assert.match(both.split("\n")[1], /^Session start cut \/work\/desk\/AGENTS\.md \(\d+ of 16000 bytes shown\) and \/work\/desk\/desks\/ari\/AGENTS\.md \(0 of 16000 bytes shown\)/u)
+  // Output already at the limit before any AGENTS.md: the files show nothing, and say so.
+  const crowded = formatBootText(sampleResult({ text_instructions: ["x".repeat(BOOT_TEXT_MAX_CHARS)], person_agents_md: big("desks/ari/AGENTS.md", "m") }))
+  assert.match(crowded, /## Your own AGENTS\.md \(\/work\/desk\/desks\/ari\/AGENTS\.md\); its rules bind this session\n\n\n\n\[Cut after 0 of 16000 bytes/u)
+  // A file with no line break inside the room is cut to nothing rather than mid-line.
+  const oneLine = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "x".repeat(40_000), truncated: false, bytes: 40_000, shownBytes: 40_000 } }))
+  assert.match(oneLine, /\[Cut after 0 of 40000 bytes/u)
 })
 
 test("formatBootText shows the named task, an ambiguous name and a name that matches nothing", () => {

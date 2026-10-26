@@ -646,6 +646,7 @@ async function deskTools(ctx, world, session, shared, options) {
     assert(!added.isError, added.text.slice(0, 300))
     assert(added.json?.in_effect === true, `lesson_add did not say the lesson is in effect: ${added.text.slice(0, 300)}`)
     assert(exists("AGENTS.md") && read("AGENTS.md").includes("- **Search ranking.** Recency matters"), "lesson_add did not write the lesson into AGENTS.md")
+    world.lessonWritten = true
   })
   await check(ctx, "lesson_add.desk_needs_owner", "tools", async () => {
     const refused = await call("lesson_add", { scope: "desk", topic: "Search ranking", body: "Recency matters more than length." })
@@ -788,7 +789,15 @@ async function bootScript(ctx, world) {
     assert(/ready|degraded|setup_required/iu.test(lines[0]), `the first line is not the status line: ${lines[0]}`)
     if (world.createdTask) assert(output.includes("rank-recent-cards-higher"), "the boot does not list the active task")
     assert(!output.includes("remove-stale-index-files"), "the boot lists an archived task")
+    metric(ctx, "boot_chars", output.length, "chars")
+    world.bootOutput = output
     assert(lines.length <= 200 && output.length <= 20000, `the boot output floods: ${lines.length} lines, ${output.length} characters`)
+  })
+  // The boot above is the next session's start: a personal lesson recorded earlier in this run must be in what it prints.
+  await check(ctx, "boot.prints_personal_lesson", "boot", async () => {
+    assert(world.lessonWritten, "no personal lesson was recorded earlier in this run")
+    assert(typeof world.bootOutput === "string", "the boot did not run")
+    assert(world.bootOutput.includes("- **Search ranking.** Recency matters more than length."), "the next session start does not print the personal lesson")
   })
 }
 

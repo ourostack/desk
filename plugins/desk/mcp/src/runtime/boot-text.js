@@ -363,6 +363,12 @@ function cleanupLines(result) {
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
  * a result without them prints `instructions`.
  */
+// Claude Code shows a tool's output whole only up to about 30,000 characters and past that saves it to a file and shows a
+// short preview, so session start keeps its whole output under this.
+export const BOOT_TEXT_MAX_CHARS = 28_000
+// Room kept for the AGENTS.md headings, cut markers and the cut notice.
+const AGENTS_MD_OVERHEAD_CHARS = 1_200
+
 export function formatBootText(result) {
   // A sync call that threw has no summary reason but "it did not run"; its error message is in `degraded`, so say that.
   const thrown = (result.degraded ?? []).find((line) => line.startsWith("sync: "))
@@ -407,11 +413,28 @@ export function formatBootText(result) {
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
   if (instructions.length > 0) lines.push("", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`))
+  // The AGENTS.md files come last and get what is left of the output limit, so a host never hides the start of the boot
+  // behind a preview. Whatever is cut is said right under the status line, where it cannot be missed.
+  let room = BOOT_TEXT_MAX_CHARS - lines.join("\n").length - AGENTS_MD_OVERHEAD_CHARS
+  const cuts = []
   for (const [md, name] of [[result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]]) {
     if (!md) continue
+    let text = md.text.replace(/\n+$/u, "")
+    let { truncated } = md
+    if (text.length > Math.max(room, 0)) {
+      const end = text.lastIndexOf("\n", Math.max(room, 0))
+      text = text.slice(0, Math.max(end, 0))
+      truncated = true
+    }
+    room -= text.length
     // A heading, not a fence: the file's own text may hold any fence or rule line.
-    lines.push("", `## ${name} (${md.path}); its rules bind this session`, "", md.text.replace(/\n+$/u, ""))
-    if (md.truncated) lines.push("", `[Cut after ${md.shownBytes} of ${md.bytes} bytes (limit ${AGENTS_MD_CAP_BYTES / 1024} KB): read the rest at ${md.path}]`)
+    lines.push("", `## ${name} (${md.path}); its rules bind this session`, "", text)
+    if (truncated) {
+      const shown = Buffer.byteLength(text, "utf8")
+      lines.push("", `[Cut after ${shown} of ${md.bytes} bytes: read the rest at ${md.path}]`)
+      cuts.push(`${md.path} (${shown} of ${md.bytes} bytes shown)`)
+    }
   }
+  if (cuts.length > 0) lines.splice(1, 0, `Session start cut ${cuts.join(" and ")}, to stay within ${AGENTS_MD_CAP_BYTES / 1024} KB of AGENTS.md and ${BOOT_TEXT_MAX_CHARS} characters of output: read the rest of each file before relying on its rules.`)
   return `${lines.join("\n")}\n`
 }

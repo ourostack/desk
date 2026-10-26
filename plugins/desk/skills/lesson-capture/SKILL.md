@@ -45,9 +45,9 @@ when the job reported to a factory store, its job report there carries the evalu
 
 each lesson worth keeping lands through `lesson_add`, which puts it where something loads it. pick the scope by whose behaviour it changes:
 
-- **personal** — this operator's preference. it becomes a line in their AGENTS.md, which every session start prints.
-- **desk** — how Desk's tools or shared skills behave. name the `owner` that carries the behaviour (`skill:<plugin>:<skill>`, `tool:<name>`, `brief` or `foundation`); the tool records system friction against it and opens an improvement card, which the improvement loop turns into a pull request.
-- **team** — every teammate's agents in a shared workspace. the tool returns the attributed line; write it into the workspace's AGENTS.md through Crew's shared-path protocol (`crew:shared-desk-conventions`).
+- **personal** — this operator's preference. it becomes a line in their AGENTS.md, which session start prints.
+- **desk** — how Desk's tools or an installed plugin's skills behave. name the `owner` that carries the behaviour (`skill:<plugin>:<skill>` for any installed plugin, overlays included; `tool:<name>`, `brief` or `foundation`); the tool records system friction against it and opens an improvement card, which the improvement loop turns into a pull request.
+- **team** — every teammate's agents in a repository the team shares: a Crew workspace, or a team's code repository that is not a desk. pass `repo` (your local clone; the desk itself is the default in a Crew workspace) and `source`: the `_shared/decisions/` record where the repository keeps them, else who said it, where and when. the tool writes the line into that repository's root AGENTS.md through a pull request and merges it, and says `merged`, `pr_open` or `failed`. Copilot CLI and Codex load a repository's AGENTS.md; Claude Code loads it only through CLAUDE.md, and the reply says which.
 
 the **owner** call is a `content-routing` decision — operator-specific stays in the workspace; a general lesson goes to the plugin layer that owns it; within a plugin, the always-on foundation vs a triggered skill.
 

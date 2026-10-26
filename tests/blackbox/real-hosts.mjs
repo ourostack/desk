@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // The real-host layer: one real session on each host, with Desk as the person has it installed, in a throwaway desk.
-// Local only (it spends model requests and needs signed-in hosts), never in CI. Each session boots, writes a note,
-// finds it with search and opens and closes a fresh browser; the files and commits on the throwaway desk are the proof.
+// Local only (it spends model requests and needs signed-in hosts), never in CI. Each session boots, records a personal
+// lesson, finds it with search and opens and closes a fresh browser; the files and commits on the throwaway desk are the
+// proof. A second session on the same desk then quotes the lesson from its own session start: the lesson's body carries a
+// secret the second prompt does not, so only a session start that printed the lesson can give it back.
 //
 //   node tests/blackbox/real-hosts.mjs [--hosts copilot,claude] [--out <dir>] [--copilot-user <gh user>]
 //
@@ -22,14 +24,23 @@ const out = path.resolve(option("--out", path.join(os.tmpdir(), "desk-blackbox-r
 const copilotUser = option("--copilot-user", "arimendelow_microsoft")
 const timeoutMs = Number(option("--timeout", "600")) * 1000
 
-function prompt(tag) {
+function prompt(tag, secret) {
   return [
     `Black-box check ${tag}. Use only the Desk tools named here, in order, and do not edit files yourself.`,
     "1. Call desk_status and note its state and root path.",
-    `2. Call friction_add with body "Real-host check ${tag}".`,
-    `3. Call desk_search with query "${tag}" and note whether the friction log is among the results.`,
+    `2. Call lesson_add with scope "personal", topic "Blackbox ${tag}" and body "Real-host check ${tag} ${secret}."`,
+    `3. Call desk_search with query "${tag}" and note whether AGENTS.md is among the results.`,
     "4. Call browser_context with action open and browser fresh, then browser_command with args [\"goto\",\"https://example.com\"], then browser_context with action close and the contextId.",
     `Finish with exactly one line: RESULT ${tag} {"state":"...","root":"...","search_found":true|false,"browser_title":"...","browser_closed":true|false}`,
+  ].join("\n")
+}
+
+// The next session: nothing but its own start. It must not read files, so the secret can only come from the boot output.
+function nextPrompt(tag) {
+  return [
+    `Black-box check ${tag}-next. Start the session the way Desk's startup tells you to, and do not read or search any file yourself.`,
+    `Your session start output has a lesson whose topic is "Blackbox ${tag}". Its body ends with a word that starts with "sec".`,
+    `Finish with exactly one line: RESULT ${tag}-next {"secret":"<that word, or none if your session start did not show the lesson>"}`,
   ].join("\n")
 }
 
@@ -81,18 +92,15 @@ function personEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|CLAUDECODE|COPILOT_AGENT|COPILOT_TASK|DESK)/u.test(key)))
 }
 
-async function session(host) {
-  const tag = `bbx${randomUUID().slice(0, 8)}`
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `desk-real-${host}-`))
-  const { desk } = makeDesk({ root, env: process.env })
+async function hostRun(host, tag, text, desk) {
   const since = Date.now()
   let result
   if (host === "copilot") {
     const token = execFileSync("gh", ["auth", "token", "--user", copilotUser], { encoding: "utf8" }).trim()
-    result = await run("agency", ["copilot", "--allow-all", "-p", prompt(tag)], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
+    result = await run("agency", ["copilot", "--allow-all", "-p", text], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
     Object.assign(result, copilotAnswer(tag, since))
   } else {
-    result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", prompt(tag)], { cwd: desk, env: personEnv() })
+    result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", text], { cwd: desk, env: personEnv() })
     try {
       const parsed = JSON.parse(result.stdout)
       result.answer = parsed.result ?? ""
@@ -101,24 +109,36 @@ async function session(host) {
       result.answer = result.stdout
     }
   }
-  const note = path.join(desk, "_meta", "friction.md")
+  return result
+}
+
+async function session(host) {
+  const tag = `bbx${randomUUID().slice(0, 8)}`
+  const secret = `sec${randomUUID().slice(0, 8)}`
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `desk-real-${host}-`))
+  const { desk } = makeDesk({ root, env: process.env })
+  const result = await hostRun(host, tag, prompt(tag, secret), desk)
+  const lessons = path.join(desk, "AGENTS.md")
   const reported = parseResult(tag, result.answer)
+  const next = await hostRun(host, `${tag}-next`, nextPrompt(tag), desk)
+  const seen = parseResult(`${tag}-next`, next.answer)
   const log = git(desk, ["log", "--format=%s", "-n", "20"], process.env)
   const checks = {
-    exited_ok: result.code === 0,
+    exited_ok: result.code === 0 && next.code === 0,
     // The session's project folder is a desk, so Desk must write there and nowhere else.
-    bound_this_desk: fs.existsSync(note),
+    bound_this_desk: fs.existsSync(lessons),
     status_ready: reported?.state === "ready",
-    note_written: fs.existsSync(note) && fs.readFileSync(note, "utf8").includes(tag),
-    note_committed: git(desk, ["log", "--format=%H", "-n", "1", "--", "_meta/friction.md"], process.env) !== "",
+    lesson_written: fs.existsSync(lessons) && fs.readFileSync(lessons, "utf8").includes(`- **Blackbox ${tag}.** Real-host check ${tag} ${secret}.`),
+    lesson_committed: git(desk, ["log", "--format=%H", "-n", "1", "--", "AGENTS.md"], process.env) !== "",
     search_found: reported?.search_found === true,
     browser_opened: /example domain/iu.test(reported?.browser_title ?? ""),
     browser_closed: reported?.browser_closed === true,
+    next_session_start_printed_lesson: seen?.secret === secret,
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     try { fs.rmSync(root, { recursive: true, force: true }); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
   }
-  return { host, tag, ms: Math.round(result.ms), sessionId: result.sessionId, checks, reported, answerTail: result.answer.slice(-600), stderrTail: result.stderr.slice(-400), commits: log.split("\n") }
+  return { host, tag, ms: Math.round(result.ms + next.ms), sessionId: result.sessionId, nextSessionId: next.sessionId, nextAnswerTail: next.answer.slice(-400), checks, reported, answerTail: result.answer.slice(-600), stderrTail: result.stderr.slice(-400), commits: log.split("\n") }
 }
 
 const runs = []

@@ -76,6 +76,7 @@ import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
 import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
+import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -1486,11 +1487,20 @@ export async function bootOnce({
   } catch {
     agentsMd = null
   }
-  // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs.
+  // The person the Desk tools resolve, without a network call, worked out once: it picks both the person's own AGENTS.md
+  // and their improvement cards. A bad DESK_PERSON never stops the boot.
+  let who = null
+  let whoError = null
+  try {
+    who = await personFn({ deskRoot: root.path, env, now: now() })
+  } catch (error) {
+    whoError = error
+  }
+  // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs. The
+  // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole.
   let personAgentsMd = null
   try {
-    const who = await personFn({ deskRoot: root.path, env, now: now() })
-    if (who.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix))
+    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: Math.max(AGENTS_MD_CAP_BYTES - (agentsMd?.shownBytes ?? 0), 0) })
   } catch {
     personAgentsMd = null
   }
@@ -1563,8 +1573,7 @@ export async function bootOnce({
   let improvement = null
   if (root !== null && !isNoninteractive(env)) {
     try {
-      // The person the Desk tools resolve, without a network call; a bad DESK_PERSON never stops the boot.
-      const who = await improvementPerson({ deskRoot: root.path, env, now: now() })
+      if (whoError !== null) throw whoError
       improvement = who.status !== "ok"
         ? { status: "unchecked", reason: who.reason }
         : await withinBudget(improvementFn({ deskRoot: root.path, personPrefix: who.personPrefix, env, now: now() }), Math.min(IMPROVEMENT_BUDGET_MS, deadline - now()), null)
