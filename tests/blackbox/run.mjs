@@ -642,9 +642,14 @@ async function deskTools(ctx, world, session, shared, options) {
     assert(/improvement|card|key/iu.test(added.text), `system friction did not report its improvement card: ${added.text.slice(0, 300)}`)
   })
   await check(ctx, "lesson_add.writes", "tools", async () => {
-    const added = await call("lesson_add", { topic: "search-ranking", body: "Recency matters more than length." })
+    const added = await call("lesson_add", { scope: "personal", topic: "Search ranking", body: "Recency matters more than length." })
     assert(!added.isError, added.text.slice(0, 300))
-    assert(exists("_meta/tips/search-ranking.md") && read("_meta/tips/search-ranking.md").includes("Recency matters"), "lesson_add did not write the tip")
+    assert(added.json?.in_effect === true, `lesson_add did not say the lesson is in effect: ${added.text.slice(0, 300)}`)
+    assert(exists("AGENTS.md") && read("AGENTS.md").includes("- **Search ranking.** Recency matters"), "lesson_add did not write the lesson into AGENTS.md")
+  })
+  await check(ctx, "lesson_add.desk_needs_owner", "tools", async () => {
+    const refused = await call("lesson_add", { scope: "desk", topic: "Search ranking", body: "Recency matters more than length." })
+    assert(refused.isError || /owner/u.test(refused.text), `a desk lesson with no owner was not refused: ${refused.text.slice(0, 300)}`)
   })
   let card
   await check(ctx, "improvement_open.opens", "tools", async () => {

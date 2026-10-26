@@ -407,10 +407,11 @@ export function formatBootText(result) {
   if ((result.repo_states ?? []).length > 0) lines.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
   if (instructions.length > 0) lines.push("", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`))
-  if (result.agents_md) {
+  for (const [md, name] of [[result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]]) {
+    if (!md) continue
     // A heading, not a fence: the file's own text may hold any fence or rule line.
-    lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", result.agents_md.text.replace(/\n+$/u, ""))
-    if (result.agents_md.truncated) lines.push("", `[Cut after ${result.agents_md.shownBytes} of ${result.agents_md.bytes} bytes (limit ${AGENTS_MD_CAP_BYTES / 1024} KB): read the rest at ${result.agents_md.path}]`)
+    lines.push("", `## ${name} (${md.path}); its rules bind this session`, "", md.text.replace(/\n+$/u, ""))
+    if (md.truncated) lines.push("", `[Cut after ${md.shownBytes} of ${md.bytes} bytes (limit ${AGENTS_MD_CAP_BYTES / 1024} KB): read the rest at ${md.path}]`)
   }
   return `${lines.join("\n")}\n`
 }

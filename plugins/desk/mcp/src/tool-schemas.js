@@ -248,9 +248,15 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     file_card: flag("Also file the store's kaizen issue for the \"system\" friction now, instead of leaving it to the loop's mirror step. Only valid when about is \"system\"."),
   }, ["body"]),
   lesson_add: schema({
-    topic: text("The lesson topic; slugified for the filename."),
-    body: text("Markdown body."),
-  }, ["topic", "body"]),
+    scope: {
+      type: "string",
+      enum: ["personal", "desk", "team"],
+      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, added to their AGENTS.md, which every session start prints. \"desk\": how Desk's tools or shared skills behave; needs `owner` and opens an improvement card against it. \"team\": every teammate's agents in a shared workspace; returns the attributed line to write into the workspace's AGENTS.md through the shared-path protocol.",
+    },
+    topic: text("The rule's short name, on one line; a later lesson with the same topic replaces it."),
+    body: text("The rule, on one line."),
+    owner: text("Required when scope is \"desk\": where the lesson takes effect. skill:<plugin>:<skill> (for example skill:desk:interaction-style), tool:<Desk tool name>, brief (the brief every child agent gets) or foundation (the always-on using-desk text)."),
+  }, ["scope", "topic", "body"]),
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
     files: {

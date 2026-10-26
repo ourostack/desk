@@ -26,8 +26,8 @@ function prompt(tag) {
   return [
     `Black-box check ${tag}. Use only the Desk tools named here, in order, and do not edit files yourself.`,
     "1. Call desk_status and note its state and root path.",
-    `2. Call lesson_add with topic "blackbox-real" and body "Real-host check ${tag}".`,
-    `3. Call desk_search with query "${tag}" and note whether the lesson file is among the results.`,
+    `2. Call friction_add with body "Real-host check ${tag}".`,
+    `3. Call desk_search with query "${tag}" and note whether the friction log is among the results.`,
     "4. Call browser_context with action open and browser fresh, then browser_command with args [\"goto\",\"https://example.com\"], then browser_context with action close and the contextId.",
     `Finish with exactly one line: RESULT ${tag} {"state":"...","root":"...","search_found":true|false,"browser_title":"...","browser_closed":true|false}`,
   ].join("\n")
@@ -101,16 +101,16 @@ async function session(host) {
       result.answer = result.stdout
     }
   }
-  const lesson = path.join(desk, "_meta", "tips", "blackbox-real.md")
+  const note = path.join(desk, "_meta", "friction.md")
   const reported = parseResult(tag, result.answer)
   const log = git(desk, ["log", "--format=%s", "-n", "20"], process.env)
   const checks = {
     exited_ok: result.code === 0,
     // The session's project folder is a desk, so Desk must write there and nowhere else.
-    bound_this_desk: fs.existsSync(lesson),
+    bound_this_desk: fs.existsSync(note),
     status_ready: reported?.state === "ready",
-    lesson_written: fs.existsSync(lesson) && fs.readFileSync(lesson, "utf8").includes(tag),
-    lesson_committed: git(desk, ["log", "--format=%H", "-n", "1", "--", "_meta/tips/blackbox-real.md"], process.env) !== "",
+    note_written: fs.existsSync(note) && fs.readFileSync(note, "utf8").includes(tag),
+    note_committed: git(desk, ["log", "--format=%H", "-n", "1", "--", "_meta/friction.md"], process.env) !== "",
     search_found: reported?.search_found === true,
     browser_opened: /example domain/iu.test(reported?.browser_title ?? ""),
     browser_closed: reported?.browser_closed === true,

@@ -75,6 +75,22 @@ test("boot carries AGENTS.md in its result, and nothing orders the agent to read
   assert.equal(throwing.agents_md, null)
 })
 
+test("boot also carries the person's own AGENTS.md in a shared workspace, where the root AGENTS.md is the team's", async () => {
+  const root = await desk()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "Team rule.\n")
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), "My rule.\n")
+  const crew = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(crew.agents_md.text, "Team rule.\n")
+  assert.deepEqual(crew.person_agents_md, { path: path.join(root, "desks", "ari", "AGENTS.md"), text: "My rule.\n", truncated: false, bytes: 9, shownBytes: 9 })
+  const solo = await boot(root)
+  assert.equal(solo.person_agents_md, null, "a solo desk's own AGENTS.md is the root one")
+  const throwing = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" }, personFn: async () => { throw new Error("denied") } })
+  assert.equal(throwing.person_agents_md, null)
+  const unresolved = await boot(root, { personFn: async () => ({ status: "unresolved", reason: "login_not_cached" }) })
+  assert.equal(unresolved.person_agents_md, null)
+})
+
 const CALL_IT = " Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits. If the card cannot be updated, say so in your reply and give the task's real status."
 
 test("boot's tool-naming instruction, on both hosts, says a looked-up tool is loaded and is called directly, never through Bash, Node or file edits, and that an unupdated card is said so with the real status", () => {
@@ -303,6 +319,13 @@ test("formatBootText marks a cut AGENTS.md with the path to the rest, and skips 
   const empty = formatBootText({ status: "ready", active_tasks: { task_count: 0, tracks: [] }, root: { path: "/d" }, host: {} })
   assert.match(empty, /^Desk boot: ready \| desk \/d \| host unknown \/ unknown \/ unknown\n/u)
   assert.match(empty, /Active tasks \(0\):\n- none\n/u)
+})
+
+test("formatBootText prints the person's AGENTS.md after the desk's, with the same cut note", () => {
+  const text = formatBootText(sampleResult({ person_agents_md: { path: "/work/desk/desks/ari/AGENTS.md", text: "Mine.\n", truncated: true, bytes: 30000, shownBytes: 6 } }))
+  const team = text.indexOf("## The desk's AGENTS.md (/work/desk/AGENTS.md)")
+  const mine = text.indexOf("## Your own AGENTS.md (/work/desk/desks/ari/AGENTS.md); its rules bind this session\n\nMine.\n\n[Cut after 6 of 30000 bytes (limit 16 KB): read the rest at /work/desk/desks/ari/AGENTS.md]")
+  assert.ok(team !== -1 && mine > team)
 })
 
 test("formatBootText shows the named task, an ambiguous name and a name that matches nothing", () => {

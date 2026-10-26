@@ -1,6 +1,6 @@
 ---
 name: lesson-capture
-description: After a task reaches `done` or a non-trivial iteration, mine its records for lessons and propose targeted skill updates.
+description: After a task reaches `done` or a non-trivial iteration, mine its records for lessons and record each with `lesson_add` where it takes effect.
 ---
 
 # lesson-capture
@@ -41,20 +41,19 @@ what i'm looking for:
 
 when the job reported to a factory store, its job report there carries the evaluator's waste labels and the job's measures (tool failures, retries, defects, flow efficiency). waste whose cause is the shared system (Desk, a skill, a tool, the factory) is not a private note: propose a kaizen card for it by recording a kaizen candidate with `friction_add` and `about: "system"` (no `file_card`), the plugin and friction class, the measure the waste moved as `signal`, and the job ids as `evidence_jobs`, worded generically per `friction-management`. lesson-capture never files a card itself: the candidate opens its own improvement card with no signoff, the loop's mirror step files the store issue, and the store's build then checks the countermeasure against that measure once it ships. waste whose cause is this desk's setup, or the work's own subject matter, follows the rest of this skill.
 
-## Output: lesson proposals
+## Output: lessons that take effect
 
-for each lesson worth shelving, i write a concrete proposal:
+each lesson worth keeping lands through `lesson_add`, which puts it where something loads it. pick the scope by whose behaviour it changes:
 
-- **where it should land** — specific skill file path + section
-- **the rule statement** — one-sentence rule
-- **the trigger phrase** — when this rule should fire
-- **what to do** — the action the rule prescribes
-- **anti-pattern** — what the rule prevents
-- **evidence** — quote from the artifact(s) that surfaced the lesson
+- **personal** — this operator's preference. it becomes a line in their AGENTS.md, which every session start prints.
+- **desk** — how Desk's tools or shared skills behave. name the `owner` that carries the behaviour (`skill:<plugin>:<skill>`, `tool:<name>`, `brief` or `foundation`); the tool records system friction against it and opens an improvement card, which the improvement loop turns into a pull request.
+- **team** — every teammate's agents in a shared workspace. the tool returns the attributed line; write it into the workspace's AGENTS.md through Crew's shared-path protocol (`crew:shared-desk-conventions`).
 
-the **where it should land** call is a `content-routing` decision — operator-specific stays in the workspace; a general lesson extracts to a plugin (generic vs an overlay); within a plugin, the layer's always-on foundation vs a triggered skill.
+the **owner** call is a `content-routing` decision — operator-specific stays in the workspace; a general lesson goes to the plugin layer that owns it; within a plugin, the always-on foundation vs a triggered skill.
 
-proposals are **proposals** — they don't auto-apply. each lesson is surfaced for operator confirm (or for my own confirm if i'm self-encoding under my own authority). operator may approve, redirect, or reject. nothing goes on the shelf without that sign-off.
+each lesson is one rule on one line, with its evidence quoted in the desk note or the improvement card's friction entry. tell the operator what the tool's reply says (`in_effect` and `message`), never "this is now a standing lesson" on your own word: a lesson nothing loads is not kept.
+
+a correction the operator gave is theirs, so record it straight away. a lesson i inferred from my own paperwork is a proposal: personal and team lessons wait for the operator's confirm; a desk lesson goes to its improvement card, whose pull request is the review.
 
 ## Relationship to friction-management
 
@@ -65,19 +64,19 @@ proposals are **proposals** — they don't auto-apply. each lesson is surfaced f
 | encoding decision | operator + agent in same pass | agent proposes; operator (or self-authorized agent) confirms |
 | cadence | reactive (when friction happens) | periodic (post-task) |
 
-both end in the same place: a targeted update to a skill body (or a no-op-with-reason if the lesson doesn't warrant encoding). they're complementary, not competing. the corkboard catches the live snags; the shelf catches the slow-cooked lessons.
+both end in the same place: a change where it is loaded — a line in an AGENTS.md, or an improvement card that ships a change to a skill or tool (or a no-op-with-reason if the lesson doesn't warrant encoding). they're complementary, not competing. the corkboard catches the live snags; the shelf catches the slow-cooked lessons.
 
 ## Hard rules
 
 1. **don't fabricate lessons.** if i read three iterations and find no real lesson, i say so. quiet completion is better than forced output. the shelf isn't a quota.
 2. **quote evidence.** each proposed lesson cites the artifact(s) that surfaced it. no inference without source.
-3. **concrete landing place.** "should probably go somewhere" is not actionable. propose the specific skill + section.
+3. **concrete landing place.** "should probably go somewhere" is not actionable. name the scope, and for a desk lesson the owner `lesson_add` takes.
 4. **don't over-encode.** a single mistake during one iteration usually isn't a rule worth shelving. wait for the second occurrence — OR explicitly note "first occurrence; flagging in case of recurrence" without yet proposing encoding.
 5. **respect existing rules.** before proposing a new rule, check if an existing skill already covers it. if yes, the proposal is "make the existing rule stickier" (e.g., promote it from a triggered skill into the always-on `using-desk` foundation) rather than "add new rule."
 
 ## What this skill does NOT do
 
-- it does not modify skill bodies directly. it proposes; operator (or self-authorized agent) applies.
+- it does not modify skill bodies directly. a desk lesson reaches a skill through its improvement card.
 - it does not log itself as friction. the lesson IS the output; friction-management handles operator-surfaced pain points separately.
 - it does not run on every task. lightweight tasks (one-commit fixes, mechanical rebases) typically have no lessons worth shelving. pick its moments.
 

@@ -976,6 +976,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     sync_summary: null,
     needs_operator: null,
     agents_md: null,
+    person_agents_md: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -1343,6 +1344,7 @@ export async function bootOnce({
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
+  personFn = improvementPerson,
   staleDeskFn = checkStaleDesk,
   releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
@@ -1484,6 +1486,14 @@ export async function bootOnce({
   } catch {
     agentsMd = null
   }
+  // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs.
+  let personAgentsMd = null
+  try {
+    const who = await personFn({ deskRoot: root.path, env, now: now() })
+    if (who.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix))
+  } catch {
+    personAgentsMd = null
+  }
 
   let tasks = null
   try {
@@ -1612,6 +1622,7 @@ export async function bootOnce({
     sync,
     sync_summary: syncSummaryText,
     agents_md: agentsMd,
+    person_agents_md: personAgentsMd,
     active_tasks: tasks,
     card_parser: parserName(nestedCards),
     card_validation: cardValidationResult,
