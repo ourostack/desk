@@ -721,14 +721,14 @@ test("an empty context queue preserves the ordinary evaluator's no-jobs result",
   assert.deepEqual(f.phases, [])
 })
 
-test("ordinary kicks and separate workers drain context generation and privacy with no label request or triage trigger", async () => {
+test("ordinary kicks and separate workers drain context generation and privacy with no label request", async () => {
   const f = await fixture(9)
   await recordStep(f.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: NOW - 3600001 })
   assert.equal((await evaluationKickDue(f.env, { now: NOW })).due, true)
   const kicks = []
   const quiet = async () => ({ ok: true, result: "nothing_waiting", launched: false })
   const impls = {
-    routeIssues: quiet, routeLocal: quiet, triage: quiet, mirror: quiet, reconcile: quiet, verify: quiet, measure: quiet,
+    routeIssues: quiet, routeLocal: quiet, mirror: quiet, reconcile: quiet, verify: quiet, measure: quiet,
     evaluate: (env, options) => runEvaluatorStep(env, { ...f.options, ...options }),
     kick: async (env, options) => {
       const decision = await evaluationKickDue(env, { ...options, now: NOW })
@@ -772,43 +772,17 @@ test("a failed privacy run does not immediately drain other candidates", async (
   assert.equal((await evaluationKickDue(f.env, { now: NOW + 3600001 })).due, true)
 })
 
-test("triage taking the worker slot preserves a successful context phase's continuation", async () => {
-  const f = await fixture()
-  await runEvaluatorStep(f.env, f.options)
-  const quiet = async () => ({ ok: true, result: "nothing_waiting", launched: false })
-  const kicks = []
-  const result = await runLoopWorker(f.env, {
-    deskRoot: f.desk, pluginVersion: VERSION, clock: () => NOW,
-    impls: {
-      routeIssues: quiet, routeLocal: quiet, mirror: quiet, reconcile: quiet, verify: quiet, measure: quiet,
-      triage: async () => ({ ok: true, result: "ran", launched: true }),
-      evaluate: () => assert.fail("triage owns this generation's one launch"),
-      kick: async (env, options) => { kicks.push(await evaluationKickDue(env, { ...options, now: NOW })) },
-    },
-  })
-  assert.equal(result.steps.evaluate, "slot_taken")
-  assert.equal(kicks.length, 1)
-  assert.equal(kicks[0].due, true)
-  assert.deepEqual(f.phases, ["task_context"])
-})
-
-for (const trigger of ["label", "triage"]) for (const damage of ["input", "state"]) {
-  test(`a broken optional context ${damage} cannot suppress an ordinary ${trigger} kick`, async () => {
+for (const damage of ["input", "state"]) {
+  test(`a broken optional context ${damage} cannot suppress an ordinary label kick`, async () => {
     const f = await fixture()
     const [work] = await listContextWork(f.env, { store: STORE })
     if (damage === "input") await rename(work.input, `${work.input}.preserved`)
     else await writeFile(await taskContextPath(f.env, STORE, work.job, "state.json"), "{}\n")
     await recordStep(f.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: NOW - 3600001 })
     const scope = { deskRoot: f.desk, personPrefix: "" }
-    if (trigger === "label") await requestEvaluation(f.env, {
+    await requestEvaluation(f.env, {
       job: "f".repeat(32), deskRoot: f.desk, requestedAt: new Date(NOW).toISOString(),
     })
-    else await updateStatus(f.env, (status) => ({
-      ...status, triage_by_desk: { [JSON.stringify([f.desk, ""])]: {
-        at: new Date(NOW - 7200000).toISOString(), ok: true, result: "ran", eligible: 1,
-        runner: { state: "qualified" }, run: { failures_in_a_row: 0 },
-      } },
-    }))
     const result = await kickLoop(f.env, { now: NOW, scope, spawn: () => ({ once() {}, unref() {} }) })
     assert.equal(result.kicked, true)
     assert.equal(result.context_held, "context_error")

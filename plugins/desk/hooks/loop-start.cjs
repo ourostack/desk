@@ -28,7 +28,7 @@
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-// The worker's budget is 20 minutes (mcp/src/factory/loop-worker.js), in which it starts at most one agent run (an evaluation or a triage run); its own process ends itself a minute later.
+// The worker's budget is 20 minutes (mcp/src/factory/loop-worker.js), in which it starts at most one agent run; its own process ends itself a minute later.
 const HARD_STOP_MS = 22 * 60 * 1000;
 // The most the worker leaves out of its budget for the facts scan (loop-worker.js `MAX_SCAN_ALLOWANCE_MS`, the same number).
 const MAX_EXTENSION_MS = 5 * 60 * 60 * 1000;

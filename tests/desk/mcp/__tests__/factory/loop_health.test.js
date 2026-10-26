@@ -9,13 +9,11 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 
-import { cardFile, cardKey, claimNext, openImprovement, readCards, LOOP_ALARMS } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { cardFile, cardKey, openImprovement, readCards, LOOP_ALARMS } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { conditionOf, observeConditions } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
 import { readStatus, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { RECONCILE_REASONS } from "../../../../../plugins/desk/mcp/src/factory/reconcile-reasons.js"
 import { STEPS, recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
-import { loopSlotFrom, slotFields } from "../../../../../plugins/desk/mcp/src/factory/loop-slot.js"
-import { LEGACY_REVISION, legacyCards } from "../_legacy_reader.js"
 import {
   AGE_ALARM_DAYS, STALE_AFTER_HOURS, STUCK_ALARM_DAYS, BLOCKING_STATES, HEADLESS_STATES,
   STORE_SIDE_REASONS, LABEL_LAG_ALARM_MINUTES, assembleLoop, buildLoopHealth, count, loopAlarms, runMeasureStep, unreadAlarms,
@@ -128,9 +126,8 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   await setLoop(ctx, { route_issues: { at: TIME, andon_open: 1, store_build_failing: 0, desk_problems_open: 2 }, labels_quarantined: { count: 0, at: TIME }, evaluate: { attempts: { "job-secret": { attempts: 1, last_day: "2026-10-05" } }, blocked_last_day: "2026-10-05" } })
   await recordStep(ctx.env, "route", { ok: true, result: "routed", now: ago(0.1) })
   const loop = await build(ctx)
-  assert.deepEqual(keysOf(loop), ["alarms", "desk_version", "evaluator", "improvement", "reconcile", "schema", "steps", "triage", "unsigned_deliveries", "worker", "written_at"])
+  assert.deepEqual(keysOf(loop), ["alarms", "desk_version", "evaluator", "improvement", "reconcile", "schema", "steps", "unsigned_deliveries", "worker", "written_at"])
   assert.deepEqual(loop.worker, { last_result: "never_ran", last_ran_at: null })
-  assert.deepEqual(loop.triage, { last_result: "never_ran", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
   assert.equal(loop.schema, "desk.factory.loop/1")
   assert.equal(loop.written_at, NOW.toISOString())
   assert.equal(loop.desk_version, "3.2.0-alpha.9")
@@ -577,7 +574,7 @@ test("loopAlarms and unreadAlarms work from a record and its signals alone", () 
   assert.deepEqual(loopAlarms(loop), [{ name: "improvement_age", evidence: { age_days: 9 } }])
   assert.deepEqual(loopAlarms(loop, { attempted: ["route"], blocked_days: 3, cards_invalid: 1 }).map((alarm) => alarm.name), ["improvement_age", "cards_invalid"])
   assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0, facts_quarantine_not_settling: false }), ["unsigned_age", "headless_blocked", "labels_quarantined", "label_lag"])
-  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", "triage_engine_unpinned", ...STEPS.map((step) => `step_stale:${step}`)])
+  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)])
   assert.deepEqual(loopAlarms(loop, { facts_quarantine_not_settling: true }).map((alarm) => alarm.name), ["improvement_age", "facts_quarantine_not_settling"])
   const blind = await build(ctx, { readCardsImpl: async () => ({ unreadable: true }) })
   assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null, facts_quarantine_not_settling: false }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag"])
@@ -764,108 +761,15 @@ test("a lag over an hour raises loop_alarm:label_lag, an hour exactly does not, 
   assert.ok((await readCards({ deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix })).cards.some((card) => card.key === cardKey("loop_alarm", "label_lag")))
 }))
 
-test("the triage section shows the step's last result, runner codes and review counts field by field, and nothing else of status.triage", () => scratch(async (ctx) => {
-  await setStatus(ctx, { triage: {
-    at: TIME, result: "ran", ok: true, launched: true, runner: { state: "ran", reason: null, qualification: "loaded" },
-    counts: { reviewed: 3, refused: 1, deferred: 0, unreviewed: 5 }, eligible: 2, last_success_at: TIME,
-    last_review: { key: "andon:ourostack/factory#12", revision: 4, at: TIME, route: "investigate" }, held: 1,
-    refresh: { scan: "truncated", changes: 0 }, run: { last_result: "timeout", last_at: TIME, last_ok_at: null, failures_in_a_row: 2 },
-  } })
-  const { triage } = await build(ctx)
-  assert.deepEqual(triage, { last_result: "ran", runner_state: "ran", runner_reason: null, qualification: "loaded", reviewed: M(3), unreviewed: M(5), refused: M(1), deferred: M(0), last_success_at: TIME, scan: "truncated", run: { last_result: "timeout", last_at: TIME, last_ok_at: null, failures_in_a_row: M(2) } })
-  assert.equal(JSON.stringify(triage).includes("andon"), false, "no card key reaches the health record")
-  // A host that cannot run triage says why; counts the step did not know are unavailable, never 0.
-  await setStatus(ctx, { triage: { result: "runner_unavailable", runner: { state: "unsupported_host", reason: null, qualification: "not_checked" }, counts: { reviewed: null, refused: null, deferred: null, unreviewed: 4 }, last_success_at: null } })
-  assert.deepEqual((await build(ctx)).triage, { last_result: "runner_unavailable", runner_state: "unsupported_host", runner_reason: null, qualification: "not_checked", reviewed: U("not_recorded"), unreviewed: M(4), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
-  await setStatus(ctx, { triage: { result: "runner_blocked", runner: { state: "scope_unqualified", reason: "diagnostic_inadequate", qualification: "invalid" } } })
-  assert.deepEqual([(await build(ctx)).triage.runner_reason, (await build(ctx)).triage.qualification], ["diagnostic_inadequate", "invalid"])
-  // Damaged values read as unknown or absent, never as text from the file.
-  await setStatus(ctx, { triage: { result: "Not A Code /x", runner: "x", counts: "x", last_success_at: "not a time", refresh: "x", run: "x" } })
-  assert.deepEqual((await build(ctx)).triage, { last_result: "unknown", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
-  await setStatus(ctx, { triage: "damaged" })
-  assert.equal((await build(ctx)).triage.last_result, "never_ran")
-}))
-
-test("a triage runner record stale because its engine pin is behind opens one engine-pin card, and the condition clears with the reason", () => scratch(async (ctx) => {
-  const KEY = "loop_alarm:triage_engine_unpinned"
-  const where = { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix }
-  const measure = (attempted, now = NOW) => runMeasureStep(ctx.env, { ...where, now, attempted })
-  const triage = (reason) => ({ result: "runner_unavailable", ok: true, runner: { state: "scope_unqualified", reason, qualification: "stale" }, counts: { reviewed: null, refused: null, deferred: null, unreviewed: 1 }, eligible: 1, last_success_at: null })
-  await setStatus(ctx, { triage: triage("engine_unpinned") })
-  // A run that did not attempt triage neither raises nor clears it.
-  await measure(["route"])
+test("a triage record an earlier Desk left reaches no part of the health record and raises no alarm", () => scratch(async (ctx) => {
+  await setStatus(ctx, { triage: { result: "runner_unavailable", ok: false, runner: { state: "scope_unqualified", reason: "engine_unpinned", qualification: "stale" } } })
+  await recordStep(ctx.env, "route", { ok: true, result: "routed", now: ago(0.1) })
+  await updateStatus(ctx.env, (status) => ({ ...status, loop: { ...status.loop, steps: { ...status.loop.steps, triage: { last_ran_at: TIME, last_ok_at: null, last_result: "timeout", runs: 3, failures: 3, failures_in_a_row: 3 } } } }))
+  const loop = await build(ctx)
+  assert.equal(loop.triage, undefined)
+  assert.equal(loop.steps.triage, undefined)
+  const out = await measure(ctx, { attempted: [...STEPS, "triage"] })
+  assert.equal(out.ok, true, JSON.stringify(out))
+  assert.deepEqual(out.spy.calls[0].present.filter((name) => name.includes("triage")), [])
   assert.deepEqual(await allCards(ctx), [])
-  const out = await measure(["triage"])
-  assert.deepEqual([out.ok, out.counts.opened], [true, 1], JSON.stringify(out))
-  const cards = await readCards(where)
-  assert.deepEqual(cards.cards.map((card) => [card.key, card.title, card.state, card.evidence]), [[KEY, "The triage runner engine pin is behind the installed Claude Code", "open", []]])
-  assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, true)
-  // Open at most once.
-  assert.equal((await measure(["triage"])).counts.opened, undefined)
-  assert.equal((await allCards(ctx)).length, 1)
-  // Another stale reason, and the pin is no longer the problem: the condition clears, so verify closes the card under its lifecycle.
-  // An unsafe root is quiet and visible on the health record, with no card of its own.
-  await setStatus(ctx, { triage: triage("root_unsafe") })
-  await measure(["triage"])
-  assert.equal((await readStatus(ctx.env)).loop.health.triage.runner_reason, "root_unsafe")
-  assert.deepEqual((await allCards(ctx)).length, 1)
-  await setStatus(ctx, { triage: triage("environment_changed") })
-  await measure(["triage"])
-  assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, false)
-}))
-
-test("triage_stale_alarm_opens_real_canonical_card", () => scratch(async (ctx) => {
-  const KEY = "loop_alarm:step_stale:triage"
-  const where = { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix }
-  // Two failures in a row are not yet stale; the third is. The measure step, the card writer, the commit path and the conditions record are the real ones.
-  const real = (attempted) => runMeasureStep(ctx.env, { ...where, now: NOW, attempted })
-  await setStatus(ctx, { triage: { result: "timeout", ok: false, runner: { state: "timeout", reason: null, qualification: "loaded" }, counts: { reviewed: 0, refused: 2, deferred: 0, unreviewed: 2 }, eligible: 2, last_success_at: null } })
-  for (let i = 0; i < 2; i++) await recordStep(ctx.env, "triage", { ok: false, result: "timeout", now: ago(0.1) })
-  assert.equal((await real(["triage"])).ok, true)
-  assert.deepEqual(await allCards(ctx), [])
-  await recordStep(ctx.env, "triage", { ok: false, result: "timeout", now: ago(0.05) })
-  const out = await real(["route", "triage"])
-  assert.deepEqual([out.ok, out.counts.opened], [true, 1], JSON.stringify(out))
-
-  // The saved canonical card, read back from disk by the real reader.
-  const saved = await readCards(where)
-  assert.deepEqual(saved.skipped, {})
-  assert.deepEqual(saved.cards.map((card) => card.key), [KEY])
-  const [card] = saved.cards
-  assert.deepEqual(
-    { source: card.source, state: card.state, title: card.title, claim: card.claim, claim_log: card.claim_log, opened_at: card.opened_at, last_opened_at: card.last_opened_at, recurrences: card.recurrences, reopened: card.reopened, closed_at: card.closed_at, close_reason: card.close_reason, countermeasure: card.countermeasure, evidence: card.evidence },
-    { source: "loop_alarm", state: "open", title: "Loop step triage is stale", claim: null, claim_log: [], opened_at: NOW.toISOString(), last_opened_at: NOW.toISOString(), recurrences: 0, reopened: 0, closed_at: null, close_reason: null, countermeasure: null, evidence: [] },
-    "the lifecycle and claim are the library's own: nothing was fabricated",
-  )
-  assert.equal(path.basename(cardFile(ctx.deskRoot, "", KEY)).startsWith("loop_alarm--"), true)
-  assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, true, "the conditions record holds the alarm, so verify closes it when it clears")
-  assert.equal((await readStatus(ctx.env)).loop.health.steps.triage.stale, true)
-  // The same alarm is not opened twice.
-  assert.equal((await real(["triage"])).counts.opened, undefined)
-  assert.equal((await allCards(ctx)).length, 1)
-
-  // The reader of the previous Desk reads the very same saved card.
-  const legacy = await legacyCards()
-  assert.equal(legacy.revision, LEGACY_REVISION)
-  assert.ok(!legacy.module.LOOP_ALARMS.includes("step_stale:triage"))
-  const older = await legacy.module.readCards(where)
-  assert.deepEqual(older.skipped, {})
-  assert.deepEqual(older.cards, saved.cards)
-  assert.equal(older.set_aside_total, 0)
-
-  // The capture record's loop slot is what it was: the same keys, counts only, and nothing of the triage section.
-  const health = (await readStatus(ctx.env)).loop.health
-  assert.equal(health.triage.last_result, "timeout")
-  const slot = loopSlotFrom(health, NOW.getTime())
-  const SLOT_KEYS = ["v", "improvement_open", "improvement_claimed", "improvement_shipped", "improvement_verifying", "oldest_open_age_days", "closed_confirmed_month", "closed_unverified_month", "loop_alarms_open", "steps_stale", "headless"]
-  assert.deepEqual(Object.keys(slot), SLOT_KEYS)
-  assert.deepEqual(Object.keys(slotFields(health)), SLOT_KEYS)
-  assert.deepEqual(JSON.stringify(slot), JSON.stringify({ v: 1, improvement_open: 0, improvement_claimed: 0, improvement_shipped: 0, improvement_verifying: 0, oldest_open_age_days: null, closed_confirmed_month: 0, closed_unverified_month: 0, loop_alarms_open: 1, steps_stale: 1, headless: null }))
-  const { triage: _local, ...withoutTriage } = health
-  assert.equal(JSON.stringify(loopSlotFrom(withoutTriage, NOW.getTime())), JSON.stringify(slot), "the slot reads nothing of the triage section")
-  assert.doesNotMatch(JSON.stringify(slot), /triage|timeout|reviewed|runner/u)
-
-  // The alarm is actionable: the real claim takes it under the unchanged limits.
-  const claimed = await claimNext({ ...where, env: ctx.env, now: NOW })
-  assert.deepEqual([claimed.result, claimed.card.key, claimed.card.state], ["claimed", KEY, "claimed"])
 }))

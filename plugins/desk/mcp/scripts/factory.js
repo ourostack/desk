@@ -18,8 +18,6 @@
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]
 //   node scripts/factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]
-//   node scripts/factory.js triage --desk <absolute desk root> [--person-prefix desks/<alias>]
-//   node scripts/factory.js triage-qualify [--check]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -48,10 +46,7 @@
 // mismatch with a reason code (`src/factory/reconcile.js`); it only reads. `loop` is the
 // detached loop worker (`src/factory/loop-worker.js`, started by `hooks/loop-start.cjs`
 // at session start): it runs the improvement steps once and prints one line of codes
-// and integers, with no path, name or id in it. `triage` runs the loop's triage step once
-// (`src/factory/triage-step.js`) under the loop worker's lock: the mechanical refresh of
-// triage annotations, then at most one bounded agent run when one is due and the runner is
-// qualified; it prints codes and counts only.
+// and integers, with no path, name or id in it.
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
@@ -78,7 +73,7 @@ import { issuesClient } from "../src/factory/store-issues.js"
 import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "triage", "triage-qualify"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -611,21 +606,6 @@ export async function runReconcileCommand({ argv, env, git = "git" }) {
   })
 }
 
-const TRIAGE_QUALIFY_USAGE = "Usage: factory.js triage-qualify [--check]"
-
-/**
- * Runs `triage-qualify`: makes the triage runner's qualification record when it does not restore (two real model sessions,
- * reserved in the shared launch ledger), or with `--check` only reports what restore says. Answers `{ state, reason, ... }`
- * codes only; `runtime_unavailable`/`runtime_unloadable` when the runner cannot be loaded. `load` is a test seam.
- */
-export async function runTriageQualifyCommand({ argv, env, load }) {
-  if (argv.length > 1 || (argv.length === 1 && argv[0] !== "--check")) throw new Error(TRIAGE_QUALIFY_USAGE)
-  const { importTriageRunner } = await import("../src/factory/triage-home.js")
-  const loaded = await (load ?? importTriageRunner)(env)
-  if (loaded.state !== "loaded") return { state: "unavailable", reason: loaded.reason }
-  return argv.length === 1 ? loaded.qualify.checkTriageQualification(env) : loaded.qualify.qualifyTriage(env)
-}
-
 const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
 
 /** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
@@ -638,12 +618,6 @@ export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(),
   const { runLoopWorker } = await import("../src/factory/loop-worker.js")
   const { impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl } = extra
   return runLoopWorker(env, { deskRoot: options.get("desk") ?? null, personPrefix: person, pluginVersion, impls, clock, alive, budgetMs, ceilingMs, exit, readStatusImpl })
-}
-
-/** Runs `triage`: one triage step (`src/factory/triage-step.js`); `pluginVersion`, `impls`, `clock` and `kick` are test seams. */
-export async function runTriageCliCommand({ argv, env, pluginVersion = deskVersion(), impls, clock, kick }) {
-  const { runTriageCommand } = await import("../src/factory/triage-step.js")
-  return runTriageCommand({ argv, env, pluginVersion, impls, clock, kick })
 }
 
 const CONSENT_USAGE = "Usage: factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>], or factory.js consent --store <owner/repo> --mentioned yes"
@@ -694,12 +668,10 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
       loop: runLoopCommand,
-      triage: runTriageCliCommand,
-      "triage-qualify": runTriageQualifyCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || (subcommand === "triage-qualify" && !["qualified", "missing", "stale", "busy"].includes(result.state)) || Object(result).failed > 0
+    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
