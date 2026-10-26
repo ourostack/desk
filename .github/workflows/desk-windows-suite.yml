@@ -111,7 +111,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: probe-${{ matrix.shard }}
-          path: probe/
+          path: plugins/desk/mcp/probe-*.json
           if-no-files-found: ignore
 
       - name: Show the result in the job summary
