@@ -35,8 +35,8 @@
     "sessionStart": [
       {
         "type": "command",
-        "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-session-start.cjs\"",
-        "powershell": "node \"${PLUGIN_ROOT}\\hooks\\copilot-session-start.cjs\"",
+        "bash": "if command -v node >/dev/null 2>&1; then node \"${PLUGIN_ROOT}/hooks/copilot-session-start.cjs\"; else desk_host=copilot; . \"${PLUGIN_ROOT}/hooks/node-missing.sh\"; fi",
+        "powershell": "if (Get-Command node -CommandType Application -ErrorAction SilentlyContinue) { node \"${PLUGIN_ROOT}\\hooks\\copilot-session-start.cjs\" } else { '{\"additionalContext\":\"Desk needs Node.js 20 or newer, and this machine has no Node.js (no `node` on PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: run `winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements` in a terminal. Then the person must open a new terminal and start a new session, because tool servers load only when a session starts.\"}' }",
         "timeoutSec": 10
       }
     ],

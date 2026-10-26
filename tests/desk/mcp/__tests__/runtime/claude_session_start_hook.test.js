@@ -119,10 +119,10 @@ test("a fake bash that exits 1 first on PATH changes nothing: the hook exits 0 w
   // The fake really is what `bash` resolves to here (a shell fallback keeps this honest where bash.cmd is needed).
   const probe = spawnSync("bash", ["-c", "exit 0"], { env: fakeEnv, encoding: "utf8", shell: process.platform === "win32" })
   assert.equal(probe.status, 1)
-  // Run the command exactly as hooks.json registers it, with the host's variable substituted: the command starts with node, not bash.
+  // Run the node command hooks.json registers, with the host's variable substituted: past its node check, the command runs node, not bash.
   const registered = JSON.parse(spawnRead()).hooks.SessionStart[0].hooks[0].command
-  assert.match(registered, /^node /u)
-  const args = [...registered.replaceAll("${CLAUDE_PLUGIN_ROOT}", plugin).matchAll(/"([^"]+)"/gu)].map((match) => match[1])
+  const nodeCommand = /; then (node [^;]+);/u.exec(registered)[1]
+  const args = [...nodeCommand.replaceAll("${CLAUDE_PLUGIN_ROOT}", plugin).matchAll(/"([^"]+)"/gu)].map((match) => match[1])
   assert.equal(args.length, 2)
   const result = spawnSync(process.execPath, args, { env: fakeEnv, encoding: "utf8", cwd: ROOT })
   assert.equal(result.status, 0, result.stderr)

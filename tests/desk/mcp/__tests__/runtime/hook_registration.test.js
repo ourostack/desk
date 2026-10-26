@@ -82,17 +82,21 @@ test("the plain-language hook the unused-code check lists is the one its registr
 })
 
 // On Windows a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed, where it exits 1. Every registered Desk hook command is Node, so none depends on which shell comes first.
-test("no command in hooks.json or copilot-hooks.json starts with bash or sh", () => {
+// The session-start commands first check, in the host's own shell, that a `node` is on PATH, and otherwise source hooks/node-missing.sh (or print the PowerShell literal) to say what to install; they still start no other shell.
+const NODE_GUARD = /^if command -v node >\/dev\/null 2>&1; then node "[^"]+"(?: "[^"]+")*; else desk_host=(?:claude|copilot); \. "[^"]+\/hooks\/node-missing\.sh"; fi$/u
+const NODE_GUARD_POWERSHELL = /^if \(Get-Command node -CommandType Application -ErrorAction SilentlyContinue\) \{ node "[^"]+" \} else \{ '\{"additionalContext":"[^']+"\}' \}$/u
+test("no command in hooks.json or copilot-hooks.json starts with bash or sh, and only session start runs a node check first", () => {
   const claude = JSON.parse(read("plugins", "desk", "hooks", "hooks.json"))
   const copilot = JSON.parse(read("plugins", "desk", "hooks", "copilot-hooks.json"))
   const commands = [
-    ...Object.values(claude.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks.map((hook) => hook.command))),
-    ...Object.values(copilot.hooks).flatMap((hooks) => hooks.flatMap((hook) => [hook.bash, hook.powershell])),
+    ...Object.entries(claude.hooks).flatMap(([event, groups]) => groups.flatMap((group) => group.hooks.map((hook) => [event, hook.command, false]))),
+    ...Object.entries(copilot.hooks).flatMap(([event, hooks]) => hooks.flatMap((hook) => [[event, hook.bash, false], [event, hook.powershell, true]])),
   ]
   assert.ok(commands.length >= 10)
-  for (const command of commands) {
+  for (const [event, command, powershell] of commands) {
     assert.equal(typeof command, "string")
     assert.doesNotMatch(command, /^\s*(?:bash|sh|\/bin\/(?:ba)?sh)(?:\s|$|\.exe)/iu, `${command} starts a shell`)
-    assert.match(command, /^node\s/u, `${command} must start with node`)
+    if (/^sessionstart$/iu.test(event)) assert.match(command, powershell ? NODE_GUARD_POWERSHELL : NODE_GUARD, `${event} must check for node first`)
+    else assert.match(command, /^node\s/u, `${command} must start with node`)
   }
 })
