@@ -109,7 +109,7 @@ test("in a desk that is not the person's own, the route step does not run or rec
   await fs.mkdir(other)
   const log = []
   const outcome = await run({ ...ctx, desk: other }, log)
-  assert.deepEqual(names(log), ["triage", "evaluate", "mirror", "reconcile", "verify", "measure"])
+  assert.deepEqual(names(log), ["evaluate", "mirror", "reconcile", "verify", "measure"])
   assert.equal(outcome.steps.route, "not_own_desk")
   assert.equal(Object.fromEntries(log).measure.alarms, false)
   assert.equal((await readStatus(ctx.env)).loop.steps.route, undefined, "the own desk's next run is not held by the route step's gap")
