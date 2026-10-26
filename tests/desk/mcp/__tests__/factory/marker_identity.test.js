@@ -45,6 +45,34 @@ test("cold macOS marker enumeration verifies forty unchanged files with bounded 
   assert.ok(inspections <= 2, `expected at most two native batches, observed ${inspections}`)
 }))
 
+test("I1 a leaf replaced after its guarded byte read is refused without pruning the replacement", (t) => scratch(async (ctx) => {
+  const marker = { ...await session(ctx), updated_at: recent() }
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  const openSync = fsSync.openSync
+  let reading = false
+  const opened = t.mock.method(fsSync, "openSync", (target, ...args) => {
+    const descriptor = openSync(target, ...args)
+    if (target === file) reading = true
+    return descriptor
+  })
+  const lstat = fs.lstat
+  let replaced = false
+  const race = t.mock.method(fs, "lstat", async (target, ...args) => {
+    if (target === file && reading && !replaced) {
+      replaced = true
+      await fs.rename(file, path.join(ctx.base, "marker-before-replacement"))
+      await json(file, marker)
+    }
+    return lstat(target, ...args)
+  })
+  assert.deepEqual(await listMarkers(ctx.env), [])
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), marker)
+  race.mock.restore()
+  opened.mock.restore()
+  assert.deepEqual(await listMarkers(ctx.env), [marker])
+}))
+
 for (const [at, kind] of [["enumeration", "valid"], ["leaf-inspection", "valid"], ["leaf-inspection", "corrupt"], ["leaf-inspection", "expired"]]) {
   test(`I1 directory swap at ${at}, ${kind} external open and restoration cannot derive or mutate external data`, posix, (t) => scratch(async (ctx) => {
     const owned = { ...await session(ctx), updated_at: recent() }
