@@ -63,7 +63,7 @@ export const DESK_SETUP_DIRECTION =
   "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
 
 function sourceLabel(source) {
-  if (source === "host-project") return "this session's project folder is a desk"
+  if (source === "host-project") return "the project folder"
   if (source === "activation-config") return "the saved desk binding"
   if (source === "env:DESK") return "the DESK environment variable"
   if (source === HOME_FALLBACK) return "a home-folder fallback"

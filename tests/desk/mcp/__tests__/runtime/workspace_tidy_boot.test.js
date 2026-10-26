@@ -101,17 +101,16 @@ test("boot check queues a detached repair, returns without waiting, and records 
   assert.match(next, /ownership/)
 })
 
-test("an established DESK association outranks a Copilot session folder in the tidy check", async () => {
+test("a Copilot session folder that is itself a desk outranks a DESK association in the tidy check", async () => {
   const f = await fixture()
   const other = path.join(f.root, "other")
   await fs.mkdir(path.join(other, "_meta"), { recursive: true })
   await fs.mkdir(path.join(other, "_archive"))
   const launched = []
   const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other, launch: async (...args) => { launched.push(args) } })
-  // The shared resolver binds explicit DESK intent, not weaker folder evidence.
+  // The shared resolver binds the desk the session was opened in, as on Claude Code.
   assert.doesNotMatch(line, /ambiguous/)
-  assert.deepEqual(launched.map(([root]) => root), [await fs.realpath(f.desk)])
-  assert.equal((await fs.readdir(other)).some((name) => name.startsWith("desk-workspace")), false)
+  assert.deepEqual(launched.map(([root]) => root), [await fs.realpath(other)])
 })
 
 test("boot failure degrades in one bounded line and never blocks session start", async () => {

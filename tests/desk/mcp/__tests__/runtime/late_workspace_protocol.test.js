@@ -55,7 +55,9 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   const a = desk(path.join(home, "desk"), person)
   const b = desk(path.join(base, "b"), person)
   const cwd = capturedFolder ? a : path.join(base, "code")
-  if (!capturedFolder) mkdirSync(cwd)
+  // The folder Copilot records for the session. A captured launch folder is the server's working folder only; the host's own project folder is elsewhere and is not a desk, because a recorded folder that is a desk outranks a saved association.
+  const recordedFolder = path.join(base, "code")
+  mkdirSync(recordedFolder)
   const env = {
     ...process.env, HOME: home, XDG_STATE_HOME: path.join(base, "state"),
     XDG_CACHE_HOME: path.join(base, "cache"), XDG_CONFIG_HOME: path.join(base, "config"),
@@ -164,10 +166,10 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   assert.equal(handle.admission.snapshot().state, "ready", JSON.stringify(handle.admission.snapshot()))
   const call = (name, args = {}) => rpc("tools/call", { name, arguments: args })
   const config = path.join(base, "binding.json")
-  const associate = (root, extra) => {
+  const associate = (root, extra, folder = recordedFolder) => {
     binding(config, root, extra)
     assert.equal(recordCopilotSession({
-      sessionId: env.COPILOT_AGENT_SESSION_ID, folder: cwd, activationConfig: config, env,
+      sessionId: env.COPILOT_AGENT_SESSION_ID, folder, activationConfig: config, env,
     }), true)
   }
   const card = (root) => path.join(root, ...(person ? ["desks", person] : []), "work", "one", "task.md")
@@ -418,15 +420,28 @@ test("late person policy cannot reuse fallback workspace authority", async (t) =
   assert.equal(readFileSync(f.card(f.b), "utf8"), text)
 })
 
-test("a recorded desk folder cannot mask an invalid saved association", async (t) => {
+test("a recorded session folder that is itself a desk wins even over an invalid saved association", async (t) => {
   const f = await fixture(t)
   f.associate(path.join(f.base, "missing"))
   assert.equal(recordCopilotSession({
     sessionId: f.env.COPILOT_AGENT_SESSION_ID, folder: f.b, activationConfig: f.config, env: f.env,
   }), true)
-  const result = await f.call("task_update", update)
-  assert.equal(result.isError, true)
-  assert.equal(payload(result).code, "root_unavailable")
+  assertWritten(await f.call("task_update", update))
+  assert.equal(f.handle.session.context.root.root, f.b)
+  assert.equal(f.handle.session.context.root.source, "host-project")
   assert.equal(readFileSync(f.card(f.a), "utf8"), text)
-  assert.equal(readFileSync(f.card(f.b), "utf8"), text)
+  assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
+})
+
+test("a recorded session folder that is itself a desk keeps its desk when a saved association names another", async (t) => {
+  const f = await fixture(t)
+  assert.equal(recordCopilotSession({ sessionId: f.env.COPILOT_AGENT_SESSION_ID, folder: f.b, env: f.env }), true)
+  assertWritten(await f.call("task_update", update))
+  assert.equal(f.handle.session.context.root.root, f.b)
+  assert.equal(f.handle.session.context.root.source, "host-project")
+  f.associate(f.a, undefined, f.b)
+  assertWritten(await f.call("task_update", update))
+  assert.equal(f.handle.session.context.root.root, f.b)
+  assert.equal(f.handle.session.context.root.source, "host-project")
+  assert.equal(readFileSync(f.card(f.a), "utf8"), text)
 })

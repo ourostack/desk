@@ -86,7 +86,7 @@ Only once a human has answered this Ask, bind the chosen desk by writing this fi
 { "schema_version": 1, "desk": { "root": "<absolute desk path>" } }
 ```
 
-to `$CLAUDE_DIR/plugins/data/desk-ourostack/desk.activation.json`, creating the directory if needed. The binding survives plugin updates.
+to `$CLAUDE_DIR/plugins/data/desk-ourostack/desk.activation.json`, creating the directory if needed. The binding survives plugin updates. It applies wherever a session starts, except in a project folder that is itself a desk (it has `_meta/` plus `_archive/` or `desks/`): a session opened there uses that desk, on Claude Code and Copilot alike.
 
 ### 6. Start a new session and verify
 
