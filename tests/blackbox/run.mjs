@@ -254,8 +254,9 @@ async function hostSession(options, host, repeat, shared) {
   const stateDir = deskStateDir(home)
   const seeded = { model: false, browser: false }
   if (options.cacheDir) {
-    seeded.model = copyTree(path.join(options.cacheDir, "embedding-model"), path.join(world.desk, ".state", "embedding-model"))
-    seeded.browser = copyTree(path.join(options.cacheDir, "browser"), path.join(stateDir, "browser"))
+    const filled = (dir) => fs.existsSync(dir) && fs.readdirSync(dir).length > 0
+    seeded.model = filled(path.join(options.cacheDir, "embedding-model")) && copyTree(path.join(options.cacheDir, "embedding-model"), path.join(world.desk, ".state", "embedding-model"))
+    seeded.browser = filled(path.join(options.cacheDir, "browser")) && copyTree(path.join(options.cacheDir, "browser"), path.join(stateDir, "browser"))
   }
   world.seeded = seeded
   shared.lastSeeded = seeded
@@ -943,6 +944,8 @@ function summarize(options, shared, wallMs) {
     repeat: options.repeat,
     caches_seeded: shared.seeded,
     npm_registry: shared.npmRegistry ?? "default",
+    load_average: os.loadavg().map((v) => Math.round(v * 10) / 10),
+    cpus: os.cpus().length,
     totals: {
       runs: results.length,
       passed: results.filter((r) => r.ok).length,

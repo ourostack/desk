@@ -56,7 +56,7 @@ export class McpSession {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       if (this.exitInfo) {
-        reject(new Error(`${this.name} already exited (code ${this.exitInfo.code}); stderr tail: ${this.stderr.slice(-600)}`))
+        reject(new Error(`${this.name} already exited (code ${this.exitInfo.code}, signal ${this.exitInfo.signal}); stderr tail: ${this.stderr.slice(-600)}`))
         return
       }
       const timer = setTimeout(() => {
