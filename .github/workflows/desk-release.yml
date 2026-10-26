@@ -67,8 +67,18 @@ jobs:
       base: ${{ steps.release.outputs.base }}
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # The release's own push (one bot commit "Release Desk <version>" that deletes the fragments it folded) matches the
+      # paths filter but has nothing to release, because every merge queues its own run (queue: max above). Such a run
+      # skips the build and so the push, which saves the install and the checks, and still runs the marking and the report:
+      # if the pushing run's marking failed, this run retries it about a minute later.
+      SELF_PUSH: ${{ github.event_name == 'push' && github.event.head_commit.author.email == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message, 'Release Desk ') }}
     steps:
+      - name: Skip the release's own push
+        if: env.SELF_PUSH == 'true'
+        run: echo "This run was started by the release commit itself, so it builds nothing; marking and the report still run." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check out main
+        if: env.SELF_PUSH != 'true'
         uses: actions/checkout@v4
         with:
           ref: main
@@ -76,6 +86,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node
+        if: env.SELF_PUSH != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -83,6 +94,7 @@ jobs:
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       - name: Install Desk MCP dependencies
+        if: env.SELF_PUSH != 'true'
         working-directory: plugins/desk/mcp
         run: npm ci
 
@@ -91,6 +103,7 @@ jobs:
       # release that would fail fails its pull request first.
       - name: Build and check the release
         id: release
+        if: env.SELF_PUSH != 'true'
         env:
           RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
         run: |

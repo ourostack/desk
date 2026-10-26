@@ -429,6 +429,19 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
+  // The release's own push builds and pushes nothing, but still marks and reports, so a marking failure in the pushing run is retried.
+  const buildJob = workflow.jobs.build
+  assert.equal(buildJob.if, undefined, "the build job always runs, so the marking and the report that need it run too")
+  assert.equal(buildJob.env.SELF_PUSH, "${{ github.event_name == 'push' && github.event.head_commit.author.email == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message, 'Release Desk ') }}")
+  for (const step of buildJob.steps) {
+    if (step.name === "Skip the release's own push") assert.equal(step.if, "env.SELF_PUSH == 'true'")
+    else if (step.name === "Hand the checked release commit to the push job") assert.equal(step.if, "steps.release.outputs.released == 'true'")
+    else assert.equal(step.if, "env.SELF_PUSH != 'true'", step.name)
+  }
+  assert.match(sharedScript(), /user\.email="41898282\+github-actions\[bot\]@users\.noreply\.github\.com"[\s\S]*commit --quiet --message "Release Desk \$version"/u, "the skip names the author and subject the release commit really has")
+  assert.equal(workflow.jobs.push.if, "needs.build.outputs.released == 'true'", "a skipped build pushes nothing")
+  assert.match(workflow.jobs.announce.if, /^always\(\) && needs\.build\.result == 'success' && \(needs\.push\.result == 'success' \|\| needs\.push\.result == 'skipped'\)/u, "marking runs when the build was skipped")
+  assert.doesNotMatch(workflow.jobs.report.if, /needs\.build\.result != 'skipped'/u, "the report runs on the release's own push")
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
