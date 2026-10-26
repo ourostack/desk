@@ -68,7 +68,8 @@ async function main({
     let extension = 0;
     const finish = (value) => { clearTimer(timer); resolve(value); };
     try {
-      const workerEnv = { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot, personPrefix: person.personPrefix }) };
+      // DESK_GIT_YIELD: the worker's Git writes give way to the person's (util/git-stage.js).
+      const workerEnv = { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot, personPrefix: person.personPrefix }), DESK_GIT_YIELD: "1" };
       child = spawnImpl(process.execPath, args, { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true, env: workerEnv });
     } catch {
       resolve({ started: false, reason: "spawn_failed" });

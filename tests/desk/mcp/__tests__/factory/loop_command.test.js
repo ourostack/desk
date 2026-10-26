@@ -13,17 +13,21 @@ import "../_isolated_env.mjs"
 import { LOOP_BUDGET_MS, LOOP_STEP_NAMES, LATER_STEPS_RESERVE_MS, MAX_SCAN_ALLOWANCE_MS, notifyLauncher, runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { main, runLoopCommand, SUPPORTED_COMMANDS } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
+import { conditionOf, observeConditions } from "../../../../../plugins/desk/mcp/src/factory/loop-conditions.js"
+import { runMeasureStep } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 import { LOCK_OUTER_AGE_MS, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/src/factory/loop-worker-state.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
+const DAY = 24 * 60 * MINUTE
 
 async function scratch(run, { consent = true } = {}) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-loop-worker-")))
-  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin") })
   const desk = path.join(base, "desk-for-test")
+  // The person's own desk ($DESK), so the steps that write this machine's findings run in it.
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state"), PATH: path.join(base, "no-bin"), DESK: desk })
   await fs.mkdir(desk)
   if (consent) await setConsent(env, { store: STORE, contribute: true, account: "someone" })
   try {
@@ -101,6 +105,38 @@ test("the steps run in exactly this order, each with the desk, the person and a 
   assert.deepEqual(Object.keys(status.loop.steps).sort(), ["evaluate", "measure", "mirror", "reconcile", "route", "verify"])
   assert.equal(status.loop.steps.route.last_result, "routed")
   assert.equal(status.loop.steps.route.runs, 1, "the route pair records once")
+}))
+
+test("in a desk that is not the person's own, the route and measure steps do not run or record", () => scratch(async (ctx) => {
+  const other = path.join(ctx.base, "project-desk")
+  await fs.mkdir(other)
+  const log = []
+  const outcome = await run({ ...ctx, desk: other }, log)
+  assert.deepEqual(names(log), ["evaluate", "mirror", "reconcile", "verify"])
+  assert.equal(outcome.steps.route, "not_own_desk")
+  assert.equal(outcome.steps.measure, "not_own_desk")
+  const { steps } = (await readStatus(ctx.env)).loop
+  assert.equal(steps.route, undefined, "the own desk's next run is not held by the route step's gap")
+  assert.equal(steps.measure, undefined, "nor by the measure step's")
+  const own = []
+  await run(ctx, own)
+  // The steps that ran in the other desk are not due yet; route and measure are, in the own desk, at once.
+  assert.deepEqual(names(own), ["routeIssues", "routeLocal", "measure"])
+}))
+
+test("two runs in a desk that is not the person's own leave a held loop alarm present, so verify cannot close its card as recovered", () => scratch(async (ctx) => {
+  const clock = fakeClock()
+  await observeConditions(ctx.env, { source: "loop_alarm", present: ["improvement_age"], now: new Date(clock.now) })
+  const other = path.join(ctx.base, "project-desk")
+  await fs.mkdir(other)
+  for (let round = 0; round < 2; round += 1) {
+    clock.advance(DAY)
+    const impls = { ...fakes([]), measure: runMeasureStep }
+    await runLoopWorker(ctx.env, { deskRoot: other, personPrefix: "desks/ari", pluginVersion: "9.9.9", clock: clock.read, impls })
+  }
+  const condition = conditionOf(await readStatus(ctx.env), "loop_alarm:improvement_age")
+  assert.equal(condition.present, true)
+  assert.equal(condition.clear_runs ?? 0, 0)
 }))
 
 test("a step that throws records a failure and the next step still runs, with nothing of the error kept", () => scratch(async (ctx) => {

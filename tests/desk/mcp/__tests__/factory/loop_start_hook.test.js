@@ -87,7 +87,7 @@ test("the launcher runs the loop command for the bound desk and person in its ow
   assert.equal(command, process.execPath)
   assert.deepEqual(args, [FACTORY_CLI, "loop", "--desk", "/the/desk", "--person-prefix", "desks/ari"])
   assert.deepEqual(options.stdio, ["ignore", "ignore", "ignore", "ipc"], "no output, and one channel the worker uses to move the hard stop")
-  assert.deepEqual(options.env, { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot: "/the/desk", personPrefix: "desks/ari" }) })
+  assert.deepEqual(options.env, { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot: "/the/desk", personPrefix: "desks/ari" }), DESK_GIT_YIELD: "1" }, "the worker's Git writes give way to the person's")
   assert.equal(options.windowsHide, true)
   assert.equal(timers.pending.length, 1)
   child.emit("exit", 0)

@@ -34,8 +34,8 @@
 // `no_factory_state`, `no_consenting_store` or `no_desk`, and a step's code is its own result code, `skipped`
 // (not due), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
 // `invalid_result`. The `route` step is the two route collectors as one: `routed`, `issues_failed`, `local_failed`
-// or `both_failed`. Every other step records itself; the worker records `route`, and records `step_error` for a
-// step that threw. The measure step runs last and is told which steps ran.
+// or `both_failed`. `route` and `measure` answer `not_own_desk` (not run and not recorded) in a desk that is not the person's own (`route-desk.js`).
+// Every other step records itself; the worker records `route`, and records `step_error` for a step that threw. The measure step runs last and is told which steps ran.
 
 import { createRequire } from "node:module"
 import * as path from "node:path"
@@ -52,6 +52,7 @@ import { processAlive, releaseLock, takeLock, touchLock, trackChild } from "./pr
 import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
+import { isOwnDesk } from "./route-desk.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
 import { contextEvaluationDue } from "./context-run.js"
 import { LOOP_LOCK_NAME, evaluateDue, kickLoop, newestRequestAt } from "./evaluate-kick.js"
@@ -93,8 +94,12 @@ const swallow = async (fn) => {
   }
 }
 
-// The two route collectors count as one step, recorded once by the worker.
+const NOT_OWN_DESK = Object.freeze({ ok: true, result: "not_own_desk" })
+
+// The two route collectors count as one step, recorded once by the worker. They write this machine's findings, so they run only in the
+// person's own desk (`route-desk.js`); in any other desk the step is not recorded, so the own desk's next run is not held by the step's gap.
 async function routeStep(env, ctx, impls) {
+  if (!ctx.ownDesk) return NOT_OWN_DESK
   const half = async (fn) => readAnswer(await swallow(() => fn(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }))) ?? { ok: false, result: "step_error" }
   const issues = await half(impls.routeIssues)
   const local = await half(impls.routeLocal)
@@ -139,7 +144,9 @@ const STEPS = Object.freeze([
   { name: "mirror", run: (env, ctx, impls) => impls.mirror(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
   { name: "reconcile", run: (env, ctx, impls) => impls.reconcile(env, { now: ctx.now, desks: [ctx.deskRoot], personPrefix: ctx.personPrefix }) },
   { name: "verify", run: (env, ctx, impls) => impls.verify(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
-  { name: "measure", run: (env, ctx, impls) => impls.measure(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now, attempted: [...ctx.attempted] }) },
+  // The machine's health record and its loop alarms describe the person's own desk: measured anywhere else, they would report that desk's
+  // cards as the machine's and its missing alarms as cleared, and the verify step would close the person's alarm cards.
+  { name: "measure", run: (env, ctx, impls) => (ctx.ownDesk ? impls.measure(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now, attempted: [...ctx.attempted] }) : NOT_OWN_DESK) },
 ])
 
 export const LOOP_STEP_NAMES = Object.freeze(STEPS.map(({ name }) => name))
@@ -154,6 +161,7 @@ const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, consumeContinuation: consume
 export async function runLoopWorker(env, {
   deskRoot, personPrefix = "", pluginVersion, clock = Date.now, alive = processAlive, budgetMs = LOOP_BUDGET_MS,
   ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, notify = notifyLauncher, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
+  ownDesk = isOwnDesk,
 }) {
   if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   checkPersonPrefix(personPrefix, "runLoopWorker")
@@ -197,6 +205,7 @@ export async function runLoopWorker(env, {
   }
   const ctx = {
     deskRoot, personPrefix, pluginVersion, attempted: [], updateStatus: updateStatusImpl,
+    ownDesk: ownDesk(env, deskRoot),
     // The agent steps' deadline: the budget, moved by any facts-scan time granted so far, less the later steps' reserve.
     agentDeadline: () => new Date(started + budgetMs + extension - LATER_STEPS_RESERVE_MS),
     onChild: (pid) => track(pid, true),
