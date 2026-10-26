@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.359 — 2026-10-26
+
+`desk_status` now reports search from the session's own search engine, so it says "Search is ready." or "Search is preparing N of M sections…" in every session. Before, a large desk's full status rarely finished within the call's time budget, and search read `not_checked`.
+
+`desk_recall` now ranks by meaning and by exact words together (reciprocal rank fusion), so a document strong on both comes first. Search also indexes every Markdown file inside a track, such as a runbook or notes in an iteration folder, not only `task.md`, `planning.md`, `doing.md` and `feedback.md`.
+
+A new session's first `desk_recall` or `desk_similar` waits up to 3 s for the search model to load, so a desk whose vectors are already stored answers by meaning at once instead of with exact words only.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.358 — 2026-10-25
 
 The Desk release workflow has a new `stable` stage, so Desk can leave alpha. Run it by hand from the Actions tab (or `gh workflow run desk-release.yml --ref main -f stage=stable`). From any `X.Y.Z-alpha.N` or `X.Y.Z-rc.N` it releases plain `X.Y.Z`, with or without pending changes.
