@@ -18,9 +18,9 @@ const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
 // Copilot drops a sessionStart hook's whole output when the hook passes its 5 s limit, foundation included. So the
-// optional lines (boot pre-checks, migrations, the commit-trailer note) get until this many milliseconds after the
-// process started; past it the hook prints the startup line and the foundation without them. The boot script runs
-// the same checks again, so nothing is lost but a line.
+// optional lines (boot pre-checks, migrations, the Copilot setting notes) get until this many milliseconds after the
+// process started; past it the hook prints the startup line and the foundation without them and does not start factory
+// delivery. The boot script runs the migration checks again; the pre-checks and the delivery wait for the next session start.
 const OPTIONAL_LINES_DEADLINE_MS = 3500;
 const { performance } = require("node:perf_hooks");
 let optionalLinesTimedOut = false;
