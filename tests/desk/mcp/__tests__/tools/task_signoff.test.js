@@ -640,7 +640,6 @@ test("every place that lists the tools lists task_signoff", () => {
   assert.match(read("plugins/desk/mcp/bootstrap.cjs"), /"task_focus", "task_signoff"/u)
   assert.ok(JSON.parse(read("plugins/desk/.mcp.claude-codex.json")) && read("plugins/desk/.mcp.claude-codex.json").includes("'task_signoff'"))
   assert.ok(read("scripts/test-desk-docs.cjs").includes('"task_signoff"'))
-  assert.ok(read("scripts/audit-codex-plugin-cache.cjs").includes('"task_signoff"'))
   assert.ok(read("plugins/desk/mcp/README.md").includes("`task_signoff`"))
   for (const host of ["claude", "copilot"]) assert.ok(deferredToolsHint(host).includes("task_signoff"), host)
   assert.equal(toolKind({ host: "copilot-cli", name: "desk-task_signoff" }), "desk")

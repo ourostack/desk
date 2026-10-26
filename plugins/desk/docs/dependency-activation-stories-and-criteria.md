@@ -2,7 +2,7 @@
 
 Status: ideation artifact.
 
-**Historical.** This document predates Agentic Engineering V2. It names the retired Work Suite and allows version pins; V2 replaced the Work Suite with Superpowers and tracks channels with version ranges, never pins ([RFC section 5](agentic-engineering-v2-rfc.md#5-work-source-and-continuity)).
+**Historical.** This document predates Agentic Engineering V2. It names the retired Work Suite and allows version pins; V2 replaced the Work Suite with Superpowers and tracks channels with version ranges, never pins ([RFC section 5](agentic-engineering-v2-rfc.md#5-work-source-and-continuity)). Its Codex stories are also historical: Desk no longer ships Codex support.
 
 This document stress-tests the current Desk dependency design against human and harness/agent stories. It assumes the latest design direction from discussion:
 

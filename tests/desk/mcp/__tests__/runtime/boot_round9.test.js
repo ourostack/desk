@@ -96,8 +96,8 @@ test("the deferred-tools hint names the exact Desk tools for the host it runs on
   assert.match(copilot, /never through the shell/u)
   assert.doesNotMatch(copilot, /ToolSearch|mcp__plugin_desk_desk__/u)
   // No length comparison: what makes the Copilot hint right is what it names and omits (above), not how it compares in size with the Claude one.
-  // Codex and an unknown host (and the hostless git hook) get both names.
-  for (const host of ["codex", "unknown", undefined]) {
+  // An unknown host (and the hostless git hook) get both names.
+  for (const host of ["unknown", undefined]) {
     assert.match(deferredToolsHint(host), /ToolSearch `select:mcp__plugin_desk_desk__task_update/u)
     assert.match(deferredToolsHint(host), /`desk-<name>`, such as `desk-task_update`/u)
   }
@@ -340,7 +340,7 @@ test("runBootCli prints readable text by default and the one-line JSON with --js
 test("the shipped script prints text by default and JSON with --json", async () => {
   const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-boot.js", import.meta.url))
   const home = await mkTempRoot("desk-boot-text-home-")
-  const env = { ...process.env, HOME: home, DESK: "", CLAUDE_PROJECT_DIR: "", DESK_ACTIVATION_CONFIG: "", CODEX_HOME: "", CLAUDE_PLUGIN_DATA: "" }
+  const env = { ...process.env, HOME: home, DESK: "", CLAUDE_PROJECT_DIR: "", DESK_ACTIVATION_CONFIG: "", CLAUDE_PLUGIN_DATA: "" }
   const text = execFileSync(process.execPath, [script], { encoding: "utf8", cwd: home, env })
   assert.match(text, /^Desk boot: setup_required\b/u)
   assert.match(text, /1\. No desk is bound on this host/u)

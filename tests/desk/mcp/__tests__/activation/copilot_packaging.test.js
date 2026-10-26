@@ -264,7 +264,6 @@ test("Copilot root plugin metadata exposes the observer agent beside worker", ()
   assert.equal(activationTarget.default, false)
   assert.deepEqual(activationTarget.entrypoints, {
     claude: "agents/observer.md",
-    codex: "agents/observer.toml",
     copilot: "agents/observer.agent.md",
   })
   assert.equal(observer.name, "observer")

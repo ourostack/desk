@@ -25,7 +25,6 @@ const requiredColumns = [
 ]
 const requiredHosts = [
   "claude",
-  "codex",
   "copilot-root",
   "ouroboros-autonomous-agent",
   "generic-stdio",
@@ -179,28 +178,28 @@ test("support matrix validation reports evidence and freshness mismatches", asyn
   })
   assert.equal(sparseEvidence.hosts[0].fallback_behavior, "")
 
-  const missingCodexEvidence = {
+  const missingClaudeEvidence = {
     ...evidence,
-    hosts: evidence.hosts.filter((row) => row.host_id !== "codex"),
+    hosts: evidence.hosts.filter((row) => row.host_id !== "claude"),
   }
   assert.deepEqual(
-    validateSupportMatrix({ matrix, manifest, evidence: missingCodexEvidence }),
+    validateSupportMatrix({ matrix, manifest, evidence: missingClaudeEvidence }),
     [
-      "missing required evidence row for host codex",
-      "missing evidence row for host codex",
+      "missing required evidence row for host claude",
+      "missing evidence row for host claude",
       "support matrix host rows must match evidence rows",
     ],
   )
 
   const fallbackMismatchEvidence = {
     ...evidence,
-    hosts: evidence.hosts.map((row) => row.host_id === "codex"
+    hosts: evidence.hosts.map((row) => row.host_id === "claude"
       ? { ...row, fallback_behavior: "wrong fallback" }
       : row),
   }
   assert.deepEqual(
     validateSupportMatrix({ matrix, manifest, evidence: fallbackMismatchEvidence }),
-    ["fallback_behavior mismatch for host codex"],
+    ["fallback_behavior mismatch for host claude"],
   )
 
   assert.deepEqual(
@@ -228,7 +227,7 @@ test("support matrix validation reports evidence and freshness mismatches", asyn
         hostCapabilityEvidence: evidencePath,
       },
     }),
-    /support matrix validation failed:\nfallback_behavior mismatch for host codex/u,
+    /support matrix validation failed:\nfallback_behavior mismatch for host claude/u,
   )
 })
 

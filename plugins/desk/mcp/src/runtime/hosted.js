@@ -37,7 +37,6 @@ export const HOSTED_SHELL_SKILLS = Object.freeze({
   "git-hygiene": "Git hygiene works on local clones of code repositories, which a hosted chat does not have.",
   "repo-handling": "Repo handling finds and clones code repositories on the machine, which a hosted chat does not have.",
   "first-run-bootstrap": NEEDS_SHELL,
-  "codex-onboarding": NEEDS_SHELL,
   "add-workspace-mcp": NEEDS_SHELL,
   "factory-evaluator": NEEDS_SHELL,
   "using-superpowers-with-desk": NEEDS_SHELL,

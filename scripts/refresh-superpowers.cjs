@@ -23,9 +23,7 @@ const SUPERPOWERS_VERSION_FILES = [
   ".claude-plugin/marketplace.json",
   "plugins/superpowers/plugin.json",
   "plugins/superpowers/.claude-plugin/plugin.json",
-  "plugins/superpowers/.codex-plugin/plugin.json",
   "plugins/desk/plugin.json",
-  "plugins/desk/.codex-plugin/plugin.json",
   "plugins/desk/activation/desk.activation.json",
   "plugins/desk/activation/copilot-root.flattened-bundle.json",
 ];

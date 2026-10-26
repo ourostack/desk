@@ -71,7 +71,7 @@ test("the Agency spec is the pinned ourostack/desk plugin on main for the sessio
   // Claude under Agency has no AGENCY_ENGINE here: the engine comes from the agent host, not a copilot default.
   assert.equal(derive({ env: {}, agentHost: "claude" }), CLAUDE_SPEC)
   assert.equal(derive({ env: {}, agentHost: "copilot" }), SPEC)
-  assert.equal(derive({ env: {}, agentHost: "codex" }), null)
+  assert.equal(derive({ env: {}, agentHost: "unknown" }), null)
   assert.equal(derive({ env: { AGENCY_ENGINE: "claude" }, agentHost: "copilot" }), CLAUDE_SPEC)
   // Other orgs, other refs and other plugins in the index are never touched.
   for (const key of ["copilot:github:someone/desk:plugins/desk@main", "copilot:github:ourostack/desk:plugins/desk@v2", "copilot:github:ourostack/ouroboros-skills:plugins/desk@v2-alpha"]) {
@@ -106,7 +106,7 @@ test("the plan per host; Copilot only for an installed plugin, never a dev check
   const claude = refreshPlan({ ...base, env: {}, pluginRoot: CLAUDE_ROOT, agentHost: "claude" })
   assert.deepEqual([claude.command, claude.args, claude.doing], ["claude", ["plugin", "update", "desk@ourostack"], "running claude plugin update desk@ourostack"])
   assert.equal(refreshPlan({ ...base, env: {}, pluginRoot: "/some/checkout/plugins/desk", agentHost: "claude" }), null)
-  assert.equal(refreshPlan({ ...base, env: {}, pluginRoot: "/x", agentHost: "codex" }), null)
+  assert.equal(refreshPlan({ ...base, env: {}, pluginRoot: "/x", agentHost: "unknown" }), null)
   assert.equal(claudeMarketplace({ pluginRoot: "/h/.claude/plugins/cache/odd name/desk/1.0.0" }), null)
   assert.equal(claudeMarketplace({ pluginRoot: "/h/.claude/plugins/cache/ourostack/desk/1.0.0/extra" }), null)
 })

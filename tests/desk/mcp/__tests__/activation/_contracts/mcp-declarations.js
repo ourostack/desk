@@ -39,7 +39,7 @@ export const SERVER_NAME_PATTERN = /^[a-z][a-z0-9-]*$/u
 export const MAX_FUNCTION_NAME_LENGTH = 64
 
 const COPILOT_ROOT_VARIABLE = "${COPILOT_PLUGIN_ROOT}"
-const MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]
+const MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json"]
 const MCP_FILE = /^\.mcp(\..+)?\.json$/u
 
 function readJson(file) {
@@ -117,22 +117,6 @@ export function collectMcpDeclarations({ repoRoot }) {
     }
   }
   return entries.sort((a, b) => a.source.localeCompare(b.source, "en"))
-}
-
-/**
- * The server names a source file spells out in code instead of reading from a declaration: TOML tables such as `[mcp_servers.desk]` and
- * `.mcp_servers.desk]`, and path arrays such as `["mcp_servers", "desk"]`. The Codex adapter writes its config tables this way, so a rename
- * in `.mcp.claude-codex.json` would leave it configuring a server that no longer exists.
- */
-export function hardCodedServerNames(source) {
-  const names = new Set()
-  for (const match of String(source).matchAll(/\bmcp_servers\.([A-Za-z0-9_-]+)|["']mcp_servers["']\s*,\s*["']([A-Za-z0-9_-]+)["']/gu)) names.add(match[1] ?? match[2])
-  return [...names].sort()
-}
-
-/** The problems with hard-coded server names: each must be a server some declaration under `plugins/*` declares. */
-export function checkHardCodedServerNames({ source, names, declared }) {
-  return names.filter((name) => !declared.includes(name)).map((name) => `${source} hard-codes the MCP server "${name}", which no declaration under plugins/* declares (declared: ${declared.join(", ")})`)
 }
 
 /**

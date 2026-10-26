@@ -37,7 +37,6 @@ test("Desk 3.2.5 and MCP 1.4.0-alpha.6 candidate surfaces move together", async 
   const errors = []
   const deskPlugin = readJson("plugins", "desk", "plugin.json")
   const claudePlugin = readJson("plugins", "desk", ".claude-plugin", "plugin.json")
-  const codexPlugin = readJson("plugins", "desk", ".codex-plugin", "plugin.json")
   const marketplace = readJson(".claude-plugin", "marketplace.json")
   const activation = readJson("plugins", "desk", "activation", "desk.activation.json")
   const bundle = readJson(
@@ -55,7 +54,6 @@ test("Desk 3.2.5 and MCP 1.4.0-alpha.6 candidate surfaces move together", async 
   for (const [label, version] of [
     ["plugins/desk/plugin.json", deskPlugin.version],
     ["plugins/desk/.claude-plugin/plugin.json", claudePlugin.version],
-    ["plugins/desk/.codex-plugin/plugin.json", codexPlugin.version],
     [".claude-plugin/marketplace.json desk entry", marketplaceDesk?.version],
     ["plugins/desk/activation/desk.activation.json", activation.version],
     ["plugins/desk/activation/desk.activation.json desk dependency", activationDesk?.version],
@@ -93,29 +91,6 @@ test("Desk 3.2.5 and MCP 1.4.0-alpha.6 candidate surfaces move together", async 
   const currentEntry = changelog.split(/\n## /u, 3)[1] ?? ""
   if (!currentEntry.includes(`desk-mcp@${expectedMcpVersion}`)) {
     errors.push(`plugins/desk/CHANGELOG.md current entry must name desk-mcp@${expectedMcpVersion}`)
-  }
-
-  const codexFixturePaths = [
-    ["global-personal", "generated-config.toml"],
-    ["global-personal", "generated-instructions.md"],
-    ["manual-only", "generated-config.toml"],
-    ["project-local", "generated-config.toml"],
-    ["project-local", "generated-instructions.md"],
-  ]
-  for (const fixturePath of codexFixturePaths) {
-    const relativePath = path.join(
-      "tests",
-      "desk",
-      "mcp",
-      "__tests__",
-      "fixtures",
-      "activation",
-      "codex",
-      ...fixturePath,
-    )
-    if (!readFileSync(path.join(repoRoot, relativePath), "utf8").includes(`desk@${expectedPluginVersion}`)) {
-      errors.push(`${relativePath} must contain desk@${expectedPluginVersion}`)
-    }
   }
 
   const releasePackPaths = deriveRuntimeDependencyPackPaths({

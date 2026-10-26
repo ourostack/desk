@@ -19,7 +19,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { fragmentProblem } = require("./release-desk.cjs");
 
-const VERSIONED_MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "agency.json"];
+const VERSIONED_MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", "agency.json"];
 const MARKETPLACE = ".claude-plugin/marketplace.json";
 const FRAGMENT_DIR = "changelog.d";
 const FRAGMENT_README = "README.md";

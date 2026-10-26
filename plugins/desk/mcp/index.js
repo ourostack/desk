@@ -8,8 +8,8 @@
 //
 //   node ./mcp/index.js --root ~/AgentBundles/slugger.ouro/desk
 //
-// The same binary serves every consumer (Codex, Claude Code worker, Copilot
-// CLI, ouroboros daemon per agent). Each consumer supplies or discovers its
+// The same binary serves every consumer (Claude Code worker, Copilot CLI,
+// ouroboros daemon per agent). Each consumer supplies or discovers its
 // own root/activation context without needing a bespoke Desk CLI.
 
 // Every module imported below must stay loadable on Node releases older than the engines floor (the Node 16 matrix test in __tests__/runtime/never_exit_before_handshake.test.js proves it), because ES module imports load before any code here runs. The version check itself is the first thing main() does.
@@ -162,7 +162,7 @@ export async function main({
   spawnDetached = spawn,
   onClosed = () => {},
 }) {
-  // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's and Codex's configs pass no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
+  // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's config passes no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
   if (!hasText(env.DESK_PLUGIN_ROOT)) env.DESK_PLUGIN_ROOT = path.resolve(mcpRoot, "..")
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ env })

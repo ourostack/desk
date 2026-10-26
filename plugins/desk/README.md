@@ -63,23 +63,7 @@ Desk ships `desk:worker` as the default agent for new sessions (`settings.json`)
 
 An overlay that resolves its own root (a crew launcher that maps the operator's identity to a shared workspace, for example) launches the Desk MCP with `--root <workspace>` when it can, and with `--onboarding <skill>` when it cannot, optionally adding `--onboarding-reason "<what is missing>"`. Desk then starts in setup mode on that path instead of exiting or guessing a home fallback that belongs to a different desk; `desk_status` reports the skill and the reason, and the startup hook and `session-start` route to it. Failing closed leaves the operator with an unavailable Desk MCP, so launchers should prefer `--onboarding`.
 
-### Under Codex
-
-The plugin ships Codex manifests for Desk and its Superpowers and Plain Language closure. Explicit alpha activation materializes only the owned config/instruction region for the selected mode.
-
-Within explicit alpha activation, the default mode is `global-personal`: Desk and Superpowers are selected together with the owned MCP bridge and instruction block. `project-local` and `manual-only` remain opt-outs. Enabled competing lifecycle configuration is refused, not silently rewritten; operator-owned text and prior approvals remain intact through `desk:using-superpowers-with-desk`, the active adapter.
-
-Codex plugin ids use the actual marketplace namespace consistently for Desk, Superpowers and downstream overlays. A namespace or cache version alone does not prove the selected loaded source.
-
-Do not run `codex mcp add` or `npm install` inside the Desk plugin for the healthy path. The MCP entrypoint restores verified production runtime dependencies from the committed runtime pack into a writable cache, then launches from a source mirror. See `desk:codex-onboarding` for repair checks when a local development install, stale host config, or missing active Desk MCP tool surface needs inspection.
-
-When debugging Codex setup, keep the evidence states separate:
-
-- `repo-source-current`: repo manifests and `.agents` marketplace source match.
-- `installed-cache-current`: the Codex plugin cache has the same manifests as repo source.
-- `active-session-visible`: the running session has actually reloaded those manifests and exposes the selected activation plus the Desk MCP tool surface, including `desk_status`.
-
-`scripts/audit-codex-plugin-cache.cjs` checks the first two states read-only. It can also check `active-session-visible` when given a host tool-list snapshot via `--active-tools` or `--active-tools-file`; `--strict-active` fails if that snapshot is missing or does not include the full Desk MCP tool set. A current cache with missing active tools means the host needs a fresh session or the MCP failed to launch.
+### Missing Desk MCP and search
 
 At worker session start, missing Desk MCP is surfaced as an operator decision rather than silently falling through to local-only mode: fix/reload the host activation now, or continue without generic reminders while accepting weaker desk search, task CRUD, friction/lesson writes, and cross-session resumption.
 
@@ -90,8 +74,6 @@ Vector packs and snapshots under `$DESK/artifacts/` belong to the old shared ind
 ### Artifact privacy
 
 Embeddings and snapshots are derivative data and may carry privacy risk even when they are not plain-text documents. Shared vector packs and warm boot snapshots are published only through explicit, policy-controlled artifact paths such as `$DESK/artifacts/`; public or sensitive repositories should require approval before these artifacts are committed.
-
-See `desk:codex-onboarding` for the repair checklist and verification steps.
 
 ### Work accounting
 
@@ -113,13 +95,11 @@ copilot --agent worker --excluded-tools=ask_user
 
 Copilot startup uses the root plugin's Desk-owned `sessionStart` hook to read `skills/using-desk/SKILL.md` at runtime and emit it as `additionalContext`. The agent file keeps the worker identity and operating context without copying the foundation body.
 
-**Codex.** The activation adapter makes `worker` the global personal default by materializing owned Codex config and `AGENTS.md` blocks. Use `manual-only` when Desk should stay available as a plugin/MCP substrate without default worker behavior, or `project-local` when a specific repo should own its Desk binding.
+See [`docs/agent-files.md`](./docs/agent-files.md) for the per-harness agent file reference.
 
-See [`docs/agent-files.md`](./docs/agent-files.md) for the per-harness agent file reference, and `desk:codex-onboarding` for repair verification when a local Codex host does not reflect the activation metadata.
+Two agent files (`agents/worker.md`, `agents/worker.agent.md`) ship the same canonical body in each harness's expected format. A sibling agent, `observer`, ships the same way (`agents/observer.md`, `agents/observer.agent.md`): it evaluates work it did not do, from evidence, and never fixes or certifies it; it is never the default. It evaluates a release with the [evaluation packet](docs/evaluation-packet.md), and labels a finished job's waste in the background when its task reaches `done` ([factory-evaluator](skills/factory-evaluator/SKILL.md)). If you want a context-specific overlay (corporate-engineering, autonomous-agent, personal-coding), author it as a sibling plugin that depends on `desk` and provides its own agent file; the substrate stays generic.
 
-Three agent files (`agents/worker.md`, `agents/worker.agent.md`, `agents/worker.toml`) ship the same canonical body in each harness's expected format. A sibling agent, `observer`, ships the same way (`agents/observer.md`, `agents/observer.agent.md`, `agents/observer.toml`): it evaluates work it did not do, from evidence, and never fixes or certifies it; it is never the default. It evaluates a release with the [evaluation packet](docs/evaluation-packet.md), and labels a finished job's waste in the background when its task reaches `done` ([factory-evaluator](skills/factory-evaluator/SKILL.md)). If you want a context-specific overlay (corporate-engineering, autonomous-agent, personal-coding), author it as a sibling plugin that depends on `desk` and provides its own agent file; the substrate stays generic.
-
-For deeper stacks, depend on the most specific layer you need. The adapter enables the selected overlay chain alongside Desk and Superpowers, with one Desk MCP. Generated instructions and `desk_status` report the declared chain; actual host loading still needs verification.
+For deeper stacks, depend on the most specific layer you need. `desk_status` reports the declared chain when the host passes activation context; actual host loading still needs verification.
 
 ## Structured questions
 
@@ -147,8 +127,6 @@ Desk installs a git `pre-commit` hook in the desk (marker line `# desk-card-comm
 Run `node -e 'import("<desk plugin>/mcp/src/desk/card-commit-guard.js").then(m=>console.log(m.uninstallCardGuard(process.argv[1])))' <desk root>`, or delete `.git/hooks/pre-commit` (or the hook in your `core.hooksPath`) and rename `pre-commit.desk-chained`, if present, back to `pre-commit`. Boot installs the hook again on the next session start, so to keep it off, set `core.hooksPath` to a folder Desk should leave alone (tracked) or remove the plugin.
 
 Desk's hooks run at its own boundaries: session start and end, the factory capture, and the card guard on the desk repository above. The harness owns its tools and the shell.
-
-On Codex, Desk registers only the `SessionEnd` capture hook; Codex skips an untrusted hook silently and there is no automatable trust grant.
 
 #### Copilot and the Desk MCP server
 Copilot gives its MCP servers no session folder (the server's working folder is the plugin's, `roots/list` answers an empty list, and `PWD` is only what launched Copilot). Desk's `sessionStart` hook records the session folder and the saved binding it saw in `<desk state>/copilot-sessions/<digest of session id>.json`, and the server reads that file whenever it resolves its root, keyed by `COPILOT_AGENT_SESSION_ID`, the one per-session value in its environment. Copilot starts the server before it fires `sessionStart`, so the first resolution finds nothing; every `desk_status` and gated tool call resolves again, so the next call binds with no restart. Sessions have separate files written by rename, a record whose folder is no longer a desk falls through to the saved binding, `$DESK` and the home fallbacks, and records untouched for 30 days are pruned.

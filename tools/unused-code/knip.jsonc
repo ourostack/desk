@@ -84,10 +84,6 @@
         "bootstrap.cjs",
         "web.cjs",
         "scripts/*.{js,mjs}",
-        // Codex is a supported host and the adapter is its activation surface: the host manifests and tests drive it, and the files below are the parts of it that nothing in this package imports by a static path.
-        "src/activation/adapters/codex.js",
-        "src/activation/artifact-ledger.js",
-        "src/activation/codex-smoke.js",
         // A superpowers skill runs this file directly; it is not imported by name.
         "src/activation/superpowers-context.js"
       ],

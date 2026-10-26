@@ -8,7 +8,7 @@
       "kind": "substrate",
       "version": "3.2.5",
       "provenance": {
-        "source": "plugins/desk/.codex-plugin/plugin.json",
+        "source": "plugins/desk/.claude-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
@@ -21,7 +21,7 @@
       "kind": "plugin",
       "version_range": "^6.3.0",
       "provenance": {
-        "source": "plugins/superpowers/.codex-plugin/plugin.json",
+        "source": "plugins/superpowers/.claude-plugin/plugin.json",
         "package": "obra/superpowers"
       },
       "lock": {
@@ -34,7 +34,7 @@
       "kind": "plugin",
       "version_range": "^0.2.6",
       "provenance": {
-        "source": "plugins/plain-language/.codex-plugin/plugin.json",
+        "source": "plugins/plain-language/.claude-plugin/plugin.json",
         "package": "ourostack/plain-language"
       },
       "lock": {
@@ -56,7 +56,6 @@
         ],
         "entrypoints": {
           "claude": "agents/worker.md",
-          "codex": "agents/worker.toml",
           "copilot": "agents/worker.agent.md"
         },
         "startup": {
@@ -75,7 +74,6 @@
         ],
         "entrypoints": {
           "claude": "agents/observer.md",
-          "codex": "agents/observer.toml",
           "copilot": "agents/observer.agent.md"
         },
         "startup": {
@@ -126,20 +124,6 @@
     }
   },
   "host_support": [
-    {
-      "host": "codex",
-      "status": "supported",
-      "dependency_resolution": "flattened",
-      "fallback_behavior": "Codex Desktop lacks a stable scriptable activation-smoke primitive; use temp-profile Codex CLI `codex exec --json` smoke plus owned global/project activation artifacts, with experimental app-server protocol evidence as the fallback when Desktop automation is needed",
-      "capabilities": [
-        "skills",
-        "mcp",
-        "global-default-agent"
-      ],
-      "unsupported_primitives": [
-        "codex-desktop-scriptable-activation-smoke"
-      ]
-    },
     {
       "host": "claude",
       "status": "supported",
@@ -269,8 +253,7 @@
       "Interactive"
     ],
     "generated_artifacts": [
-      "owned-host-config",
-      "activation-ledger"
+      "owned-host-config"
     ],
     "never_delete": [
       "desk-root-data"

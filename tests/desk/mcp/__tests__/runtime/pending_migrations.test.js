@@ -554,7 +554,7 @@ async function tidyDesk({ messy }) {
     execFileSync("git", ["-C", desk, ...args])
   }
   const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody", DESK_ACTIVATION_CONFIG: "" }
-  for (const key of ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_CONFIG_DIR", "AGENCY_TOML", "CODEX_HOME", "DESK_PERSON"]) delete env[key]
+  for (const key of ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_CONFIG_DIR", "AGENCY_TOML", "DESK_PERSON"]) delete env[key]
   return { desk, home, env }
 }
 

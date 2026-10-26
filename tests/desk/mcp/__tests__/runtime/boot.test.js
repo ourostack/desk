@@ -1365,7 +1365,7 @@ test("bootOnce: when restoring the runtime dependencies failed, the not-validate
 
 test("detectAgentHost: names the covered host from its own variables, unknown otherwise", () => {
   assert.equal(detectAgentHost({ CLAUDE_PLUGIN_ROOT: "/x" }), "claude")
-  assert.equal(detectAgentHost({ CODEX_HOME: "/x" }), "codex")
+  assert.equal(detectAgentHost({ CODEX_HOME: "/x" }), "unknown")
   assert.equal(detectAgentHost({ COPILOT_CLI: "1" }), "copilot")
   assert.equal(detectAgentHost({}), "unknown")
   // A Copilot session started from a Claude Code shell inherits CLAUDECODE; Copilot's own session id wins.
@@ -1589,7 +1589,7 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)
   const result = await healthyBoot(root)
-  assert.deepEqual(result.covers_hosts, ["claude", "copilot", "codex"])
+  assert.deepEqual(result.covers_hosts, ["claude", "copilot"])
   assert.ok(result.instructions.some((line) => line.includes(`Use the absolute path ${root} for the desk`) && !line.includes("export DESK=")))
   // The old ceremony is gone: no "confirm desk_status" step and no "read AGENTS.md" step (the text carries AGENTS.md itself).
   assert.ok(result.instructions.some((line) => line.startsWith("If your host defers tools") && line.includes("ToolSearch `select:") && line.includes("mcp__plugin_desk_desk__task_update")))
@@ -1869,7 +1869,6 @@ test("scripts/session-boot.js runs the command line for real, as a subprocess", 
       DESK: "",
       CLAUDE_PROJECT_DIR: "",
       DESK_ACTIVATION_CONFIG: "",
-      CODEX_HOME: "",
       CLAUDE_PLUGIN_DATA: "",
     },
   })

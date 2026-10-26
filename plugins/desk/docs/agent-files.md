@@ -1,14 +1,13 @@
 # desk:worker — agent files
 
-The desk plugin ships a substrate-default engineering agent named `worker`. The same canonical body lands in three formats so the agent works natively on the three major agentic CLIs.
+The desk plugin ships a substrate-default engineering agent named `worker`. The same canonical body lands in two formats so the agent works natively on Claude Code and Copilot CLI.
 
 | File | Harness | Format | What it gives you |
 |---|---|---|---|
 | `worker.md` | Claude Code | YAML frontmatter + markdown body | A discrete agent selectable via plugin loader / marketplace. Invoke `claude --agent desk:worker`. |
 | `worker.agent.md` | Copilot CLI | YAML frontmatter (`target: github-copilot`, `user-invocable: true`) + markdown body | A discrete agent that appears in Copilot CLI's agent picker. Invoke `copilot --agent worker`. |
-| `worker.toml` | Codex CLI | TOML subagent — `name`, `description`, `developer_instructions` | Source format for hosts that expose explicit subagents; Codex's healthy path is activation-owned default behavior. |
 
-The plugin also ships `observer`, `worker`'s sibling, in the same three formats (`observer.md`, `observer.agent.md`, `observer.toml`). Named for Lean's process observer, it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. It is never the default agent: invoke `claude --agent desk:observer` or `copilot --agent observer`, and see [its release-evaluation skill](../skills/evaluate-release/SKILL.md) and the [evaluation packet](evaluation-packet.md).
+The plugin also ships `observer`, `worker`'s sibling, in the same two formats (`observer.md`, `observer.agent.md`). Named for Lean's process observer, it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. It is never the default agent: invoke `claude --agent desk:observer` or `copilot --agent observer`, and see [its release-evaluation skill](../skills/evaluate-release/SKILL.md) and the [evaluation packet](evaluation-packet.md).
 
 ## Install + invoke per harness
 
@@ -44,17 +43,7 @@ The root package carries generated flattened Superpowers metadata for Copilot-co
 
 The root plugin also registers a Desk-owned `sessionStart` hook. Copilot executes that hook with the installed plugin root, and the hook reads `skills/using-desk/SKILL.md` at runtime to emit the canonical foundation as `additionalContext`; `worker.agent.md` does not carry a copied foundation body.
 
-### Codex CLI / Codex App
-
-Within explicit alpha activation, Codex selects Desk and Superpowers with one owned Desk MCP bridge and worker instruction block. `global-personal` is the selected activation's default mode, not permission to replace an existing installation. Operator-owned text, prior approvals and opt-outs remain intact through `desk:using-superpowers-with-desk`.
-
-The generated worker block injects the `using-desk` foundation and adds only Codex activation text: run `desk:session-start` first, bind `$DESK`, and apply `plain-language` and `superpowers:using-superpowers`, because no Codex hook loads them. The Desk MCP health guard belongs to `desk:session-start`. When the active host does not expose Desk MCP tools, especially `desk_status`, it does not treat that as local-only mode: it explains what Desk MCP provides, asks whether to fix/reload now or continue without reminders, and routes repair to `desk:codex-onboarding` or the Codex repair checklist. Callable `desk_status` means the MCP is present and any degraded index/vector/snapshot state should be repaired through Desk runtime tooling.
-
-Use `manual-only` when Desk should remain available as a plugin/MCP substrate without changing default behavior. That mode writes no instruction block, so nothing injects `using-desk`; the `agents/worker.toml` body tells a worker started there to invoke `desk:using-desk` itself. Use `project-local` when a repo should own its own Desk binding. If a Codex host exposes an explicit subagent surface, `agents/worker.toml` is the source format for that optional layer, but copied agent files are not part of the healthy path.
-
-No bespoke Desk CLI is required for the default worker path; the host plugin profile, activation adapter, and bundled MCP metadata carry the setup.
-
-For verification and repair of marketplace/plugin exposure, the activation-owned Desk MCP bridge, runtime-pack health, and owned worker-default blocks, see `desk:codex-onboarding`.
+No bespoke Desk CLI is required for the default worker path; the host plugin profile and bundled MCP metadata carry the setup.
 
 ## Structured questions on Claude Code
 
@@ -84,7 +73,7 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 
 `desk:worker` is the standalone target. Downstream overlays inherit it rather than copying its skills, MCP or body. Select the authorized overlay chain with Desk and Superpowers and preserve one Desk MCP server. Source packaging and actual host inheritance require separate evidence.
 
-`desk_status` with `{ detail: true }` reports the active selected activation and chain when the host passes activation context. For Codex cache/debugging, distinguish `repo-source-current`, `installed-cache-current`, and `active-session-visible`: the first two can be checked by the read-only cache audit, while active session visibility requires a host/session reload proof or an active tool-list snapshot supplied to the cache audit.
+`desk_status` with `{ detail: true }` reports the active selected activation and chain when the host passes activation context.
 
 ### Live readiness diagnostics
 
@@ -115,7 +104,7 @@ barriers. Readiness progresses even when no one calls `desk_status`.
 
 The agent body uses a `$DESK` placeholder for the workspace directory. The consumer agent's preamble declares the binding — substitute textually when interpreting skill instructions or running shell commands. Defaults are:
 
-- Standalone Codex install: `$DESK = ~/desk/`
+- Standalone install: `$DESK = ~/desk/`
 - Autonomous-agent overlay: `$DESK = ~/AgentBundles/<agent>.ouro/desk/`
 - Personal-coding overlay: whatever the operator declares
 - Corporate-engineering overlay: whatever the org's convention is

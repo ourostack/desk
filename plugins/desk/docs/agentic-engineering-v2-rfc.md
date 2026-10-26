@@ -140,7 +140,7 @@ Upstream providers such as Superpowers are vendored from their own default branc
 
 ## 8. Limits
 
-V2 grants no repository, publication, destructive or rollout authority beyond what the human gave. Hosts differ in background, visual, review and recovery capabilities, and V2 does not promise every host supports every one. Codex can still run Desk, but it is not a supported target. Structural tests are not a substitute for installed behavior or editorial judgment. One successful job is not proof of a productivity improvement; the factory exists so that claims like that can be made honestly, or honestly withheld.
+V2 grants no repository, publication, destructive or rollout authority beyond what the human gave. Hosts differ in background, visual, review and recovery capabilities, and V2 does not promise every host supports every one. Desk supports Claude Code and Copilot CLI; it ships nothing for Codex. Structural tests are not a substitute for installed behavior or editorial judgment. One successful job is not proof of a productivity improvement; the factory exists so that claims like that can be made honestly, or honestly withheld.
 
 Public, generic policy lives here and in the layer foundations. Environment-specific rules belong in consumer overlays, product behavior in the product's repository, and each operator's preferences in their own desk.
 

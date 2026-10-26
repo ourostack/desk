@@ -16,7 +16,6 @@ const pluginSkill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-langua
 const manifests = [
   "plugins/plain-language/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
-  "plugins/plain-language/.codex-plugin/plugin.json",
 ].map((file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")));
 const rootPlugin = manifests[0];
 const claudePlugin = manifests[1];

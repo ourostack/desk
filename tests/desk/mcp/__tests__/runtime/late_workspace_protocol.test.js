@@ -68,7 +68,6 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   delete env.DESK_ACTIVATION_CONFIG
   delete env.CLAUDE_PLUGIN_DATA
   delete env.CLAUDE_PROJECT_DIR
-  delete env.CODEX_HOME
   const input = new PassThrough()
   const output = new PassThrough()
   const waiting = new Map()

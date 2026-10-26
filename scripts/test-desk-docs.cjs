@@ -54,20 +54,6 @@ const PRIVACY_REQUIRED_DOCS = Object.freeze([
 
 const TOPIC_REQUIREMENTS = Object.freeze([
   Object.freeze({
-    label: "Codex global personal activation",
-    docs: Object.freeze([
-      "plugins/desk/README.md",
-      "plugins/desk/docs/agent-files.md",
-    ]),
-    terms: Object.freeze([
-      "codex",
-      "global-personal",
-      "project-local",
-      "manual-only",
-      "desk mcp bridge",
-    ]),
-  }),
-  Object.freeze({
     label: "Claude native dependency activation",
     docs: Object.freeze([
       "plugins/desk/README.md",
@@ -310,7 +296,7 @@ function isAllowedManualCommandContext(record) {
 
 function hasUncontrolledWorkerInstructionGuidance(record) {
   const mentionsInstructionTarget =
-    /\b(?:agents\.md|codex instructions?|codex worker instructions?|worker default(?: instruction)? block|worker-default(?: instruction)? block|agent files?|worker\.toml)\b/u
+    /\b(?:agents\.md|worker default(?: instruction)? block|worker-default(?: instruction)? block|agent files?)\b/u
       .test(record.lower);
   const hasManualEditVerb =
     /\b(?:append|copy|copied|paste|write|drop|place|add|hand-edit|hand edit|manually edit)\b/u
@@ -337,13 +323,6 @@ function validateHealthyPathRecord(errors, record) {
     !isAllowedManualCommandContext(record)
   ) {
     errors.push(`${lineRef(record)} mentions npm install outside troubleshooting/developer notes`);
-  }
-
-  if (
-    /\bcodex\s+mcp\s+add\b/u.test(record.lower) &&
-    !isAllowedManualCommandContext(record)
-  ) {
-    errors.push(`${lineRef(record)} presents codex mcp add outside troubleshooting/developer notes`);
   }
 
   if (
@@ -717,16 +696,8 @@ function assertFixturePasses(errors, text, headingPath) {
 
 const DEFAULT_FAILING_FIXTURES = Object.freeze([
   Object.freeze({
-    text: "If activation fails, run `codex mcp add desk` from the repo.",
-    expected: "codex mcp add",
-  }),
-  Object.freeze({
     text: "Run `npm install` instead of using the runtime pack.",
     expected: "npm install",
-  }),
-  Object.freeze({
-    text: "Paste the worker default block into your Codex instructions.",
-    expected: "AGENTS/worker copy or append",
   }),
   Object.freeze({
     text: "Append the worker-default instruction block to AGENTS.md.",
@@ -743,11 +714,6 @@ const DEFAULT_FAILING_FIXTURES = Object.freeze([
 ]);
 
 const DEFAULT_PASSING_FIXTURES = Object.freeze([
-  Object.freeze({ text: "Do not run `codex mcp add` for the healthy path." }),
-  Object.freeze({
-    text: "If activation fails, run `codex mcp add desk` from the repo.",
-    headingPath: ["Troubleshooting"],
-  }),
   Object.freeze({
     text: "Direct development checkouts can still run `npm install` when intentionally working on the MCP package.",
     headingPath: ["Developer notes"],

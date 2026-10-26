@@ -2,16 +2,15 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
-import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
 // The legacy Work Suite provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
 const legacyProvider = (file) => JSON.parse(readFileSync(new URL(`../fixtures/legacy-providers/${file}`, import.meta.url), "utf8"))
-const legacy = { id: "work-suite", kind: "plugin", version_range: "^4.0.0-alpha.2", provenance: { source: "plugins/work-suite/.codex-plugin/plugin.json", package: "ourostack/work-suite" }, lock: { version: "4.0.0-alpha.2", integrity: "sha256-legacy-fixture" } }
+const legacy = { id: "work-suite", kind: "plugin", version_range: "^4.0.0-alpha.2", provenance: { source: "plugins/work-suite/.claude-plugin/plugin.json", package: "ourostack/work-suite" }, lock: { version: "4.0.0-alpha.2", integrity: "sha256-legacy-fixture" } }
 function fixture() {
   const activation = read("plugins/desk/activation/desk.activation.json")
   activation.dependencies = activation.dependencies.filter((entry) => !["work-suite", "superpowers"].includes(entry.id))
-  activation.dependencies.push({ id: "superpowers", kind: "plugin", version_range: "6.3.0", provenance: { source: "plugins/superpowers/.codex-plugin/plugin.json", package: "ourostack/superpowers" }, lock: { version: "6.3.0", integrity: "sha256-fixture" } })
+  activation.dependencies.push({ id: "superpowers", kind: "plugin", version_range: "6.3.0", provenance: { source: "plugins/superpowers/.claude-plugin/plugin.json", package: "ourostack/superpowers" }, lock: { version: "6.3.0", integrity: "sha256-fixture" } })
   activation.provides.activation_targets.find((entry) => entry.id === "desk:worker").depends_on = ["desk", "superpowers", "plain-language"]
   const deskPlugin = read("plugins/desk/plugin.json")
   deskPlugin.activation.copilot.dependencies.superpowers = { path: "../superpowers", version: "6.3.0", resolution: "flattened", bundleMetadata: "plugins/desk/activation/copilot-root.flattened-bundle.json" }
@@ -54,38 +53,6 @@ for (const [label, mutate, expected] of [
     assert.deepEqual(validateCopilotPackagingContract(input).filter((error) => !baseline.includes(error)), [expected])
   })
 }
-
-for (const config of [
-  '[plugins]\n"work-suite@elsewhere" = { enabled = true }\n',
-  '[plugins."work-suite@elsewhere"]\nenabled = "true"\n',
-  '[plugins."work-suite@elsewhere"]\ndescription = "enabled = true"\n',
-  '[plugins."work-suite@elsewhere"]\nenabled = 1\n',
-]) {
-  test(`Codex checks typed enabled state rather than text in ${JSON.stringify(config)}`, () => {
-    const input = {
-      manifest: fixture().activation, mode: "global-personal", existingConfig: config,
-      existingInstructions: "", pluginRoot: "plugins/desk", deskRoot: "~/desk", runtimeCacheDir: "/tmp/desk-cache",
-    }
-    if (config.startsWith("[plugins]\n")) {
-      assert.throws(() => materializeCodexActivation(input), /Work Suite/u)
-    } else {
-      assert.ok(materializeCodexActivation(input).generatedConfig.startsWith(config))
-    }
-  })
-}
-
-test("manual-only activation with no selected lifecycle does not enable an available legacy provider", () => {
-  const manifest = fixture().activation
-  manifest.dependencies.push(structuredClone(legacy))
-  manifest.provides.activation_targets[0].depends_on = ["desk", "plain-language"]
-  const result = materializeCodexActivation({
-    manifest, mode: "manual-only", existingConfig: "", existingInstructions: "",
-    pluginRoot: "plugins/desk", deskRoot: "~/desk", runtimeCacheDir: "/tmp/desk-cache",
-  })
-  assert.doesNotMatch(result.generatedConfig, /\[plugins\."(?:work-suite|superpowers)@/u)
-  assert.equal(result.generatedInstructions, "")
-  assert.equal(result.generatedActivationConfig, "")
-})
 
 function omittedSelectionLegacyInput() {
   const input = fixture()

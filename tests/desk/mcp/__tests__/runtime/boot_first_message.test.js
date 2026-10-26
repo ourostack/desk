@@ -69,7 +69,7 @@ test("on Copilot, the boot says to ask in chat and never through ask_user; other
     assert.equal(list.filter((line) => line.includes("ask_user")).length, 1)
     assert.ok(list.indexOf(ASK_IN_CHAT) !== -1 && list.indexOf(ASK_IN_CHAT) < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction to ask which task to resume")
   }
-  for (const env of [{ DESK: root }, { DESK: root, CLAUDECODE: "1" }, { DESK: root, CODEX_HOME: "/x" }, { DESK: root, COPILOT_AGENT_SESSION_ID: "s", DESK_FACTORY_HEADLESS: "1" }]) {
+  for (const env of [{ DESK: root }, { DESK: root, CLAUDECODE: "1" }, { DESK: root, CLAUDE_PLUGIN_ROOT: "/x" }, { DESK: root, COPILOT_AGENT_SESSION_ID: "s", DESK_FACTORY_HEADLESS: "1" }]) {
     const other = await boot(root, { env })
     for (const list of lists(other)) assert.ok(!list.some((line) => line.includes("ask_user")), JSON.stringify(env))
   }

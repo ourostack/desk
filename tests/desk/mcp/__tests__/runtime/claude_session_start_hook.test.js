@@ -1,4 +1,4 @@
-// The Claude and Codex SessionStart hook is Node, so it never depends on which `bash` is first on PATH. It must say what the shell script it replaced said (kept as a fixture for this comparison), exit 0 on every path, and honour the headless flag.
+// The Claude SessionStart hook is Node, so it never depends on which `bash` is first on PATH. It must say what the shell script it replaced said (kept as a fixture for this comparison), exit 0 on every path, and honour the headless flag.
 // Every run gets its own throwaway HOME and desk, a registry with no checks, and a factory start that does nothing.
 import "../_isolated_env.mjs"
 import { test } from "node:test"
