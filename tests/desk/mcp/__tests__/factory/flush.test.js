@@ -1693,8 +1693,9 @@ test("closed-PR entries that are not PRs of this machine's intake branch are ski
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 0)
 }))
 
-// Every `*_check_unavailable` is the store's own check failing: wait and retry, never quarantine.
-for (const code of ["merge_conflict", "unexpected_merge", "intake_check_unavailable", "corrections_check_unavailable", "labels_check_unavailable"]) {
+// Every `*_check_unavailable` is the store's own check failing: wait and retry, never quarantine. A `triage_` code can only name a triage
+// batch an earlier Desk sent with the facts, so it never quarantines them either.
+for (const code of ["merge_conflict", "unexpected_merge", "intake_check_unavailable", "corrections_check_unavailable", "labels_check_unavailable", "triage_row_invalid"]) {
   test(`a PR closed with ${code} is stale, not bad: nothing is quarantined and the files go out again rebuilt on the current main`, () => scratch(async ({ env }) => {
     const { flush } = await load()
     await optIn(env)
