@@ -37,9 +37,4 @@ test("selected alpha guidance preserves legacy preferences and leaves the compat
   const selectedInstructions = result.generatedInstructions.slice(existingInstructions.length)
   assert.match(selectedInstructions, /desk:using-superpowers-with-desk/u)
   assert.doesNotMatch(selectedInstructions, /Use Work Suite skills/u)
-  // The legacy Work Suite mapping belongs to the retired-name redirect skill, which the host's skill listing
-  // surfaces; the owned block does not restate it.
-  assert.doesNotMatch(selectedInstructions, /legacy.*Work Suite|Work Suite.*legacy/iu)
-  const redirect = readFileSync(new URL("../../../../../plugins/desk/skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
-  assert.match(redirect.split("---", 3)[1], /Work Suite capability mapping for unchanged standing instructions/u)
 })

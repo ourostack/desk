@@ -1541,13 +1541,13 @@ for (const association of ["activation", "DESK"]) {
       const fixturePlugin = await mkTempRoot("desk-boot-association-plugin-")
       const sourcePlugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk")
       await fs.mkdir(path.join(fixturePlugin, "migrations"))
-      for (const name of ["02-tidy-desk.md", "03-normalize-task-status.md"]) {
+      for (const name of ["02-tidy-desk.md"]) {
         await fs.copyFile(path.join(sourcePlugin, "migrations", name), path.join(fixturePlugin, "migrations", name))
       }
       await fs.symlink(path.join(sourcePlugin, "mcp"), path.join(fixturePlugin, "mcp"), "junction")
       for (const [root, pending] of [[opened, !pendingAtAssociation], [associated, pendingAtAssociation]]) {
         execFileSync("git", ["-C", root, "init", "-q"])
-        await writeCard(root, "work", "sample", VALID_CARD.replace("status: processing", `status: ${pending ? "active" : "processing"}`))
+        await writeCard(root, "work", "sample", VALID_CARD)
         if (!pending) await fs.writeFile(path.join(root, "_meta", "organization.json"), '{"tidy_version":1}\n')
       }
       const coverageEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("NYC_") || key === "NODE_OPTIONS"))
@@ -1567,7 +1567,6 @@ for (const association of ["activation", "DESK"]) {
       assert.equal(result.root.path, associated)
       assert.deepEqual(result.migrations, pendingAtAssociation ? [
         { id: "02-tidy-desk", state: "agent_work" },
-        { id: "03-normalize-task-status", state: "agent_work" },
       ] : [])
       assert.equal(await fs.readFile(path.join(associated, "work/sample/task.md"), "utf8"), before, "migration detection and boot do not normalize cards")
     })

@@ -244,7 +244,7 @@ for (const dimension of ["model", "model_pair", "subject_model", "judge_model"])
 
 test("lack of actual observed subject activation stays unavailable rather than inferred from requested names", async () => {
   const { validateActivationReceipt } = await load("copilot-runner.mjs");
-  const requested = { subjectAgent: "configured-subject-agent", compositionSeam: "desk:superpowers-integration", requestedConfigurationSha256: hash("config") };
+  const requested = { subjectAgent: "configured-subject-agent", compositionSeam: "desk:using-superpowers-with-desk", requestedConfigurationSha256: hash("config") };
   assert.equal(validateActivationReceipt({ requested, observed: null }).availability, "unavailable");
   assert.equal(validateActivationReceipt({ requested, observed: { reconstructedFromProse: true } }).availability, "unavailable");
 });

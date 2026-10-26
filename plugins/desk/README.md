@@ -67,7 +67,7 @@ An overlay that resolves its own root (a crew launcher that maps the operator's 
 
 The plugin ships Codex manifests for Desk and its Superpowers and Plain Language closure. Explicit alpha activation materializes only the owned config/instruction region for the selected mode.
 
-Within explicit alpha activation, the default mode is `global-personal`: Desk and Superpowers are selected together with the owned MCP bridge and instruction block. `project-local` and `manual-only` remain opt-outs. Enabled competing lifecycle configuration is refused, not silently rewritten; operator-owned text and prior approvals remain intact through `desk:using-superpowers-with-desk`, the active adapter that the retired `desk:superpowers-integration` name now redirects to.
+Within explicit alpha activation, the default mode is `global-personal`: Desk and Superpowers are selected together with the owned MCP bridge and instruction block. `project-local` and `manual-only` remain opt-outs. Enabled competing lifecycle configuration is refused, not silently rewritten; operator-owned text and prior approvals remain intact through `desk:using-superpowers-with-desk`, the active adapter.
 
 Codex plugin ids use the actual marketplace namespace consistently for Desk, Superpowers and downstream overlays. A namespace or cache version alone does not prove the selected loaded source.
 
