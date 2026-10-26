@@ -1,7 +1,7 @@
 // Desk's browser (plugins/desk/mcp/web.cjs): fresh or mine, through the Playwright CLI.
 // Most tests drive a fake CLI and a fake npm placed where the real ones go, so they run everywhere without a browser.
 // With DESK_BROWSER_REAL=1 the last tests install the real playwright-core and drive a real Edge or Chrome.
-import { after, test } from "node:test"
+import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
@@ -719,14 +719,15 @@ test("real: mine carries the person's sign-in into a copy, leaves a running brow
 })
 
 // TEMPORARY diagnostic for a Windows CI run that does not exit after the last test: what keeps this process alive, and which processes started recently.
-after(() => {
+test("zz diagnostic: report live handles a little after the last test", () => {
   const report = (label) => {
-    process.stderr.write(`[web.test diagnostic ${label}] pid ${process.pid} active: ${JSON.stringify(process.getActiveResourcesInfo())}\n`)
+    const handles = process._getActiveHandles().map((h) => `${h.constructor?.name}${h.pid ? ` pid=${h.pid}` : ""}${h.spawnfile ? ` ${h.spawnfile}` : ""}${h.spawnargs ? ` ${JSON.stringify(h.spawnargs).slice(0, 300)}` : ""}`)
+    process.stderr.write(`[web.test diagnostic ${label}] pid ${process.pid} resources ${JSON.stringify(process.getActiveResourcesInfo())} handles ${JSON.stringify(handles)}\n`)
     if (process.platform === "win32") {
       const listed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt (Get-Date).AddMinutes(-10) } | ForEach-Object { '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }"], { encoding: "utf8", input: "", timeout: 60000 })
       process.stderr.write(`[web.test diagnostic ${label}] recent processes:\n${listed.stdout}\n${listed.stderr}\n`)
     }
   }
-  report("after")
-  setTimeout(() => report("10s later"), 10000).unref()
+  setTimeout(() => report("5s"), 5000).unref()
+  setTimeout(() => report("30s"), 30000).unref()
 })
