@@ -255,6 +255,11 @@ test("a background writer that finds the index lock held stages nothing and defe
   assert.equal(git.calls.some((call) => call[0] === "add" || call[0] === "commit"), false)
   // A person's write in the same state commits: it does not check the lock first, and Git's own lock is retried (below).
   assert.equal((await run({ spawn, calls: git.calls })).commit, "committed")
+  // No lock, or Git cannot say where it would be: the background write commits.
+  const free = (cmd, args) => args.includes("--git-path") ? { status: 0, stdout: `${path.join(base, "no.lock")}\n`, stderr: "" } : git.spawn(cmd, args)
+  assert.equal((await asBackgroundWriter(() => run({ spawn: free, calls: git.calls }))).commit, "committed")
+  const unknown = (cmd, args) => args.includes("--git-path") ? { status: 128, stdout: "", stderr: "fatal" } : git.spawn(cmd, args)
+  assert.equal((await asBackgroundWriter(() => run({ spawn: unknown, calls: git.calls }))).commit, "committed")
 })
 
 test("a person's commit waits out a briefly held lock, and a background writer's does not", () => {
@@ -271,6 +276,11 @@ test("a person's commit waits out a briefly held lock, and a background writer's
   const person = script(2)
   assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, true)
   assert.equal(person.commits(), 3)
+  // A lock that stays held is given up on after the wait, and Git's own message comes back.
+  const held = script(Infinity)
+  const started = Date.now()
+  assert.equal(commitPaths("/desk", ["a.md"], "m", held.spawn).ok, false)
+  assert.ok(Date.now() - started >= 2900 && held.commits() > 2)
   const background = script(2)
   const before = process.env[YIELD_ENV]
   process.env[YIELD_ENV] = "1"

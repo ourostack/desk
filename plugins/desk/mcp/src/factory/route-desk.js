@@ -25,17 +25,15 @@ const canonical = (folder) => {
 }
 
 /** The person's own desk for `env`, or null when their settings name none (or name one that cannot be used). Never throws. */
-export function ownDesk(env, { homeDir = env?.HOME || os.homedir(), resolve = resolveDeskRootWithSource } = {}) {
+export function ownDesk(env, { homeDir = os.homedir() } = {}) {
   try {
-    const { root } = resolve({ env, activationConfigPath: resolveActivationConfigPath({ env }), homeDir, deskPluginRoot: env?.DESK_PLUGIN_ROOT })
-    return typeof root === "string" ? canonical(root) : null
+    return canonical(resolveDeskRootWithSource({ env, activationConfigPath: resolveActivationConfigPath({ env }), homeDir }).root)
   } catch {
     return null
   }
 }
 
-/** Whether `deskRoot` is the person's own desk, so the loop may write this machine's findings there. */
+/** Whether `deskRoot` (an absolute path) is the person's own desk, so the loop may write this machine's findings there. */
 export function isOwnDesk(env, deskRoot, options) {
-  const own = ownDesk(env, options)
-  return own !== null && typeof deskRoot === "string" && own === canonical(deskRoot)
+  return ownDesk(env, options) === canonical(deskRoot)
 }

@@ -55,12 +55,12 @@ const LOCK_HELD = /Unable to create '[^']*\.lock'|\.lock': File exists|cannot lo
 export const YIELD_ENV = "DESK_GIT_YIELD"
 
 /** True when this process is one of Desk's background writers, which give way to a person's writes. */
-export function yieldsGitLock(env = process.env) {
-  return env?.[YIELD_ENV] === "1"
+export function yieldsGitLock() {
+  return process.env[YIELD_ENV] === "1"
 }
 
 function lockHeld(result) {
-  return result?.status !== 0 && LOCK_HELD.test(String(result?.stderr ?? ""))
+  return result?.status !== 0 && LOCK_HELD.test(String(result?.stderr))
 }
 
 function sleepSync(ms) {
@@ -82,9 +82,7 @@ function run(spawnGit, root, args, extra = {}) {
 /** True when another Git process holds `root`'s index lock right now. False when Git cannot say. */
 export function indexLockHeld(root, spawnGit) {
   const result = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
-  if (result?.status !== 0) return false
-  const lock = String(result.stdout).trim()
-  return lock !== "" && existsSync(path.resolve(root, lock))
+  return result.status === 0 && existsSync(path.resolve(root, String(result.stdout).trim()))
 }
 
 /** True when `result` (a `spawnSync`-shaped return value) is `spawnGit` reporting its own timeout kill. */

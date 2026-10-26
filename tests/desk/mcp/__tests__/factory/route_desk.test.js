@@ -21,19 +21,21 @@ test("the own desk comes from the saved binding, $DESK or the home folder, never
     const pluginData = path.join(base, "plugin-data")
     mkdirSync(pluginData, { recursive: true })
     const plain = { HOME: home }
-    assert.equal(ownDesk(plain), null, "no settings, no home desk: no own desk")
-    assert.equal(isOwnDesk({ ...plain, CLAUDE_PROJECT_DIR: project }, project), false, "a project desk is not the person's own")
+    const at = { homeDir: home }
+    assert.equal(ownDesk(plain, at), null, "no settings, no home desk: no own desk")
+    assert.equal(isOwnDesk({ ...plain, CLAUDE_PROJECT_DIR: project }, project, at), false, "a project desk is not the person's own")
     const homeDesk = desk(path.join(home, "desk"))
-    assert.equal(ownDesk(plain), homeDesk)
+    assert.equal(ownDesk(plain, at), homeDesk)
     assert.equal(isOwnDesk({ ...plain, DESK: project }, project), true, "$DESK names the person's own desk")
+    assert.equal(isOwnDesk({ ...plain, DESK: project }, path.join(base, "not-there")), false)
     writeFileSync(path.join(pluginData, "desk.activation.json"), JSON.stringify({ schema_version: 1, desk: { root: saved } }))
     const claude = { ...plain, CLAUDE_PLUGIN_DATA: pluginData, CLAUDE_PROJECT_DIR: project }
-    assert.equal(isOwnDesk(claude, saved), true)
-    assert.equal(isOwnDesk(claude, project), false)
+    assert.equal(isOwnDesk(claude, saved, at), true)
+    assert.equal(isOwnDesk(claude, project, at), false)
     // A saved binding to a folder that is gone names no own desk rather than another one.
     writeFileSync(path.join(pluginData, "desk.activation.json"), JSON.stringify({ schema_version: 1, desk: { root: path.join(base, "gone") } }))
-    assert.equal(ownDesk(claude), null)
-    assert.equal(isOwnDesk(claude, homeDesk), false)
+    assert.equal(ownDesk(claude, at), null)
+    assert.equal(isOwnDesk(claude, homeDesk, at), false)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
