@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import childProcess from "node:child_process"
 import fsSync, { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { deriveFile, deriveMarker, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
@@ -8,6 +9,69 @@ import { END, ID, STORE, json, recent, scratch, session } from "./_session_helpe
 
 const NEWER = "2026-09-26T09:02:00.000Z"
 const posix = { skip: process.platform === "win32" }
+
+test("cold macOS marker enumeration verifies forty unchanged files with bounded native ACL batches", { skip: process.platform !== "darwin" }, (t) => scratch(async (ctx) => {
+  const original = { ...await session(ctx), updated_at: recent() }
+  const ids = Array.from({ length: 40 }, (_, index) => `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`)
+  const root = await factoryStateRoot(ctx.env)
+  const dir = path.join(root, "markers")
+  for (const id of ids) {
+    const marker = { ...original, session_id: id }
+    await writeMarker(ctx.env, marker)
+    const file = path.join(dir, `${marker.host}-${id}.json`)
+    await fs.writeFile(file, JSON.stringify(marker))
+  }
+  const native = childProcess.execFileSync.bind(childProcess)
+  const lstat = fs.lstat.bind(fs)
+  const ancestors = new Map()
+  const base = await fs.realpath(ctx.base)
+  t.mock.method(fs, "lstat", async (file, ...args) => {
+    const stat = await lstat(file, ...args)
+    const relative = path.relative(base, String(file))
+    // Keep other tests' shared-temp churn out of this unchanged-tree process-count fixture.
+    if (stat.isDirectory() && (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) {
+      if (!ancestors.has(String(file))) ancestors.set(String(file), stat)
+      return ancestors.get(String(file))
+    }
+    return stat
+  })
+  let inspections = 0
+  t.mock.method(childProcess, "execFileSync", (command, args, options) => {
+    if (command === "/bin/ls" && args.some((arg) => arg.startsWith(`${dir}${path.sep}`))) inspections += 1
+    return native(command, args, options)
+  })
+  const markers = await listMarkers(ctx.env)
+  assert.deepEqual(markers.map((marker) => marker.session_id).sort(), [...ids].sort())
+  assert.ok(inspections <= 2, `expected at most two native batches, observed ${inspections}`)
+}))
+
+test("I1 a leaf replaced after its guarded byte read is refused without pruning the replacement", (t) => scratch(async (ctx) => {
+  const marker = { ...await session(ctx), updated_at: recent() }
+  await writeMarker(ctx.env, marker)
+  const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
+  const openSync = fsSync.openSync
+  let reading = false
+  const opened = t.mock.method(fsSync, "openSync", (target, ...args) => {
+    const descriptor = openSync(target, ...args)
+    if (target === file) reading = true
+    return descriptor
+  })
+  const lstat = fs.lstat
+  let replaced = false
+  const race = t.mock.method(fs, "lstat", async (target, ...args) => {
+    if (target === file && reading && !replaced) {
+      replaced = true
+      await fs.rename(file, path.join(ctx.base, "marker-before-replacement"))
+      await json(file, marker)
+    }
+    return lstat(target, ...args)
+  })
+  assert.deepEqual(await listMarkers(ctx.env), [])
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), marker)
+  race.mock.restore()
+  opened.mock.restore()
+  assert.deepEqual(await listMarkers(ctx.env), [marker])
+}))
 
 for (const [at, kind] of [["enumeration", "valid"], ["leaf-inspection", "valid"], ["leaf-inspection", "corrupt"], ["leaf-inspection", "expired"]]) {
   test(`I1 directory swap at ${at}, ${kind} external open and restoration cannot derive or mutate external data`, posix, (t) => scratch(async (ctx) => {

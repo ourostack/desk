@@ -1,0 +1,37 @@
+name: Factory macOS protection
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/factory-macos-protection.yml"
+      - "plugins/desk/mcp/src/factory/**"
+      - "tests/desk/mcp/__tests__/factory/os_protect.test.js"
+      - "tests/desk/mcp/__tests__/factory/marker_identity.test.js"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-macos-protection:
+    name: Native macOS protection
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify native ACL checks and marker identity guards
+        run: >-
+          node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs
+          --test-concurrency=1 --test
+          tests/desk/mcp/__tests__/factory/os_protect.test.js
+          tests/desk/mcp/__tests__/factory/marker_identity.test.js

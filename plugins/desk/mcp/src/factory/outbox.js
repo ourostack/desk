@@ -94,6 +94,7 @@ import {
   ensureOwnerOnlyDirectory,
   expandHome,
   lstatIfPresent,
+  primeAclFreeFiles,
   protectLeafFile,
   realpathExistingPrefix,
 } from "./os-protect.js"
@@ -693,7 +694,11 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
   const nowMs = Date.parse(now())
   const kept = []
   let heldPruned = 0
-  for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
+  const names = await listRegularFiles(dir, OUTBOX_NAME_PATTERN)
+  await assertMarkerDirectory(directory)
+  await primeAclFreeFiles(names.map((name) => path.join(dir, name)), platform, NAMING)
+  await assertMarkerDirectory(directory)
+  for (const name of names) {
     const file = path.join(dir, name)
     const before = await lstatExactIfPresent(file, NAMING)
     let marker = null
