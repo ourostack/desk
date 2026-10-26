@@ -10,7 +10,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { performance } = require("node:perf_hooks");
 
 const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = process.argv[2] || `${pluginRoot}/skills/using-desk/SKILL.md`;
@@ -26,29 +25,15 @@ function stripTrailingNewlines(text) {
 // fallbacks, names where the root came from, and with the boot checks adds one "Desk boot pre-checks:" line only when a
 // check has something to say, then starts factory delivery detached with ignored stdio, after the output is built.
 // An empty answer means the resolver could not load or run.
-async function resolverText(argv) {
+async function startupDirection() {
   try {
     const { main } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "scripts", "resolve-desk-root.js")).href);
     let text = "";
-    await main({ argv, env: process.env, write: (chunk) => { text += chunk; } });
+    await main({ argv: ["--startup-line", "--boot-checks"], env: process.env, write: (chunk) => { text += chunk; } });
     return stripTrailingNewlines(text);
   } catch {
     return "";
   }
-}
-
-// The boot checks and migrations get until this many milliseconds after the process started, as in the Copilot hook
-// (whose host drops the whole output past 5 s); past it the hook prints the startup line alone, without their lines.
-// The boot script runs the same checks again.
-const OPTIONAL_LINES_DEADLINE_MS = 3500;
-
-async function startupDirection() {
-  const full = resolverText(["--startup-line", "--boot-checks"]);
-  let timer;
-  const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()), null); });
-  const text = await Promise.race([full, late]);
-  clearTimeout(timer);
-  return text ?? resolverText(["--startup-line"]);
 }
 
 function emit(additionalContext) {

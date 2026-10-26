@@ -807,7 +807,7 @@ function namedCards(resolved, cards) {
 }
 
 /** The GitHub `owner/repo` of every repo of every open task, read from the cards and the clones' config files, never by running git. */
-export function taskStores(cards, { root, homeDir = os.homedir() }) {
+function taskStores(cards, { root, homeDir = os.homedir() }) {
   const stores = new Set()
   for (const card of cards) {
     // A card that cannot be read here names no repo; card validation reports it.

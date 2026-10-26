@@ -83,9 +83,6 @@ const HOOKS_DIR = path.join(__dirname, "..");
 const PLUGIN_ROOT_DIR = path.join(__dirname, "..", "..");
 const REPAIR_ENTRY_POINT = path.join(HOOKS_DIR, "boot-checks.cjs");
 const TOTAL_BUDGET_MS = 300;
-// The migration Detect blocks get less time in a hook than in the boot script, which runs them again with its own budget:
-// the hook must leave room for the Desk foundation inside Copilot's 5 s limit on a slow machine.
-const HOOK_MIGRATION_BUDGET_MS = 1500;
 const RECORD_SKIPPED_WAIT_MS = 250;
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(PLUGIN_ROOT_DIR, "mcp", "scripts", "factory.js");
@@ -617,7 +614,7 @@ async function migrationLine({ host, env = process.env, sessionFolder, budgetMs,
     const shouldLaunchFiler = await import("../../mcp/src/runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({
-      pluginRoot, env, cwd, budgetMs: budgetMs ?? HOOK_MIGRATION_BUDGET_MS, host, quietWhenUnchecked: true,
+      pluginRoot, env, cwd, budgetMs, host, quietWhenUnchecked: true,
       fileProblem: async ({ reason }) => {
         const safeReason = argvSafeReason(reason);
         if (!shouldLaunchFiler({ env, mechanism: "pending-migrations", signature: safeReason })) {
