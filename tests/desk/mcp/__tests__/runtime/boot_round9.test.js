@@ -185,17 +185,17 @@ test("a failed fetch that bumps FETCH_HEAD does not move the 'as of' time: only 
   assert.ok(Date.parse(lastSyncedAt({ root, env })) >= Date.parse(first))
 })
 
-test("repoStates marks a clone with no remote at all as local-only, and nothing else", () => {
+test("repoStates marks a clone with no remote at all as local-only, and nothing else", async () => {
   const card = { track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "r", local_path: "/clones/r", mode: "local" }] } }
-  const states = (remotes) => repoStates({
+  const states = async (remotes) => (await repoStates({
     cards: [card], now: () => 0, deadline: 60000,
     spawnGit: (cmd, args) => (args.includes("remote") ? remotes : args.includes("status") ? { status: 0, stdout: "## main\n" } : { status: 1, stdout: "" }),
-  }).states[0]
-  assert.equal(states({ status: 0, stdout: "\n" }).local_only, true)
-  assert.equal(states({ status: 0, stdout: "origin\n" }).local_only, undefined)
-  assert.equal(states({ status: 1, stdout: "" }).local_only, undefined)
-  assert.equal(states({ status: 0, stdout: null }).local_only, undefined)
-  assert.equal(states(undefined).local_only, undefined)
+  })).states[0]
+  assert.equal((await states({ status: 0, stdout: "\n" })).local_only, true)
+  assert.equal((await states({ status: 0, stdout: "origin\n" })).local_only, undefined)
+  assert.equal((await states({ status: 1, stdout: "" })).local_only, undefined)
+  assert.equal((await states({ status: 0, stdout: null })).local_only, undefined)
+  assert.equal((await states(undefined)).local_only, undefined)
 })
 
 // ── Readable output ─────────────────────────────────────────────────────

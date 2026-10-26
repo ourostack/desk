@@ -46,7 +46,7 @@
 // the script finished and returned a complete result, not that everything
 // it found is healthy.
 
-import { spawn as nodeSpawn, spawnSync } from "node:child_process"
+import { execFile, spawn as nodeSpawn, spawnSync } from "node:child_process"
 import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -722,40 +722,57 @@ function hostLineHostname(cardText) {
 
 const REPO_FETCH_TIMEOUT_MS = 10000
 
-/** `git fetch` plus branch and dirty state for every locally-cloned repo of every open task, within the deadline. */
-export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.homedir(), now, deadline }) {
-  const states = []
+/** A `git fetch` run off the event loop; its caller reads only whether it succeeded (`status` 0). */
+function fetchAsync(cmd, args, { timeout }) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout, windowsHide: true }, (error) => resolve({ status: error ? 1 : 0 }))
+  })
+}
+
+/**
+ * `git fetch` plus branch and dirty state for every locally-cloned repo of every open task, within the deadline. The
+ * fetches run at once and off the event loop: run one after another with `spawnSync`, they held up the push checks
+ * started beside them, so a task-only boot waited for every fetch and then ran out of time for the push checks.
+ */
+export async function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.homedir(), now, deadline }) {
+  // The real `spawnSync` fetches asynchronously; a test's stand-in answers as it is.
+  const fetchGit = spawnGit === spawnSync ? fetchAsync : async (...args) => spawnGit(...args)
+  const repos = []
   const pending = []
   for (const card of cards) {
     if (TERMINAL_STATUSES.has(card.data?.status) || !Array.isArray(card.data?.repos)) continue
     for (const repo of card.data.repos) {
       if (repo === null || typeof repo !== "object" || repo.mode !== "local" || typeof repo.local_path !== "string") continue
       const label = repoLabel(card, repo)
-      const dir = resolveLocalPath(repo.local_path, { homeDir, deskRoot: root })
       if (deadline - now() < MIN_ACCOUNT_CALL_MS) {
         pending.push(`repo state for ${label.repo} (${cardLocation(card)}): boot_budget_exceeded`)
         continue
       }
-      const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
-      const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
-      if (!status || status.status !== 0 || typeof status.stdout !== "string") {
-        states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
-        continue
-      }
-      const lines = status.stdout.split("\n").filter((line) => line !== "")
-      // A clone with no remote at all has nowhere to push: its commits are the delivered work (`done-evidence.js`).
-      const remotes = spawnGit("git", ["-C", dir, "remote"], { encoding: "utf8", timeout: 5000 })
-      states.push({
-        ...label,
-        present: true,
-        local_path: repo.local_path,
-        path: dir,
-        branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
-        dirty: lines.length > 1,
-        fetched: Boolean(fetched) && fetched.status === 0,
-        ...(remotes?.status === 0 && typeof remotes.stdout === "string" && remotes.stdout.trim() === "" ? { local_only: true } : {}),
-      })
+      repos.push({ repo, label, dir: resolveLocalPath(repo.local_path, { homeDir, deskRoot: root }) })
     }
+  }
+  const fetches = await Promise.all(repos.map(({ dir }) => fetchGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })))
+  const states = []
+  for (const [index, { repo, label, dir }] of repos.entries()) {
+    const fetched = fetches[index]
+    const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
+    if (!status || status.status !== 0 || typeof status.stdout !== "string") {
+      states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
+      continue
+    }
+    const lines = status.stdout.split("\n").filter((line) => line !== "")
+    // A clone with no remote at all has nowhere to push: its commits are the delivered work (`done-evidence.js`).
+    const remotes = spawnGit("git", ["-C", dir, "remote"], { encoding: "utf8", timeout: 5000 })
+    states.push({
+      ...label,
+      present: true,
+      local_path: repo.local_path,
+      path: dir,
+      branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
+      dirty: lines.length > 1,
+      fetched: Boolean(fetched) && fetched.status === 0,
+      ...(remotes?.status === 0 && typeof remotes.stdout === "string" && remotes.stdout.trim() === "" ? { local_only: true } : {}),
+    })
   }
   return { states, pending }
 }
@@ -869,9 +886,11 @@ async function taskOnlyBoot({ taskQuery, root, host, degraded, pending, walkFn, 
   const task = namedTaskResult(taskQuery, cards, { root, host, homeDir })
   const named = namedCards(resolveTaskQuery(taskQuery, cards, root.path), cards)
   const routes = resolvePushAccounts({ root: root.path, cards: named, runner: gh, now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
+  // The routes run while the repos are fetched; a failure is reported where they are awaited, below.
+  routes.catch(() => {})
   let repoStateList = []
   try {
-    const found = repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
+    const found = await repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
     repoStateList = found.states
     pending.push(...found.pending)
   } catch (error) {
@@ -1498,7 +1517,7 @@ export async function bootOnce({
   let repoStateList = []
   if (named.length > 0) {
     try {
-      const found = repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
+      const found = await repoFn({ cards: named, root: root.path, spawnGit, homeDir, now, deadline })
       repoStateList = found.states
       pending.push(...found.pending)
     } catch (error) {

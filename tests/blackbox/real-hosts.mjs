@@ -53,7 +53,9 @@ function copilotAnswer(tag, since) {
   const root = path.join(os.homedir(), ".copilot", "session-state")
   for (const id of fs.existsSync(root) ? fs.readdirSync(root) : []) {
     const file = path.join(root, id, "events.jsonl")
-    if (!fs.existsSync(file) || fs.statSync(file).mtimeMs < since) continue
+    const stat = fs.existsSync(file) ? fs.statSync(file) : null
+    // A short check's own log is small; another session's log can pass Node's string limit (1.85 GB seen) and crash the read.
+    if (stat === null || stat.mtimeMs < since || stat.size > 100 * 1024 * 1024) continue
     const text = fs.readFileSync(file, "utf8")
     if (!text.includes(tag)) continue
     const messages = text.split("\n").filter(Boolean).map((line) => { try { return JSON.parse(line) } catch { return null } }).filter(Boolean)

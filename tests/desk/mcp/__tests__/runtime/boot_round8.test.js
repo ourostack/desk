@@ -88,14 +88,14 @@ test("with two repos that cannot be cloned from anywhere, one instruction asks f
   assert.ok(at("The operator named a task: hand off") !== -1 && at("hand off") < at("is not at its recorded path"), "a clone that can be made is optional, so it follows the hand-off")
 })
 
-test("repoStates reports a card's clone url on a missing clone, without credentials embedded in it", () => {
+test("repoStates reports a card's clone url on a missing clone, without credentials embedded in it", async () => {
   const spawnGit = (cmd, args) => (args.includes("fetch") ? { status: 0, stdout: "" } : { status: 128, stdout: "" })
   const card = (url) => ({ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "r", local_path: "/clones/r", mode: "local", url }] } })
-  const urlOf = (url) => repoStates({ cards: [card(url)], spawnGit, now: () => 0, deadline: 60000 }).states[0].url
-  assert.equal(urlOf("https://example.com/a/r.git"), "https://example.com/a/r.git")
-  assert.equal(urlOf("https://user:secret@example.com/a/r.git"), "https://example.com/a/r.git")
-  assert.equal(urlOf("  "), undefined)
-  assert.equal(urlOf(42), undefined)
+  const urlOf = async (url) => (await repoStates({ cards: [card(url)], spawnGit, now: () => 0, deadline: 60000 })).states[0].url
+  assert.equal(await urlOf("https://example.com/a/r.git"), "https://example.com/a/r.git")
+  assert.equal(await urlOf("https://user:secret@example.com/a/r.git"), "https://example.com/a/r.git")
+  assert.equal(await urlOf("  "), undefined)
+  assert.equal(await urlOf(42), undefined)
 })
 
 test("a repos url must be a string", () => {
@@ -104,11 +104,11 @@ test("a repos url must be a string", () => {
   assert.deepEqual(cardProblems({ ...base, repos: [{ name: "r", local_path: "", mode: "remote", url: 5 }] }), ["repos[0].url is not a string"])
 })
 
-test("a clone url must be strict https, ssh or scp-style: anything else is dropped and the agent is told to ask", () => {
+test("a clone url must be strict https, ssh or scp-style: anything else is dropped and the agent is told to ask", async () => {
   const spawnGit = (cmd, args) => (args.includes("fetch") ? { status: 0, stdout: "" } : { status: 128, stdout: "" })
-  const urlOf = (url) => repoStates({ cards: [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "r", local_path: "/c/r", mode: "local", url }] } }], spawnGit, now: () => 0, deadline: 60000 }).states[0].url
-  for (const good of ["https://example.com/a/r.git", "ssh://git@example.com:2222/a/r.git", "ssh://example.com/a/r", "git@example.com:a/r.git", "https://example.com:8443/a/r.git"]) assert.equal(urlOf(good), good, good)
-  for (const bad of ["--upload-pack=touch /tmp/x", "-oProxyCommand=x", "https://example.com/a b", "https://example.com/a;rm -rf ~", "https://example.com/$(id)", "https://example.com/`id`", "https://example.com/a|b", "http://example.com/a/r.git", "file:///etc/passwd", "git@example.com:a/r.git;x", "ext::sh -c id", "https://", ""]) assert.equal(urlOf(bad), undefined, bad)
+  const urlOf = async (url) => (await repoStates({ cards: [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "r", local_path: "/c/r", mode: "local", url }] } }], spawnGit, now: () => 0, deadline: 60000 })).states[0].url
+  for (const good of ["https://example.com/a/r.git", "ssh://git@example.com:2222/a/r.git", "ssh://example.com/a/r", "git@example.com:a/r.git", "https://example.com:8443/a/r.git"]) assert.equal(await urlOf(good), good, good)
+  for (const bad of ["--upload-pack=touch /tmp/x", "-oProxyCommand=x", "https://example.com/a b", "https://example.com/a;rm -rf ~", "https://example.com/$(id)", "https://example.com/`id`", "https://example.com/a|b", "http://example.com/a/r.git", "file:///etc/passwd", "git@example.com:a/r.git;x", "ext::sh -c id", "https://", ""]) assert.equal(await urlOf(bad), undefined, bad)
 })
 
 test("the clone command quotes both arguments and ends option parsing", async () => {
