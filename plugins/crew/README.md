@@ -11,6 +11,7 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
 - **the conflict-safe write protocol** -- direct push to your own desk; a shared path goes through a
   pull-latest -> branch -> PR -> merge-now serialization (no human review gate; the PR is a concurrency
   primitive).
+- **team lessons** -- a correction that holds for the whole team goes, attributed and sourced, into the root `AGENTS.md` of the repository the team works in, which Desk's session start, Copilot CLI and Codex load (Claude Code through `CLAUDE.md`), so nobody teaches it twice; a personal one goes into that person's `desks/<alias>/AGENTS.md`. `lesson_add` routes each one and writes a team lesson through a pull request it merges.
 - **perspective queries** -- answer "what would `<person>` think about X", "what's `<person>` working
   on", "what's actually agreed vs just a fact", read from the right home and attributed honestly.
 - **crew onboarding** -- clone a shared workspace through an overlay-supplied identity, resolve the
@@ -22,6 +23,6 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 
 ## Skills
 
-- `shared-desk-conventions` -- the layout, the taxonomy, and the write protocol.
+- `shared-desk-conventions` -- the layout, the taxonomy, the write protocol and team lessons.
 - `perspective-query` -- the read side: answer perspective- and status-shaped questions honestly.
 - `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.
