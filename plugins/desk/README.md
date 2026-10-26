@@ -85,11 +85,11 @@ At worker session start, missing Desk MCP is surfaced as an operator decision ra
 
 Search needs no setup. Each Desk MCP server keeps its own exact-word index and runs a small built-in embedding model for meaning-based search, downloaded once into `$DESK/.state/`. See [Search](mcp/README.md#search) in the MCP README.
 
-Vector packs and snapshots under `$DESK/artifacts/` belong to the old shared index and are not read by this build.
+Vector packs and snapshots under `$DESK/artifacts/` belong to the old shared index. This build does not read or make them.
 
-### Artifact privacy
+### Embedding privacy
 
-Embeddings and snapshots are derivative data and may carry privacy risk even when they are not plain-text documents. Shared vector packs and warm boot snapshots are published only through explicit, policy-controlled artifact paths such as `$DESK/artifacts/`; public or sensitive repositories should require approval before these artifacts are committed.
+Embeddings are derivative data and may carry privacy risk even though they are not plain-text documents. Desk keeps them in `$DESK/.state/`, which it keeps out of Git, and never publishes them.
 
 See `desk:codex-onboarding` for the repair checklist and verification steps.
 

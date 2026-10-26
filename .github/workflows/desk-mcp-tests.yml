@@ -47,22 +47,13 @@ on:
       - "plugins/plain-language/**"
       - "upstream-sources.lock.json"
       - "plugins/desk/mcp/artifacts/runtime-deps/**"
-      - "plugins/desk/artifacts/vector-packs/**"
-      - "plugins/desk/artifacts/snapshots/**"
       - "plugins/desk/artifacts/tombstones/**"
-      - "plugins/desk/artifacts/publication-policy.json"
-      - "plugins/desk/artifacts/publication-policy.schema.json"
       - "plugins/desk/README.md"
       - "plugins/desk/docs/**"
       - "plugins/desk/mcp/README.md"
       - "plugins/desk/activation/README.md"
-      - "plugins/desk/mcp/config/performance-budgets.json"
       - "plugins/desk/mcp/scripts/build-runtime-deps-pack.js"
       - "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js"
-      - "plugins/desk/mcp/scripts/build-vector-pack.js"
-      - "plugins/desk/mcp/scripts/build-snapshot.js"
-      - "plugins/desk/mcp/scripts/verify-snapshot.js"
-      - "plugins/desk/mcp/scripts/validate-artifacts.js"
       - "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"
       - "scripts/*.cjs"
       - "scripts/test-desk-docs.cjs"
@@ -429,13 +420,9 @@ jobs:
           test -n "$manifest"
           npm run runtime:deps-pack:verify -- --pack-dir "$(dirname "$manifest")"
 
-      - name: Verify Desk snapshot artifacts
+      - name: Verify runtime support matrix
         working-directory: plugins/desk/mcp
-        run: npm run artifact:snapshot:verify -- --plugin-root ..
-
-      - name: Validate Desk shared artifacts
-        working-directory: plugins/desk/mcp
-        run: npm run artifact:validate -- --desk-root ../../.. --plugin-root ..
+        run: npm run runtime:support-matrix:verify
 
       # Path relevance and evaluation status only. Mechanical success of this job is not a scored evaluation: the
       # candidate supplies repository, ref, exact head and changed paths as data, while the trusted fixture, grader,

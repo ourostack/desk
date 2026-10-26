@@ -1,3 +1,6 @@
+// The redaction ledger shipped with the plugin (`artifacts/tombstones/tombstones.jsonl`): each row names a document by
+// path and content hash that must never be indexed. The search engine and the file search that runs before it starts
+// both leave these documents out.
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
@@ -15,7 +18,7 @@ const TOMBSTONE_FIELDS = new Set([
 const DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 const HASH_RE = /^sha256:[a-f0-9]{64}$/u
 
-export function validateTombstoneRow(row) {
+function validateTombstoneRow(row) {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
     return ["tombstone row must be an object"]
   }
@@ -138,101 +141,6 @@ export function tombstoneDecisionForDoc({ ledger, doc } = {}) {
   }
 }
 
-export async function filterTombstonedDocuments({ pluginRoot, docs = [] } = {}) {
-  const ledger = await validTombstoneLedger({ pluginRoot })
-  if (!ledger.present) {
-    return { docs: [...docs], tombstoned_count: 0 }
-  }
-
-  const kept = []
-  let tombstonedCount = 0
-  for (const doc of docs) {
-    const decision = tombstoneDecisionForDoc({ ledger, doc })
-    if (decision.tombstoned) {
-      tombstonedCount += 1
-    } else {
-      kept.push(doc)
-    }
-  }
-  return { docs: kept, tombstoned_count: tombstonedCount }
-}
-
-export async function tombstoneStatusForDocuments({ pluginRoot, docs = [] } = {}) {
-  const filtered = await filterTombstonedDocuments({ pluginRoot, docs })
-  return {
-    tombstoned: filtered.tombstoned_count > 0,
-    tombstoned_count: filtered.tombstoned_count,
-  }
-}
-
-export async function assertArtifactDoesNotRepresentTombstones({
-  pluginRoot,
-  artifact_type,
-  represented_documents,
-} = {}) {
-  const ledger = await loadTombstoneLedger({ pluginRoot })
-  if (!ledger.valid) {
-    throw artifactTombstoneLedgerInvalidError({ artifact_type, diagnostics: ledger.diagnostics })
-  }
-  if (!ledger.present) {
-    return { allowed: true, redacted_count: 0 }
-  }
-  const representedDiagnostics = validateRepresentedDocuments(represented_documents)
-  if (representedDiagnostics.length > 0) {
-    throw representedDocumentsInvalidError({ artifact_type, diagnostics: representedDiagnostics })
-  }
-
-  let redactedCount = 0
-  for (const doc of represented_documents) {
-    const decision = tombstoneDecisionForDoc({ ledger, doc })
-    if (decision.tombstoned) redactedCount += 1
-  }
-  if (redactedCount === 0) return { allowed: true, redacted_count: 0 }
-
-  const error = new Error("artifact represents redacted documents")
-  error.code = "artifact_represents_redacted_document"
-  error.artifact_type = artifact_type
-  error.redacted_count = redactedCount
-  throw error
-}
-
-export async function assertArtifactInputsDoNotContainTombstones({
-  pluginRoot,
-  artifact_type,
-  sourceDocs,
-} = {}) {
-  const ledger = await loadTombstoneLedger({ pluginRoot })
-  if (!ledger.valid) {
-    throw artifactTombstoneLedgerInvalidError({ artifact_type, diagnostics: ledger.diagnostics })
-  }
-  if (!ledger.present) {
-    return { allowed: true, redacted_count: 0 }
-  }
-  const representedDiagnostics = validateRepresentedDocuments(sourceDocs)
-  if (representedDiagnostics.length > 0) {
-    throw representedDocumentsInvalidError({ artifact_type, diagnostics: representedDiagnostics })
-  }
-
-  let redactedCount = 0
-  for (const doc of sourceDocs) {
-    const decision = tombstoneDecisionForDoc({ ledger, doc })
-    if (decision.tombstoned) redactedCount += 1
-  }
-  if (redactedCount === 0) return { allowed: true, redacted_count: 0 }
-
-  const error = new Error("artifact input includes redacted documents")
-  error.code = "artifact_input_redacted"
-  error.artifact_type = artifact_type
-  error.redacted_count = redactedCount
-  throw error
-}
-
-async function validTombstoneLedger({ pluginRoot }) {
-  const ledger = await loadTombstoneLedger({ pluginRoot })
-  if (ledger.valid) return ledger
-  throw tombstoneLedgerInvalidError({ diagnostics: ledger.diagnostics })
-}
-
 function invalidLedger({ diagnostics, ledgerPath, present }) {
   return {
     valid: false,
@@ -241,47 +149,6 @@ function invalidLedger({ diagnostics, ledgerPath, present }) {
     diagnostics,
     ledger_path: ledgerPath,
   }
-}
-
-function tombstoneLedgerInvalidError({ diagnostics }) {
-  const error = new Error("tombstone ledger is invalid")
-  error.code = "tombstone_ledger_invalid"
-  error.diagnostics = diagnostics
-  return error
-}
-
-function artifactTombstoneLedgerInvalidError({ artifact_type, diagnostics }) {
-  const error = new Error("artifact tombstone ledger is invalid")
-  error.code = "artifact_tombstone_ledger_invalid"
-  error.artifact_type = artifact_type
-  error.diagnostics = diagnostics
-  return error
-}
-
-function representedDocumentsInvalidError({ artifact_type, diagnostics }) {
-  const error = new Error("artifact represented documents are invalid")
-  error.code = "artifact_represented_documents_invalid"
-  error.artifact_type = artifact_type
-  error.diagnostics = diagnostics
-  return error
-}
-
-function validateRepresentedDocuments(docs) {
-  if (!Array.isArray(docs)) return ["artifact represented_documents must be an array"]
-  const diagnostics = []
-  for (const doc of docs) {
-    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-      diagnostics.push("artifact represented document must be an object")
-      continue
-    }
-    if (!isNormalizedRelativePath(doc.path)) {
-      diagnostics.push("artifact represented document path must be a normalized relative path")
-    }
-    if (!isSha256(doc.hash)) {
-      diagnostics.push("artifact represented document hash must be a sha256 digest")
-    }
-  }
-  return diagnostics
 }
 
 function isNormalizedRelativePath(value) {

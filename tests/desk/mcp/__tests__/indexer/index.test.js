@@ -2,14 +2,12 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { createHash } from "node:crypto"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
-import Database from "better-sqlite3"
 
-import { isIndexFresh, rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
-import { openDb, closeDb, getMeta, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { chunkTextHash } from "../../../../../plugins/desk/mcp/src/indexer/text-hash.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function mkRoot() {
@@ -21,39 +19,9 @@ async function w(root, rel, body) {
   await fs.writeFile(abs, body, "utf8")
 }
 
-async function writeManyEmptySharedDocs(root, count) {
-  const dir = path.join(root, "_shared")
-  await fs.mkdir(dir, { recursive: true })
-  for (let index = 0; index < count; index += 1) {
-    await fs.writeFile(
-      path.join(dir, `${String(index).padStart(5, "0")}.md`),
-      "",
-      "utf8",
-    )
-  }
-}
-
-async function writeManyChunkySharedDocs(root, docCount, chunksPerDoc) {
-  const dir = path.join(root, "_shared")
-  await fs.mkdir(dir, { recursive: true })
-  const body = Array.from(
-    { length: chunksPerDoc },
-    (_, index) => `## Chunk ${index}\n\nbody ${index}`,
-  ).join("\n\n")
-  for (let index = 0; index < docCount; index += 1) {
-    await fs.writeFile(
-      path.join(dir, `chunky-${String(index).padStart(5, "0")}.md`),
-      body,
-      "utf8",
-    )
-  }
-}
-
-const indexOpts = { skipEmbed: true }
-
 test("empty desk → empty index", async () => {
   const root = await mkRoot()
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root)
   assert.equal(summary.docs_indexed, 0)
   assert.equal(summary.docs_skipped, 0)
   assert.equal(summary.chunks_inserted, 0)
@@ -70,7 +38,7 @@ test("small fixture desk → expected doc + chunk counts", async () => {
   await w(root, "trackA/task-1/doing.md", "# Doing\n\ndoing body")
   await w(root, "_meta/friction.md", "# Friction\n\nentry")
 
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root)
   assert.equal(summary.docs_indexed, 4)
   assert.ok(summary.chunks_inserted >= 4)
 
@@ -96,317 +64,73 @@ test("re-running on an unchanged desk is a no-op (hash unchanged)", async () => 
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
   await w(root, "trackA/task-1/planning.md", "body")
 
-  const first = await rebuildIndex(root, indexOpts)
+  const first = await rebuildIndex(root)
   assert.equal(first.docs_indexed, 2)
   assert.equal(first.docs_skipped, 0)
 
-  const second = await rebuildIndex(root, indexOpts)
+  const second = await rebuildIndex(root)
   assert.equal(second.docs_indexed, 0, "no docs should reindex on no-op run")
   assert.equal(second.docs_skipped, 2)
 })
 
-test("indexer records active embedding spec metadata and stable chunk keys", async () => {
+test("each section stores the hash of its text, unchanged across rebuilds", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/doing.md", "## Stable\n\nsame body\n")
 
-  const first = await rebuildIndex(root, indexOpts)
-  assert.equal(first.docs_indexed, 1)
-
-  const db = openDb(root)
-  let firstKeys
-  try {
-    const activeSpecId = getMeta(db, "active_embedding_spec_id")
-    assert.ok(activeSpecId, "missing active_embedding_spec_id meta")
-    assert.match(activeSpecId, /nomic-embed-text-v1_5/u)
-    assert.equal(getMeta(db, "active_chunker_id"), "desk-md-h2-paragraph-v2")
-    assert.equal(getMeta(db, "active_normalization_id"), "unicode-whitespace-v1")
-
-    const rows = db
-      .prepare(
-        `SELECT chunk_key, text_hash, embedding_spec_id, chunker_id, normalization_id
-         FROM chunks
-         ORDER BY chunk_index`,
-      )
-      .all()
-    assert.ok(rows.length >= 1)
-    for (const row of rows) {
-      assert.match(row.chunk_key, /^ck_/u)
-      assert.match(row.text_hash, /^sha256:/u)
-      assert.equal(row.embedding_spec_id, activeSpecId)
-      assert.equal(row.chunker_id, "desk-md-h2-paragraph-v2")
-      assert.equal(row.normalization_id, "unicode-whitespace-v1")
+  await rebuildIndex(root)
+  const read = () => {
+    const db = openDb(root)
+    try {
+      return db.prepare("SELECT text, text_hash FROM chunks ORDER BY chunk_index").all()
+    } finally {
+      closeDb(db)
     }
-    firstKeys = rows.map((row) => row.chunk_key)
-  } finally {
-    closeDb(db)
   }
+  const first = read()
+  assert.ok(first.length >= 1)
+  for (const row of first) assert.equal(row.text_hash, chunkTextHash(row.text))
 
-  const second = await rebuildIndex(root, indexOpts)
-  assert.equal(second.docs_indexed, 0)
+  const second = await rebuildIndex(root)
   assert.equal(second.docs_skipped, 1)
-
-  const dbAfter = openDb(root)
-  try {
-    const secondKeys = dbAfter
-      .prepare("SELECT chunk_key FROM chunks ORDER BY chunk_index")
-      .all()
-      .map((row) => row.chunk_key)
-    assert.deepEqual(secondKeys, firstKeys)
-  } finally {
-    closeDb(dbAfter)
-  }
+  assert.deepEqual(read(), first)
 })
 
-test("unchanged legacy indexes are reindexed to backfill chunk identity metadata", async () => {
+test("archived docs keep archive metadata and every section is in the exact-word index", async () => {
   const root = await mkRoot()
-  const relPath = "trackA/task-1/doing.md"
-  const raw = "## Stable\n\nsame body\n"
-  await w(root, relPath, raw)
+  await w(root, "trackA/_archive/old-task/task.md", "---\nstatus: done\n---\narchived hybrid body")
 
-  const stateDir = path.join(root, ".state")
-  await fs.mkdir(stateDir, { recursive: true })
-  const legacy = new Database(path.join(stateDir, "desk-index.sqlite"))
-  try {
-    legacy.exec(`
-      CREATE TABLE docs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        path TEXT NOT NULL UNIQUE,
-        kind TEXT NOT NULL,
-        track TEXT,
-        task_slug TEXT,
-        status TEXT,
-        schema_version INTEGER DEFAULT 0,
-        created_at TEXT,
-        updated_at TEXT,
-        hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        frontmatter TEXT
-      );
-      CREATE TABLE chunks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        doc_id INTEGER NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        text TEXT NOT NULL,
-        heading TEXT,
-        start_offset INTEGER,
-        end_offset INTEGER
-      );
-    `)
-    const docId = legacy
-      .prepare(
-        `INSERT INTO docs
-          (path, kind, track, task_slug, hash, mtime, frontmatter)
-         VALUES (?, 'doing', 'trackA', 'task-1', ?, 0, '{}')
-         RETURNING id`,
-      )
-      .get(relPath, createHash("sha256").update(raw).digest("hex")).id
-    legacy
-      .prepare(
-        `INSERT INTO chunks
-          (doc_id, chunk_index, text, heading, start_offset, end_offset)
-         VALUES (?, 0, ?, 'Stable', 0, ?)`,
-      )
-      .run(docId, raw.trim(), raw.length)
-  } finally {
-    legacy.close()
-  }
-
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root)
   assert.equal(summary.docs_indexed, 1)
-  assert.equal(summary.docs_skipped, 0)
-
-  const db = openDb(root)
-  try {
-    const rows = db
-      .prepare(
-        `SELECT chunk_key, text_hash, embedding_spec_id, chunker_id, normalization_id
-         FROM chunks
-         ORDER BY chunk_index`,
-      )
-      .all()
-    assert.ok(rows.length > 0)
-    for (const row of rows) {
-      assert.match(row.chunk_key, /^ck_/u)
-      assert.match(row.text_hash, /^sha256:/u)
-      assert.equal(row.embedding_spec_id, getMeta(db, "active_embedding_spec_id"))
-      assert.equal(row.chunker_id, getMeta(db, "active_chunker_id"))
-      assert.equal(row.normalization_id, getMeta(db, "active_normalization_id"))
-    }
-  } finally {
-    closeDb(db)
-  }
-})
-
-test("unchanged docs with missing chunk rows are rebuilt only when chunks are expected", async () => {
-  const root = await mkRoot()
-  await w(
-    root,
-    "trackA/task-1/doing.md",
-    "## Missing chunks\n\nbody\n\n## Second chunk\n\nmore body",
-  )
-  await w(root, "trackA/task-2/doing.md", "")
-
-  await rebuildIndex(root, indexOpts)
-  const db = openDb(root)
-  try {
-    const missingChunksDoc = db
-      .prepare("SELECT id FROM docs WHERE path = ?")
-      .get("trackA/task-1/doing.md")
-    const emptyDoc = db
-      .prepare("SELECT id FROM docs WHERE path = ?")
-      .get("trackA/task-2/doing.md")
-    db.prepare("DELETE FROM chunks WHERE doc_id = ? AND chunk_index = 1").run(
-      missingChunksDoc.id,
-    )
-    db.prepare("DELETE FROM chunks WHERE doc_id = ?").run(emptyDoc.id)
-  } finally {
-    closeDb(db)
-  }
-
-  const summary = await rebuildIndex(root, indexOpts)
-  assert.equal(summary.docs_indexed, 1)
-  assert.equal(summary.docs_skipped, 1)
-
-  const dbAfter = openDb(root)
-  try {
-    const rebuiltChunks = dbAfter
-      .prepare(
-        `SELECT count(*) AS count
-         FROM chunks c
-         JOIN docs d ON d.id = c.doc_id
-         WHERE d.path = ? AND c.chunk_key IS NOT NULL`,
-      )
-      .get("trackA/task-1/doing.md").count
-    const emptyChunks = dbAfter
-      .prepare(
-        `SELECT count(*) AS count
-         FROM chunks c
-         JOIN docs d ON d.id = c.doc_id
-         WHERE d.path = ?`,
-      )
-      .get("trackA/task-2/doing.md").count
-    assert.equal(rebuiltChunks, 2)
-    assert.equal(emptyChunks, 0)
-  } finally {
-    closeDb(dbAfter)
-  }
-})
-
-test("vectors stored under another embedding specification do not count as the active specification's", async () => {
-  const root = await mkRoot()
-  await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nsemantic body")
-
-  const dim = 768
-  const vec = Array.from({ length: dim }, (_, i) => (i % 5) / dim)
-  const firstFetch = async () => ({ ok: true, json: async () => ({ embedding: vec }) })
-  await rebuildIndex(root, { embed: { fetch: firstFetch } })
-
-  const db = openDb(root)
-  try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
-    assert.ok(vecCount > 0, "expected initial vector rows")
-    db.prepare("UPDATE text_vectors SET vector_space = 'inactive-spec-for-red-test'").run()
-    const activeSpecId = getMeta(db, "active_embedding_spec_id")
-    assert.ok(activeSpecId, "missing active_embedding_spec_id meta")
-    const inactiveSpecId = "inactive-spec-for-red-test"
-    assert.notEqual(activeSpecId, inactiveSpecId)
-    db.prepare(
-      `INSERT INTO embedding_specs
-        (id, model, model_revision, dimension, chunker_id, normalization_id, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, 0)`,
-    ).run(
-      inactiveSpecId,
-      "nomic-embed-text",
-      "nomic-embed-text-v1.4",
-      768,
-      "desk-md-h2-paragraph-v0",
-      "unicode-whitespace-v0",
-    )
-    db.prepare(
-      `UPDATE chunks
-       SET embedding_spec_id = ?,
-           chunker_id = 'desk-md-h2-paragraph-v0',
-           normalization_id = 'unicode-whitespace-v0'`,
-    ).run(inactiveSpecId)
-  } finally {
-    closeDb(db)
-  }
-
-  let calls = 0
-  const secondFetch = async () => {
-    calls += 1
-    return { ok: true, json: async () => ({ embedding: vec }) }
-  }
-  const second = await rebuildIndex(root, {
-    reembedMissing: true,
-    embed: { fetch: secondFetch },
-  })
-
-  assert.equal(second.docs_indexed, 1)
-  assert.ok(calls > 0, "inactive spec vectors must not satisfy active-spec embedding coverage")
-})
-
-test("default embedding options use global fetch and archive docs keep archive metadata", async () => {
-  const root = await mkRoot()
-  await w(root, "trackA/_archive/old-task/task.md", "---\nstatus: done\n---\narchived semantic body")
-
-  const originalFetch = globalThis.fetch
-  const dim = 768
-  const vec = Array.from({ length: dim }, (_, i) => (i % 11) / dim)
-  const requests = []
-  globalThis.fetch = async (url, request) => {
-    requests.push({
-      url: String(url),
-      body: JSON.parse(request.body),
-    })
-    return { ok: true, json: async () => ({ embedding: vec }) }
-  }
-
-  try {
-    const summary = await rebuildIndex(root)
-    assert.equal(summary.docs_indexed, 1)
-    assert.equal(summary.semantic_warnings, 0)
-  } finally {
-    if (originalFetch === undefined) {
-      delete globalThis.fetch
-    } else {
-      globalThis.fetch = originalFetch
-    }
-  }
-
-  assert.ok(requests.length > 0, "expected indexer to call global fetch with default embed options")
-  assert.ok(requests[0].url.endsWith("/api/embeddings"), `unexpected embed URL: ${requests[0].url}`)
-  assert.equal(requests[0].body.model, "nomic-embed-text")
 
   const db = openDb(root)
   try {
     const doc = db.prepare("SELECT is_archived FROM docs WHERE path = ?").get("trackA/_archive/old-task/task.md")
-    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
     assert.equal(doc.is_archived, 1)
-    assert.ok(vecCount > 0, "expected default embedding path to store vectors")
+    const hits = db.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?").all("hybrid")
+    assert.equal(hits.length, 1)
   } finally {
     closeDb(db)
   }
 })
 
-test("isIndexFresh covers missing, invalid, stale, and fresh metadata states", async () => {
+test("an in-memory index can be rebuilt through a handle the caller owns", async () => {
   const root = await mkRoot()
-  await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nfreshness body")
-  const db = openDb(root)
+  await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
+  const db = openDb(root, { dbPath: ":memory:" })
   try {
-    assert.equal(await isIndexFresh(root, db), false)
+    const summary = await rebuildIndex(root, { db })
+    assert.equal(summary.docs_indexed, 1)
+    assert.equal(db.open, true, "a caller's handle stays open")
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM docs").get().n, 1)
+  } finally { closeDb(db) }
+})
 
-    setMeta(db, "last_indexed_at", "not-a-date")
-    assert.equal(await isIndexFresh(root, db), false)
-
-    setMeta(db, "last_indexed_at", "2000-01-01T00:00:00.000Z")
-    assert.equal(await isIndexFresh(root, db), false)
-
-    setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
-    assert.equal(await isIndexFresh(root, db), true)
-  } finally {
-    closeDb(db)
-  }
+test("an aborted signal stops the rebuild before anything is written", async () => {
+  const root = await mkRoot()
+  await w(root, "trackA/task-1/task.md", "# task")
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(rebuildIndex(root, { signal: controller.signal }), { name: "AbortError" })
 })
 
 test("modifying one doc → that doc reindexed, others skipped", async () => {
@@ -415,7 +139,7 @@ test("modifying one doc → that doc reindexed, others skipped", async () => {
   await w(root, "trackA/task-1/planning.md", "plan v1")
   await w(root, "trackA/task-2/task.md", "---\nstatus: blocked\n---\nbody")
 
-  await rebuildIndex(root, indexOpts)
+  await rebuildIndex(root)
 
   // Touch one file with new content.
   await w(root, "trackA/task-1/planning.md", "plan v2 has different content")
@@ -423,7 +147,7 @@ test("modifying one doc → that doc reindexed, others skipped", async () => {
   const future = new Date(Date.now() + 5000)
   await fs.utimes(path.join(root, "trackA/task-1/planning.md"), future, future)
 
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root)
   assert.equal(summary.docs_indexed, 1)
   assert.equal(summary.docs_skipped, 2)
 })
@@ -433,11 +157,11 @@ test("deleting a doc removes it from the index on next pass", async () => {
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nbody")
   await w(root, "trackA/task-1/planning.md", "plan")
 
-  await rebuildIndex(root, indexOpts)
+  await rebuildIndex(root)
 
   await fs.unlink(path.join(root, "trackA/task-1/planning.md"))
 
-  const summary = await rebuildIndex(root, indexOpts)
+  const summary = await rebuildIndex(root)
   assert.equal(summary.docs_removed, 1)
 
   const db = openDb(root)
@@ -449,143 +173,14 @@ test("deleting a doc removes it from the index on next pass", async () => {
   }
 })
 
-test("happy-path embedding stores one vector per section text", async () => {
-  const root = await mkRoot()
-  await w(root, "trackA/t1/task.md", "---\nstatus: processing\n---\nhybrid retrieval body\n\n## H2\n\nmore text")
-
-  // Mock fetch that returns a deterministic 768-dim vector.
-  const dim = 768
-  const vec = Array.from({ length: dim }, (_, i) => (i % 7) / dim)
-  const okFetch = async () => ({ ok: true, json: async () => ({ embedding: vec }) })
-
-  const summary = await rebuildIndex(root, { embed: { fetch: okFetch } })
-  assert.equal(summary.semantic_warnings, 0, "expected no soft-fail warnings on happy path")
-  assert.ok(summary.chunks_inserted >= 1)
-
-  const db = openDb(root)
-  try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
-    assert.equal(vecCount, summary.chunks_inserted, "one vector per section text")
-    assert.equal(db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c, 0, "the row-keyed table is left to older builds")
-  } finally {
-    closeDb(db)
-  }
-})
-
-test("ollama-down soft-fail still populates FTS chunks", async () => {
-  const root = await mkRoot()
-  await w(root, "trackA/t1/task.md", "---\nstatus: processing\n---\nhybrid retrieval body")
-
-  // Pass a mock fetch that always fails — embeddings come back null but
-  // chunks still get inserted and FTS still indexes them.
-  const failingFetch = async () => {
-    const e = new Error("ECONNREFUSED")
-    e.code = "ECONNREFUSED"
-    throw e
-  }
-  const summary = await rebuildIndex(root, { embed: { fetch: failingFetch } })
-  assert.equal(summary.docs_indexed, 1)
-  assert.ok(summary.chunks_inserted >= 1)
-  assert.equal(summary.semantic_warnings, 1)
-
-  const db = openDb(root)
-  try {
-    const hits = db
-      .prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?")
-      .all("hybrid")
-    assert.ok(hits.length >= 1, "expected FTS to have indexed the text")
-    // No vec rows when ollama is down.
-    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
-    assert.equal(vecCount, 0)
-  } finally {
-    closeDb(db)
-  }
-})
-
-test("sections of unchanged docs that have no vector are embedded without re-indexing the docs", async () => {
-  const root = await mkRoot()
-  await w(root, "trackA/t1/task.md", "---\nstatus: processing\n---\nlexical-only body")
-
-  const failingFetch = async () => {
-    const error = new Error("ECONNREFUSED")
-    error.code = "ECONNREFUSED"
-    throw error
-  }
-  const first = await rebuildIndex(root, { embed: { fetch: failingFetch } })
-  assert.equal(first.docs_indexed, 1)
-  assert.equal(first.semantic_warnings, 1)
-
-  let calls = 0
-  const okFetch = async () => {
-    calls += 1
-    const vec = Array.from({ length: 768 }, (_, i) => (i % 13) / 768)
-    return { ok: true, json: async () => ({ embedding: vec }) }
-  }
-  const second = await rebuildIndex(root, { embed: { fetch: okFetch } })
-  assert.equal(second.docs_indexed, 0)
-  assert.equal(second.docs_skipped, 1)
-  assert.equal(second.semantic_warnings, 0)
-  assert.equal(calls, 1)
-
-  const db = openDb(root)
-  try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
-    assert.equal(vecCount, 1)
-  } finally {
-    closeDb(db)
-  }
-})
-
-test("large rebuilds do not exceed SQLite variable limits when no chunks need embedding", { timeout: 60000 }, async () => {
-  const root = await mkRoot()
-  const docsBeyondLocalSqliteVariableLimit = 32767
-  await writeManyEmptySharedDocs(root, docsBeyondLocalSqliteVariableLimit)
-
-  let calls = 0
-  const fetchShouldNotRun = async () => {
-    calls += 1
-    throw new Error("empty docs should not need embeddings")
-  }
-
-  const summary = await rebuildIndex(root, { embed: { fetch: fetchShouldNotRun } })
-  assert.equal(summary.docs_indexed, docsBeyondLocalSqliteVariableLimit)
-  assert.equal(summary.chunks_inserted, 0)
-  assert.equal(summary.semantic_warnings, 0)
-  assert.equal(calls, 0)
-})
-
-test("large missing-vector batches append rows without spread argument overflow", { timeout: 60000 }, async () => {
-  const root = await mkRoot()
-  const docsPerBatch = 500
-  const chunksPerDoc = 240
-  await writeManyChunkySharedDocs(root, docsPerBatch, chunksPerDoc)
-
-  let calls = 0
-  const failingFetch = async () => {
-    calls += 1
-    throw new Error("controlled embedding stop")
-  }
-
-  const summary = await rebuildIndex(root, {
-    embed: {
-      endpoint: "http://127.0.0.1:9/api/embeddings",
-      fetch: failingFetch,
-    },
-  })
-  assert.equal(summary.docs_indexed, docsPerBatch)
-  assert.equal(summary.chunks_inserted, docsPerBatch * chunksPerDoc)
-  assert.equal(summary.semantic_warnings, 1)
-  assert.equal(calls, 1)
-})
-
-test("Task 4 lexical failure rolls back deletions, earlier documents, chunks and refs", async () => {
+test("a lexical failure rolls back deletions, earlier documents, chunks and refs", async () => {
   const root = await mkRoot()
   await w(root, "track/a/task.md", "# before")
   await w(root, "track/a/planning.md", "# plan")
   await w(root, "track/removed/task.md", "# removed later")
   const db = openDb(root)
   try {
-    await rebuildIndex(root, { db, skipEmbed: true })
+    await rebuildIndex(root, { db })
     const snapshot = () => ["docs", "chunks", "refs_graph", "meta"].map((table) =>
       db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
     const before = snapshot()
@@ -594,52 +189,9 @@ test("Task 4 lexical failure rolls back deletions, earlier documents, chunks and
     await w(root, "track/z/task.md", "# fail-late")
     db.exec(`CREATE TRIGGER reject_late_chunk BEFORE INSERT ON chunks
       WHEN NEW.text LIKE '%fail-late%' BEGIN SELECT RAISE(ABORT, 'injected lexical failure'); END`)
-    await assert.rejects(rebuildIndex(root, { db, skipEmbed: true }), /injected lexical failure/)
+    await assert.rejects(rebuildIndex(root, { db }), /injected lexical failure/)
     assert.deepEqual(snapshot(), before)
   } finally { closeDb(db) }
-})
-
-test("Task 4 readers see complete generations and embedding runs after the lexical commit", async () => {
-  const root = await mkRoot()
-  await w(root, "track/a/task.md", "# before")
-  const db = openDb(root)
-  let reader
-  try {
-    await rebuildIndex(root, { db, skipEmbed: true })
-    reader = openDb(root)
-    const before = getMeta(reader, "active_lexical_generation")
-    assert.ok(before, "each lexical pass needs a committed generation")
-    const snapshots = []
-    db.function("observe_generation", () => {
-      snapshots.push({
-        generation: getMeta(reader, "active_lexical_generation"),
-        texts: reader.prepare("SELECT text FROM chunks ORDER BY id").all().map((row) => row.text),
-      })
-      return 0
-    })
-    db.exec("CREATE TRIGGER observe_chunks AFTER INSERT ON chunks BEGIN SELECT observe_generation(); END")
-    await w(root, "track/a/task.md", "# after")
-    await w(root, "track/a/planning.md", "# plan")
-    const eventCursor = { journal_id: "fixture-journal", sequence: 7 }
-    let embedded = 0
-    const summary = await rebuildIndex(root, {
-      db, eventCursor,
-      embed: { fetch: async () => {
-        embedded++
-        assert.equal(db.inTransaction, false)
-        assert.notEqual(getMeta(reader, "active_lexical_generation"), before)
-        assert.deepEqual(JSON.parse(getMeta(reader, "covered_event_cursor")), eventCursor)
-        assert.equal(reader.prepare("SELECT COUNT(*) AS n FROM refs_graph").get().n, 1)
-        return { ok: true, json: async () => ({ embedding: Array(768).fill(0.1) }) }
-      } },
-    })
-    assert.ok(embedded > 0)
-    assert.ok(snapshots.length > 0)
-    for (const snapshot of snapshots) assert.deepEqual(snapshot, { generation: before, texts: ["# before"] })
-    assert.equal(String(summary.lexical_generation), getMeta(reader, "active_lexical_generation"))
-    const generation = reader.prepare("SELECT * FROM lexical_generations WHERE id = ?").get(summary.lexical_generation)
-    assert.deepEqual(JSON.parse(generation.documents), reader.prepare("SELECT path, hash FROM docs ORDER BY path").all())
-  } finally { closeDb(reader); closeDb(db) }
 })
 
 test("an invalid tombstone ledger stops a rebuild before any document is indexed", async () => {
@@ -647,7 +199,7 @@ test("an invalid tombstone ledger stops a rebuild before any document is indexed
   await w(root, "track/a/task.md", "# task")
   const pluginRoot = await mkTempRoot("desk-idx-plugin-")
   await w(pluginRoot, "artifacts/tombstones/tombstones.jsonl", "{not json\n")
-  await assert.rejects(rebuildIndex(root, { skipEmbed: true, tombstones: { pluginRoot } }), (error) => {
+  await assert.rejects(rebuildIndex(root, { tombstones: { pluginRoot } }), (error) => {
     assert.equal(error.code, "artifact_tombstone_ledger_invalid")
     assert.deepEqual(error.diagnostics, ["tombstone ledger line 1 must be valid JSON"])
     return true
@@ -655,35 +207,5 @@ test("an invalid tombstone ledger stops a rebuild before any document is indexed
   const db = openDb(root)
   try {
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM docs").get().n, 0)
-  } finally { closeDb(db) }
-})
-
-test("an ignored vector-pack root that fails with a non-Error value is recorded by its text", async () => {
-  const root = await mkRoot()
-  await w(root, "track/a/task.md", "# task")
-  const pluginRoot = await mkTempRoot("desk-idx-plugin-")
-  await fs.mkdir(path.join(pluginRoot, "artifacts", "vector-packs", ACTIVE_EMBEDDING_SPEC.id), { recursive: true })
-  const db = openDb(root)
-  // Only the vector-pack import prepares this statement when embedding is skipped.
-  const failing = new Proxy(db, {
-    get(target, prop) {
-      if (prop === "prepare") {
-        return (sql) => {
-          if (sql.startsWith("INSERT INTO text_vectors")) throw "vector store unavailable"
-          return target.prepare(sql)
-        }
-      }
-      const value = Reflect.get(target, prop, target)
-      return typeof value === "function" ? value.bind(target) : value
-    },
-  })
-  try {
-    const summary = await rebuildIndex(root, {
-      db: failing,
-      skipEmbed: true,
-      vectorPacks: { pluginRoot, ignoreInvalidRoots: true },
-    })
-    assert.equal(summary.docs_indexed, 1)
-    assert.deepEqual(summary.vector_packs.import_errors, [{ pluginRoot, message: "vector store unavailable" }])
   } finally { closeDb(db) }
 })

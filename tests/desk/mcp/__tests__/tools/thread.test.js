@@ -1,8 +1,7 @@
 // thread.test.js — desk_thread provenance walk via refs_graph (Unit 6).
 //
-// Strategy: build small fixture desks on disk, run the real indexer (with
-// skipEmbed: true — desk_thread doesn't need embeddings), then exercise
-// desk_thread directly. A few tests bypass the indexer and inject synthetic
+// Strategy: build small fixture desks on disk, run the real indexer into an
+// in-memory index, then exercise desk_thread directly. A few tests bypass the indexer and inject synthetic
 // refs_graph edges via direct SQL — useful for stressing the BFS itself
 // (deep chains, cycles) without depending on the indexer's edge inference.
 
@@ -12,10 +11,12 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 // Graph algorithm tests use an explicitly built index; alpha tests use the routed tool.
-import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind, normalizeStartPath, compareChainRows } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
-import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { desk_thread as routedThread, indexedThread, describeRefKind, normalizeStartPath, compareChainRows } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
+import { buildFixtureIndex, fixtureDb } from "./_search_helpers.js"
 import { mkTempRoot } from "../_temp_roots.js"
+
+// The indexed backend reads the fixture desk's in-memory index.
+const desk_thread = (args) => indexedThread({ ...args, db: fixtureDb(args.deskRoot) })
 
 test("desk_thread walks the session search engine's in-memory index", async (t) => {
   const { createSearchEngine } = await import("../../../../../plugins/desk/mcp/src/search/engine.js")
@@ -47,12 +48,9 @@ async function writeFile(root, rel, body) {
   await fs.writeFile(abs, body, "utf8")
 }
 
-/**
- * Index a fixture desk without touching Ollama. Returns nothing useful;
- * desk_thread will open the same DB.
- */
+/** Index a fixture desk; desk_thread reads the same in-memory index. */
 async function indexNoEmbed(root) {
-  return rebuildIndex(root, { skipEmbed: true })
+  return buildFixtureIndex(root)
 }
 
 /**
@@ -279,26 +277,22 @@ test("desk_thread — depth limit truncates a long chain", async () => {
   )
   await indexNoEmbed(root)
 
-  const db = openDb(root)
-  try {
-    // Wipe the synthetic seed; we want a clean slate.
-    db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const ids = []
-    for (const name of ["A", "B", "C", "D", "E", "F"]) {
-      ids.push(
-        insertSyntheticDoc(db, {
-          path: `chain/${name}.md`,
-          kind: "other",
-          updated_at: `2026-04-2${ids.length}`,
-        }),
-      )
-    }
-    // A → B → C → D → E → F
-    for (let i = 0; i < ids.length - 1; i++) {
-      insertEdge(db, ids[i], ids[i + 1], "linked_from_body")
-    }
-  } finally {
-    closeDb(db)
+  const db = fixtureDb(root)
+  // Wipe the synthetic seed; we want a clean slate.
+  db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
+  const ids = []
+  for (const name of ["A", "B", "C", "D", "E", "F"]) {
+    ids.push(
+      insertSyntheticDoc(db, {
+        path: `chain/${name}.md`,
+        kind: "other",
+        updated_at: `2026-04-2${ids.length}`,
+      }),
+    )
+  }
+  // A → B → C → D → E → F
+  for (let i = 0; i < ids.length - 1; i++) {
+    insertEdge(db, ids[i], ids[i + 1], "linked_from_body")
   }
 
   // Depth 2 from A: should reach A, B, C only.
@@ -328,24 +322,20 @@ test("desk_thread — cycle in refs_graph doesn't infinite-loop", async () => {
   )
   await indexNoEmbed(root)
 
-  const db = openDb(root)
-  try {
-    db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const aId = insertSyntheticDoc(db, {
-      path: "cycle/A.md",
-      kind: "other",
-      updated_at: "2026-04-20",
-    })
-    const bId = insertSyntheticDoc(db, {
-      path: "cycle/B.md",
-      kind: "other",
-      updated_at: "2026-04-21",
-    })
-    insertEdge(db, aId, bId, "linked_from_body")
-    insertEdge(db, bId, aId, "linked_from_body") // cycle!
-  } finally {
-    closeDb(db)
-  }
+  const db = fixtureDb(root)
+  db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
+  const aId = insertSyntheticDoc(db, {
+    path: "cycle/A.md",
+    kind: "other",
+    updated_at: "2026-04-20",
+  })
+  const bId = insertSyntheticDoc(db, {
+    path: "cycle/B.md",
+    kind: "other",
+    updated_at: "2026-04-21",
+  })
+  insertEdge(db, aId, bId, "linked_from_body")
+  insertEdge(db, bId, aId, "linked_from_body") // cycle!
 
   const res = await desk_thread({
     deskRoot: root,
@@ -408,41 +398,37 @@ test("desk_thread — ordering: start first, then hop_distance asc, then updated
   )
   await indexNoEmbed(root)
 
-  const db = openDb(root)
-  try {
-    db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const startId = insertSyntheticDoc(db, {
-      path: "start.md",
-      kind: "task",
-      updated_at: "2026-05-01",
-      task_slug: "start",
-    })
-    // Two hop-1 neighbours with different updated_at dates; the newer one
-    // must come before the older one.
-    const newerId = insertSyntheticDoc(db, {
-      path: "hop1-newer.md",
-      kind: "doing",
-      updated_at: "2026-04-25",
-      task_slug: "start",
-    })
-    const olderId = insertSyntheticDoc(db, {
-      path: "hop1-older.md",
-      kind: "planning",
-      updated_at: "2026-04-10",
-      task_slug: "start",
-    })
-    // Hop-2 doc reachable via newerId.
-    const farId = insertSyntheticDoc(db, {
-      path: "hop2-far.md",
-      kind: "other",
-      updated_at: "2026-04-30",
-    })
-    insertEdge(db, newerId, startId, "doing_of")
-    insertEdge(db, olderId, startId, "planning_of")
-    insertEdge(db, newerId, farId, "linked_from_body")
-  } finally {
-    closeDb(db)
-  }
+  const db = fixtureDb(root)
+  db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
+  const startId = insertSyntheticDoc(db, {
+    path: "start.md",
+    kind: "task",
+    updated_at: "2026-05-01",
+    task_slug: "start",
+  })
+  // Two hop-1 neighbours with different updated_at dates; the newer one
+  // must come before the older one.
+  const newerId = insertSyntheticDoc(db, {
+    path: "hop1-newer.md",
+    kind: "doing",
+    updated_at: "2026-04-25",
+    task_slug: "start",
+  })
+  const olderId = insertSyntheticDoc(db, {
+    path: "hop1-older.md",
+    kind: "planning",
+    updated_at: "2026-04-10",
+    task_slug: "start",
+  })
+  // Hop-2 doc reachable via newerId.
+  const farId = insertSyntheticDoc(db, {
+    path: "hop2-far.md",
+    kind: "other",
+    updated_at: "2026-04-30",
+  })
+  insertEdge(db, newerId, startId, "doing_of")
+  insertEdge(db, olderId, startId, "planning_of")
+  insertEdge(db, newerId, farId, "linked_from_body")
 
   const res = await desk_thread({
     deskRoot: root,
@@ -590,29 +576,25 @@ test("desk_thread — an edge to a doc missing from the index is skipped, not cr
   await writeFile(root, "_meta/friction.md", "---\nschema_version: 1\n---\nseed\n")
   await indexNoEmbed(root)
 
-  const db = openDb(root)
-  try {
-    db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
-    const startId = insertSyntheticDoc(db, {
-      path: "start.md",
-      kind: "other",
-      updated_at: "2026-04-20",
-    })
-    const orphanId = insertSyntheticDoc(db, {
-      path: "orphan.md",
-      kind: "other",
-      updated_at: "2026-04-19",
-    })
-    insertEdge(db, startId, orphanId, "linked_from_body")
-    // Remove the target doc's row without the FK cascade pruning the edge —
-    // this desk never does this itself; it's standing in for external
-    // corruption of the index db.
-    db.pragma("foreign_keys = OFF")
-    db.prepare("DELETE FROM docs WHERE id = ?").run(orphanId)
-    db.pragma("foreign_keys = ON")
-  } finally {
-    closeDb(db)
-  }
+  const db = fixtureDb(root)
+  db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
+  const startId = insertSyntheticDoc(db, {
+    path: "start.md",
+    kind: "other",
+    updated_at: "2026-04-20",
+  })
+  const orphanId = insertSyntheticDoc(db, {
+    path: "orphan.md",
+    kind: "other",
+    updated_at: "2026-04-19",
+  })
+  insertEdge(db, startId, orphanId, "linked_from_body")
+  // Remove the target doc's row without the FK cascade pruning the edge —
+  // this desk never does this itself; it's standing in for external
+  // corruption of the index db.
+  db.pragma("foreign_keys = OFF")
+  db.prepare("DELETE FROM docs WHERE id = ?").run(orphanId)
+  db.pragma("foreign_keys = ON")
 
   const res = await desk_thread({
     deskRoot: root,

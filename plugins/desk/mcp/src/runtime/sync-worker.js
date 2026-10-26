@@ -12,8 +12,7 @@
 // (`resolveDeskStateDir`/`lastStartRootKey`, reused from `runtime/last-
 // start.js` — outside the desk, so it can never itself be committed), JSON
 // `{ token, pid, start }`, the same shape `boot-checks.cjs`'s own report
-// lock writes. Staleness mirrors `readiness/owner-record.js`'s own
-// `inspectOwner`: a PID that no longer exists is dead outright; a PID that
+// lock writes. Staleness: a PID that no longer exists is dead outright; a PID that
 // exists but whose recorded start time (`readiness/process-start.js`)
 // disagrees with its current one names a different process that reused the
 // PID, so the recorded owner is dead too; anything else — no start

@@ -407,7 +407,6 @@ async function importMirrorInChunks(url) {
 export async function importPreparedRuntime({ mcpRoot, prepared, load = importMirrorInChunks }) {
   const pluginRoot = path.resolve(mcpRoot, "..")
   const runtimeServer = await load(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
-  runtimeServer.configureRuntimeArtifacts?.({ pluginRoot })
   return {
     ...runtimeServer,
     _deskRuntime: {

@@ -557,7 +557,7 @@ test("the shipped importer runs inspection and restore through the admission job
     prepared: { sourceMirrorPath: "/mirror", runtimeCacheDir: "/cache", target: "t", packDir: "/pack" },
     load: async (url) => {
       assert.match(url, /\/mirror\/src\/server\.js$/u)
-      return { configureRuntimeArtifacts: ({ pluginRoot }) => assert.equal(pluginRoot, path.resolve("/plugin")), marker: 1 }
+      return { marker: 1 }
     },
   })
   assert.equal(loaded.marker, 1)

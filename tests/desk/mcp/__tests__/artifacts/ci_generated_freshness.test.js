@@ -32,20 +32,12 @@ test("generated artifact verifier defaults select the owning repository and refu
   const generatedArtifacts = require(path.join(repoRoot, generatedArtifactsScript))
   assert.equal(await generatedArtifacts.loadRuntimeDeps(), await generatedArtifacts.loadRuntimeDeps(mcpRoot))
   assert.deepEqual(
-    await generatedArtifacts.loadProductionArtifactModules(),
-    await generatedArtifacts.loadProductionArtifactModules(mcpRoot),
-  )
-  assert.deepEqual(
     await generatedArtifacts.productionRuntimePackExpectations(),
     await generatedArtifacts.productionRuntimePackExpectations({ repoRoot, mcpRoot }),
   )
   assert.equal(generatedArtifacts.gitTracksFile({ repoRoot, repoPath: generatedArtifactsScript }), true)
   assert.equal(generatedArtifacts.gitTracksFile({ repoRoot, repoPath: "__missing_generated_artifact_fixture__" }), false)
   assert.throws(() => generatedArtifacts.verifyPublishedRuntimeDependencyPack(), TypeError)
-  await assert.rejects(() => generatedArtifacts.verifyProductionSharedArtifacts(), TypeError)
-  const expectation = await generatedArtifacts.productionSharedArtifactExpectation({ repoRoot, mcpRoot })
-  const shared = await generatedArtifacts.verifyProductionSharedArtifacts({ expectation })
-  assert.equal(shared.ok, true, shared.errors.join("\n"))
   assert.equal(await generatedArtifacts.runCli(), 0)
 })
 
@@ -74,10 +66,6 @@ const requiredPackageScripts = {
   "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
-  "artifact:vector-pack:build": "node scripts/build-vector-pack.js",
-  "artifact:snapshot:build": "node scripts/build-snapshot.js",
-  "artifact:snapshot:verify": "node scripts/verify-snapshot.js",
-  "artifact:validate": "node scripts/validate-artifacts.js",
 }
 
 const requiredHostFreshnessPathFilters = [
@@ -456,11 +444,7 @@ test("root generated-artifact verifier exports the production freshness contract
   for (const exportName of [
     "verifyGeneratedArtifacts",
     "verifyPublishedRuntimeDependencyPack",
-    "verifyProductionSharedArtifacts",
     "productionRuntimePackExpectations",
-    "productionSharedArtifactExpectation",
-    "artifactSourceScopeHash",
-    "documentTreeHash",
   ]) {
     assert.equal(typeof generatedArtifacts[exportName], "function", `${exportName} must be exported`)
   }
@@ -485,34 +469,6 @@ test("root generated-artifact verifier fails closed when required runtime packs 
   assert.match(result.errors.join("\n"), /generated artifact missing/u)
   assert.match(stderr.join(""), /unit-fixture-node-999/u)
   assert.equal(stdout.join(""), "")
-})
-
-test("root generated-artifact verifier propagates missing production vector and snapshot artifacts", async () => {
-  const generatedArtifacts = require(path.join(repoRoot, generatedArtifactsScript))
-  const tempRoot = mkdtempSync(path.join(tmpdir(), "desk-generated-artifacts-"))
-  try {
-    const stdout = []
-    const stderr = []
-    const result = await generatedArtifacts.verifyGeneratedArtifacts({
-      repoRoot,
-      mcpRoot,
-      pluginRoot: path.join(tempRoot, "plugins", "desk"),
-      targets: [],
-      io: {
-        stdout: { write: (text) => stdout.push(text) },
-        stderr: { write: (text) => stderr.push(text) },
-      },
-      spawn: () => ({ status: 1, stdout: "", stderr: "" }),
-    })
-
-    assert.equal(result.ok, false)
-    assert.match(result.errors.join("\n"), /production vector pack artifact missing/u)
-    assert.match(result.errors.join("\n"), /production snapshot artifact missing/u)
-    assert.match(stderr.join(""), /vector-packs/u)
-    assert.equal(stdout.join(""), "")
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
-  }
 })
 
 test("root generated-artifact verifier rejects present but stale runtime dependency packs", async () => {
@@ -678,8 +634,6 @@ test("root generated-artifact verifier covers defensive helper and CLI branches"
 
     const defaultExpectation = await generatedArtifacts.productionRuntimePackExpectation()
     assert.equal(defaultExpectation.target, "darwin-arm64-node-127")
-    const defaultShared = await generatedArtifacts.productionSharedArtifactExpectation()
-    assert.ok(defaultShared.relativeVectorPackDir.startsWith("plugins/desk/artifacts/vector-packs/"))
     const processIoVerify = await generatedArtifacts.verifyGeneratedArtifacts()
     assert.equal(processIoVerify.ok, true, processIoVerify.errors.join("\n"))
     const defaultVerifyStdout = []
@@ -697,15 +651,6 @@ test("root generated-artifact verifier covers defensive helper and CLI branches"
       repoPath: "missing",
       spawn: () => ({}),
     }), false)
-    assert.equal(generatedArtifacts.artifactSourceScopeHash(tempRoot).startsWith("sha256:"), true)
-    assert.equal(
-      generatedArtifacts.documentTreeHash([
-        { path: "b.md", hash: "sha256:b" },
-        { path: "a.md", hash: "a" },
-      ]).startsWith("sha256:"),
-      true,
-    )
-    assert.equal(internals.canonicalSha("abc"), "sha256:abc")
     assert.equal(internals.formatErrorMessage(new Error("error object")), "error object")
     assert.equal(internals.formatErrorMessage("plain string"), "plain string")
 
@@ -738,56 +683,6 @@ test("root generated-artifact verifier covers defensive helper and CLI branches"
       /non-production dependency/u,
     )
 
-    const freshnessErrors = []
-    internals.propagateValidationFreshness({
-      artifacts: undefined,
-      errors: freshnessErrors,
-      idField: "pack_id",
-      label: "production vector pack",
-    })
-    internals.propagateValidationFreshness({
-      artifacts: [{ freshness: { artifact_source_scope: "stale", document_tree: "stale" } }],
-      errors: freshnessErrors,
-      idField: "pack_id",
-      label: "production vector pack",
-    })
-    assert.match(freshnessErrors.join("\n"), /production vector pack <unknown> artifact_source_scope_hash is stale/u)
-
-    assert.throws(
-      () => internals.primaryArtifactFiles({ dir: fixtureJson, suffix: ".jsonl" }),
-      /ENOTDIR|not a directory/u,
-    )
-    const checksumErrors = []
-    internals.verifyProductionArtifactChecksum({
-      errors: checksumErrors,
-      label: "missing artifact",
-      primaryPath: path.join(tempRoot, "missing.jsonl"),
-      checksumPath: path.join(tempRoot, "missing.sha256"),
-      existsSync: () => false,
-      repoRoot,
-      primaryRepoPath: "missing.jsonl",
-      checksumRepoPath: "missing.sha256",
-      spawn: () => ({ status: 0, stdout: "", stderr: "" }),
-    })
-    assert.deepEqual(checksumErrors, [])
-    assert.equal(internals.readTrackedFileBytes({
-      repoRoot,
-      repoPath: "missing",
-      spawn: () => ({ stdout: Buffer.from("tracked bytes"), stderr: "" }),
-    }), undefined)
-    assert.equal(internals.readTrackedFileBytes({
-      repoRoot,
-      repoPath: "missing",
-      spawn: () => ({ status: 0, stdout: Buffer.alloc(0), stderr: "" }),
-    }), undefined)
-    assert.deepEqual(
-      internals.readTrackedFileBytes({
-        repoRoot,
-        repoPath: "string",
-        spawn: () => ({ status: 0, stdout: "string bytes", stderr: "" }),
-      }),
-      Buffer.from("string bytes", "utf8"),
-    )
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }

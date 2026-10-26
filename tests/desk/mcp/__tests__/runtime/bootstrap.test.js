@@ -89,11 +89,11 @@ function makeMcpFixture({ serverMarker = "initial", includePackageLock = true } 
     writeJson(path.join(fixtureMcpRoot, "package-lock.json"), packageLock)
   }
   writeText(path.join(fixtureMcpRoot, "index.js"), "export const entrypoint = true\n")
-  writeJson(path.join(fixtureMcpRoot, "config", "artifact-source-scope.json"), {
-    source_paths: ["plugins/desk/mcp/config/artifact-source-scope.json"],
+  writeJson(path.join(fixtureMcpRoot, "config", "fixture-config.json"), {
+    source_paths: ["plugins/desk/mcp/config/fixture-config.json"],
   })
   writeServer(fixtureMcpRoot, serverMarker)
-  writeText(path.join(fixtureMcpRoot, "scripts", "build-vector-pack.js"), "export const script = true\n")
+  writeText(path.join(fixtureMcpRoot, "scripts", "fixture-script.js"), "export const script = true\n")
   writeText(path.join(fixtureMcpRoot, "scripts", "node_modules", "ignored.js"), "ignored\n")
   writeText(path.join(fixtureMcpRoot, "src", "nested", "visible.js"), "export const visible = true\n")
   writeText(path.join(fixtureMcpRoot, "src", "node_modules", "ignored.js"), "ignored\n")
@@ -111,10 +111,6 @@ function writeServer(fixtureMcpRoot, marker) {
     path.join(fixtureMcpRoot, "src", "server.js"),
     [
       `export const marker = ${JSON.stringify(marker)}`,
-      "export let configuredArtifactPluginRoot = null",
-      "export function configureRuntimeArtifacts(input) {",
-      "  configuredArtifactPluginRoot = input?.pluginRoot ?? null",
-      "}",
       "export async function startServer() {}",
       "",
     ].join("\n"),
@@ -509,10 +505,6 @@ test("prepareRuntime restores dependencies, reuses current cache, and imports up
       nodeAbi: fixtureNodeAbi,
     })
     assert.equal(firstImport.marker, "initial")
-    assert.equal(
-      firstImport.configuredArtifactPluginRoot,
-      path.resolve(fixture.mcpRoot, ".."),
-    )
 
     writeServer(fixture.mcpRoot, "updated")
     const secondImport = await importRuntimeServer({
@@ -523,10 +515,6 @@ test("prepareRuntime restores dependencies, reuses current cache, and imports up
       nodeAbi: fixtureNodeAbi,
     })
     assert.equal(secondImport.marker, "updated")
-    assert.equal(
-      secondImport.configuredArtifactPluginRoot,
-      path.resolve(fixture.mcpRoot, ".."),
-    )
     assert.equal(listSourceMirrors(runtimeCacheDir).length, 2)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
@@ -765,8 +753,8 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     const files = sourceFilesForHash(fixture.mcpRoot)
     assert.ok(files.includes("index.js"))
     assert.ok(files.includes("package.json"))
-    assert.ok(files.includes("config/artifact-source-scope.json"))
-    assert.ok(files.includes("scripts/build-vector-pack.js"))
+    assert.ok(files.includes("config/fixture-config.json"))
+    assert.ok(files.includes("scripts/fixture-script.js"))
     assert.ok(files.includes("src/server.js"))
     assert.ok(files.includes("src/nested/visible.js"))
     assert.equal(files.includes("package-lock.json"), false)
@@ -779,15 +767,15 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     writeText(path.join(fixture.mcpRoot, "src", "nested", "visible.js"), "changed visible\n")
     assert.notEqual(hashCurrentSource(fixture.mcpRoot), before)
     const afterSrcChange = hashCurrentSource(fixture.mcpRoot)
-    writeText(path.join(fixture.mcpRoot, "scripts", "build-vector-pack.js"), "changed script\n")
+    writeText(path.join(fixture.mcpRoot, "scripts", "fixture-script.js"), "changed script\n")
     assert.notEqual(hashCurrentSource(fixture.mcpRoot), afterSrcChange)
 
     writeJson(path.join(fixture.mcpRoot, "package-lock.json"), fixture.packageLock)
     const firstMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     const secondMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     assert.equal(secondMirror, firstMirror)
-    assert.equal(existsSync(path.join(firstMirror, "config", "artifact-source-scope.json")), true)
-    assert.equal(existsSync(path.join(firstMirror, "scripts", "build-vector-pack.js")), true)
+    assert.equal(existsSync(path.join(firstMirror, "config", "fixture-config.json")), true)
+    assert.equal(existsSync(path.join(firstMirror, "scripts", "fixture-script.js")), true)
     assert.equal(existsSync(path.join(firstMirror, "scripts", "node_modules", "ignored.js")), false)
     assert.equal(
       readdirSync(path.dirname(firstMirror)).some((entry) => entry.includes(".tmp-")),
@@ -817,14 +805,14 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
 
     const markerPath = path.join(mirrorPath, ".complete.json")
     const marker = readJson(markerPath)
-    const configPath = path.join(mirrorPath, "config", "artifact-source-scope.json")
+    const configPath = path.join(mirrorPath, "config", "fixture-config.json")
     const configBytes = readFileSync(configPath)
 
     for (const sourceFiles of [
       ["../../package.json", ...marker.source_files.slice(1)],
       marker.source_files.slice(1),
       marker.source_files.map((file) =>
-        file === "config/artifact-source-scope.json" ? "src" : file
+        file === "config/fixture-config.json" ? "src" : file
       ).sort(),
     ]) {
       writeJson(markerPath, { ...marker, source_files: sourceFiles })
@@ -834,7 +822,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
     writeJson(markerPath, marker)
     rmSync(configPath)
     try {
-      symlinkSync(path.join(fixture.mcpRoot, "config", "artifact-source-scope.json"), configPath)
+      symlinkSync(path.join(fixture.mcpRoot, "config", "fixture-config.json"), configPath)
       assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
     } catch (error) {
       if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
@@ -872,7 +860,7 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
     for (const file of [
       "C:\\payload.js",
       "\\\\server\\share\\payload.js",
-      "config\\artifact-source-scope.json",
+      "config\\fixture-config.json",
     ]) {
       // A drive-letter or UNC name cannot be a file under the mirror on Windows, so there the marker names a file that does not exist; the admission check refuses it from the spelling alone, before it reads anything.
       const materializable = !(process.platform === "win32" && /^(?:[A-Za-z]:|\\\\)/u.test(file))

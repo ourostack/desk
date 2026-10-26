@@ -1,13 +1,12 @@
 // Searches made before the session's search engine has started read the files directly.
-import { directLexicalSearch } from "../readiness/direct-lexical.js"
+import { directLexicalSearch } from "./direct-lexical.js"
 
 const STARTING = "Desk search is still starting; try again in a few seconds."
 
 const filesRouter = Object.freeze({
   async lexical(request) {
     if (request.kind === "thread") return { status: "error", code: "search_starting", message: STARTING }
-    const { semantic_unavailable, semantic_note, semantic_diagnostic, ...result } = await directLexicalSearch(request)
-    return result
+    return directLexicalSearch(request)
   },
   async semantic(request) {
     if (request.kind === "similar") return { seed: request.path ?? null, results: [], note: STARTING }

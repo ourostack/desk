@@ -13,8 +13,6 @@ The manifest is intentionally declarative. Host adapters flatten it into native 
 - `provides.overlay_agents`: Optional agent overlays that inherit Desk behavior without launching as `desk:worker`.
 - `mcp_servers`: Required MCP servers. Desk declares its MCP launch as host-native rather than as a manual `mcp add` step.
 - `desk_root`: Root binding policy, precedence, and opt-out modes. The default policy is global activation first, then `DESK`, then safe defaults, with project-local and manual-only opt-outs.
-- `artifacts.embeddings`: Shared embedding policy and active embedding spec for vector packs.
-- `artifacts.snapshots`: Snapshot restore and stale-reconcile policy.
 - `host_support`: Host dispositions, dependency-resolution strategy, unsupported primitives, fallback behavior, and capabilities.
 - `permissions`: Requested host capabilities, generated artifact classes, and never-delete boundaries.
 
@@ -83,9 +81,9 @@ The read-only `scripts/audit-codex-plugin-cache.cjs` checks the first two states
 
 `desk:session-start` carries the startup health guard for every Desk worker: if `desk_status` or the Desk MCP namespace is missing from the active tool surface, the agent treats Desk MCP as absent, explains what MCP-backed desk access provides, and asks whether to fix/reload now or continue without generic reminders. Choosing repair routes to `desk:codex-onboarding` or the host repair checklist; choosing no reminders is an explicit operator preference, not silent local-only fallback. Once `desk_status` is callable, degraded index/vector/snapshot states are runtime repair problems rather than activation absence.
 
-## Artifact Privacy
+## Embedding Privacy
 
-Embeddings and snapshots are derivative data and may carry privacy risk. Activation manifests declare the shared embedding and snapshot policies so host adapters can keep publication explicit, approval-gated, and separate from ordinary startup.
+Embeddings are derivative data and may carry privacy risk. Desk keeps them in the desk's `.state/` folder, out of Git, and the activation manifest no longer declares shared embedding or snapshot artifacts.
 
 ## Ouroboros Autonomous Agent
 

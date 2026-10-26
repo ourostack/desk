@@ -1,5 +1,4 @@
 import { test } from "node:test"
-import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import {
   existsSync,
@@ -18,7 +17,6 @@ import fsNative from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 
 import { closeDb, indexDbPath, openDb, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"

@@ -13,10 +13,6 @@ const requiredDeskMcpPackageScripts = {
   "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
-  "artifact:vector-pack:build": "node scripts/build-vector-pack.js",
-  "artifact:snapshot:build": "node scripts/build-snapshot.js",
-  "artifact:snapshot:verify": "node scripts/verify-snapshot.js",
-  "artifact:validate": "node scripts/validate-artifacts.js",
 };
 function repoPath(filePath, { repoRoot = process.cwd() } = {}) {
   return path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);

@@ -752,7 +752,7 @@ function cleanDesk(root) {
   fs.mkdirSync(path.join(root, "_meta"), { recursive: true });
   fs.mkdirSync(path.join(root, "_archive"), { recursive: true });
   put(root, "AGENTS.md", "# Agents\n");
-  put(root, "artifacts/publication-policy.json", "{}\n");
+  put(root, "artifacts/report.json", "{}\n");
 }
 
 // M4-3's messy fixture: one of each organization finding. The person-named track is named after the fixture repository's git user.

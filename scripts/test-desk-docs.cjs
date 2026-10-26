@@ -134,35 +134,6 @@ const TOPIC_REQUIREMENTS = Object.freeze([
     ]),
   }),
   Object.freeze({
-    label: "Vector pack publication",
-    docs: Object.freeze([
-      "plugins/desk/README.md",
-      "plugins/desk/mcp/README.md",
-      "plugins/desk/docs/dependency-activation-stories-and-criteria.md",
-      "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md",
-    ]),
-    terms: Object.freeze([
-      "vector pack",
-      "publication",
-      "policy",
-    ]),
-  }),
-  Object.freeze({
-    label: "Snapshot warm boot restore",
-    docs: Object.freeze([
-      "plugins/desk/README.md",
-      "plugins/desk/mcp/README.md",
-      "plugins/desk/docs/dependency-activation-stories-and-criteria.md",
-      "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md",
-    ]),
-    terms: Object.freeze([
-      "snapshot",
-      "warm boot",
-      ".state",
-      "restore",
-    ]),
-  }),
-  Object.freeze({
     label: "Redaction cleanup",
     docs: Object.freeze([
       "plugins/desk/docs/dependency-activation-stories-and-criteria.md",
@@ -172,21 +143,6 @@ const TOPIC_REQUIREMENTS = Object.freeze([
       "redaction",
       "tombstone",
       "artifact rotation",
-    ]),
-  }),
-  Object.freeze({
-    label: "Publication policy approval",
-    docs: Object.freeze([
-      "plugins/desk/README.md",
-      "plugins/desk/mcp/README.md",
-      "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md",
-    ]),
-    terms: Object.freeze([
-      "publication",
-      "policy",
-      "public",
-      "sensitive",
-      "approval",
     ]),
   }),
 ]);
@@ -383,10 +339,9 @@ function validatePrivacyNotes(errors, {
     const hasPrivacyNote =
       lower.includes("derivative data") &&
       lower.includes("privacy risk") &&
-      lower.includes("embedding") &&
-      lower.includes("snapshot");
+      lower.includes("embedding");
     if (!hasPrivacyNote) {
-      errors.push(`${doc} must state that embeddings and snapshots are derivative data and may carry privacy risk`);
+      errors.push(`${doc} must state that embeddings are derivative data and may carry privacy risk`);
     }
   }
 }

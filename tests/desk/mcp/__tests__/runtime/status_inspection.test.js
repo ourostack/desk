@@ -1,11 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { createStatusInspection, inspectStatusDb, waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/runtime/status-inspection.js"
 import { attachStatusInspectionChild, inspectStatusInputs } from "../../../../../plugins/desk/mcp/src/runtime/status-inspection-child.js"
-import { closeDb, indexDbPath, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { statusObservedSince } from "./_status_observation.js"
 
@@ -32,46 +30,18 @@ function childFixture(reply, { code = 0, error, sendError } = {}) {
   return child
 }
 
-test("native inspection returns plain current metadata, closes SQLite, and preserves null/missing states", async () => {
+test("native inspection reports the desk root in a child process and rejects an unknown phase", async () => {
   const root = await mkTempRoot("status-inspect-")
-  const missing = await inspectStatusDb(root)
-  assert.equal(missing.local_db.state, "missing")
-  assert.equal(await inspectStatusDb(root, { phase: "index" }), null)
-  const db = openDb(root)
-  closeDb(db)
   const result = await inspectStatusDb(root)
-  assert.equal(result.local_db.state, "available")
-  const index = await inspectStatusDb(root, { phase: "index" })
-  assert.equal(index.generation, null)
-  assert.equal(Object.hasOwn(index, "db"), false, "SQLite handles must never cross IPC")
-  // Reopen and write after the child has exited: no held DB transaction or process.
-  const reopened = openDb(root)
-  reopened.exec("INSERT OR REPLACE INTO meta(key, value) VALUES ('status_test', 'closed')")
-  closeDb(reopened)
+  assert.equal(result.path, root)
+  assert.equal(result.exists, true)
+  const missing = await inspectStatusDb(path.join(root, "absent"))
+  assert.equal(missing.exists, false)
+  assert.equal(missing.diagnostic, "desk_root_not_found")
   const defaultReader = createStatusInspection(root)
-  assert.equal((await defaultReader.inspect("local")).local_db.state, "available")
+  assert.equal((await defaultReader.inspect("root", { source: "fixture" })).source, "fixture")
   await defaultReader.close()
-})
-
-test("corrupt DB and malformed generation retain their different diagnostic paths", async () => {
-  const root = await mkTempRoot("status-inspect-errors-")
-  mkdirSync(path.dirname(indexDbPath(root)), { recursive: true })
-  writeFileSync(indexDbPath(root), "not SQLite")
-  const corrupt = inspectStatusInputs({ deskRoot: root })
-  assert.equal(corrupt.local_db.state, "corrupt")
-  assert.throws(() => inspectStatusInputs({ deskRoot: root, phase: "index" }), { code: "SQLITE_NOTADB" })
-  const directoryRoot = await mkTempRoot("status-inspect-directory-")
-  mkdirSync(indexDbPath(directoryRoot), { recursive: true })
-  const unreadable = (error) => error.name === "SqliteError" &&
-    ["SQLITE_IOERR_READ", "SQLITE_CANTOPEN", "SQLITE_CANTOPEN_ISDIR"].includes(error.code)
-  const { default: Database } = await import("better-sqlite3")
-  assert.equal(unreadable(new Database.SqliteError("unable to open database file", "SQLITE_CANTOPEN_ISDIR")), true,
-    "SQLite's Windows VFS reports opening a directory with the extended CANTOPEN_ISDIR code")
-  assert.equal(unreadable(new Error("unable to open database file")), false)
-  assert.equal(unreadable(new Database.SqliteError("file is not a database", "SQLITE_NOTADB")), false)
-  assert.throws(() => inspectStatusInputs({ deskRoot: directoryRoot }), unreadable)
-  await assert.rejects(inspectStatusDb(directoryRoot), unreadable)
-  assert.throws(() => inspectStatusInputs({ deskRoot: root, phase: "unsupported" }), /unknown status inspection phase/u)
+  assert.throws(() => inspectStatusInputs({ deskRoot: root, phase: "index" }), /unknown status inspection phase/u)
 })
 
 test("inspection child attaches only to an IPC port and reports success and exceptions explicitly", () => {
@@ -156,13 +126,13 @@ test("the owned reader serializes its jobs and refuses use after close", async (
   child.send = (_, callback) => callback(null)
   child.disconnect = () => { child.emit("exit", 0); child.emit("close", 0) }
   const reader = createStatusInspection("root", { spawn: () => child })
-  const first = reader.inspect("local")
-  await assert.rejects(reader.inspect("index"), /already running/u)
+  const first = reader.inspect("root")
+  await assert.rejects(reader.inspect("root"), /already running/u)
   child.emit("message", { ok: true, value: null })
   assert.equal(await first, null)
   await reader.close()
   await reader.close()
-  await assert.rejects(reader.inspect("local"), /already closed/u)
+  await assert.rejects(reader.inspect("root"), /already closed/u)
 })
 
 test("an unsolicited reply and a spawn failure never become successful status", async () => {
@@ -172,7 +142,7 @@ test("an unsolicited reply and a spawn failure never become successful status", 
   const reader = createStatusInspection("root", { spawn: () => child })
   child.emit("message", { ok: true, value: {} })
   await assert.rejects(reader.close(), /unexpected reply/u)
-  await assert.rejects(reader.inspect("local"), /unexpected reply/u)
+  await assert.rejects(reader.inspect("root"), /unexpected reply/u)
   assert.throws(() => createStatusInspection("root", { spawn() { throw new Error("spawn refused") } }), /spawn refused/u)
 })
 
@@ -182,7 +152,7 @@ test("a close-only spawn error also retires its exact-owned reader", async () =>
   child.kill = () => { child.emit("close", null) }
   child.disconnect = () => {}
   const reader = createStatusInspection("root", { spawn: () => child })
-  const pending = reader.inspect("local")
+  const pending = reader.inspect("root")
   child.emit("error", new Error("native spawn error"))
   await assert.rejects(pending, /native spawn error/u)
   await assert.rejects(reader.close(), /native spawn error/u)

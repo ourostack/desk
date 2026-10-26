@@ -1,15 +1,14 @@
 // SQLite index init.
 //
-// Opens (or creates) `<deskRoot>/.state/desk-index.sqlite`, loads sqlite-vec,
-// applies the schema.sql migrations idempotently, and returns a
-// better-sqlite3 Database handle. All other indexer code goes through
-// openDb() so the sqlite-vec extension is guaranteed loaded.
+// Opens (or creates) the search index, applies schema.sql idempotently and
+// returns a better-sqlite3 Database handle. The search engine opens it in
+// memory (`dbPath: ":memory:"`); without `dbPath` it is
+// `<deskRoot>/.state/desk-index.sqlite`.
 
 import { readFileSync, mkdirSync, existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import Database from "better-sqlite3"
-import * as sqliteVec from "sqlite-vec"
 import { ensureStateIgnored } from "../util/state-ignore.js"
 import { ensureCardGuard } from "../desk/card-commit-guard.js"
 
@@ -29,8 +28,8 @@ export function indexDbPath(deskRoot) {
 }
 
 /**
- * Open (or create) the desk index DB. Loads sqlite-vec, applies migrations,
- * returns a ready-to-use better-sqlite3 handle.
+ * Open (or create) the desk index DB. Applies the schema and returns a
+ * ready-to-use better-sqlite3 handle.
  *
  * @param {string} deskRoot — absolute path to the desk workspace.
  * @param {object} [opts]
@@ -50,14 +49,10 @@ export function openDb(deskRoot, opts = {}) {
   }
   const db = new Database(dbPath)
   try {
-    // Pragmas: WAL gives concurrent-reader friendliness (the search tools will
-    // read while the indexer writes). foreign_keys lets ON DELETE CASCADE
-    // actually cascade. FULL makes committed event coverage durable before journal compaction.
+    // foreign_keys lets ON DELETE CASCADE actually cascade. WAL and FULL matter only for an index on disk.
     db.pragma("journal_mode = WAL")
     db.pragma("synchronous = FULL")
     db.pragma("foreign_keys = ON")
-    // sqlite-vec must be loaded before any vec0 virtual-table reference resolves.
-    sqliteVec.load(db)
     runMigrations(db)
   } catch (error) {
     // An unreadable database fails on the first pragma, after the handle is open. Windows will not rename or delete a file that is still open, so the quarantine that moves a corrupt index aside would fail while the handle waits for garbage collection.
@@ -67,58 +62,9 @@ export function openDb(deskRoot, opts = {}) {
   return db
 }
 
-/**
- * Apply schema.sql + run additive migrations.
- *
- * The base schema is idempotent (every statement uses IF NOT EXISTS).
- * Additive migrations for columns added after v1.0 are guarded by checking
- * sqlite_master / table_info so they're also idempotent.
- */
+/** Apply schema.sql; every statement is idempotent (IF NOT EXISTS). */
 export function runMigrations(db) {
-  const hadChunksFts = Boolean(
-    db
-      .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")
-      .get(),
-  )
-  const sql = readSchemaSql()
-  db.exec(sql)
-
-  // 1.1 migration: docs.is_archived column. Older indexes (built under
-  // v1.0) don't have it; add it idempotently so callers can WHERE-filter.
-  // Pre-existing rows get is_archived=0; the next reindex updates them.
-  // The new index is also added defensively.
-  const docCols = db.prepare("PRAGMA table_info(docs)").all()
-  if (!docCols.some((c) => c.name === "is_archived")) {
-    db.exec(
-      "ALTER TABLE docs ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0",
-    )
-  }
-  db.exec("CREATE INDEX IF NOT EXISTS idx_docs_is_archived ON docs(is_archived)")
-
-  // 1.2 migration: stable chunk identity and embedding spec metadata.
-  const chunkCols = db.prepare("PRAGMA table_info(chunks)").all()
-  for (const column of [
-    "chunk_key",
-    "text_hash",
-    "embedding_spec_id",
-    "chunker_id",
-    "normalization_id",
-  ]) {
-    if (!chunkCols.some((c) => c.name === column)) {
-      db.exec(`ALTER TABLE chunks ADD COLUMN ${column} TEXT`)
-    }
-  }
-  db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_chunk_key ON chunks(chunk_key)")
-  db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_embedding_spec_id ON chunks(embedding_spec_id)")
-  // Vectors are found, saved and cleaned up by section text.
-  db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash)")
-
-  if (!hadChunksFts) {
-    const row = db.prepare("SELECT COUNT(*) AS count FROM chunks").get()
-    if (row.count > 0) {
-      db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
-    }
-  }
+  db.exec(readSchemaSql())
 }
 
 /** Clean shutdown — close DB handle. Safe to call multiple times. */

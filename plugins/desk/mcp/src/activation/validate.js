@@ -11,9 +11,6 @@ const MCP_LAUNCH_MODES = new Set(["host-native"])
 const DESK_ROOT_POLICIES = new Set(["global-default"])
 const DESK_ROOT_PRECEDENCE = new Set(["activation", "DESK", "safe-default"])
 const DESK_ROOT_OPT_OUT_MODES = new Set(["project-local", "manual-only"])
-const VECTOR_PACK_POLICIES = new Set(["read-and-import"])
-const SNAPSHOT_RESTORE_POLICIES = new Set(["newest-compatible"])
-const SNAPSHOT_RECONCILE_POLICIES = new Set(["incremental"])
 const HOST_SUPPORT_STATUSES = new Set(["supported", "degraded", "unsupported"])
 const DEPENDENCY_RESOLUTION_MODES = new Set(["flattened", "native-or-flattened", "manual-host"])
 const HOST_CAPABILITIES = new Set(["skills", "mcp", "global-default-agent", "agents", "hooks"])
@@ -73,7 +70,6 @@ export function validateActivationManifest(manifest) {
   validateMcpServers(manifest.mcp_servers, errors)
   validateDeskRoot(manifest.desk_root, errors)
   validateDeskRuntime(manifest.desk_runtime, errors)
-  validateArtifacts(manifest.artifacts, errors)
   validateHostSupport(manifest.host_support, errors)
   validatePermissions(manifest.permissions, errors)
   validateProvides(manifest.provides, dependencyIds, errors)
@@ -243,26 +239,6 @@ function validateDeskRuntime(deskRuntime, errors) {
     if (error?.code !== "activation_policy_invalid") throw error
     // A readiness policy failure always carries a path, a code and a message for each diagnostic.
     for (const { path, code, message } of error.diagnostics) errors.push(diagnostic(path, code, message))
-  }
-}
-
-function validateArtifacts(artifacts, errors) {
-  validateRequiredObject(artifacts, "artifacts", ["embeddings", "snapshots"], errors)
-  if (!isObject(artifacts)) return
-
-  validateRequiredObject(artifacts.embeddings, "artifacts.embeddings", ["shared", "spec_id", "vector_packs"], errors)
-  if (isObject(artifacts.embeddings) && artifacts.embeddings.shared !== true) {
-    errors.push(diagnostic("artifacts.embeddings.shared", "missing_shared_embeddings", "embedding policy must declare shared embeddings"))
-  }
-  if (isObject(artifacts.embeddings)) {
-    validateText(artifacts.embeddings.spec_id, "artifacts.embeddings.spec_id", "invalid_embedding_spec", "embedding spec id must be text", errors)
-    validateEnum(artifacts.embeddings.vector_packs, "artifacts.embeddings.vector_packs", VECTOR_PACK_POLICIES, "invalid_vector_pack_policy", "vector pack policy is not supported", errors)
-  }
-
-  validateRequiredObject(artifacts.snapshots, "artifacts.snapshots", ["restore", "stale_reconcile"], errors)
-  if (isObject(artifacts.snapshots)) {
-    validateEnum(artifacts.snapshots.restore, "artifacts.snapshots.restore", SNAPSHOT_RESTORE_POLICIES, "invalid_snapshot_restore", "snapshot restore must use newest-compatible", errors)
-    validateEnum(artifacts.snapshots.stale_reconcile, "artifacts.snapshots.stale_reconcile", SNAPSHOT_RECONCILE_POLICIES, "invalid_snapshot_reconcile", "snapshot reconcile policy is not supported", errors)
   }
 }
 

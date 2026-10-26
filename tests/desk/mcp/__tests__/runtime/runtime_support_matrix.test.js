@@ -225,7 +225,7 @@ test("runtime support matrix validation catches omitted, phantom, and metadata-d
   }
 })
 
-test("runtime support matrix generation and verification are wired into artifact validation", () => {
+test("runtime support matrix generation and verification are package scripts CI runs", () => {
   const packageJson = loadJson(path.join(mcpRoot, "package.json"))
   assert.equal(
     packageJson.scripts["runtime:support-matrix:generate"],
@@ -235,11 +235,11 @@ test("runtime support matrix generation and verification are wired into artifact
     packageJson.scripts["runtime:support-matrix:verify"],
     "node scripts/verify-runtime-support-matrix.js",
   )
-  const validator = readFileSync(
-    path.join(mcpRoot, "scripts", "validate-artifacts.js"),
+  const workflow = readFileSync(
+    path.join(mcpRoot, "..", "..", "..", ".github", "workflows", "desk-mcp-tests.yml"),
     "utf8",
   )
-  assert.match(validator, /verifyRuntimeSupportMatrix/u)
+  assert.match(workflow, /npm run runtime:support-matrix:verify/u)
 })
 
 test("runtime support matrix generation ignores incomplete layouts and reads complete packs", async () => {

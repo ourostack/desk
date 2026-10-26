@@ -15,8 +15,6 @@
   // Class and enum members are left out because knip finds their uses through the types of installed dependencies, so the answer would change with what a machine has installed.
   "include": ["files", "dependencies", "unlisted", "unresolved", "exports", "types", "nsExports", "nsTypes", "duplicates"],
   "ignoreIssues": {
-    // The unused exports are getActiveEmbeddingSpec, isActiveEmbeddingSpec, normalizeChunkText, chunkTextHash and computeChunkKey. They should be deleted, but this file is one of the artifact source paths (plugins/desk/mcp/config/artifact-source-scope.json): any change to its bytes changes the source-scope hash recorded in the published vector pack and snapshot, which would have to be rebuilt and republished. Delete them together with that rebuild.
-    "plugins/desk/mcp/src/indexer/spec.js": ["exports"],
     // plugins/superpowers is the unmodified upstream payload, locked by SHA-256 in upstream-sources.lock.json, so its exports (the frame and key helpers upstream's own tests use) cannot be removed here.
     "plugins/superpowers/skills/brainstorming/scripts/server.cjs": ["exports"]
   },

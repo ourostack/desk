@@ -123,3 +123,12 @@ test("ordinary Agency declaration (boundary): desk/agency.json declares only the
     "github:ourostack/desk:plugins/plain-language@main",
   ])
 })
+
+test("authored V2 closure (boundary): active worker source drops Ponytail invocation while historical mentions remain", () => {
+  const workerSource = readFileSync(new URL("../../../../../plugins/desk/agents/worker.agent.md", import.meta.url), "utf8")
+  assert.doesNotMatch(workerSource, /apply `ponytail`/iu)
+  assert.doesNotMatch(workerSource, /ponytail-upstream.*declared dep/iu)
+
+  const changelog = readFileSync(new URL("../../../../../plugins/desk/CHANGELOG.md", import.meta.url), "utf8")
+  assert.match(changelog, /ponytail/iu, "historical CHANGELOG mentions must not be indiscriminately rejected")
+})

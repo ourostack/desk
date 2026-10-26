@@ -2,44 +2,22 @@ import Database from "better-sqlite3"
 import { discover } from "../indexer/discover.js"
 import { chunkBody } from "../indexer/chunk.js"
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
+import { deskPluginRoot } from "../package-metadata.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
-import { resolveEnsureIndexOptions } from "../server-helpers.js"
-import { expectedLexicalGenerationIdentity } from "./generations.js"
 
-async function loadCurrentTombstoneLedger({ deskRoot, signal }) {
+/**
+ * Read the desk's files afresh into a disposable in-memory corpus and search it with the same FTS5 tokenizer, BM25 and
+ * query serialization as the search engine. Serves searches made before the session's search engine has started.
+ */
+export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
   signal?.throwIfAborted()
-  const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
-  const ledger = await loadTombstoneLedger(tombstones)
-  signal?.throwIfAborted()
+  const ledger = await loadTombstoneLedger({ pluginRoot: deskPluginRoot() })
   if (!ledger.valid) {
     const error = new Error("artifact tombstone ledger is invalid")
     error.code = "artifact_tombstone_ledger_invalid"
     error.diagnostics = ledger.diagnostics
     throw error
   }
-  return ledger
-}
-
-/**
- * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
- * serialization as indexed search. This disposable corpus never opens the
- * persistent index, loads vectors, embeds, or publishes a generation.
- * A policy change discards the corpus; only one fresh scan is allowed.
- */
-export async function directLexicalSearch(request) {
-  let ledger = await loadCurrentTombstoneLedger(request)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const identity = expectedLexicalGenerationIdentity({ ledger }).tombstone_identity
-    const result = await searchWithLedger(request, ledger)
-    ledger = await loadCurrentTombstoneLedger(request)
-    if (identity === expectedLexicalGenerationIdentity({ ledger }).tombstone_identity) return result
-  }
-  const error = new Error("Tombstone policy changed during both direct lexical scan attempts.")
-  error.code = "readiness_changed_during_read"
-  throw error
-}
-
-async function searchWithLedger({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }, ledger) {
   const documents = await discover(deskRoot, { signal })
   const db = new Database(":memory:")
   try {
@@ -71,7 +49,7 @@ async function searchWithLedger({ deskRoot, query, filters, scope, limit, now, s
     signal?.throwIfAborted()
     const search = kind === "timeline" ? indexedTimeline : indexedSearch
     return await search({
-      deskRoot, db, input: { query, filters, scope, limit, from, to }, opts: { now, lexicalOnly: true },
+      deskRoot, db, input: { query, filters, scope, limit, from, to }, opts: { now },
     })
   } finally {
     db.close()

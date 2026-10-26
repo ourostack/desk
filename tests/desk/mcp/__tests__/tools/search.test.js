@@ -1,25 +1,22 @@
-// search.test.js — desk_search hybrid lexical+semantic ranking + filters.
+// search.test.js — desk_search exact-word ranking + filters.
 
 import { test } from "node:test"
-import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import Database from "better-sqlite3"
-import * as sqliteVec from "sqlite-vec"
 
-// Keep legacy indexed ranking coverage separate from the alpha consumer contract.
-import { __searchInternalsForTests, desk_search as routedSearch, desk_timeline as routedTimeline, indexedSearch as desk_search, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
-import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { __searchInternalsForTests, desk_search as routedSearch, desk_timeline as routedTimeline, indexedSearch, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { createSearchEngine, SEARCH_WORDING } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import {
   buildFixtureIndex,
-  makeEmbedFetch,
-  makeFailingFetch,
+  fixtureDb,
   mkTempDeskRoot,
-  topicVector,
   writeFile,
 } from "./_search_helpers.js"
+
+// The indexed backends read the fixture desk's in-memory index.
+const desk_search = (args) => indexedSearch({ ...args, db: fixtureDb(args.deskRoot) })
+const indexedTimeline = (args) => indexedTimelineOn({ ...args, db: fixtureDb(args.deskRoot) })
 
 function engineFor(t, deskRoot, options = {}) {
   const engine = createSearchEngine({ deskRoot, semantic: "unsupported", watch: () => ({ close() {} }), cleanup: () => ({ removed: false, bytes: 0 }), ...options })
@@ -40,20 +37,6 @@ test("before the search engine starts, search and timeline read the files and ca
   await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
 })
 
-test("indexed search closes and propagates sqlite extension load failures", async (t) => {
-  const root = await mkTempDeskRoot()
-  await buildFixtureIndex(root, {
-    files: [{ path: "track/work/task.md", text: "indexed quartz" }],
-  })
-  const original = Database.prototype.loadExtension
-  Database.prototype.loadExtension = () => { throw new Error("sqlite vec load failed") }
-  t.after(() => { Database.prototype.loadExtension = original })
-  await assert.rejects(
-    () => desk_search({ deskRoot: root, input: { query: "quartz" } }),
-    /sqlite vec load failed/u,
-  )
-})
-
 test("routed timeline reads the session search engine, with and without a query", async (t) => {
   const { desk_timeline } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const root = await mkTempDeskRoot()
@@ -68,50 +51,27 @@ test("routed timeline reads the session search engine, with and without a query"
   assert.equal(query.search_mode, "lexical")
 })
 
-test("timeline hybrid keeps the strongest chunk per document", async () => {
+test("timeline keeps the strongest section per document", async () => {
   const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "---\nupdated: 2026-09-19\n---\nalpha opening")
+  await writeFile(root, "track/work/task.md", "---\nupdated: 2026-09-19\n---\n## One\n\nalpha opening\n\n## Two\n\nalpha later stronger detail alpha\n")
   await buildFixtureIndex(root)
-  const db = new Database(path.join(root, ".state", "desk-index.sqlite"))
-  try {
-    sqliteVec.load(db)
-    const doc = db.prepare("SELECT id FROM docs WHERE path = ?").get("track/work/task.md")
-    const info = db.prepare(`INSERT INTO chunks
-      (doc_id, chunk_index, chunk_key, text_hash, embedding_spec_id, chunker_id, normalization_id, text)
-      SELECT doc_id, 1, chunk_key || '-second', text_hash || '-second', embedding_spec_id, chunker_id, normalization_id, ?
-      FROM chunks WHERE doc_id = ? AND chunk_index = 0`).run("alpha later stronger detail", doc.id)
-    db.prepare("INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)").run(info.lastInsertRowid, "alpha later stronger detail")
-    db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) SELECT ?, text_hash, ? FROM chunks WHERE id = ?")
-      .run(ACTIVE_VECTOR_SPACE, Buffer.from(new Float32Array(topicVector("alpha later stronger detail")).buffer), info.lastInsertRowid)
-  } finally {
-    db.close()
-  }
-  const result = await indexedTimeline({
-    deskRoot: root,
-    input: { from: "2026-01-01", query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
-  assert.equal(result.search_mode, "hybrid")
+  const result = await indexedTimeline({ deskRoot: root, input: { from: "2026-01-01", query: "alpha" } })
+  assert.equal(result.search_mode, "lexical")
   assert.equal(result.results.length, 1)
   assert.equal(result.results[0].path, "track/work/task.md")
 })
-
-test("the exact-word note of indexed search and timeline is plain", async () => {
-  const plain = "Meaning-based search is still catching up; these results match exact words and are usable."
+test("indexed search and timeline carry no meaning-search fields", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nstatus: processing\nupdated: 2026-09-19\nschema_version: 1\n---\nquartz lexical fallback\n")
   await buildFixtureIndex(root)
-  const search = await desk_search({ deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true } })
-  assert.equal(search.semantic_note, plain)
-  assert.equal(search.semantic_diagnostic.message, plain)
-  const timeline = await indexedTimeline({ deskRoot: root, input: { from: "2026-01-01", query: "quartz" }, opts: { lexicalOnly: true } })
-  assert.equal(timeline.semantic_note, plain)
-  assert.equal(timeline.semantic_diagnostic.message, plain)
-  for (const result of [search, timeline]) assert.ok(!("semantic_repair" in result), "nothing to repair: it is catching up")
-  const off = await desk_search({ deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true, semanticDiagnostic: { reason: "semantic_off" } } })
-  assert.equal(off.semantic_note, "Meaning-based search is off for this desk; these results match exact words.")
+  const search = await desk_search({ deskRoot: root, input: { query: "quartz" } })
+  const timeline = await indexedTimeline({ deskRoot: root, input: { from: "2026-01-01", query: "quartz" } })
+  for (const result of [search, timeline]) {
+    assert.equal(result.search_mode, "lexical")
+    assert.equal(result.results[0].path, "track/work/task.md")
+    for (const field of ["semantic_unavailable", "semantic_note", "semantic_diagnostic", "semantic_repair"]) assert.ok(!(field in result), field)
+  }
 })
-
 // Words an agent should never have to decode in what search says. Tool names and quoted values are exact identifiers the reader acts on, so they are left out of the check.
 const SEARCH_JARGON = /converg|generation|controller|barrier|journal|reconcil|\bproo?f\b|\bproven\b|RECOVERING|_READY\b|vector|embedding/iu
 
@@ -123,10 +83,7 @@ test("everything the search engine says is plain", () => {
 })
 
 
-// Build a fixture desk where chunks across multiple tracks share or differ
-// on the first-word "family" (deterministic 768-dim vectors per
-// _search_helpers.js). A query whose first letter matches a doc's first
-// letter produces a strong semantic hit; mismatched produces near-zero.
+// A fixture desk across three tracks: two alpha documents (one blocked) and one bravo document.
 
 async function buildBaseDesk() {
   const root = await mkTempDeskRoot()
@@ -168,22 +125,10 @@ test("search internals cover defensive helper branches", async () => {
   await writeFile(blankFeatureRoot, "_meta/featured.md", "# comment only\n")
   assert.equal(await helpers.readFeaturedTrack(blankFeatureRoot), null)
 
-  assert.match(
-    helpers.semanticUnavailableFields(undefined).semantic_note,
-    /embedding service did not return/u,
-  )
-  assert.equal(helpers.semanticUnavailableFields(undefined).semantic_diagnostic, null)
-  assert.equal(
-    Object.hasOwn(helpers.semanticUnavailableFields({ reason: "alpha_scope", message: "semantic intentionally out of scope" }), "semantic_repair"),
-    false,
-  )
-
   assert.deepEqual(helpers.buildFtsQuery(null), { matchExpr: null, terms: [] })
   assert.deepEqual(helpers.buildFtsQuery("a"), { matchExpr: null, terms: [] })
   assert.equal(helpers.clampLimit(Number.NaN), 10)
   assert.equal(helpers.clampLimit(999), 50)
-  assert.equal(helpers.decodeEmbedding(null), null)
-  assert.deepEqual(helpers.decodeEmbedding(Buffer.from([0, 0, 128, 63])), [1])
 
   assert.deepEqual(helpers.resolveScopeFilter("all", "active"), { sql: "", params: [] })
   assert.deepEqual(helpers.resolveScopeFilter("archived", "active"), {
@@ -225,7 +170,6 @@ test("search internals cover defensive helper branches", async () => {
   )
 
   assert.deepEqual(helpers.gatherFtsCandidates({}, null, "", [], 10), [])
-  assert.deepEqual(helpers.gatherVecCandidates({}, null, 10), [])
   assert.equal(helpers.hydrateChunks({}, []).size, 0)
 
   assert.equal(helpers.makeSnippet("", ["alpha"]), "")
@@ -338,7 +282,6 @@ test("desk_search — happy path returns ranked results with score_breakdown", a
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   assert.ok(Array.isArray(res.results), "results is an array")
@@ -348,115 +291,46 @@ test("desk_search — happy path returns ranked results with score_breakdown", a
   assert.match(top.snippet.toLowerCase(), /alpha/, "top result mentions alpha")
   assert.ok(typeof top.score === "number" && top.score > 0)
   assert.ok(top.score_breakdown && typeof top.score_breakdown === "object")
-  assert.ok(top.score_breakdown.semantic >= 0)
+  assert.equal(top.score_breakdown.semantic, 0)
   assert.ok(top.score_breakdown.bm25 >= 0)
-  assert.equal(res.semantic_unavailable, false)
+  assert.equal(res.search_mode, "lexical")
   assert.ok(typeof res.latency_ms === "number")
-})
-
-test("desk_search — Ollama-down soft-fails to FTS-only with semantic_unavailable=true", async () => {
-  const root = await buildBaseDesk()
-  await buildFixtureIndex(root)
-
-  const res = await desk_search({
-    deskRoot: root,
-    input: { query: "alpha" },
-    opts: { embed: { fetch: makeFailingFetch() } },
-  })
-
-  assert.equal(res.semantic_unavailable, true, "flag set when query embed fails")
-  // FTS still finds the alpha hits.
-  assert.ok(res.results.length >= 1)
-  // Semantic component in breakdown should be 0 (no embedding available).
-  assert.equal(res.results[0].score_breakdown.semantic, 0)
 })
 
 test("desk_search — empty or missing query returns before indexing", async () => {
   const root = await mkTempDeskRoot()
-  const empty = await desk_search({ deskRoot: root, input: null })
+  const empty = await indexedSearch({ deskRoot: root, input: null })
   assert.deepEqual(empty.results, [])
   assert.equal(empty.query, "")
-  assert.equal(empty.semantic_unavailable, false)
 })
 
-test("desk_search — lexical no-match returns empty results with unavailable semantic note", async () => {
+test("desk_search — lexical no-match returns empty results", async () => {
   const root = await buildBaseDesk()
   await buildFixtureIndex(root)
 
   const res = await desk_search({
     deskRoot: root,
     input: { query: "zzzz-no-match" },
-    opts: { embed: { fetch: makeFailingFetch() } },
   })
 
   assert.equal(res.search_mode, "lexical")
-  assert.equal(res.semantic_unavailable, true)
   assert.deepEqual(res.results, [])
-  assert.match(res.semantic_note, /Semantic search unavailable/u)
 })
 
-test("desk_search — single-character query uses semantic candidates without FTS", async () => {
+test("desk_search — single-character query has no exact words to match", async () => {
   const root = await buildBaseDesk()
   await buildFixtureIndex(root)
 
   const res = await desk_search({
     deskRoot: root,
     input: { query: "a" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
-  assert.equal(res.search_mode, "hybrid")
-  assert.equal(res.semantic_unavailable, false)
-  assert.ok(res.results.length >= 1)
+  assert.equal(res.search_mode, "lexical")
+  assert.deepEqual(res.results, [])
 })
 
-test("indexed search reads vectors after explicit fixture repair, never repairs itself", async () => {
-  const root = await mkTempDeskRoot()
-  await writeFile(
-    root,
-    "trackA/task-1/task.md",
-    "---\nstatus: processing\nschema_version: 1\n---\nalpha semantic repair body\n",
-  )
-  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
-  await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
-  await rebuildIndex(root, { reembedMissing: true, embed: { fetch: makeEmbedFetch() } })
-
-  const res = await desk_search({
-    deskRoot: root,
-    input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
-
-  assert.equal(res.semantic_unavailable, false)
-  assert.ok(res.results.length >= 1)
-  assert.ok(
-    res.results[0].score_breakdown.semantic > 0,
-    "semantic component should be restored after repair",
-  )
-})
-
-test("desk_search — default embed options use global fetch", async () => {
-  const root = await buildBaseDesk()
-  await buildFixtureIndex(root)
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = makeEmbedFetch()
-  try {
-    const res = await desk_search({
-      deskRoot: root,
-      input: { query: "alpha" },
-    })
-    assert.equal(res.search_mode, "hybrid")
-    assert.equal(res.semantic_unavailable, false)
-  } finally {
-    if (originalFetch === undefined) {
-      delete globalThis.fetch
-    } else {
-      globalThis.fetch = originalFetch
-    }
-  }
-})
-
-test("desk_search — default active scope skips archived semantic candidates", async () => {
+test("desk_search — default active scope skips archived documents", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -472,16 +346,14 @@ test("desk_search — default active scope skips archived semantic candidates", 
 
   const active = await desk_search({
     deskRoot: root,
-    input: { query: "a" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
+    input: { query: "alpha" },
   })
   assert.ok(active.results.length >= 1)
   assert.ok(active.results.every((result) => !result.path.includes("_archive")))
 
   const all = await desk_search({
     deskRoot: root,
-    input: { query: "a", scope: "all" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
+    input: { query: "alpha", scope: "all" },
   })
   assert.ok(all.results.some((result) => result.path.includes("_archive")))
 })
@@ -493,7 +365,6 @@ test("desk_search — track filter narrows to one track", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { track: "trackA" } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   assert.ok(res.results.length >= 1)
@@ -509,7 +380,6 @@ test("desk_search — invalid and empty filters behave as no-ops", async () => {
   const invalid = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: "not-an-object" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(invalid.results.length >= 1)
 
@@ -519,7 +389,6 @@ test("desk_search — invalid and empty filters behave as no-ops", async () => {
       query: "alpha",
       filters: { track: [] },
     },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(emptyArrays.results.length >= 1)
 
@@ -529,19 +398,17 @@ test("desk_search — invalid and empty filters behave as no-ops", async () => {
       query: "alpha",
       filters: { track: 42 },
     },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.deepEqual(nonStringTrack.results, [])
 })
 
-test("desk_search — track array filter excludes semantic candidates outside the set", async () => {
+test("desk_search — track array filter excludes documents outside the set", async () => {
   const root = await buildBaseDesk()
   await buildFixtureIndex(root)
 
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { track: ["trackA", "trackC"] } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   assert.ok(res.results.length >= 1)
@@ -558,7 +425,6 @@ test("desk_search — status filter (single value)", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { status: "processing" } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   for (const r of res.results) {
     assert.equal(r.status, "processing")
@@ -572,7 +438,6 @@ test("desk_search — status filter (array of values)", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { status: ["processing", "blocked"] } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   for (const r of res.results) {
     assert.ok(["processing", "blocked"].includes(r.status))
@@ -586,7 +451,6 @@ test("desk_search — kind filter narrows by doc kind", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { kind: "planning" } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   for (const r of res.results) {
     assert.equal(r.kind, "planning")
@@ -601,7 +465,6 @@ test("desk_search — kind array filter narrows by doc kind", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { kind: ["planning"] } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(res.results.length >= 1)
   for (const r of res.results) {
@@ -626,7 +489,6 @@ test("desk_search — since filter excludes older docs", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { since: "2025-01-01" } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   for (const r of res.results) {
     assert.ok(
@@ -653,7 +515,6 @@ test("desk_search — until filter excludes newer docs", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha", filters: { until: "2025-01-01" } },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(res.results.length >= 1)
   for (const r of res.results) {
@@ -671,14 +532,12 @@ test("desk_search — limit is clamped to [1, 50]", async () => {
   const huge = await desk_search({
     deskRoot: root,
     input: { query: "alpha", limit: 9999 },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(huge.results.length <= 50, "limit clamped to 50 max")
 
   const tiny = await desk_search({
     deskRoot: root,
     input: { query: "alpha", limit: 0 },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   // 0 → clamped to 1; depending on data we get 0 or 1 result, but never
   // more than 1.
@@ -687,7 +546,7 @@ test("desk_search — limit is clamped to [1, 50]", async () => {
 
 test("desk_search — state_bias raises active-status docs above terminal-status docs", async () => {
   const root = await mkTempDeskRoot()
-  // Two docs with identical text → same FTS + semantic scores. State_bias
+  // Two docs with identical text → same FTS scores. State_bias
   // is the only differentiator.
   await writeFile(
     root,
@@ -704,7 +563,6 @@ test("desk_search — state_bias raises active-status docs above terminal-status
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(res.results.length >= 2)
   const processingResult = res.results.find((r) => r.status === "processing")
@@ -729,7 +587,6 @@ test("desk_search — empty query returns empty results", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.deepEqual(res.results, [])
 })
@@ -748,32 +605,11 @@ test("desk_search — long snippets center around query terms", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha-centered" },
-    opts: { embed: { fetch: async () => { throw new Error("query embeddings unavailable") } } },
   })
   assert.ok(res.results.length >= 1)
   assert.match(res.results[0].snippet, /alpha-centered/u)
   assert.match(res.results[0].snippet, /^\.\.\./u)
   assert.match(res.results[0].snippet, /\.\.\.$/u)
-})
-
-test("desk_search — long semantic-only snippets fall back when query term is absent", async () => {
-  const root = await mkTempDeskRoot()
-  const longBody = Array.from({ length: 120 }, (_, index) => `aardvark${index}`).join(" ")
-  await writeFile(
-    root,
-    "trackA/task-semantic/task.md",
-    `---\nstatus: processing\nschema_version: 1\n---\n${longBody}\n`,
-  )
-  await buildFixtureIndex(root)
-
-  const res = await desk_search({
-    deskRoot: root,
-    input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
-  })
-  assert.ok(res.results.length >= 1)
-  assert.match(res.results[0].snippet, /\.\.\.$/u)
-  assert.doesNotMatch(res.results[0].snippet, /alpha/u)
 })
 
 test("desk_search — long snippets handle start and end query-term boundaries", async () => {
@@ -795,7 +631,6 @@ test("desk_search — long snippets handle start and end query-term boundaries",
   const start = await desk_search({
     deskRoot: root,
     input: { query: "alpha-start" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.doesNotMatch(start.results[0].snippet, /^\.\.\./u)
   assert.match(start.results[0].snippet, /\.\.\.$/u)
@@ -803,7 +638,6 @@ test("desk_search — long snippets handle start and end query-term boundaries",
   const end = await desk_search({
     deskRoot: root,
     input: { query: "alpha-end" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   const endResult = end.results.find((result) =>
     result.path.includes(path.posix.join("task-end", "task.md")),
@@ -855,7 +689,6 @@ alpha pinned body summary
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   // The pinned doing.md should rank top — its pin breakdown should be 0.3.
@@ -888,20 +721,14 @@ test("desk_search — ignores malformed featured task frontmatter when pinning",
   )
   await buildFixtureIndex(root)
 
-  const db = openDb(root)
-  try {
-    db.prepare("UPDATE docs SET frontmatter = ? WHERE path = ?").run(
-      "{malformed-json",
-      "trackP/task-pinned/task.md",
-    )
-  } finally {
-    closeDb(db)
-  }
+  fixtureDb(root).prepare("UPDATE docs SET frontmatter = ? WHERE path = ?").run(
+    "{malformed-json",
+    "trackP/task-pinned/task.md",
+  )
 
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(res.results.length >= 1)
   assert.equal(res.results[0].score_breakdown.pin, 0)
@@ -920,7 +747,6 @@ test("desk_search — ignores blank featured track and no-op iteration histories
   const blankFeatured = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(blankFeatured.results.length >= 1)
   assert.equal(blankFeatured.results[0].score_breakdown.pin, 0)
@@ -938,22 +764,16 @@ test("desk_search — ignores blank featured track and no-op iteration histories
   }
   await buildFixtureIndex(root)
 
-  const db = openDb(root)
-  try {
-    for (const [docPath, frontmatter] of rows) {
-      db.prepare("UPDATE docs SET frontmatter = ? WHERE path = ?").run(
-        JSON.stringify(frontmatter),
-        docPath,
-      )
-    }
-  } finally {
-    closeDb(db)
+  for (const [docPath, frontmatter] of rows) {
+    fixtureDb(root).prepare("UPDATE docs SET frontmatter = ? WHERE path = ?").run(
+      JSON.stringify(frontmatter),
+      docPath,
+    )
   }
 
   const noPins = await desk_search({
     deskRoot: root,
     input: { query: "alpha" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(noPins.results.length >= 1)
   assert.ok(noPins.results.every((result) => result.score_breakdown.pin === 0))
@@ -973,7 +793,6 @@ test("desk_search — propagates unexpected featured-track read errors", async (
     () => desk_search({
       deskRoot: root,
       input: { query: "alpha" },
-      opts: { embed: { fetch: makeEmbedFetch() } },
     }),
     /EISDIR|illegal operation/u,
   )

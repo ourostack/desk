@@ -28,10 +28,6 @@ const requiredPackageScripts = {
   "activation:copilot-bundle:generate": "node scripts/generate-copilot-bundle.js",
   "runtime:deps-pack:build": "node scripts/build-runtime-deps-pack.js",
   "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
-  "artifact:vector-pack:build": "node scripts/build-vector-pack.js",
-  "artifact:snapshot:build": "node scripts/build-snapshot.js",
-  "artifact:snapshot:verify": "node scripts/verify-snapshot.js",
-  "artifact:validate": "node scripts/validate-artifacts.js",
 }
 
 function writeText(root, relativePath, content) {
@@ -593,13 +589,13 @@ test("validateDeskMcpPackageScripts catches missing scripts, command drift, and 
   )
   await assertThrowsWith(
     (root) => writeJson(root, "plugins/desk/mcp/package.json", {
-      scripts: { ...requiredPackageScripts, "artifact:validate": "node scripts/validate-artifacts-stale.js" },
+      scripts: { ...requiredPackageScripts, "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack-stale.js" },
     }),
     (root) => validator.validateDeskMcpPackageScripts({ repoRoot: root }),
-    /artifact:validate must be node scripts\/validate-artifacts\.js/u,
+    /runtime:deps-pack:verify must be node scripts\/verify-runtime-deps-pack\.js/u,
   )
   await assertThrowsWith(
-    (root) => removePath(root, "plugins/desk/mcp/scripts/validate-artifacts.js"),
+    (root) => removePath(root, "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js"),
     (root) => validator.validateDeskMcpPackageScripts({ repoRoot: root }),
     /target is missing/u,
   )

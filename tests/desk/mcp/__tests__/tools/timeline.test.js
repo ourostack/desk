@@ -3,14 +3,16 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_timeline, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
-import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { desk_timeline, indexedTimeline as indexedTimelineOn } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import {
   buildFixtureIndex,
-  makeEmbedFetch,
+  fixtureDb,
   mkTempDeskRoot,
   writeFile,
 } from "./_search_helpers.js"
+
+// The indexed backend reads the fixture desk's in-memory index.
+const indexedTimeline = (args) => indexedTimelineOn({ ...args, db: fixtureDb(args.deskRoot) })
 
 async function buildTimelineDesk() {
   const root = await mkTempDeskRoot()
@@ -33,7 +35,6 @@ async function buildTimelineDesk() {
 }
 
 test("desk_timeline routes timeline requests through the public query router", async () => {
-  const embedFetch = makeEmbedFetch()
   const queryRouter = {
     async lexical(request) {
       return { routed: true, request }
@@ -43,7 +44,7 @@ test("desk_timeline routes timeline requests through the public query router", a
   const result = await desk_timeline({
     deskRoot: "/tmp/desk",
     input: { query: "alpha", from: "2025-01-01" },
-    opts: { now: 12345, embed: { fetch: embedFetch } },
+    opts: { now: 12345 },
     queryRouter,
   })
 
@@ -54,7 +55,7 @@ test("desk_timeline routes timeline requests through the public query router", a
       from: "2025-01-01",
       kind: "timeline",
       now: 12345,
-      opts: { now: 12345, embed: { fetch: embedFetch } },
+      opts: { now: 12345 },
       query: "alpha",
       signal: undefined,
     },
@@ -86,7 +87,7 @@ test("indexedTimeline — without query: chronological listing within window", a
   }
 })
 
-test("indexedTimeline — with query: hybrid ranking inside the window", async () => {
+test("indexedTimeline — with query: exact words inside the window", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
@@ -97,7 +98,6 @@ test("indexedTimeline — with query: hybrid ranking inside the window", async (
       to: "2026-12-31",
       query: "alpha",
     },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   // Only docs in window with "alpha" content should match — that's just
@@ -108,55 +108,26 @@ test("indexedTimeline — with query: hybrid ranking inside the window", async (
   assert.ok(!paths.some((p) => p.includes("/old/")), "old out of window")
 })
 
-test("indexedTimeline — default embed options use global fetch", async () => {
-  const root = await buildTimelineDesk()
-  await buildFixtureIndex(root)
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = makeEmbedFetch()
-  try {
-    const res = await indexedTimeline({
-      deskRoot: root,
-      input: {
-        from: "2025-01-01",
-        to: "2026-12-31",
-        query: "alpha",
-      },
-    })
-    assert.equal(res.search_mode, "hybrid")
-    assert.equal(res.semantic_unavailable, false)
-    assert.ok(res.results.some((result) => result.path.includes("/recent/")))
-  } finally {
-    if (originalFetch === undefined) {
-      delete globalThis.fetch
-    } else {
-      globalThis.fetch = originalFetch
-    }
-  }
-})
-
-test("indexedTimeline — single-character query uses semantic candidates without FTS", async () => {
+test("indexedTimeline — single-character query has no exact words to match", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
   const res = await indexedTimeline({
     deskRoot: root,
     input: { query: "a" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
-  assert.equal(res.search_mode, "hybrid")
-  assert.equal(res.semantic_unavailable, false)
-  assert.ok(res.results.length >= 1)
+  assert.equal(res.search_mode, "lexical")
+  assert.deepEqual(res.results, [])
 })
 
-test("indexedTimeline — query window skips semantic candidates outside bounds", async () => {
+test("indexedTimeline — query window skips matches outside bounds", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
   const res = await indexedTimeline({
     deskRoot: root,
-    input: { query: "a", to: "2025-12-31" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
+    input: { query: "alpha", to: "2025-12-31" },
   })
 
   const paths = res.results.map((result) => result.path)
@@ -181,7 +152,6 @@ test("indexedTimeline — scope can restrict archived entries", async () => {
   const archived = await indexedTimeline({
     deskRoot: root,
     input: { query: "alpha", scope: "archived" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
   })
 
   assert.ok(archived.results.length >= 1)
@@ -258,14 +228,9 @@ test("indexedTimeline — no-query path tolerates empty docs and missing timesta
   )
   await buildFixtureIndex(root)
 
-  const db = openDb(root)
-  try {
-    db.prepare("UPDATE docs SET updated_at = NULL WHERE path = ?").run(
-      "trackA/empty/task.md",
-    )
-  } finally {
-    closeDb(db)
-  }
+  fixtureDb(root).prepare("UPDATE docs SET updated_at = NULL WHERE path = ?").run(
+    "trackA/empty/task.md",
+  )
 
   const res = await indexedTimeline({ deskRoot: root, input: {} })
   assert.ok(res.results.some((result) => result.path === "trackA/empty/task.md"))
