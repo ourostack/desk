@@ -103,6 +103,8 @@ The mapper also adds the rule `Never call task_signoff.` to `briefRules`, and it
 
 The mapper's `briefRules` also carry the scratch sentence from `work-orchestration` ("Write down the exact path of everything you create..."). Copy it into every brief the same way, whether or not the brief mentions scratch: a reviewer may make a temporary copy unasked, and a deletion through a shell variable stops Claude Code for approval.
 
+The mapper's `briefRules` also carry `work-orchestration`'s visual-proof sentence ("Capture visual proof as you go..."). Copy it into every brief the same way, and check the Evidence list it asks for when you integrate each return.
+
 Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
 
 When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief.
