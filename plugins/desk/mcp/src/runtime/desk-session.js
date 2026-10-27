@@ -1327,7 +1327,7 @@ function memberUnknownOutcome(member, message) {
     code: MEMBER_UNKNOWN,
     summary: `${message} Reads are available; writes are refused.`,
     fix: message,
-    diagnostic: { mode: "degraded", member: { problem: member.problem, logins: member.logins ?? [] } },
+    diagnostic: { mode: "degraded", member: { problem: member.problem, logins: member.logins } },
   }
 }
 
