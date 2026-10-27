@@ -91,6 +91,11 @@ Store readers must understand context/2 before the producer is upgraded; read
 support and the compatible public reader were delivered before this emission
 change. Existing context/1 records are not rewritten.
 
+Preparation and publication share the same bounded two-second planning turn.
+They alternate which goes first; that stage may use the remaining whole turn,
+so a valid operation does not stall merely because it needs more than half.
+The total deadline and the separate numerical-delivery reserve are unchanged.
+
 A source change can mechanically replace old wording with a prose-free
 `unavailable` record while a fresh explanation is reviewed. Its privacy verdict
 is `not_required` with a null reviewer, never a fabricated independent approval.

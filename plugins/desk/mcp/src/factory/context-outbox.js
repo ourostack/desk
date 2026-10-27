@@ -504,14 +504,14 @@ export async function planContextPublication(env, { store, entries, pluginVersio
       start = value.cursor % jobs.length
     }
   }
-  // Each stage gets first use of the remaining turn on alternate calls.
+  // Alternate first use of the whole shared turn; a valid unit may need more than half.
   const first = await planningTurn(env, store)
   let prepared = { prepared: 0, deferred: [] }
   const prepare = async () => {
     if (clock() < limit) {
       try {
         prepared = await prepareContextGroups(env, {
-          store, pluginVersion, deadline: Math.min(limit, clock() + PREPARATION_MS / 2), clock, ...readers,
+          store, pluginVersion, deadline: limit, clock, ...readers,
         }, [...groups.values()])
       } catch (error) {
         if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
@@ -522,7 +522,7 @@ export async function planContextPublication(env, { store, entries, pluginVersio
     }
   }
   if (first === "prepare") await prepare()
-  const publicationLimit = Math.min(limit, clock() + PREPARATION_MS / 2)
+  const publicationLimit = limit
   for (let offset = 0; offset < jobs.length; offset += 1) {
     const index = (start + offset) % jobs.length
     next = index
