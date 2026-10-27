@@ -9,6 +9,8 @@ import { SESSION_ID_V4, validatePublished } from "./published-schema.js"
 import { normalizePublished, stableStringify } from "./pipeline/normalize.js"
 
 export const CONTEXT_SCHEMA = "desk.factory.context/1"
+// Read support precedes emission so existing store readers can be upgraded first.
+const RECOMMENDATION_SCHEMA = "desk.factory.context/2"
 export const CONTEXT_PATH = /^context\/([0-9a-f]{32})\.json$/u
 export const CONTEXT_MAX_BYTES = 128 * 1024
 const SHA256 = /^[0-9a-f]{64}$/u
@@ -26,9 +28,9 @@ const UNSAFE = [
   /\b[0-9a-f]{24,}\b/iu,
   /(?:\+?\d[\d ().-]{8,}\d)/u,
 ]
-function textField(max) {
+function textField(max, { nullable = true } = {}) {
   return customField((value, path, errors) => {
-    if (value === null) return true
+    if (value === null && nullable) return true
     if (typeof value !== "string") { addError(errors, "type", path); return false }
     if (value.length === 0 || [...value].length > max || value.trim() !== value) { addError(errors, "range", path); return false }
     if (UNSAFE.some((pattern) => pattern.test(value))) { addError(errors, "unsafe_text", path); return false }
@@ -58,6 +60,15 @@ const EVENT_SPEC = {
   confidence: enumField(["high", "medium", "low"]),
   evidence: arrayField(objectField(REF_SPEC), 8),
 }
+const RECOMMENDATION_SPEC = {
+  id: patternField(/^[0-9a-f]{16}$/u),
+  observations: arrayField(patternField(/^[0-9a-f]{16}$/u), 8),
+  problem: textField(240, { nullable: false }),
+  change: textField(240, { nullable: false }),
+  hypothesis: textField(160, { nullable: false }),
+  check: textField(240, { nullable: false }),
+  confidence: enumField(["high", "medium", "low"]),
+}
 const TOP = {
   schema: enumField([CONTEXT_SCHEMA]), job: patternField(PATTERNS.jobId),
   evaluator: objectField(VERSION_SPEC),
@@ -76,6 +87,11 @@ const TOP = {
     reviewer: nullableObjectField(VERSION_SPEC),
   }),
 }
+const WITH_RECOMMENDATIONS = {
+  ...TOP,
+  schema: enumField([RECOMMENDATION_SCHEMA]),
+  recommendations: arrayField(objectField(RECOMMENDATION_SPEC), 8),
+}
 
 /** Hash the exact proposed public payload, excluding only its privacy verdict. */
 export function contextPayloadHash(value) {
@@ -86,8 +102,9 @@ export function contextPayloadHash(value) {
 /** Validate a candidate's closed shape; publication additionally requires its bound review. */
 export function validateContext(value, { candidate = false } = {}) {
   const errors = []
-  validateObject(value, "", TOP, errors)
+  validateObject(value, "", value?.schema === RECOMMENDATION_SCHEMA ? WITH_RECOMMENDATIONS : TOP, errors)
   if (errors.length > 0) return answer(errors)
+  const recommendations = value.schema === RECOMMENDATION_SCHEMA ? value.recommendations : []
   if (Buffer.byteLength(JSON.stringify(value)) > CONTEXT_MAX_BYTES) return answer([{ code: "too_large", path: "" }])
   if (value.privacy === null) {
     if (!candidate) addError(errors, "review_missing", "privacy")
@@ -95,7 +112,7 @@ export function validateContext(value, { candidate = false } = {}) {
     if (value.privacy.payload_sha256 !== contextPayloadHash(value)) addError(errors, "review_mismatch", "privacy")
     if (value.privacy.verdict === "approved" && value.privacy.reviewer === null) addError(errors, "inconsistent", "privacy")
     if (value.privacy.verdict === "not_required" && (value.state === "published" || value.heading !== null ||
-        value.events.length > 0 || value.privacy.reviewer !== null)) addError(errors, "inconsistent", "privacy")
+        value.events.length > 0 || recommendations.length > 0 || value.privacy.reviewer !== null)) addError(errors, "inconsistent", "privacy")
   }
   const { state, reasons, omitted_events: omitted } = value.coverage
   if ((state === "measured" && (reasons.length > 0 || omitted > 0)) ||
@@ -109,6 +126,7 @@ export function validateContext(value, { candidate = false } = {}) {
     if (value.events.length === 0 || value.sources.length === 0 || state === "unavailable") addError(errors, "inconsistent", "state")
   } else if (value.heading !== null || value.events.length > 0 || state !== "unavailable" ||
       !(value.state === "withheld" ? reasons.includes("withheld") : reasons.includes("not_recorded") || reasons.includes("review_pending"))) addError(errors, "inconsistent", "state")
+  if (value.state !== "published" && recommendations.length > 0) addError(errors, "inconsistent", "recommendations")
   const sources = new Map()
   for (const [index, source] of value.sources.entries()) {
     if (sources.has(source.session)) addError(errors, "duplicate", `sources.${index}`)
@@ -128,6 +146,15 @@ export function validateContext(value, { candidate = false } = {}) {
       if (sources.get(ref.session) !== ref.source) addError(errors, "source_unmatched", refPath)
       if (!["start", "end"].includes(ref.anchor) !== (ref.range !== null)) addError(errors, "inconsistent", refPath)
     }
+  }
+  const recommendationIds = new Set()
+  for (const [index, recommendation] of recommendations.entries()) {
+    const at = `recommendations.${index}`
+    if (recommendationIds.has(recommendation.id)) addError(errors, "duplicate", `${at}.id`)
+    recommendationIds.add(recommendation.id)
+    if (recommendation.observations.length === 0) addError(errors, "inconsistent", `${at}.observations`)
+    if (new Set(recommendation.observations).size !== recommendation.observations.length) addError(errors, "duplicate", `${at}.observations`)
+    if (recommendation.observations.some((id) => !ids.has(id))) addError(errors, "evidence_unmatched", `${at}.observations`)
   }
   return answer(errors)
 }
