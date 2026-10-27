@@ -69,6 +69,24 @@ references to eight per event; canonical bytes are limited to 128 KiB. Partial
 event lists state their omission count and retain the terminal observation.
 `published`, `withheld` and `unavailable` remain distinct.
 
+Validators also read `desk.factory.context/2`, which adds a closed
+`recommendations` list to the same record. Each of at most eight recommendations
+has a stable ID, one to eight distinct `observations` naming events in that
+record, a `problem`, a proposed `change`, a `hypothesis`, a verification `check`
+and `confidence`. Problem, change and check are limited to 240 characters each;
+the hypothesis is limited to 160. All four sentences are required and follow
+the same public-text rules. The referenced observations retain their original
+session and source evidence; a recommendation does not turn an evidence anchor
+into a measured phase or a causal result.
+
+Recommendations are advice, not a work claim or permission to act. Their bytes
+are part of the exact independently reviewed payload. A proposed change is not
+a shipped change or a demonstrated benefit. Withheld and unavailable records
+have no recommendations; an older context/1 record has no recommendation field,
+which does not mean zero improvement opportunities. This release adds read
+support only: ordinary producers still emit context/1 until store readers have
+been upgraded for context/2.
+
 A source change can mechanically replace old wording with a prose-free
 `unavailable` record while a fresh explanation is reviewed. Its privacy verdict
 is `not_required` with a null reviewer, never a fabricated independent approval.
