@@ -114,7 +114,17 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       routing,
     };
     if (!validMarker(marker)) return "invalid";
-    await outbox.writeMarker(env, marker);
+    // A turn's capture runs detached, so it can land after the session's end is recorded (a session that ends right after a turn,
+    // as every `-p` run does). It must never undo that end: the read and the write share one lock per session, and a capture with
+    // no end keeps the end already recorded. Later activity in a resumed session still reopens it when derived (session-lifetime).
+    await outbox.withNamedLock(env, `marker-${marker.host}-${id}`, async () => {
+      if (!ended) {
+        const file = path.join(await outbox.factoryStateRoot(env), "markers", `${marker.host}-${id}.json`);
+        const recorded = await outbox.readMarker(env, file).catch(() => null);
+        if (recorded?.ended_at) Object.assign(marker, { end_reason: recorded.end_reason, ended_at: recorded.ended_at });
+      }
+      await outbox.writeMarker(env, marker);
+    }, { deskRoot });
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
     const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");
@@ -160,51 +170,68 @@ function sessionEnded(host, payload) {
   return host === "copilot" ? !Object.hasOwn(payload, "stopReason") && Object.hasOwn(payload, "reason") : payload.hook_event_name === "SessionEnd";
 }
 
-async function runBoundedHook(host, input, entry) {
-  if (headless(process.env)) return;
-  const deadline = Date.now() + 1500;
+// How long a turn's end may wait for the delivery check, counted from the hook's own start.
+const DEADLINE_MS = 1500;
+
+// The capture (marker, finalize jobs, loop kick) never changes the hook's answer, and loading Desk's MCP modules for it was almost
+// all of the bounded child's time (about 200 ms of 206 on macOS; Windows is several times slower and ran past the deadline on most
+// turns). So it always runs detached, and at a turn's end the bounded child runs only the delivery check, whose answer the host uses.
+async function runBoundedHook(host, input, entry, { deadlineMs = DEADLINE_MS, stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
+  if (headless(env)) return;
+  const deadline = Date.now() + deadlineMs;
   const payload = await readInput(input);
   if (payload === null || Date.now() >= deadline) return;
+  const capture = startDetached(entry, [host, "--factory-worker", "--detached"], payload, { env });
   if (sessionEnded(host, payload)) {
-    await startDetached(entry, [host, "--factory-worker", "--detached"], payload);
+    await capture;
     return;
   }
-  // A separate process makes the unchanged deadline effective even during synchronous OS calls.
-  await new Promise((resolve) => {
+  // A separate process makes the deadline effective even during synchronous OS calls.
+  const check = new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, host, "--factory-worker"], {
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: process.env,
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env,
     });
-    let output = "", diagnostic = "";
+    let output = "", diagnostic = "", timedOut = false, spawnError = null;
     child.stdout.on("data", chunk => { if (output.length < 16384) output += chunk; });
     child.stderr.on("data", chunk => { if (diagnostic.length < 2048) diagnostic += chunk; });
-    const timer = setTimeout(() => child.kill("SIGKILL"), Math.max(0, deadline - Date.now()));
-    const finish = (code) => {
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.max(0, deadline - Date.now()));
+    let finished = false;
+    const finish = (code, signal) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
-      if (code === 0) {
-        if (diagnostic) process.stderr.write(diagnostic.slice(0, 2048));
+      if (code === 0 && !timedOut) {
+        if (diagnostic) stderr.write(diagnostic.slice(0, 2048));
         try {
           const value = JSON.parse(output);
-          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.includes("[DESK_DELIVERY_CORRECTION]")) process.stdout.write(JSON.stringify(value));
+          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.includes("[DESK_DELIVERY_CORRECTION]")) stdout.write(JSON.stringify(value));
         } catch { /* Accounting produces no stdout when no correction is due. */ }
-      } else process.stderr.write("[desk-delivery] unverified: hook_worker_unavailable\n");
+      } else {
+        const why = timedOut ? "deadline" : spawnError ? `spawn ${spawnError.code ?? "error"}` : signal ? `signal ${signal}` : `exit ${code}`;
+        stderr.write(`[desk-delivery] unverified: hook_worker_unavailable (${why})\n`);
+      }
       resolve();
     };
-    child.once("error", finish);
+    child.once("error", (error) => { spawnError = error; finish(null, null); });
     child.once("close", finish);
     child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify(payload));
   });
+  await Promise.all([capture, check]);
 }
 
 // The command line of the entry file `hooks/factory-end.cjs`, which is the file hosts register and the worker process runs again.
+// `--factory-worker --detached` is the capture, `--factory-worker` alone the bounded delivery check.
 function main(entry, argv = process.argv, stdin = process.stdin) {
-  if (argv[4] === "--detached") limitWorker();
+  const detached = argv[4] === "--detached";
+  if (detached) limitWorker();
   const work = argv[3] === "--factory-worker"
-    ? readInput(stdin, argv[4] === "--detached" ? 5000 : undefined).then(async (payload) => {
-      const [_, delivery] = await Promise.all([
-        runHook({ host: argv[2], payload }),
-        checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" })),
-      ]);
+    ? readInput(stdin, detached ? 5000 : undefined).then(async (payload) => {
+      if (detached) {
+        await runHook({ host: argv[2], payload });
+        return;
+      }
+      const delivery = await checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" }));
       if (delivery.diagnostic) process.stderr.write(`[desk-delivery] unverified: ${delivery.diagnostic}\n`);
       if (delivery.output) process.stdout.write(JSON.stringify(delivery.output));
     })
@@ -213,4 +240,4 @@ function main(entry, argv = process.argv, stdin = process.stdin) {
 }
 
 const checkDelivery = options => require("./delivery-stop.cjs").checkDelivery(options);
-module.exports = { readInput, runHook, launch, main };
+module.exports = { readInput, runHook, runBoundedHook, launch, main };

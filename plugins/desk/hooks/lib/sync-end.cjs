@@ -16,11 +16,9 @@
 // Deliberately much smaller than `factory-end.cjs`: no plugin-metadata scan,
 // no marker file, no derive/finalize job — just resolve this session's desk
 // root and run one local, no-network check against it.
+//
+// Session end runs it from `session-end.cjs`, in the same detached worker as the factory capture.
 
-
-const path = require("node:path");
-const { limitWorker, startDetached } = require("./detach-worker.cjs");
-const ENTRY = path.join(__dirname, "..", "sync-end.cjs");
 const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
 const MAX_INPUT = 1024 * 1024;
 
@@ -88,14 +86,4 @@ async function runHook({ host, payload, env = process.env } = {}) {
   }
 }
 
-// The command line of the entry file `hooks/sync-end.cjs`. The hook itself only reads the payload and hands it to a
-// detached worker (`--worker`), so it exits well inside the host's timeout however slow Git is (see detach-worker.cjs).
-function main(argv = process.argv, stdin = process.stdin) {
-  const host = argv[2];
-  const work = argv[3] === "--worker"
-    ? (limitWorker(), readInput(stdin, 5000).then((payload) => runHook({ host, payload })))
-    : readInput(stdin).then((payload) => payload === null || headless(process.env) ? null : startDetached(ENTRY, [host, "--worker"], payload));
-  work.then(() => process.exit(0), () => process.exit(0));
-}
-
-module.exports = { readInput, runHook, main };
+module.exports = { readInput, runHook };

@@ -49,7 +49,7 @@
       "entry": [
         // Registered in hooks.json and copilot-hooks.json.
         "factory-end.cjs",
-        "sync-end.cjs",
+        "session-end.cjs",
         "claude-session-start.cjs",
         "copilot-session-start.cjs",
         "copilot-boot-prompt.cjs",

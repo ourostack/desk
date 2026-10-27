@@ -486,7 +486,8 @@ async function endHooks(ctx, world) {
   })
   await check(ctx, "hook.session_end.runs", "hooks", async () => {
     const out = await runEvent(world, events.end, world.host === "claude" ? { reason: "exit" } : { reason: "complete" }, ["desk"])
-    assert(Object.keys(out).length >= 2, "expected the factory and sync session-end hooks")
+    // One command per host: session-end.cjs runs the factory capture and the unpushed check in one detached worker.
+    assert(Object.keys(out).length === 1, `expected one Desk session-end hook, got ${Object.keys(out).length}`)
     for (const [key, result] of Object.entries(out)) assertHookOk(result, key)
     metric(ctx, "session_end_hooks_ms", Object.values(out).reduce((sum, r) => sum + r.ms, 0), "ms")
   })
