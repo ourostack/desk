@@ -5,7 +5,7 @@ import { deskPluginRoot, deskVersion } from "../package-metadata.js"
 import {
   acceptContextCandidate, acceptContextPrivacy, listContextWork,
 } from "./context-outbox.js"
-import { CONTEXT_SCHEMA, contextShare, contextSource } from "./context-schema.js"
+import { RECOMMENDATION_SCHEMA, contextShare, contextSource } from "./context-schema.js"
 import {
   factoryStateRoot, readConsent, readStatus, readTaskContextFile,
   taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
@@ -63,8 +63,8 @@ export async function contextEvaluationDue(env, status, now) {
 
 function template(work) {
   return {
-    schema: CONTEXT_SCHEMA, job: work.job, evaluator: work.source.evaluator,
-    state: "unavailable", heading: null, events: [],
+    schema: RECOMMENDATION_SCHEMA, job: work.job, evaluator: work.source.evaluator,
+    state: "unavailable", heading: null, events: [], recommendations: [],
     sources: work.source.sources.map((facts) => contextSource(facts, work.job)),
     coverage: { state: "unavailable", reasons: ["not_recorded"], omitted_events: 0 }, privacy: null,
   }

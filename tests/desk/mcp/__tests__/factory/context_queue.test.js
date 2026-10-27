@@ -1147,6 +1147,25 @@ test("a refreshed publication state disappearing before readback cannot publish 
   assert.deepEqual(plan.ready, [])
 })
 
+test("ordinary stale-record invalidations emit context2 with no public recommendations", async () => {
+  const f = await reviewed()
+  await queue.saveContextSent(f.env, STORE, [f.item], 102)
+  await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
+  await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
+  await queue.prepareTaskContexts(f.env, f.options)
+  const ready = await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries })
+  assert.equal(ready.length, 1)
+  assert.equal(ready[0].invalidation, true)
+  const record = JSON.parse(ready[0].bytes)
+  assert.equal(record.schema, "desk.factory.context/2")
+  assert.deepEqual(record.recommendations, [])
+  assert.equal(record.state, "unavailable")
+  assert.equal(record.heading, null)
+  assert.deepEqual(record.events, [])
+  assert.equal(record.privacy.verdict, "not_required")
+  assert.equal(record.privacy.payload_sha256, contextPayloadHash(record))
+})
+
 for (const code of [null, "context_preparation_deferred", "synthetic_source_failure"]) {
   test(`a stale replacement ${code ?? "succeeding after early discovery defers"} never republishes its earlier wording`, async (t) => {
     const f = await reviewed()

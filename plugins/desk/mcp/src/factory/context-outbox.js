@@ -8,7 +8,7 @@ import {
   serializeTaskContext, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
-  checkContextAgainstFacts, CONTEXT_MAX_BYTES, contextPayloadHash, contextSource, validateContext,
+  checkContextAgainstFacts, CONTEXT_MAX_BYTES, RECOMMENDATION_SCHEMA, contextPayloadHash, contextSource, validateContext,
 } from "./context-schema.js"
 import { isPlainObject, PATTERNS } from "./schema.js"
 import { stableStringify } from "./pipeline/normalize.js"
@@ -421,7 +421,7 @@ async function readyContext(env, store, state, group, verifiedInput) {
   let record = state.record
   if (invalidation) {
     record = {
-      schema: "desk.factory.context/1", job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [],
+      schema: RECOMMENDATION_SCHEMA, job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [], recommendations: [],
       sources: input.sources.map((facts) => contextSource(facts, job)),
       coverage: { state: "unavailable", reasons: [state.phase === "refused" ? "not_recorded" : "review_pending"], omitted_events: 0 },
       privacy: null,
