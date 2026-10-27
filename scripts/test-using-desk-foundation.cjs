@@ -263,11 +263,25 @@ function main() {
   const drain = read(path.join(pluginRoot, "skills", "draining-issues", "SKILL.md"));
   assert.match(drain, /^name: draining-issues$/mu);
   assert.match(drain, /^description: Use when .*draining issues.*issue drain.*prompt requests/mu);
+  assert.match(drain, /^description: .*watching for new issues/mu, "issue-watcher assignments must discover the same drain method");
+  const watching = section(drain, "Watch without idle model turns");
+  for (const phrase of [
+    "deterministic",
+    "no model invocation",
+    "scheduled AI prompt",
+    "durably record",
+    "before waking",
+    "seen markers",
+    "attached",
+    "reboot",
+  ]) {
+    assert.ok(watching.includes(phrase), `issue watching must specify ${phrase}`);
+  }
   // Byte-for-byte bundle of https://github.com/ourostack/ouroboros-skills/blob/main/skills/draining-issues/SKILL.md.
   // Refresh from the canonical library and review its behavior before updating this digest.
   assert.equal(
     crypto.createHash("sha256").update(drain).digest("hex"),
-    "719d741ae94c107a35b5c3254eac48055a0034a0aad1c763c0f3cbc8335577ea",
+    "d8f59da579481c3c22f5ae5b8dc884bd3480e47a2b603bdea199e6b93bbc9aa4",
     "draining-issues must match the reviewed canonical library copy",
   );
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
