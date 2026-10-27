@@ -47,9 +47,12 @@ function shells() {
 }
 const SHELLS = shells()
 
+// Windows keeps these in every process's environment, and PowerShell needs PATHEXT to resolve `node` to node.exe.
+const WINDOWS_SYSTEM = Object.fromEntries(["SystemRoot", "OS", "PATHEXT"].filter((name) => process.env[name]).map((name) => [name, process.env[name]]))
+
 function env(pathValue, extra = {}) {
   const home = mkdtempSync(path.join(ROOT, "home-"))
-  return { PATH: pathValue, HOME: home, USERPROFILE: home, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), ...(process.env.OS ? { OS: process.env.OS } : {}), ...extra }
+  return { PATH: pathValue, HOME: home, USERPROFILE: home, ...WINDOWS_SYSTEM, ...extra }
 }
 
 function run(shell, command, environment) {
