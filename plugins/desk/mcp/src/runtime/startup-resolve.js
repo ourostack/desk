@@ -17,7 +17,8 @@ function hostProjectFolder(env) {
   return readCopilotSession({ env })?.folder ?? (hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined)
 }
 
-export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd } = {}) {
+// The tool server's admission and the boot script both call this, so they cannot bind different desks. `readActivationConfig` lets the boot read the saved binding with its bounded reader.
+export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd, readActivationConfig } = {}) {
   const hostProjectRoot = hostProjectFolder(env)
   return resolveDeskRootWithSource({
     activationConfigPath: resolveStartupActivationConfigPath({ args, env }),
@@ -28,6 +29,7 @@ export function resolveStartupDeskRoot({ args, env = process.env, homeDir, cwd }
     hostProjectRoot,
     hostSessionRoot: args?.hostSessionRoot,
     projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
+    ...(readActivationConfig === undefined ? {} : { readActivationConfig }),
   })
 }
 

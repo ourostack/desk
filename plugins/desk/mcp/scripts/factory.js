@@ -161,7 +161,7 @@ export async function runStatusCommand({ argv, env }) {
 
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
   try {
-    return execFileSync("git", args, { cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
+    return execFileSync("git", args, { windowsHide: true, cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
   } catch (error) {
     const failure = new Error("factory.js validate-pr: Git data could not be read")
     failure.status = typeof error?.status === "number" ? error.status : null

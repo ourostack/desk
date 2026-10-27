@@ -491,6 +491,7 @@ export function cardOpenState(summary, key) {
 const UNCHECKED = {
   login_not_cached: "this crew desk has several people and this session's person is not known without a network call (set DESK_PERSON to read your cards)",
   no_matching_member: "this session's identity matches no member of this crew desk's roster (set DESK_PERSON to read your cards)",
+  several_accounts: "several GitHub accounts signed in to gh are on this crew desk's roster and none was chosen (set DESK_PERSON to read your cards)",
   invalid_member: "the crew roster names an alias that is not a valid folder name",
 }
 

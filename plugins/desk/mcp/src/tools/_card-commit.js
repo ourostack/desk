@@ -50,7 +50,7 @@ const CARD_NAME = /^[a-z_]+--[0-9a-f]{12}\.md$/u
 const SET_ASIDE_NAME = /^[^/]+\.[0-9a-f]{6}$/u
 
 function git(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  return spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
 }
 
 // The files under `folder` that hold unstaged or staged changes or are untracked; null when Git cannot say.

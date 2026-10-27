@@ -11,6 +11,7 @@ import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
 import { unsignedLines } from "../desk/unsigned-deliveries.js"
+import { memberSourceLabel } from "../desk/crew-member.js"
 
 // The AGENTS.md reader lives in its own dependency-free module so the hosted front door can use it too.
 export { AGENTS_MD_CAP_BYTES, readAgentsMd } from "./agents-md.js"
@@ -392,11 +393,15 @@ export function formatBootText(result) {
   const headline = result.status === "degraded" && failing.length > 0 ? `${label}: degraded (${failing.slice(0, 3).join(" and ")}${failing.length > 3 ? ` and ${failing.length - 3} more` : ""})${waitingWords}` : `${label}: ${result.status}${waitingWords}`
   const status = [headline]
   if (result.root?.path) status.push(`desk ${result.root.path}${result.root.source ? ` (bound by ${result.root.source})` : ""}`)
+  // In a Crew workspace: who this session writes as, from the same resolver as desk_status's write_scope.
+  if (typeof result.person?.alias === "string") status.push(`person ${result.person.alias}, writes to ${result.person.write_path} (${memberSourceLabel(result.person)})`)
+  else if (result.person) status.push("team workspace read-only: no person")
   if (result.host) status.push(`host ${result.host.hostname ?? "unknown"} / ${result.host.user ?? "unknown"} / ${result.host.agent ?? "unknown"}`)
   // The headline already says a failed sync; the sync words follow only for a sync that did not fail (it worked, or there was nothing to sync).
   if (sync !== null && !syncFailed) status.push(sync)
   const lines = [status.join(" | ")]
   if (waiting) lines.push(`Needs you first: ${result.needs_operator.question}`)
+  if (typeof result.person?.problem === "string") lines.push(result.person.problem)
   if (typeof result.stale_desk?.line === "string") lines.push(result.stale_desk.line)
   if (typeof result.release_alert?.line === "string") lines.push(result.release_alert.line)
   if (typeof result.desk_problems?.line === "string") lines.push(result.desk_problems.line)

@@ -65,7 +65,7 @@ function gitEnv() {
 // round), so `timeoutMs` has no default of its own left to fall back to.
 function run(spawnGit, root, args, timeoutMs) {
   if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
-  return spawnGit("git", ["-C", root, ...args], {
+  return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
     env: gitEnv(),

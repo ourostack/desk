@@ -1454,3 +1454,12 @@ test("a tidy report really writes the hook into the desk's hooks folder", () => 
   assert.equal(report.code, 0)
   assert.match(readFileSync(path.join(root, ".git", "hooks", "pre-commit"), "utf8"), /desk-card-commit-guard/u)
 })
+
+test("several signed-in roster accounts: the cached gh login picks among them, and an account outside them is no person", () => {
+  const root = crewDesk()
+  const gh = tempDir()
+  write(gh, "hosts.yml", "github.com:\n    users:\n        alice-login:\n        Bob-Login:\n    user: alice-login\n")
+  const env = { GH_CONFIG_DIR: gh, XDG_STATE_HOME: tempDir() }
+  assert.equal(resolvePerson(root, { env, homeDir: tempDir(), spawnGh: () => ({ status: 0, stdout: "bob-login\n" }), now: NOW }), "bob")
+  assert.equal(resolvePerson(root, { env: { ...env, XDG_STATE_HOME: tempDir() }, homeDir: tempDir(), spawnGh: () => ({ status: 0, stdout: "orphan\n" }), now: NOW }), null)
+})

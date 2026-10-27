@@ -213,14 +213,14 @@ async function moveInto({ root, from, to, spawnGit }) {
   const relFrom = relPath(root, from)
   const relTo = relPath(root, to)
 
-  const addResult = spawnGit("git", ["-C", root, "add", "-A", "--", relFrom], {
+  const addResult = spawnGit("git", ["-C", root, "add", "-A", "--", relFrom], { windowsHide: true,
     encoding: "utf8",
   })
   if (addResult.status !== 0) {
     throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging ${shownPath(relFrom)}: ${addResult.stderr}`))
   }
 
-  const mvResult = spawnGit("git", ["-C", root, "mv", relFrom, relTo], {
+  const mvResult = spawnGit("git", ["-C", root, "mv", relFrom, relTo], { windowsHide: true,
     encoding: "utf8",
   })
   if (mvResult.status !== 0) {

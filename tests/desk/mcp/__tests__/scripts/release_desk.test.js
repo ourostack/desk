@@ -669,7 +669,7 @@ test("pull request CI dry-runs auto, RC and stable through the full shared helpe
     assert.deepEqual(result.stdout.trim().split("\n"), ["--dry-run", "--stage", stage])
   }
   assert.deepEqual(tests.jobs["ci-gate"].needs, [
-    "blackbox", "browser", "desk-mcp-coverage-shards",
+    "blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards",
     "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
     "desk-native-windows", "unused-code",
   ])

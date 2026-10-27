@@ -65,6 +65,7 @@ import { fileURLToPath } from "node:url"
 import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, readCrewRoster } from "./crew-roster.js"
+import { localMember } from "./crew-member.js"
 import { hasUnstagedWork } from "../util/git-stage.js"
 import { installCardGuard } from "./card-commit-guard.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
@@ -130,7 +131,7 @@ function tidied(record) {
 
 function run(spawn, command, args) {
   try {
-    return spawn(command, args, { encoding: "utf8", timeout: IDENTITY_TIMEOUT_MS })
+    return spawn(command, args, { windowsHide: true, encoding: "utf8", timeout: IDENTITY_TIMEOUT_MS })
   } catch {
     return { status: 1, stdout: "" }
   }
@@ -243,11 +244,14 @@ export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.hom
   if (root === null) return null
   const rows = (roster === undefined ? readCrewRoster(root) : roster)?.filter((row) => row.alias !== "")
   if (rows === undefined || rows.length === 0) return null
-  const identity = hasText(env.DESK_IDENTITY)
-    ? env.DESK_IDENTITY.trim()
-    : ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground })
+  // The Desk tools' own resolver first (crew-member.js): DESK_IDENTITY, then the logins signed in to gh. Only when gh lists
+  // none, or several signed-in accounts are on the roster, does the cached `gh api user` login decide, as before.
+  const member = localMember({ deskRoot: root, env, homeDir, workspace: { crew: true, roster: rows } })
+  if (member.pending === undefined) return member.person
+  const identity = ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground })
   if (identity === undefined || identity === null) return identity
-  const row = rows.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
+  const pool = member.pending === "choose" ? member.candidates : rows
+  const row = pool.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
   return row === undefined ? null : row.alias
 }
 

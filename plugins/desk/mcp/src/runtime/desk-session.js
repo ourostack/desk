@@ -289,6 +289,7 @@ export function createDeskSession(deps) {
     forgetSearch()
     context.authority = null
     context.person = null
+    context.member = null
     context.authorityAdmitted = false
   }
 
@@ -373,6 +374,7 @@ export function createDeskSession(deps) {
       root: value.root.root,
       activation: value.activation,
       person: args.person ?? null,
+      member: value.member ?? null,
     })
     const key = ownershipKey(inputs)
     const unchanged = !context.resolutionFailed && resolvedOwnershipKey === key
@@ -398,9 +400,10 @@ export function createDeskSession(deps) {
     }
     const activation = inputs.activation
     const policyKey = JSON.stringify(activation.readinessPolicy)
-    if (context.policyKey !== policyKey || context.personInput !== (args.person ?? null)) forgetAuthority()
+    const personInput = JSON.stringify({ person: args.person ?? null, member: inputs.member ?? null })
+    if (context.policyKey !== policyKey || context.personInput !== personInput) forgetAuthority()
     context.policyKey = policyKey
-    context.personInput = args.person ?? null
+    context.personInput = personInput
     context.activation = activation.activationStatus
     context.stateBranchName = activation.stateBranch
     resolvedInputs = inputs
@@ -461,9 +464,13 @@ export function createDeskSession(deps) {
 
     setPhase("admitting_authority")
     if (!context.authorityAdmitted) {
-      const refused = await admitAuthority(policy)
+      const refused = await admitAuthority(policy, inputs.member ?? null)
       if (disposed) return null
-      if (refused) return { ...refused, repair: repairs.at(-1) }
+      if (refused) {
+        // A Crew workspace session with no member still reads, so its search starts.
+        if (refused.code === MEMBER_UNKNOWN && !context.search) startSearch(deskRoot, policy)
+        return { ...refused, repair: repairs.at(-1) }
+      }
     }
     const searchProblem = context.search ? null : startSearch(deskRoot, policy)
 
@@ -478,8 +485,16 @@ export function createDeskSession(deps) {
   }
 
   // Write authority. Resolves with a degraded outcome when it is refused, else null. Tests replace the check through the runtime's `verifyAuthority`.
-  async function admitAuthority(policy) {
+  async function admitAuthority(policy, member) {
     setPhase("verifying_authority")
+    // In a Crew workspace with no authority provider, the person is the session's member (crew-member.js), under either policy.
+    // The last settled member stays reported while a recheck settles again.
+    if (policy.authority_provider === null && member?.crew === true) {
+      context.member ??= member
+      return admitMember(policy, member)
+    }
+    // Only a person that came from the member resolution is reported as such (desk_status's write_scope.source).
+    context.member = null
     const verify = context.runtimeServer.verifyAuthority ?? verifyAdmissionAuthority
     const authorityProvider = policy.authority_provider === null ? null : authorityProviders[policy.authority_provider]
     try {
@@ -492,6 +507,34 @@ export function createDeskSession(deps) {
     } catch (error) {
       return admissionOutcome(error)
     }
+  }
+
+  // The member's own desk becomes the write prefix; no member leaves the session read-only with one plain message.
+  async function admitMember(policy, local) {
+    let member
+    let message
+    try {
+      // Loaded here, not at the top: index.js imports this module, and everything it loads before the handshake must stay loadable on an old Node.
+      const { memberMessage, settleMember } = await import("../desk/crew-member.js")
+      // Tests replace the GitHub question through the runtime, as they do `verifyAuthority`.
+      const settle = context.runtimeServer.settleMember ?? settleMember
+      member = await settle(local, { deskRoot: context.root.root, env })
+      message = memberMessage(member)
+    } catch (error) {
+      return exceptionOutcome(error)
+    }
+    if (disposed) return null
+    context.member = member
+    if (member.person === null) return memberUnknownOutcome(member, message)
+    const authority = Object.freeze({ mode: "person", person: member.person })
+    try {
+      context.person = validateAdmissionAuthority({ authority, policy: { ...policy, write_authority: "person" } })
+    } catch (error) {
+      return admissionOutcome(error)
+    }
+    context.authority = authority
+    context.authorityAdmitted = true
+    return null
   }
 
   // The session's search engine, in this process. A failure never takes reads or writes away: searches read the files directly, and the next attempt starts it again.
@@ -720,6 +763,7 @@ export function createDeskSession(deps) {
       root: context.root,
       activation: context.activation,
       runtime: context.runtime,
+      member: context.member ?? null,
       focus,
       search,
     }
@@ -1272,6 +1316,19 @@ function admissionOutcome(error) {
     }
   }
   return exceptionOutcome(error)
+}
+
+const MEMBER_UNKNOWN = "crew_member_unknown"
+
+// A Crew workspace session whose person is not known: reads work, writes are refused, and `fix` is the one plain message.
+function memberUnknownOutcome(member, message) {
+  return {
+    state: "degraded",
+    code: MEMBER_UNKNOWN,
+    summary: `${message} Reads are available; writes are refused.`,
+    fix: message,
+    diagnostic: { mode: "degraded", member: { problem: member.problem, logins: member.logins } },
+  }
 }
 
 function searchUnavailableOutcome(error) {

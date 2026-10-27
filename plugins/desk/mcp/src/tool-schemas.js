@@ -272,7 +272,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
         required: ["path", "content"],
         additionalProperties: false,
       },
-      description: "For a client with no filesystem: files to write and then commit along with `paths`. Each path must be relative, stay inside the desk (and the --person write prefix), and not be in .git, .state/ or .github/workflows/, a task card, a symbolic link or a Git pattern; any refused entry refuses the whole call before anything is written. Not allowed with `tidy: true`. Required unless `paths` is given.",
+      description: "For a client with no filesystem: files to write and then commit along with `paths`. Each path must be relative, stay inside the desk (and this session's write prefix), and not be in .git, .state/ or .github/workflows/, a task card, a symbolic link or a Git pattern; any refused entry refuses the whole call before anything is written. Not allowed with `tidy: true`. Required unless `paths` is given.",
     },
     message: text("The commit message."),
     tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards (already staged by task_move, track_rename or git mv) with the old and new path of every move, plus _meta/organization.json. Task cards are accepted only as moves or deletes. Leaves other staged work staged and ends the message with the Desk-Tidy: true trailer."),

@@ -130,3 +130,22 @@ export function crewWorkspace(deskRoot) {
   if (roster !== null && roster.some((row) => row.alias !== "")) return { crew: true, roster }
   return desks ? { crew: true, roster: [] } : { crew: false, roster: null }
 }
+
+function isFile(file) {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether the desk at `deskRoot` is a real Crew workspace: it holds `_meta/crew.json` (every workspace `crew:start-crew`
+ * makes), or a roster with a named row (workspaces made before `crew.json` existed). Only these get member scoping and
+ * outrank a saved binding as a start folder. A personal desk with a track folder named `desks` is neither.
+ */
+export function isCrewWorkspace(deskRoot) {
+  if (typeof deskRoot !== "string" || deskRoot === "") return false
+  if (isFile(path.join(deskRoot, "_meta", "crew.json"))) return true
+  return readCrewRoster(deskRoot)?.some((row) => row.alias !== "") === true
+}

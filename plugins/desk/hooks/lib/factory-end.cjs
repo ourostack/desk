@@ -163,6 +163,9 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     const at = !claude && Number.isSafeInteger(payload.timestamp) && payload.timestamp >= 0 ? new Date(payload.timestamp).toISOString() : new Date().toISOString();
     const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;
     let routing = resolveStore({ deskRoot, pluginDirs: dirs, read: (file) => readSmallText(file) });
+    const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");
+    let person;
+    try { person = await improvementPerson({ deskRoot, env }); } catch { /* no positive person */ }
     if (incomplete && routing.source !== "desk") routing = { store: null, source: "invalid_declaration", warnings: routing.warnings };
     const marker = {
       schema_version: 1, host: claude ? "claude-code" : codex ? "codex-cli" : "copilot-cli", session_id: id,
@@ -170,7 +173,9 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       end_reason: ended ? ENUMS.endReason.includes(payload.reason) ? payload.reason : "other" : null,
       ended_at: ended ? at : null, plugins, updated_at: new Date().toISOString(),
       entrypoint: claude || codex ? "unknown" : path.resolve(pluginRoot).startsWith(agency) ? "launcher" : "cli",
-      person_prefix: env.DESK_PERSON ? `desks/${env.DESK_PERSON.trim()}` : "",
+      // DESK_PERSON as given (a value that is not an alias makes the marker invalid), else the person the tool server writes
+      // as (improvement-person.js uses its resolver), so derive reads this member's cards.
+      person_prefix: env.DESK_PERSON ? `desks/${env.DESK_PERSON.trim()}` : person?.status === "ok" && /^(?:desks\/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$/u.test(person.personPrefix) ? person.personPrefix : "",
       routing,
     };
     if (!validMarker(marker)) return "invalid";
@@ -199,9 +204,6 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     }, { deskRoot }));
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
-    const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");
-    let person;
-    try { person = await improvementPerson({ deskRoot, env }); } catch { /* no positive person */ }
     const scope = person?.status === "ok" ? { deskRoot, personPrefix: person.personPrefix } : null;
     const workerEnv = { ...env };
     if (scope === null) delete workerEnv.DESK_FACTORY_LOOP_SCOPE;

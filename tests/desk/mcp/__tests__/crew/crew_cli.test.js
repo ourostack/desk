@@ -43,7 +43,7 @@ test("main hands each action its options and exits by the result's state", async
     startWorkspace: async (args) => (calls.push(["start", args]), { state: "plan" }),
   }
   assert.deepEqual(await run(["status"], engine), { code: 0, result: { state: "not_crew" } })
-  assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined }])
+  assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined, session: true }])
   assert.equal((await run(["join", "--repo", "/r", "--identity", "me", "--alias", "me", "--apply"], engine)).code, 1)
   assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", apply: true }])
   await run(["start", "--founder", "test-founder=placeholder_id", "--tooling-repo", "acme/tools", "--tooling-path", "plugins/t", "--tooling-plugin", "t", "--tooling-ref", "dev", "--tooling-marketplace", "acme"], engine)

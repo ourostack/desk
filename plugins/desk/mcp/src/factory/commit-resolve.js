@@ -45,7 +45,7 @@ const isDirectory = (value) => typeof value === "string" && path.isAbsolute(valu
 export function createCommitResolver({ git = "git", timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const run = (root, args, input) => {
     try {
-      return execFileSync(git, ["-C", root, ...args], {
+      return execFileSync(git, ["-C", root, ...args], { windowsHide: true,
         encoding: "utf8",
         env: gitEnv(),
         timeout: timeoutMs,

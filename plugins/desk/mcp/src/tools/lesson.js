@@ -84,7 +84,7 @@ function notLoaded(who, prefix) {
 async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, schedulePush, search, personOf, lockWaitMs }) {
   const alias = typeof person === "string" ? person.trim() : ""
   if (alias === "" && crewWorkspace(deskRoot).crew) {
-    throw new Error("lesson_add: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; start Desk with --person <alias>, or use scope team")
+    throw new Error("lesson_add: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; call desk_status to see why there is no person, or use scope team")
   }
   const file = await resolveWriteTarget({ deskRoot, person, segments: ["AGENTS.md"] })
   const where = deskRelativePath(deskRoot, file)

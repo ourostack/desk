@@ -303,7 +303,7 @@ function readDesksRegistryNames(deskRoot) {
 function readGitUserName(deskRoot, spawnGitConfig) {
   let result
   try {
-    result = spawnGitConfig("git", ["-C", deskRoot, "config", "user.name"], {
+    result = spawnGitConfig("git", ["-C", deskRoot, "config", "user.name"], { windowsHide: true,
       encoding: "utf8",
     })
   } catch {

@@ -267,7 +267,7 @@ export function runChild({ spawn, cmd, args, opts, timeoutMs, maxBytes, graceMs 
   return new Promise((resolve) => {
     let child
     try {
-      child = spawn(cmd, args, opts)
+      child = spawn(cmd, args, { windowsHide: true, ...opts })
     } catch (error) {
       resolve({ kind: "error", code: error?.code })
       return

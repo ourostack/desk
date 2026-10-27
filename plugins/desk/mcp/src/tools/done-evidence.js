@@ -67,7 +67,7 @@ function describeRepos(repos) {
 }
 
 function git(spawnGit, dir, args) {
-  const result = spawnGit("git", ["-C", dir, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const result = spawnGit("git", ["-C", dir, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
 }
 

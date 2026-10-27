@@ -23,12 +23,12 @@ async function present(file) {
   }
 }
 function readGit(root, args, spawnGit, input) {
-  const answer = spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: 10000, ...(input === undefined ? {} : { input }) })
+  const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: 10000, ...(input === undefined ? {} : { input }) })
   if (answer.status !== 0) throw new Error(`task_archive: Git precondition unavailable (${args[0]}): ${answer.stderr || answer.error?.code || answer.status}`)
   return answer.stdout
 }
 function gitBoolean(root, name, spawnGit) {
-  const answer = spawnGit("git", ["-C", root, "config", "--bool", "--get", name], { encoding: "utf8", timeout: 10000 })
+  const answer = spawnGit("git", ["-C", root, "config", "--bool", "--get", name], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (answer.status === 1) return true
   if (answer.status !== 0 || !["true", "false"].includes(answer.stdout.trim()))
     throw new Error(`task_archive: Git ${name} could not be qualified`)
@@ -43,7 +43,7 @@ async function gitContext(root, spawnGit) {
   }
   if (!marker) return null
   const top = readGit(root, ["rev-parse", "--show-toplevel"], spawnGit).trim()
-  const head = spawnGit("git", ["-C", top, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8", timeout: 10000 })
+  const head = spawnGit("git", ["-C", top, "rev-parse", "--verify", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (head.status !== 0 && head.status !== 1) throw new Error("task_archive: HEAD could not be qualified; nothing was moved")
   return { root: top, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null,
     fileMode: gitBoolean(top, "core.filemode", spawnGit), symlinks: gitBoolean(top, "core.symlinks", spawnGit), spawnGit }
@@ -131,7 +131,7 @@ function publishExpected(git, paths, expected, message) {
   if (metadata.length) {
     const input = metadata.map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}\0`).join("")
     const updated = git.spawnGit("git", ["-C", git.root, "update-index", "-z", "--index-info"],
-      { encoding: "utf8", timeout: 10000, input })
+      { windowsHide: true, encoding: "utf8", timeout: 10000, input })
     if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed" }
     entries = indexEntries(git.root, paths, git.spawnGit)
   }
@@ -362,7 +362,7 @@ export async function prepareArchivedCardPublication({ effectiveRoot, file, befo
 }
 
 function headSha(git) {
-  const answer = git.spawnGit("git", ["-C", git.root, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8", timeout: 10000 })
+  const answer = git.spawnGit("git", ["-C", git.root, "rev-parse", "--verify", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (answer.status === 1) return null
   if (answer.status !== 0) throw new Error("task_archive: current HEAD could not be qualified")
   return answer.stdout.trim()

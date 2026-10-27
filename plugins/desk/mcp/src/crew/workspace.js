@@ -21,12 +21,15 @@
 // a clone of a GitHub repository it signs in as the signed-in gh account that can push to it (never simply the active
 // one), and reaches https://github.com/<owner>/<name> with that account's token, whatever remote spelling the clone uses.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { CREW_ROSTER_FILE, crewWorkspace, markdownTables } from "../desk/crew-roster.js"
 import { CREW_CONFIG_FILE, parseCrewConfig, readCrewConfig } from "../desk/crew-config.js"
 import { ghRunner, signedInAccounts } from "../factory/flush.js"
+import { memberMessage, memberSourceLabel, resolveMember } from "../desk/crew-member.js"
+import { resolveActivationConfigPath, resolveDeskRootWithSource } from "../util/paths.js"
 
 const GIT_TIMEOUT_MS = 120_000
 const MERGE_TRIES = 3
@@ -96,7 +99,7 @@ function gitIn(cwd, spawnGit) {
   const run = (args, { network = false } = {}) => {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" }
     if (network && link.token !== undefined) env.GH_TOKEN = link.token
-    const result = spawnGit("git", [...(network ? link.config : []), "-C", cwd, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, env })
+    const result = spawnGit("git", [...(network ? link.config : []), "-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, env })
     return { ok: result.status === 0, stdout: String(result.stdout ?? "").trim(), stderr: String(result.stderr ?? "").trim() }
   }
   run.must = (args, stage, why = "", options) => {
@@ -215,7 +218,7 @@ const deskOf = (alias) => `desks/${alias}`
  * team's tooling with its install commands, roster aliases, whether the desk template exists, and, given `identity`,
  * the member it names (`{ alias, desk }`) or null.
  */
-export async function crewStatus({ repo, identity, spawnGit = spawnSync }) {
+export async function crewStatus({ repo, identity, spawnGit = spawnSync, session = false, env = process.env, memberFn = resolveMember }) {
   const top = toplevel(repo, spawnGit)
   if (top === null) return { state: "not_git", repo, message: notGit(repo) }
   const workspace = crewWorkspace(top)
@@ -234,6 +237,7 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync }) {
     about = row === undefined ? ` ${identity.trim()} has no roster row yet; join with crew:join-crew.` : ` ${row.identity} is on the roster as ${row.alias}.`
   }
   const desks = aliases.length === 0 ? "no desks yet" : `${plural(aliases.length, "desk")} (${aliases.join(", ")})`
+  const binding = session ? await sessionIn(top, { identity, member, env, memberFn }) : undefined
   return {
     state: "crew",
     repo: top,
@@ -244,10 +248,50 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync }) {
     roster: aliases,
     template: listFiles(path.join(top, ...TEMPLATE.split("/"))).length > 0,
     member,
+    ...(binding === undefined ? {} : { session: binding }),
     problems: config.problems,
-    message: `This is a Crew workspace with ${desks}.${about}`,
+    message: `This is a Crew workspace with ${desks}.${about}${binding === undefined ? "" : ` ${binding.message}`}`,
   }
 }
+
+/**
+ * What a Desk session started in the clone at `top` binds, from Desk's own resolvers with the real environment: the root
+ * the host would bind with this clone as its project folder (`util/paths.js`), and the person it writes as
+ * (`desk/crew-member.js`, which may ask GitHub when several signed-in accounts are on the roster). `ready` is true when
+ * the root is this clone and the person is `identity`'s roster alias (any person when no identity is given): the
+ * member's next session is set up. This is the activation check a join can run in the same session.
+ */
+async function sessionIn(top, { identity, member, env, memberFn }) {
+  let bound
+  let here = false
+  try {
+    bound = resolveDeskRootWithSource({ env, activationConfigPath: resolveActivationConfigPath({ env }), hostProjectRoot: top, cwd: top, homeDir: env.HOME || os.homedir() })
+    // The resolver returns only a folder that exists, so both resolve to their real paths.
+    here = realpathSync(bound.root) === realpathSync(top)
+  } catch {
+    bound = { root: null, source: null }
+  }
+  const found = here ? await memberFn({ deskRoot: top, env }) : null
+  const person = found?.person ?? null
+  const expected = identity === undefined || identity === null || String(identity).trim() === "" ? undefined : member?.alias ?? null
+  const ready = here && person !== null && (expected === undefined || person === expected)
+  let message
+  if (!here) message = `A Desk session started in this clone would bind ${bound.root ?? "no desk"} (${bound.source ?? "nothing found"}), not this clone.`
+  else if (person === null) message = memberMessage(found)
+  else if (!ready) message = `A Desk session started in this clone writes as ${person} (${memberSourceLabel(found)}), not as ${expected ?? `${identity}, who has no roster row`}.`
+  else message = `A Desk session started in this clone binds it and writes to desks/${person}/ (${memberSourceLabel(found)}).`
+  return {
+    ready,
+    root: bound.root,
+    root_source: bound.source,
+    person,
+    person_source: found?.source ?? null,
+    identity: found?.identity ?? null,
+    write_path: person === null ? null : `desks/${person}`,
+    message,
+  }
+}
+
 
 // ── Content Crew adds ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -949,7 +993,7 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
   if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
-  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} Desk sessions in this clone find that desk from the roster.` })
+  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
   if (status.member !== null) return memberResult(status.member)
   const problem = aliasProblem(alias)
   if (problem !== null) return refuse(problem)
@@ -1033,7 +1077,7 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
       return memberResult(settled, unused)
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
-    const next = `Desk sessions in this clone find that desk from the roster.${toolingNote}`
+    const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
     const missing = [
