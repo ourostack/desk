@@ -65,7 +65,7 @@ test("the roster match uses the signed-in logins with no network call, DESK_IDEN
   assert.equal(localMember({ deskRoot: root, env: { DESK_IDENTITY: "bob_microsoft" }, readLogins: logins("ari_microsoft") }).person, "bob")
   const nobody = localMember({ deskRoot: root, env: { DESK_IDENTITY: "nobody" }, readLogins: logins("ari_microsoft") })
   assert.equal(nobody.problem, "not_on_roster")
-  assert.match(memberMessage(nobody), /^This session's GitHub account \(nobody\) is not on this team workspace's roster, so Desk keeps this team workspace read-only in this session\. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with \(gh auth login\); then call desk_status, which checks again\.$/u)
+  assert.match(memberMessage(nobody), /^This session's GitHub account \(nobody\) is not on this team workspace's desk list, so Desk keeps this team workspace read-only in this session\. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with \(gh auth login\); then call desk_status, which checks again\.$/u)
   // A row with no identity never matches, and a broken login reader counts as no login.
   assert.equal(localMember({ deskRoot: root, env: {}, readLogins: logins("") }).pending, "whoami")
   assert.equal(localMember({ deskRoot: root, env: {}, readLogins: () => { throw new Error("unreadable") } }).pending, "whoami")
@@ -77,14 +77,14 @@ test("a real gh hosts.yml is read from GH_CONFIG_DIR", async () => {
   await fs.writeFile(path.join(config, "hosts.yml"), "github.com:\n    users:\n        bob_microsoft:\n    user: bob_microsoft\n")
   const member = localMember({ deskRoot: root, env: { GH_CONFIG_DIR: config } })
   assert.equal(member.person, "bob")
-  assert.equal(memberSourceLabel(member), "crew roster, GitHub account bob_microsoft")
+  assert.equal(memberSourceLabel(member), "desk list, GitHub account bob_microsoft")
 })
 
 test("an alias that is not a folder name is a problem, not a person", async () => {
   const root = await crewClone({ roster: "| alias | identity |\n|---|---|\n| a..b | ari_microsoft |\n" })
   const member = localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft") })
   assert.equal(member.problem, "invalid_alias")
-  assert.match(memberMessage(member), /ari_microsoft is on this team workspace's roster with an alias that is not a valid folder name/u)
+  assert.match(memberMessage(member), /ari_microsoft is on this team workspace's desk list with an alias that is not a valid folder name/u)
 })
 
 test("several roster accounts signed in: GitHub says which one can push, once per process", async () => {
@@ -114,7 +114,7 @@ test("several roster accounts and no answer: a problem with one message, asked a
   const settled = await settleMember(local, { deskRoot: root, gh: offline, now: () => clock })
   assert.equal(settled.person, null)
   assert.equal(settled.problem, "several_accounts")
-  assert.match(memberMessage(settled), /^Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster \(ari_microsoft, bob_microsoft\) is yours/u)
+  assert.match(memberMessage(settled), /^Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's desk list \(ari_microsoft, bob_microsoft\) is yours/u)
   const asked = offline.calls.length
   await settleMember(local, { deskRoot: root, gh: offline, now: () => clock })
   assert.equal(offline.calls.length, asked, "a failed answer is kept for a minute")
@@ -216,7 +216,7 @@ test("the active account is not on the roster: one other roster account is the m
   const refused = localMember({ deskRoot: root, env: { GH_CONFIG_DIR: two } })
   assert.deepEqual({ person: refused.person, problem: refused.problem, pending: refused.pending }, { person: null, problem: "several_accounts", pending: undefined })
   assert.equal(await settleMember(refused, { deskRoot: root, gh: () => assert.fail("no GitHub call") }), refused)
-  assert.equal(memberMessage(refused), "Several GitHub accounts signed in to gh are on this team workspace's roster (ari_microsoft, bob_microsoft), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, so Desk keeps this team workspace read-only in this session. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; then call desk_status, which checks again.")
+  assert.equal(memberMessage(refused), "Several GitHub accounts signed in to gh are on this team workspace's desk list (ari_microsoft, bob_microsoft), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, so Desk keeps this team workspace read-only in this session. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; then call desk_status, which checks again.")
 })
 
 test("two roster accounts signed in and GitHub unreachable: the refusal leads with the network, not with switching accounts", async () => {
@@ -229,7 +229,7 @@ test("two roster accounts signed in and GitHub unreachable: the refusal leads wi
   })
   const settled = await settleMember(local, { deskRoot: root, gh: offline })
   assert.deepEqual({ person: settled.person, problem: settled.problem, unreachable: settled.unreachable }, { person: null, problem: "several_accounts", unreachable: true })
-  assert.equal(memberMessage(settled), "Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster (ari_microsoft, bob_microsoft) is yours, so Desk keeps this team workspace read-only in this session. To write to your own desk, check that GitHub can be reached; then call desk_status, which checks again. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).")
+  assert.equal(memberMessage(settled), "Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's desk list (ari_microsoft, bob_microsoft) is yours, so Desk keeps this team workspace read-only in this session. To write to your own desk, check that GitHub can be reached; then call desk_status, which checks again. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).")
   // GitHub answered and neither account can push: the account-choice message, as before.
   forgetMemberAnswers()
   const neither = fakeGh({
@@ -240,7 +240,7 @@ test("two roster accounts signed in and GitHub unreachable: the refusal leads wi
   })
   const answered = await settleMember(local, { deskRoot: root, gh: neither })
   assert.equal(answered.unreachable, undefined)
-  assert.match(memberMessage(answered), /^Several GitHub accounts signed in to gh are on this team workspace's roster/u)
+  assert.match(memberMessage(answered), /^Several GitHub accounts signed in to gh are on this team workspace's desk list/u)
 })
 
 test("one GitHub account on two roster rows is refused, not bound to the first row", async () => {
@@ -250,7 +250,7 @@ test("one GitHub account on two roster rows is refused, not bound to the first r
     localMember({ deskRoot: root, env: { DESK_IDENTITY: "ari_microsoft" } }),
   ]) {
     assert.deepEqual({ person: member.person, problem: member.problem, aliases: member.aliases }, { person: null, problem: "several_rows", aliases: ["ari", "arimendelow"] })
-    assert.equal(memberMessage(member), "This session's GitHub account ari_microsoft is on more than one row of this team workspace's roster (ari, arimendelow), so Desk keeps this team workspace read-only in this session. Ask the team to remove the extra row from _meta/desks.md through a pull request; then call desk_status, which checks again.")
+    assert.equal(memberMessage(member), "This session's GitHub account ari_microsoft is on more than one row of this team workspace's desk list (ari, arimendelow), so Desk keeps this team workspace read-only in this session. Ask the team to remove the extra row from _meta/desks.md through a pull request; then call desk_status, which checks again.")
   }
   forgetMemberAnswers()
   const asked = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({ "api user --jq .login": { code: 0, stdout: "ari_microsoft\n" } }), readLogins: logins() })

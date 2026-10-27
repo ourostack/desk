@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
-import { CREW_CONFIG_FILE, parseCrewConfig, readCrewConfig } from "../../../../../plugins/desk/mcp/src/desk/crew-config.js"
+import { CREW_CONFIG_FILE, DEFAULT_PEOPLE, parseCrewConfig, readCrewConfig } from "../../../../../plugins/desk/mcp/src/desk/crew-config.js"
 
 test("no declaration: a monorepo, nothing declared", () => {
   const config = parseCrewConfig(null)
@@ -107,4 +107,19 @@ test("readCrewConfig reads the file at the root, and a missing or unreadable one
   const odd = await mkTempRoot("crew-config-dir-")
   await fs.mkdir(path.join(odd, CREW_CONFIG_FILE), { recursive: true })
   assert.equal(readCrewConfig(odd).declared, false)
+})
+
+test("people names the team's roster: a Markdown file in the repository, by default _shared/landscape/roster.md", () => {
+  assert.equal(DEFAULT_PEOPLE, "_shared/landscape/roster.md")
+  assert.equal(parseCrewConfig(null).people, DEFAULT_PEOPLE)
+  assert.equal(parseCrewConfig("{}").people, DEFAULT_PEOPLE)
+  assert.equal(parseCrewConfig("[]").people, DEFAULT_PEOPLE)
+  const named = parseCrewConfig(JSON.stringify({ people: "./team\\roster.md" }))
+  assert.equal(named.people, "team/roster.md")
+  assert.deepEqual(named.problems, [])
+  for (const raw of ["../roster.md", "team/roster.txt", "_meta/people.md", "desks/pat/roster.md", "Agents.md", "", 5]) {
+    const config = parseCrewConfig(JSON.stringify({ people: raw }))
+    assert.equal(config.people, DEFAULT_PEOPLE, String(raw))
+    assert.deepEqual(config.problems, [`people: ${JSON.stringify(raw)} is not a Markdown file inside this repository outside _meta/, desks/ and AGENTS.md`])
+  }
 })

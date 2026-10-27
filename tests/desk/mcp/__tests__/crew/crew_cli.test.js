@@ -41,19 +41,26 @@ test("main hands each action its options and exits by the result's state", async
     crewStatus: async (args) => (calls.push(["status", args]), { state: "not_crew" }),
     joinWorkspace: async (args) => (calls.push(["join", args]), { state: "refused" }),
     startWorkspace: async (args) => (calls.push(["start", args]), { state: "plan" }),
+    updateRoster: async (args) => (calls.push(["roster", args]), { state: "updated" }),
   }
   assert.deepEqual(await run(["status"], engine), { code: 0, result: { state: "not_crew" } })
   assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined, session: true }])
   assert.equal((await run(["join", "--repo", "/r", "--identity", "me", "--alias", "me", "--apply"], engine)).code, 1)
-  assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", apply: true }])
+  assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", about: undefined, preferences: undefined, apply: true }])
+  await run(["join", "--identity", "me", "--alias", "me", "--about", "/tmp/about.md", "--preferences", "/tmp/prefs.md"], engine)
+  assert.deepEqual(calls.pop(), ["join", { repo: "/work/team", identity: "me", alias: "me", about: "/tmp/about.md", preferences: "/tmp/prefs.md", apply: false }])
+  assert.deepEqual(await run(["roster", "--identity", "me", "--apply"], engine), { code: 0, result: { state: "updated" } })
+  assert.deepEqual(calls.pop(), ["roster", { repo: "/work/team", identity: "me", apply: true }])
+  assert.equal((await run(["roster", "--alias", "me"], engine)).code, 2)
   await run(["start", "--founder", "test-founder=placeholder_id", "--tooling-repo", "acme/tools", "--tooling-path", "plugins/t", "--tooling-plugin", "t", "--tooling-ref", "dev", "--tooling-marketplace", "acme"], engine)
   assert.deepEqual(calls.pop(), ["start", {
-    repo: "/work/team", apply: false, team: undefined, founder: { alias: "test-founder", identity: "placeholder_id" },
+    repo: "/work/team", apply: false, team: undefined, people: undefined, founder: { alias: "test-founder", identity: "placeholder_id" },
     tooling: { repo: "acme/tools", path: "plugins/t", plugin: "t", ref: "dev", marketplace: "acme" },
   }])
-  await run(["start", "--team", "Placeholder", "--founder", "solo", "--apply"], engine)
+  await run(["start", "--team", "Placeholder", "--founder", "solo", "--people", "team/roster.md", "--apply"], engine)
   const [, start] = calls.pop()
   assert.equal(start.team, "Placeholder")
+  assert.equal(start.people, "team/roster.md")
   assert.deepEqual(start.founder, { alias: "solo", identity: "" })
   assert.deepEqual(start.tooling, { repo: undefined, path: undefined, plugin: undefined, ref: undefined, marketplace: undefined })
   assert.equal(start.apply, true)

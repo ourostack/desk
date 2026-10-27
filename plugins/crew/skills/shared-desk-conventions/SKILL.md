@@ -33,9 +33,10 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
   AGENTS.md                             # crew conventions and team lessons; Desk's session start prints it
   _meta/
     desks.md                            # the desk registry (one row per desk) -- see desk:session-start
-    crew.json                           # Crew's settings: where the team's plugin lives (see "Two setups")
+    crew.json                           # Crew's settings: where the team's plugin and roster live (see "Two setups")
   _shared/                              # the common area -- team-neutral, the contention hotspot
     landscape/                          # FACTS: externally true, team-neutral (read by everyone)
+      roster.md                         # the team's roster of people (by default; see crew:roster)
       <topic>.md
     decisions/                          # DECISIONS: what the team ACTUALLY agreed, attributed
       README.md                         # the discipline note; near-empty until kickoff
@@ -115,7 +116,7 @@ When an agent writes its own `desks/<you>/`, it is the **sole writer** of that s
 
 ### A shared path → auto pull-`main` → branch → write → PR → merge-now
 
-A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry), `_meta/crew.json` (Crew's settings), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
+A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions, and the team's roster), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry), `_meta/crew.json` (Crew's settings), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
 
 1. **pulls latest `main`** (so it's writing on top of everyone else's work),
 2. **branches** off that latest `main`,
@@ -135,6 +136,10 @@ There is **NO human review step.** The PR is a serialization primitive, not an a
 | `desks/<someone-else>/...` | attributed contribution only when authorized | conflict-safe contribution path; preserve owner meaning, never bypass protected scope |
 
 > **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → establish authority and use the conflict-safe contribution protocol. Another desk requires an authorized, attributed contribution, not a home-organization veto or silent permission expansion. The agent runs this test silently.
+
+## The team's roster
+
+Everyone the team works with, teammates and contacts, lives in one roster file, and `_meta/desks.md` is the desk list, not the roster. When a person comes up in your work (a teammate, partner, customer contact), add or update their roster entry, with where you learned it and the date; one person's opinion of someone is attributed to them; nothing private or sensitive. `crew:roster` owns where the roster lives, how an entry is written, the newcomer questions and how an edit lands (`crew.js roster`); follow it rather than this summary.
 
 ## Team lessons -- a correction taught once reaches every teammate's agents
 
@@ -169,6 +174,7 @@ The shared repo must be useful as **plain markdown** to a teammate who never run
 ## Cross-references
 
 - `desk:directory-structure` -- the single-operator floor plan this skill overlays. The `desks/<alias>/` subtree is exactly that layout, re-rooted.
+- `crew:roster` -- the team's roster of people: where it lives, entries, questions, and how an edit lands.
 - `perspective-query` -- operationalizes this taxonomy: "what would `<person>` think / what's `<person>` doing / what's agreed vs just fact," with the attribution discipline this skill defines.
 - `desk:session-start` -- reads `_meta/desks.md` and surfaces the desk-set + "which desk am I."
 - `crew:start-crew` -- gives a new or existing repository this floor plan, monorepo or dual-repo.

@@ -42,7 +42,7 @@ test("a new member: the plan names the desk and the roster row and writes nothin
   assert.equal(plan.desk, "desks/newbie")
   assert.deepEqual(plan.files, ["desks/newbie/AGENTS.md", "desks/newbie/README.md", "desks/newbie/_meta/friction.md"])
   assert.equal(plan.row, "| newbie | newbie_example | desks/newbie | acme/team | crew | desks/newbie |")
-  assert.match(plan.message, /^Plan only: nothing was written\. Joining adds desks\/newbie\/ \(3 files\) and then the roster row for newbie_example\./u)
+  assert.match(plan.message, /^Plan only: nothing was written\. Joining adds desks\/newbie\/ \(3 files\) and then the desk-list row for newbie_example\./u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })
 
@@ -53,13 +53,13 @@ test("a new member joins: own desk pushed first, then the roster row merged; too
   assert.equal(result.state, "joined", result.message)
   assert.equal(result.alias, "newbie")
   assert.equal(result.pr, PR)
-  assert.match(result.message, /^Joined: newbie_example is on the roster as newbie, with an own desk at desks\/newbie\/\./u)
+  assert.match(result.message, /^Joined: newbie_example is on the desk list as newbie, with an own desk at desks\/newbie\/\./u)
   assert.match(result.message, /The team's tooling repository acme\/team-tooling declares no plugin yet, so there is nothing to install\./u)
   assert.deepEqual(readCrewRoster(repo.clone).map((row) => row.alias), ["test-founder", "newbie"])
   assert.equal(onMain(repo.bare, "desks/newbie/AGENTS.md"), onMain(repo.bare, "desks/_template/AGENTS.md").replaceAll("{{alias}}", "newbie"))
   // The desk commit is on main before the roster commit: the row never points at a missing desk.
   const log = git(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
-  assert.deepEqual(log, ["Crew: add newbie to the roster (#12)", "Crew: add newbie's desk"])
+  assert.deepEqual(log, ["Crew: add newbie to the team (#12)", "Crew: add newbie's desk"])
   // Only the roster row went through the pull request.
   const created = calls.find((args) => args[0] === "pr" && args[1] === "create")
   assert.equal(created[created.indexOf("--head") + 1], "crew/join-newbie-mjuohs00")
@@ -69,7 +69,7 @@ test("a new member joins: own desk pushed first, then the roster row merged; too
   const again = await joinWorkspace(join(repo, { apply: true, gh }))
   assert.equal(again.state, "member")
   assert.equal(again.alias, "newbie")
-  assert.match(again.message, /^newbie_example is already on the roster as newbie; nothing to add\./u)
+  assert.match(again.message, /^newbie_example is already on the desk list as newbie; nothing to add\./u)
 })
 
 test("a returning identity keeps its recorded alias, whatever alias is offered", async () => {
@@ -158,7 +158,7 @@ test("a join interrupted after the desk was pushed finishes the roster row on th
   const { gh } = fakeGh(repo.bare, { create: { code: 1 } })
   const first = await joinWorkspace(join(repo, { apply: true, gh }))
   assert.equal(first.state, "failed")
-  assert.match(first.message, /desks\/newbie\/ is pushed; run join again to add the roster row/u)
+  assert.match(first.message, /desks\/newbie\/ is pushed; run join again to add the desk-list row/u)
   assert.ok(mainFiles(repo.bare).includes("desks/newbie/AGENTS.md"))
   const second = await joinWorkspace(join(repo, { apply: true, gh: fakeGh(repo.bare).gh }))
   assert.equal(second.state, "joined", second.message)

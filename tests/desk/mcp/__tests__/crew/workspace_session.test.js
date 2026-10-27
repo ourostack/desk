@@ -37,9 +37,9 @@ test("a member's clone is ready: the clone binds, even with a user-wide DESK, an
   const status = await crewStatus({ repo: repo.clone, identity: "pat_example", session: true, env })
   assert.deepEqual(status.session, {
     ready: true, root: realpathSync(repo.clone), root_source: "host-project", person: "pat", person_source: "crew-roster", identity: "pat_example", write_path: "desks/pat",
-    message: "A Desk session started in this clone binds it and writes to desks/pat/ (crew roster, GitHub account pat_example).",
+    message: "A Desk session started in this clone binds it and writes to desks/pat/ (desk list, GitHub account pat_example).",
   })
-  assert.match(status.message, /pat_example is on the roster as pat\. A Desk session started in this clone binds it/u)
+  assert.match(status.message, /pat_example is on the desk list as pat\. A Desk session started in this clone binds it/u)
 })
 
 test("an account that is not on the roster is not ready, with the one plain message", async () => {
@@ -49,7 +49,7 @@ test("an account that is not on the roster is not ready, with the one plain mess
   const status = await crewStatus({ repo: repo.clone, identity: "pat_example", session: true, env })
   assert.equal(status.session.ready, false)
   assert.equal(status.session.person, null)
-  assert.match(status.session.message, /^This session's GitHub account \(someone_else\) is not on this team workspace's roster/u)
+  assert.match(status.session.message, /^This session's GitHub account \(someone_else\) is not on this team workspace's desk list/u)
 })
 
 test("a session that would write as someone else, or bind another desk, is not ready", async () => {
@@ -58,7 +58,7 @@ test("a session that would write as someone else, or bind another desk, is not r
   assert.equal(other.session.ready, false)
   assert.equal(other.session.message, "A Desk session started in this clone writes as sam (DESK_PERSON), not as pat.")
   const nobody = await crewStatus({ repo: repo.clone, identity: "new_person", session: true, env: { HOME: process.env.HOME, DESK_PERSON: "sam" } })
-  assert.equal(nobody.session.message, "A Desk session started in this clone writes as sam (DESK_PERSON), not as new_person, who has no roster row.")
+  assert.equal(nobody.session.message, "A Desk session started in this clone writes as sam (DESK_PERSON), not as new_person, who has no desk-list row.")
   const anyone = await crewStatus({ repo: repo.clone, session: true, env: { HOME: process.env.HOME, DESK_PERSON: "sam" } })
   assert.equal(anyone.session.ready, true, "with no identity given, any person will do")
   // With no HOME in the environment, the resolver uses the account's home folder; the clone still binds.

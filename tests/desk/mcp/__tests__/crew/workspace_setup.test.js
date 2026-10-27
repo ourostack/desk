@@ -31,13 +31,14 @@ test("start on an existing team repository: the plan lists what it adds and the 
     { path: "_meta/desks.md", change: "add" },
     { path: "_shared/decisions/README.md", change: "add" },
     { path: "_shared/landscape/README.md", change: "add" },
+    { path: "_shared/landscape/roster.md", change: "add" },
     { path: "desks/_template/AGENTS.md", change: "add" },
     { path: "desks/_template/README.md", change: "add" },
     { path: "desks/_template/_meta/friction.md", change: "add" },
   ])
   assert.deepEqual(plan.outside, ["context/", "guides/", "team/"])
   assert.equal(plan.declaration.shared_writes, undefined)
-  assert.equal(plan.message, "Plan only: nothing was written. Starting a dual-repo crew adds 7 files and appends a section to AGENTS.md. These top-level folders are outside Crew's shape, and nothing in them is moved: context/, guides/, team/. Move their content into the shape with the team afterwards. Run again with --apply to make the change.")
+  assert.equal(plan.message, "Plan only: nothing was written. Starting a dual-repo crew adds 8 files and appends a section to AGENTS.md. The team's roster is a new _shared/landscape/roster.md, from Crew's starter. These top-level folders are outside Crew's shape, and nothing in them is moved: context/, guides/, team/. Move their content into the shape with the team afterwards. Run again with --apply to make the change.")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
   assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), before)
 })
@@ -74,6 +75,7 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
   assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), {
     schema_version: 1,
     tooling: { repo: "acme/team-tooling", path: "plugins/team", plugin: "team" },
+    people: "_shared/landscape/roster.md",
   })
   // The clone is on main at the merged commit, clean, with no leftover branch here or on "GitHub".
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -111,11 +113,11 @@ test("start a monorepo: its plugins/ folder is part of the shape, and the plugin
   const plan = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, now: NOW })
   assert.equal(plan.setup, "monorepo")
   assert.deepEqual(plan.outside, ["notes/"])
-  assert.match(plan.message, /^Plan only: nothing was written\. Starting a monorepo crew adds 8 files\./u)
+  assert.match(plan.message, /^Plan only: nothing was written\. Starting a monorepo crew adds 9 files\./u)
   const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true })
   assert.equal(result.state, "published", result.message)
   assert.match(result.message, /now a monorepo Crew workspace/u)
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1 })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, people: "_shared/landscape/roster.md" })
   assert.match(onMain(repo.bare, "AGENTS.md"), /\*\*Team tooling\*\*: the team's plugin is in `plugins\/team\/`\./u)
   const status = await crewStatus({ repo: repo.clone })
   assert.equal(status.setup, "monorepo")
@@ -135,13 +137,13 @@ test("start: a new repository gets Crew's shape and a plain front page", async (
   const repo = await teamRepo({ "README.md": "# Fresh\n", ".gitignore": "node_modules\n" })
   const { gh } = fakeGh(repo.bare, { repos: { "acme/crew-tooling": { "plugins/crew-tools/.claude-plugin/plugin.json": "{}" } } })
   const plan = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, team: "Placeholder Crew", now: NOW })
-  assert.deepEqual(plan.changes.map((change) => change.path), ["AGENTS.md", "_meta/crew.json", "_meta/desks.md", "_shared/decisions/README.md", "_shared/landscape/README.md", "desks/_template/AGENTS.md", "desks/_template/README.md", "desks/_template/_meta/friction.md"])
+  assert.deepEqual(plan.changes.map((change) => change.path), ["AGENTS.md", "_meta/crew.json", "_meta/desks.md", "_shared/decisions/README.md", "_shared/landscape/README.md", "_shared/landscape/roster.md", "desks/_template/AGENTS.md", "desks/_template/README.md", "desks/_template/_meta/friction.md"])
   assert.equal(plan.changes[0].change, "add")
   assert.deepEqual(plan.outside, [])
-  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true, tooling: { repo: "acme/crew-tooling", path: "plugins/crew-tools", plugin: "crew-tools" } })
+  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true, tooling: { repo: "acme/crew-tooling", path: "plugins/crew-tools", plugin: "crew-tools" }, people: "_shared/landscape/roster.md" })
   assert.equal(result.state, "published", result.message)
   assert.equal(onMain(repo.bare, "README.md"), "# Fresh\n", "an existing README is kept")
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { repo: "acme/crew-tooling", path: "plugins/crew-tools", plugin: "crew-tools" } })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { repo: "acme/crew-tooling", path: "plugins/crew-tools", plugin: "crew-tools" }, people: "_shared/landscape/roster.md" })
   assert.match(onMain(repo.bare, "AGENTS.md"), /^# Agents in this workspace\n/u)
   assert.doesNotMatch(onMain(repo.bare, "AGENTS.md"), /Not yet in Crew's shape/u)
 })
@@ -180,9 +182,9 @@ test("start refuses what it cannot honor before writing anything, and never over
     assert.equal(result.state, "refused", JSON.stringify(extra))
     assert.match(result.message, reason)
   }
-  // Existing _shared/decisions/ and _shared/landscape/ folders are kept as they are: nothing is added to them.
+  // Existing _shared/decisions/ and _shared/landscape/ folders are kept as they are: only the team's roster is added.
   const kept = await startWorkspace(startCit(repo))
-  assert.equal(kept.changes.some((change) => change.path.startsWith("_shared/")), false)
+  assert.deepEqual(kept.changes.filter((change) => change.path.startsWith("_shared/")).map((change) => change.path), ["_shared/landscape/roster.md"])
   const taken = await teamRepo({ ...CIT_SHAPED, "_meta/crew.json": "{\"note\":\"someone else's\"}\n" })
   const refused = await startWorkspace(startCit(taken, { apply: true }))
   assert.equal(refused.state, "refused")
@@ -371,7 +373,7 @@ test("a monorepo with several plugins: start names none of them unless told whic
   assert.match(refused.message, /several plugins in plugins\/ \(alpha-helpers, team\); name the team's with --tooling-path plugins\/<name> --tooling-plugin <name>/u)
   const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: { path: "plugins/team", plugin: "team" } })
   assert.equal(result.state, "published", result.message)
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { path: "plugins/team", plugin: "team" } })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { path: "plugins/team", plugin: "team" }, people: "_shared/landscape/roster.md" })
   assert.equal((await crewStatus({ repo: repo.clone })).tooling.plugin, "team")
   // A named monorepo plugin must be there.
   const absent = await teamRepo({ "README.md": "# Mono\n" })

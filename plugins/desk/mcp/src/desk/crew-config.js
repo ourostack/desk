@@ -5,6 +5,9 @@
 //   { "schema_version": 1,
 //     "tooling": { "repo": "owner/name", "path": "plugins/x", "plugin": "x", "ref": "main", "marketplace": "owner" } }
 //
+//   { ..., "people": "team/roster.md" }
+//
+// `people` is the team's roster, a Markdown file of everyone the team works with; without it, `_shared/landscape/roster.md`.
 // `tooling.repo` makes the workspace dual-repo: the plugin lives in that separate tooling repository. Without it the
 // workspace is a monorepo, with the plugin in its own `plugins/` folder, which is how every workspace made before the
 // declaration existed reads. Every field is optional; a value that cannot be honored is reported in `problems` and
@@ -17,6 +20,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 
 export const CREW_CONFIG_FILE = path.join("_meta", "crew.json")
+export const DEFAULT_PEOPLE = "_shared/landscape/roster.md"
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
 const REPO = /^[A-Za-z0-9][A-Za-z0-9_-]*\/[A-Za-z0-9._-]+$/u
 
@@ -64,15 +68,24 @@ function readTooling(raw, problems) {
   return { repo, path: toolPath, plugin, ref, marketplace }
 }
 
+// The roster's repository-relative path: a Markdown file outside Crew's own files (`_meta/`, `desks/`, the root AGENTS.md).
+function readPeople(raw, problems) {
+  if (raw === undefined || raw === null) return DEFAULT_PEOPLE
+  const rel = inside(raw)
+  if (rel !== null && /\.md$/iu.test(rel) && !/^(?:_meta|desks)\//iu.test(rel) && rel.toLowerCase() !== "agents.md") return rel
+  problems.push(`people: ${shown(raw)} is not a Markdown file inside this repository outside _meta/, desks/ and AGENTS.md`)
+  return DEFAULT_PEOPLE
+}
+
 /**
- * parseCrewConfig(text) -> { declared, setup: "monorepo" | "dual-repo", tooling, problems }
+ * parseCrewConfig(text) -> { declared, setup: "monorepo" | "dual-repo", tooling, people, problems }
  *
  * `text` is the file's content, or null when there is no file. `tooling` is null when nothing is declared; a tooling
  * repository with no `plugin` is a stub to point to, with nothing to install.
  */
 export function parseCrewConfig(text) {
   const problems = []
-  const config = { declared: text !== null, setup: "monorepo", tooling: null, problems }
+  const config = { declared: text !== null, setup: "monorepo", tooling: null, people: DEFAULT_PEOPLE, problems }
   if (text === null) return config
   let raw
   try {
@@ -86,6 +99,7 @@ export function parseCrewConfig(text) {
   }
   config.tooling = readTooling(block(raw.tooling, "tooling", problems), problems)
   if (config.tooling?.repo) config.setup = "dual-repo"
+  config.people = readPeople(raw.people, problems)
   return config
 }
 

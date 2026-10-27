@@ -96,8 +96,9 @@ jobs:
         run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web.test.js
 
   # A member's session in a Crew workspace clone binds the clone and writes as that member, with a user-wide DESK set
-  # and no --person, on every platform a member uses. Windows runs with core.autocrlf=true, as Git for Windows installs
-  # it, so the checkout and the test clones carry CRLF line endings. The coverage shards run these files on Linux only.
+  # and no --person, on every platform a member uses; a join's roster entry and a roster edit land with the file's
+  # line endings kept. Windows runs with core.autocrlf=true, as Git for Windows installs it, so the checkout and the
+  # test clones carry CRLF line endings. The coverage shards run these files on Linux only.
   crew-member-binding:
     name: Crew member binding (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -145,6 +146,10 @@ jobs:
           ../../../tests/desk/mcp/__tests__/runtime/crew_member_admission.test.js
           ../../../tests/desk/mcp/__tests__/runtime/crew_member_end_to_end.test.js
           ../../../tests/desk/mcp/__tests__/crew/workspace_session.test.js
+          ../../../tests/desk/mcp/__tests__/crew/people.test.js
+          ../../../tests/desk/mcp/__tests__/crew/workspace_people.test.js
+          ../../../tests/desk/mcp/__tests__/crew/workspace_roster.test.js
+          ../../../tests/desk/mcp/__tests__/crew/workspace_line_endings.test.js
           ../../../tests/desk/mcp/__tests__/ci/windows_hide.test.js
 
   # Desk's black-box tester (tests/blackbox): installs the shipped plugins the way Copilot and Claude Code do, drives every user-facing

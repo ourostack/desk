@@ -62,7 +62,7 @@ test("start never merges someone else's crew/start- pull request, whatever it ho
   assert.equal(result.state, "published", result.message)
   assert.equal(result.reused, undefined)
   assert.equal(merged(fake).includes(planted), false)
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: TOOLING })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: TOOLING, people: "_shared/landscape/roster.md" })
   assert.equal(mainFiles(repo.bare).includes("unrelated.md"), false)
   assert.match(onMain(repo.bare, "AGENTS.md"), /^# Hello, agents\n/u)
   assert.equal((await crewStatus({ repo: memberClone(repo, "after").clone })).state, "crew")
@@ -159,8 +159,8 @@ test("success is reported only once the default branch holds the result, not bec
   const join = await joinWorkspace({ repo: memberClone(team, "dan").clone, spawnGit: team.spawnGit, gh: hollow(team.bare).gh, identity: "dan_example", alias: "dan", wait: noWait, now: NOW, apply: true })
   assert.equal(join.state, "failed")
   assert.equal(join.stage, "verify")
-  assert.equal(join.message, "Not confirmed: GitHub says the pull request https://github.com/acme/team/pull/12 merged, but the team's main branch does not have dan_example's roster row. Next: run the same join again; it adds only what is missing.")
-  assert.equal(join.reason, "main does not hold the roster row for dan_example as dan")
+  assert.equal(join.message, "Not confirmed: GitHub says the pull request https://github.com/acme/team/pull/12 merged, but the team's main branch does not have dan_example's desk-list row. Next: run the same join again; it adds only what is missing.")
+  assert.equal(join.reason, "main does not hold the desk-list row for dan_example as dan")
   // A merge that, by GitHub's account, took the desk away is not a join either.
   const emptied = fakeGh(team.bare, {
     merge: (state) => {
@@ -176,8 +176,8 @@ test("success is reported only once the default branch holds the result, not bec
   })
   const gone = await joinWorkspace({ repo: memberClone(team, "eve").clone, spawnGit: team.spawnGit, gh: emptied.gh, identity: "eve_example", alias: "eve", wait: noWait, now: NOW, apply: true })
   assert.equal(gone.stage, "verify")
-  assert.equal(gone.reason, "main does not hold the roster row for eve_example as eve, desks/eve/")
-  assert.match(gone.message, /does not have eve_example's roster row and desk\. Next: run the same join again/u)
+  assert.equal(gone.reason, "main does not hold the desk-list row for eve_example as eve, desks/eve/")
+  assert.match(gone.message, /does not have eve_example's desk-list row and desk\. Next: run the same join again/u)
   // The start's own read-back checks the settings it wrote, not merely that the file exists.
   const swapped = await teamRepo(CIT_SHAPED)
   const swap = fakeGh(swapped.bare, {
@@ -226,7 +226,7 @@ test("a rerun with new settings rebuilds its own open start pull request from th
   assert.equal(second.reused, true)
   assert.equal(second.pr, first.pr)
   assert.equal(creates(fake).length, 1)
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: withPlugin })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: withPlugin, people: "_shared/landscape/roster.md" })
   assert.ok((await crewStatus({ repo: memberClone(repo, "check").clone })).tooling.install.copilot.includes("plugins/team"))
 })
 
@@ -245,7 +245,7 @@ test("commits someone else pushed onto this run's own open pull request are neve
   assert.equal(second.state, "published", second.message)
   assert.equal(second.reused, true)
   assert.doesNotMatch(onMain(repo.bare, "AGENTS.md"), /someone else/u)
-  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: TOOLING })
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: TOOLING, people: "_shared/landscape/roster.md" })
   // A join's branch, with another member's row rebound to someone else.
   const team = await started()
   const joining = reviewed(team.bare)

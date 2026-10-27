@@ -140,7 +140,7 @@ test("the boot prints the Crew clone, the member and where they write, with a us
   assert.deepEqual(result.person, { alias: "ari", source: "crew-roster", identity: "ari_microsoft", write_path: "desks/ari", problem: null })
   assert.match(result.person_agents_md?.text ?? JSON.stringify(result.person_agents_md), /Ari's own rules/u)
   const text = formatBootText(result)
-  assert.ok(text.includes(`desk ${f.crew} (bound by host-project) | person ari, writes to desks/ari (crew roster, GitHub account ari_microsoft)`), text.split("\n")[0])
+  assert.ok(text.includes(`desk ${f.crew} (bound by host-project) | person ari, writes to desks/ari (desk list, GitHub account ari_microsoft)`), text.split("\n")[0])
 })
 
 test("the boot says plainly when the session's account is not on the roster", async () => {
@@ -150,7 +150,7 @@ test("the boot says plainly when the session's account is not on the roster", as
   assert.equal(result.person.alias, null)
   const text = formatBootText(result)
   assert.match(text.split("\n")[0], /\| team workspace read-only: no person/u)
-  assert.ok(text.includes("This session's GitHub account (stranger) is not on this team workspace's roster"), text)
+  assert.ok(text.includes("This session's GitHub account (stranger) is not on this team workspace's desk list"), text)
   // A personal desk has no person line.
   assert.equal(personSummary({ crew: false, person: null }), null)
   assert.equal(personSummary(null), null)

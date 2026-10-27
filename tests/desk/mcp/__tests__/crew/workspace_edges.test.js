@@ -213,7 +213,7 @@ test("join: a roster row that cannot merge leaves the desk pushed and the pull r
   assert.ok(onMain(repo.bare, "desks/a/AGENTS.md") !== null)
   // The plan for a desk that is already in place says only the roster row is left.
   const plan = await joinWorkspace({ repo: repo.clone, identity: "a_example", alias: "a" })
-  assert.match(plan.message, /desks\/a\/ is already in place, so joining adds the roster row for a_example/u)
+  assert.match(plan.message, /desks\/a\/ is already in place, so joining adds the desk-list row for a_example/u)
 })
 
 test("join refuses a dirty clone and a clone with no origin", async () => {

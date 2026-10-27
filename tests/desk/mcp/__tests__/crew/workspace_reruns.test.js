@@ -192,7 +192,7 @@ test("one person joining from two machines at once ends with one row: the second
   const result = await joinWorkspace(join(repo, { apply: true, gh }))
   assert.equal(result.state, "member", result.message)
   assert.equal(result.alias, "newbie2")
-  assert.match(result.message, /^newbie_example is already on the roster as newbie2; nothing to add\. It joined as newbie2 from another machine meanwhile, so desks\/newbie\/ is unused\./u)
+  assert.match(result.message, /^newbie_example is already on the desk list as newbie2; nothing to add\. It joined as newbie2 from another machine meanwhile, so desks\/newbie\/ is unused\./u)
   assert.equal(state.closed, true)
   assert.equal(rows(repo).filter((line) => line.includes("newbie_example")).length, 1)
   // A rerun after the row landed elsewhere finds the member before writing anything.
@@ -221,15 +221,15 @@ test("a desk pushed for one identity whose row has not landed cannot be claimed 
   // The first person's join pushed the desk and stopped before the row.
   const first = await joinWorkspace(join(repo, { apply: true, gh: fakeGh(repo.bare, { create: { code: 1 } }).gh }))
   assert.equal(first.state, "failed")
-  assert.match(first.message, /desks\/newbie\/ is pushed; run join again to add the roster row/u)
+  assert.match(first.message, /desks\/newbie\/ is pushed; run join again to add the desk-list row/u)
   const intruder = memberClone(repo, "intruder")
   const refused = await joinWorkspace(join(intruder, { identity: "intruder_example" }))
   assert.equal(refused.state, "refused")
-  assert.match(refused.message, /desks\/newbie\/ is already on the default branch, added for newbie_example, whose roster row has not landed; choose another alias/u)
+  assert.match(refused.message, /desks\/newbie\/ is already on the default branch, added for newbie_example, whose desk-list row has not landed; choose another alias/u)
   // A desk with no record of whose it is is not claimed either.
   await pushFromElsewhere(repo, { "desks/stray/AGENTS.md": "x", "desks/stray/README.md": "x", "desks/stray/_meta/friction.md": "x" })
   const stray = await joinWorkspace(join(memberClone(repo, "stray"), { identity: "stray_example", alias: "stray", apply: true }))
-  assert.match(stray.message, /desks\/stray\/ is already on the default branch with no roster row, and nothing records whose it is; choose another alias/u)
+  assert.match(stray.message, /desks\/stray\/ is already on the default branch with no desk-list row, and nothing records whose it is; choose another alias/u)
   // The person it was pushed for finishes the join, from any clone, case aside.
   const resumed = await joinWorkspace(join(memberClone(repo, "again"), { identity: "NEWBIE_EXAMPLE", apply: true }))
   assert.equal(resumed.state, "joined", resumed.message)
@@ -337,7 +337,7 @@ test("a rebuilt roster row whose push is refused leaves its pull request open fo
   const result = await joinWorkspace(join(repo, { apply: true, gh, spawnGit }))
   assert.equal(result.state, "failed")
   assert.equal(result.stage, "push")
-  assert.match(result.message, / The pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open\. desks\/newbie\/ is pushed; run join again to add the roster row\.$/u)
+  assert.match(result.message, / The pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open\. desks\/newbie\/ is pushed; run join again to add the desk-list row\.$/u)
   assert.equal(state.closed, false)
 })
 
@@ -367,7 +367,7 @@ test("one person's other machine joining with the same alias while this one push
   const result = await joinWorkspace(join(repo, { apply: true, spawnGit }))
   assert.equal(result.state, "member", result.message)
   assert.equal(result.alias, "newbie")
-  assert.equal(result.message, "newbie_example is already on the roster as newbie; nothing to add. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as newbie_example; Desk checks this before it reports the join as done.")
+  assert.equal(result.message, "newbie_example is already on the desk list as newbie; nothing to add. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as newbie_example; Desk checks this before it reports the join as done.")
   assert.equal(rows(repo).filter((line) => line.includes("newbie_example")).length, 1)
 })
 
@@ -380,6 +380,6 @@ test("a workspace the team took Crew out of meanwhile is not joined", async () =
   const result = await joinWorkspace(join(repo, { apply: true }))
   assert.equal(result.state, "failed")
   assert.equal(result.stage, "roster")
-  assert.match(result.message, /the default branch on GitHub is no longer a Crew workspace: its roster and desks\/ are gone\)\.$/u)
+  assert.match(result.message, /the default branch on GitHub is no longer a Crew workspace: its desk list and desks\/ are gone\)\.$/u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })

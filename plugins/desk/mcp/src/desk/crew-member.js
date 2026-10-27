@@ -170,26 +170,26 @@ export function memberMessage(member) {
   const writable = "so Desk keeps this team workspace read-only in this session"
   const after = "then call desk_status, which checks again"
   if (member.problem === "several_accounts" && member.unreachable === true) {
-    return `Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster (${member.candidates.join(", ")}) is yours, ${writable}. To write to your own desk, check that GitHub can be reached; ${after}. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).`
+    return `Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's desk list (${member.candidates.join(", ")}) is yours, ${writable}. To write to your own desk, check that GitHub can be reached; ${after}. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).`
   }
   if (member.problem === "several_accounts") {
-    return `Several GitHub accounts signed in to gh are on this team workspace's roster (${member.candidates.join(", ")}), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, ${writable}. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; ${after}.`
+    return `Several GitHub accounts signed in to gh are on this team workspace's desk list (${member.candidates.join(", ")}), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, ${writable}. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; ${after}.`
   }
   if (member.problem === "several_rows") {
-    return `This session's GitHub account ${member.identity} is on more than one row of this team workspace's roster (${member.aliases.join(", ")}), ${writable}. Ask the team to remove the extra row from _meta/desks.md through a pull request; ${after}.`
+    return `This session's GitHub account ${member.identity} is on more than one row of this team workspace's desk list (${member.aliases.join(", ")}), ${writable}. Ask the team to remove the extra row from _meta/desks.md through a pull request; ${after}.`
   }
   if (member.problem === "github_unreachable") {
     return `gh lists no signed-in account here and Desk could not ask GitHub which account gh acts as, ${writable}. To write to your own desk, sign in to gh as the account you joined with (gh auth login) and check that GitHub can be reached; ${after}.`
   }
   if (member.problem === "invalid_alias") {
-    return `This session's GitHub account ${member.identity} is on this team workspace's roster with an alias that is not a valid folder name, ${writable}. Ask the team to fix that row in _meta/desks.md through a pull request; ${after}.`
+    return `This session's GitHub account ${member.identity} is on this team workspace's desk list with an alias that is not a valid folder name, ${writable}. Ask the team to fix that row in _meta/desks.md through a pull request; ${after}.`
   }
-  return `This session's GitHub account (${member.logins.join(", ")}) is not on this team workspace's roster, ${writable}. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with (gh auth login); ${after}.`
+  return `This session's GitHub account (${member.logins.join(", ")}) is not on this team workspace's desk list, ${writable}. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with (gh auth login); ${after}.`
 }
 
 /** A short label for a member's source, for one-line status text. */
 export function memberSourceLabel(member) {
-  if (member?.source === "crew-roster") return `crew roster, GitHub account ${member.identity}`
+  if (member?.source === "crew-roster") return `desk list, GitHub account ${member.identity}`
   if (member?.source === "env:DESK_PERSON") return "DESK_PERSON"
   if (member?.source === "launch-argument") return "--person"
   return "authority provider"

@@ -63,7 +63,7 @@ test("an account that is not on the roster can read but every write is refused w
   const refused = await desk.call("task_create", { track: "ops", slug: "stranger-write", title: "Not a member" })
   assert.equal(refused.isError, true)
   assert.equal(refused.payload.code, "crew_member_unknown")
-  assert.equal(refused.payload.fix, "This session's GitHub account (stranger) is not on this team workspace's roster, so Desk keeps this team workspace read-only in this session. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with (gh auth login); then call desk_status, which checks again.")
+  assert.equal(refused.payload.fix, "This session's GitHub account (stranger) is not on this team workspace's desk list, so Desk keeps this team workspace read-only in this session. To write to your own desk, join with crew:join-crew, or sign in to gh as the account you joined with (gh auth login); then call desk_status, which checks again.")
   assert.deepEqual(readdirSync(path.join(root, "desks", "ari")), [], "nothing was written")
   assert.equal(existsSync(path.join(root, "ops")), false)
   const read = await desk.call("desk_search", { query: "anything" })

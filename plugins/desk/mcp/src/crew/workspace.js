@@ -2,10 +2,11 @@
 // or existing repository, and join a new teammate to one. Each action is one deterministic step with a plan first:
 // nothing is written until `apply`.
 //
-// Every Crew workspace has the same shape: the root AGENTS.md, `_meta/desks.md` (the roster), `desks/<alias>/`,
-// `desks/_template/`, `_shared/landscape/` and `_shared/decisions/`. It comes in two setups that differ only in where
-// the team's plugin lives: a monorepo keeps it in its own `plugins/<name>/`; a dual-repo workspace names a separate
-// tooling repository in `_meta/crew.json`. Starting adds whatever of the shape is missing and deletes, moves and
+// Every Crew workspace has the same shape: the root AGENTS.md, `_meta/desks.md` (the desk list; `ROSTER` and "roster
+// row" in this code), `desks/<alias>/`, `desks/_template/`, `_shared/landscape/`, `_shared/decisions/`, and the team's
+// roster of people, the file `people` in `_meta/crew.json` names (`people.js`). It comes in two setups that differ
+// only in where the team's plugin lives: a monorepo keeps it in its own `plugins/<name>/`; a dual-repo workspace names
+// a separate tooling repository in `_meta/crew.json`. Starting adds whatever of the shape is missing and deletes, moves and
 // overwrites nothing: the root AGENTS.md gains one section, and a Crew file that already exists is refused. Folders
 // outside the shape are listed, for the team to move into it.
 //
@@ -21,7 +22,7 @@
 // a clone of a GitHub repository it signs in as the signed-in gh account that can push to it (never simply the active
 // one), and reaches https://github.com/<owner>/<name> with that account's token, whatever remote spelling the clone uses.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -29,6 +30,7 @@ import { CREW_ROSTER_FILE, crewWorkspace, markdownTables } from "../desk/crew-ro
 import { CREW_CONFIG_FILE, parseCrewConfig, readCrewConfig } from "../desk/crew-config.js"
 import { ghRunner, signedInAccounts } from "../factory/flush.js"
 import { memberMessage, memberSourceLabel, resolveMember } from "../desk/crew-member.js"
+import { listedIn, mergePeople, normalized, peopleQuestions, starterRoster, toLf } from "./people.js"
 import { resolveActivationConfigPath, resolveDeskRootWithSource } from "../util/paths.js"
 
 const GIT_TIMEOUT_MS = 120_000
@@ -96,11 +98,12 @@ const route = (remote) => [
 // a GitHub address and the token to reach it with.
 function gitIn(cwd, spawnGit) {
   let link = { remote: "origin", token: undefined, config: [] }
-  const run = (args, { network = false } = {}) => {
+  const run = (args, { network = false, raw = false } = {}) => {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" }
     if (network && link.token !== undefined) env.GH_TOKEN = link.token
     const result = spawnGit("git", [...(network ? link.config : []), "-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, env })
-    return { ok: result.status === 0, stdout: String(result.stdout ?? "").trim(), stderr: String(result.stderr ?? "").trim() }
+    const stdout = String(result.stdout ?? "")
+    return { ok: result.status === 0, stdout: raw ? stdout : stdout.trim(), stderr: String(result.stderr ?? "").trim() }
   }
   run.must = (args, stage, why = "", options) => {
     const result = run(args, options)
@@ -215,8 +218,10 @@ const deskOf = (alias) => `desks/${alias}`
  * crewStatus({ repo, identity? }) -> { state: "not_git" | "not_crew" | "crew", ... }
  *
  * For a Crew workspace: its origin (`owner/name` or null), default branch, setup ("monorepo" or "dual-repo"), the
- * team's tooling with its install commands, roster aliases, whether the desk template exists, and, given `identity`,
- * the member it names (`{ alias, desk }`) or null.
+ * team's tooling with its install commands, the desk list's aliases (`roster`), whether the desk template exists, and,
+ * given `identity`, the member it names (`{ alias, desk }`) or null. `people` is the team's roster: its `path`, whether
+ * it `exists`, whether it `listed` the member (null without `identity` or without a desk-list row), the interview
+ * `questions` (`questions_from`: "roster" or "crew"), and, when it is missing, Crew's `starter` to create it from.
  */
 export async function crewStatus({ repo, identity, spawnGit = spawnSync, session = false, env = process.env, memberFn = resolveMember }) {
   const top = toplevel(repo, spawnGit)
@@ -234,8 +239,9 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync, session
   if (typeof identity === "string" && identity.trim() !== "") {
     const row = rows.find((candidate) => sameIdentity(candidate.identity, identity))
     member = row === undefined ? null : { alias: row.alias, desk: deskOf(row.alias) }
-    about = row === undefined ? ` ${identity.trim()} has no roster row yet; join with crew:join-crew.` : ` ${row.identity} is on the roster as ${row.alias}.`
+    about = row === undefined ? ` ${identity.trim()} has no desk-list row yet; join with crew:join-crew.` : ` ${row.identity} is on the desk list as ${row.alias}.`
   }
+  const people = peopleIn(top, config.people, member ? [member.alias, identity] : null)
   const desks = aliases.length === 0 ? "no desks yet" : `${plural(aliases.length, "desk")} (${aliases.join(", ")})`
   const binding = session ? await sessionIn(top, { identity, member, env, memberFn }) : undefined
   return {
@@ -248,9 +254,30 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync, session
     roster: aliases,
     template: listFiles(path.join(top, ...TEMPLATE.split("/"))).length > 0,
     member,
+    people,
     ...(binding === undefined ? {} : { session: binding }),
     problems: config.problems,
     message: `This is a Crew workspace with ${desks}.${about}${binding === undefined ? "" : ` ${binding.message}`}`,
+  }
+}
+
+// The team's roster at `rel` in the clone at `top`, as `crewStatus` reports it; `names` are the member's alias and
+// identity, or null when there is no member to look for.
+function peopleIn(top, rel, names) {
+  let text = null
+  try {
+    text = readFileSync(path.join(top, ...rel.split("/")), "utf8")
+  } catch {
+    text = null
+  }
+  const { questions, from } = peopleQuestions(text)
+  return {
+    path: rel,
+    exists: text !== null,
+    listed: names === null ? null : text !== null && listedIn(text, names),
+    questions,
+    questions_from: from,
+    ...(text === null ? { starter: starterRoster() } : {}),
   }
 }
 
@@ -278,7 +305,7 @@ async function sessionIn(top, { identity, member, env, memberFn }) {
   let message
   if (!here) message = `A Desk session started in this clone would bind ${bound.root ?? "no desk"} (${bound.source ?? "nothing found"}), not this clone.`
   else if (person === null) message = memberMessage(found)
-  else if (!ready) message = `A Desk session started in this clone writes as ${person} (${memberSourceLabel(found)}), not as ${expected ?? `${identity}, who has no roster row`}.`
+  else if (!ready) message = `A Desk session started in this clone writes as ${person} (${memberSourceLabel(found)}), not as ${expected ?? `${identity}, who has no desk-list row`}.`
   else message = `A Desk session started in this clone binds it and writes to desks/${person}/ (${memberSourceLabel(found)}).`
   return {
     ready,
@@ -336,20 +363,21 @@ function withRosterRow(current, member) {
   return lines.join("\n")
 }
 
-function crewSection({ tooling, outside }) {
+function crewSection({ tooling, outside, people }) {
   const lines = [
     "## Crew workspace",
     "",
-    "This repository is also a Crew shared workspace. Each teammate's agents keep their own working state in `desks/<alias>/`; everything outside a person's own desk is shared. `_meta/desks.md` binds each person's account to their desk, and `_meta/crew.json` holds Crew's settings.",
+    "This repository is also a Crew shared workspace. Each teammate's agents keep their own working state in `desks/<alias>/`; everything outside a person's own desk is shared. `_meta/desks.md`, the desk list, binds each person's account to their desk, and `_meta/crew.json` holds Crew's settings.",
     "",
     `- **Team facts** go in \`${FACTS}\`: externally true, team-neutral material, each with its source and the date it was checked.`,
     `- **Agreed team decisions** go in \`${DECISIONS}\`: only what the team actually agreed, with who agreed it and when. One person's view stays in their own desk, attributed to them.`,
+    `- **The team's roster** is \`${people}\`: everyone the team works with, teammates and contacts, and what is worth knowing about them. When a person comes up in your work, add or update their entry; Crew's \`crew:roster\` skill says how.`,
   ]
   if (tooling?.repo) lines.push(`- **Team tooling**: the team's plugin lives in the separate [${tooling.repo}](https://github.com/${tooling.repo}) repository, not in this one.`)
   else if (tooling?.path) lines.push(`- **Team tooling**: the team's plugin is in \`${tooling.path}/\`.`)
   lines.push("- **Shared writes** (anything outside your own desk) land through a pull request that the writer merges at once; the pull request serializes concurrent writes and is not a review.")
   if (outside.length > 0) lines.push(`- **Not yet in Crew's shape**: ${quoted(outside)}. Their content stays where it is until the team decides to move it into the folders above (Crew's \`start-crew\` says how); until then, read it where it is.`)
-  lines.push("- **To join**, a new teammate's agent runs Crew's `join-crew`, which adds their desk and then their roster row.")
+  lines.push("- **To join**, a new teammate's agent runs Crew's `join-crew`, which asks them a few questions, adds their desk, then their roster entry and their desk-list row.")
   return `${lines.join("\n")}\n`
 }
 
@@ -804,10 +832,11 @@ function openResult(result, landed, base, lead) {
 
 // ── start ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-function declarationFor({ tooling }) {
+function declarationFor({ tooling, people }) {
   const declaration = { schema_version: 1 }
   const given = Object.fromEntries(Object.entries(tooling ?? {}).filter(([, value]) => value !== undefined && value !== null && value !== ""))
   if (Object.keys(given).length > 0) declaration.tooling = given
+  if (people !== undefined) declaration.people = people
   return declaration
 }
 
@@ -839,22 +868,25 @@ async function finishStart({ action, top, git, apply, connect, result, origin })
 }
 
 /**
- * startWorkspace({ repo, apply?, tooling?, founder?: { alias, identity }, team? }) -> { state, changes, ... }
+ * startWorkspace({ repo, apply?, tooling?, people?, founder?: { alias, identity }, team? }) -> { state, changes, ... }
  *
  * Adds Crew's shape to a new or existing repository; `tooling.repo` makes it dual-repo, and that repository must exist
- * and hold what is declared. `state`: "plan" (nothing written), "published" (landed on the default branch),
+ * and hold what is declared. `people` is the team's roster (by default `_shared/landscape/roster.md`): recorded in
+ * `_meta/crew.json`, left byte-identical when it exists, and created from Crew's starter when it does not. `state`: "plan" (nothing written), "published" (landed on the default branch),
  * "committed" (a clone with no origin), "pr_open", "already_crew", "refused" (before any write) or "failed" (with
  * `stage`; the clone is put back as it was).
  */
-export async function startWorkspace({ repo, apply = false, tooling, founder, team, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
+export async function startWorkspace({ repo, apply = false, tooling, people, founder, team, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
   const action = "start"
   const refuse = (message) => ({ action, state: "refused", repo, message: `Nothing was written: ${message}.` })
   const top = toplevel(repo, spawnGit)
   if (top === null) return { action, state: "refused", repo, message: notGit(repo) }
   const { git, origin, base } = workspaceFacts(top, spawnGit)
-  const declaration = declarationFor({ tooling })
+  const declaration = declarationFor({ tooling, people })
   const parsed = parseCrewConfig(JSON.stringify(declaration))
-  const result = { action, repo: top, setup: parsed.setup, declaration: { tooling: parsed.tooling } }
+  // Recorded as Crew reads it back: a path in `/` form, the default when none was given.
+  declaration.people = parsed.people
+  const result = { action, repo: top, setup: parsed.setup, declaration: { tooling: parsed.tooling, people: parsed.people } }
   const connect = () => connectTo(git, origin, { gh, result })
   if (crewWorkspace(top).crew) return finishStart({ action, top, git, apply, connect, result, origin })
   if (parsed.problems.length > 0) return refuse(parsed.problems.join("; "))
@@ -871,6 +903,9 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   if (rootName(top, "README.md") === null) files["README.md"] = startReadme(team ?? path.basename(top))
   files[CONFIG] = `${JSON.stringify(declaration, null, 2)}\n`
   for (const [rel, content] of Object.entries(TEMPLATE_FILES)) files[`${TEMPLATE}${rel}`] = content
+  // A roster the team already keeps is used as it is; only a missing one is created.
+  const keptPeople = present(top, parsed.people)
+  if (!keptPeople) files[parsed.people] = starterRoster()
   if (founder !== undefined) {
     for (const [rel, content] of Object.entries(TEMPLATE_FILES)) files[`${deskOf(founder.alias)}/${rel}`] = render(content, founder)
   }
@@ -894,16 +929,17 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     .sort((a, b) => (a.path < b.path ? -1 : 1))
   const shape = parsed.setup === "dual-repo" ? SHAPE : [...SHAPE, "plugins/"]
   const outside = teamContent(tracked(git)).filter((entry) => entry.endsWith("/") && !shape.includes(entry))
-  Object.assign(result, { changes, outside })
+  Object.assign(result, { changes, outside, people: { path: parsed.people, change: keptPeople ? "keep" : "add" } })
   if (!apply) {
     const added = changes.filter((change) => change.change === "add").length
     const appended = agentsAtPlan === null ? "" : ` and appends a section to ${agentsAtPlan}`
+    const roster = keptPeople ? ` The team's roster is the existing ${parsed.people}, left as it is.` : ` The team's roster is a new ${parsed.people}, from Crew's starter.`
     const loose = outside.length > 0 ? ` These top-level folders are outside Crew's shape, and nothing in them is moved: ${outside.join(", ")}. Move their content into the shape with the team afterwards.` : ""
-    return { ...result, state: "plan", message: `Plan only: nothing was written. Starting a ${parsed.setup} crew adds ${plural(added, "file")}${appended}.${loose} Run again with --apply to make the change.` }
+    return { ...result, state: "plan", message: `Plan only: nothing was written. Starting a ${parsed.setup} crew adds ${plural(added, "file")}${appended}.${roster}${loose} Run again with --apply to make the change.` }
   }
 
   const created = new Set()
-  const section = (eol) => withEol(crewSection({ tooling: plugin, outside }), eol)
+  const section = (eol) => withEol(crewSection({ tooling: plugin, outside, people: parsed.people }), eol)
   let written = {}
   const write = () => {
     // Rebuilt on a newer default branch, the change still never overwrites a file a teammate added meanwhile, and
@@ -966,6 +1002,90 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   }
 }
 
+// ── The team's roster ────────────────────────────────────────────────────────────────────────────────────────────
+
+const splitZ = (text) => text.split("\0").filter(Boolean)
+
+// The roster as the clone's HEAD holds it (as Git stores it), or null when HEAD has no such file.
+function headPeople(git, rel) {
+  const blob = git(["cat-file", "blob", `HEAD:${rel}`], { raw: true })
+  return blob.ok ? blob.stdout : null
+}
+
+/**
+ * The member's uncommitted change to the team's roster at `rel`, the only uncommitted change a join or a roster update
+ * takes: `{ edit }`, where `edit` is null when there is none, or `{ base, ours, eol }` (`base`: the file the change was
+ * made on, null when HEAD has none; `ours`: the changed file; both with LF line endings; `eol`: the changed file's own
+ * line ending); or `{ refused }` when anything else is uncommitted.
+ */
+function pendingPeople(git, top, rel) {
+  const changed = [...new Set([
+    ...splitZ(git(["diff", "--name-only", "--no-renames", "-z", "HEAD"], { raw: true }).stdout),
+    ...splitZ(git(["ls-files", "--others", "--exclude-standard", "-z"], { raw: true }).stdout),
+  ])].sort()
+  const other = changed.filter((file) => file !== rel)
+  if (other.length > 0) return { refused: `has uncommitted changes outside the team's roster ${rel} (${other.join(", ")}); commit or stash them first, then run this again` }
+  if (changed.length === 0) return { edit: null }
+  if (!exists(top, rel)) return { refused: `has the team's roster ${rel} deleted, and Crew never removes it; restore it (git checkout -- ${rel}), then run this again` }
+  const text = readFileSync(path.join(top, ...rel.split("/")), "utf8")
+  const base = headPeople(git, rel)
+  return { edit: { base: base === null ? null : normalized(base), ours: normalized(text), eol: eolOf(text) } }
+}
+
+// Takes the member's roster change out of the clone, which the join's own commits need clean; `putBack` returns it.
+function takeEdit(git, top, rel, edit) {
+  git(["reset", "--quiet", "--", rel])
+  if (edit.base === null) unlinkSync(path.join(top, ...rel.split("/")))
+  else git.must(["checkout", "--", rel], "people")
+}
+
+// What the roster `theirs` (the file on the default branch, or null when it has none) becomes with `change` on top:
+// `{ text }` (null when it already has the change), `{ conflict: true }` or `{ error }`. A roster that was missing
+// when the change was made was Crew's starter, so two people creating it at once both land.
+function withPeopleChange(change, theirs, spawnGit) {
+  if (theirs === null) return change.base === null ? { text: change.ours } : { conflict: true }
+  const merged = mergePeople({ base: change.base ?? starterRoster(), ours: change.ours, theirs, spawnGit })
+  return merged.text === normalized(theirs) ? { text: null } : merged
+}
+
+// Writes `change` onto the clone's roster for a shared write, in the file's own line ending, and returns the paths it
+// wrote ([] when the default branch already has the change). A change that does not merge stops at stage `people`.
+function writePeople(top, rel, change, spawnGit, created) {
+  const file = path.join(top, ...rel.split("/"))
+  const raw = existsSync(file) ? readFileSync(file, "utf8") : null
+  const merged = withPeopleChange(change, raw, spawnGit)
+  if (merged.conflict) throw new Failed("people", `a teammate changed the same lines of the team's roster ${rel} first`)
+  if (merged.error !== undefined) throw new Failed("people", `the team's roster ${rel} could not be merged: ${merged.error}`)
+  if (merged.text === null) return []
+  writeFiles(top, { [rel]: withEol(merged.text, raw === null ? change.eol : eolOf(raw)) }, created)
+  return [rel]
+}
+
+// Puts the member's roster change back in the clone after a run that did not land it, carried onto the clone's
+// current commit, so a rerun merges it against the file it now sits on and never undoes a teammate's change.
+function putBack(git, top, rel, change, spawnGit) {
+  const merged = withPeopleChange(change, headPeople(git, rel), spawnGit)
+  if (typeof merged.text === "string") writeFiles(top, { [rel]: withEol(merged.text, change.eol) }, new Set())
+}
+
+// What to do after a roster change a teammate's change conflicts with. The clone is left clean on the default branch
+// as GitHub has it, so the roster is read again as it is now.
+const peopleNext = (rel, action) => ` Next: read the team's roster ${rel} again as it is now, write the entry again in it, and run ${action} --apply again; it adds only what is missing.`
+
+function peopleFailure(git, base, error) {
+  if (error.stage !== "people") return false
+  git(["merge", "--quiet", "--ff-only", `origin/${base}`])
+  return true
+}
+
+const peopleChangeKind = (pending, change) => (pending.edit === null ? (change === null ? "none" : "starter") : pending.edit.base === null ? "create" : "edit")
+
+// The roster change as a plan shows it: what kind of change, and for an edit, Git's diff of it.
+function describePeople(git, rel, pending, change) {
+  const kind = peopleChangeKind(pending, change)
+  return { path: rel, change: kind, ...(kind === "edit" ? { diff: git(["diff", "HEAD", "--", rel], { raw: true }).stdout } : {}) }
+}
+
 // ── join ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 // Who a desk was added for, from the identity line in the commits that added its files: their identities, or none.
@@ -974,35 +1094,68 @@ function deskOwners(git, desk) {
   return [...log.stdout.matchAll(new RegExp(`^${IDENTITY_TRAILER}:[ \\t]*(\\S.*)$`, "gmu"))].map((match) => match[1].trim())
 }
 
-// Why `desk`, already on the default branch with no roster row, is not this identity's to resume; or null.
+// Why `desk`, already on the default branch with no desk-list row, is not this identity's to resume; or null.
 function deskClaimProblem(git, desk, identity) {
   const owners = deskOwners(git, desk)
   if (owners.some((owner) => sameIdentity(owner, identity))) return null
-  if (owners.length > 0) return `${desk}/ is already on the default branch, added for ${owners[0]}, whose roster row has not landed; choose another alias`
-  return `${desk}/ is already on the default branch with no roster row, and nothing records whose it is; choose another alias`
+  if (owners.length > 0) return `${desk}/ is already on the default branch, added for ${owners[0]}, whose desk-list row has not landed; choose another alias`
+  return `${desk}/ is already on the default branch with no desk-list row, and nothing records whose it is; choose another alias`
+}
+
+// `current` (a desk file, or undefined when the template has none) with the member's own words added at its end.
+function withNote(current, note) {
+  if (current === undefined) return `${note}\n`
+  const eol = eolOf(current)
+  return `${current}${current.endsWith("\n") ? eol : `${eol}${eol}`}${withEol(note, eol)}${eol}`
+}
+
+// The member's own words for their desk: `[[desk file, text]]`, or a refusal for a file that cannot be read or is empty.
+function readNotes({ about, preferences }) {
+  const notes = []
+  for (const [flag, file, target] of [["--about", about, "README.md"], ["--preferences", preferences, "AGENTS.md"]]) {
+    if (file === undefined) continue
+    let text = ""
+    try {
+      text = toLf(readFileSync(file, "utf8")).trim()
+    } catch {
+      text = ""
+    }
+    if (text === "") return { refused: `${flag} ${file} cannot be read or is empty` }
+    notes.push([target, text])
+  }
+  return { notes }
 }
 
 /**
- * joinWorkspace({ repo, identity, alias, apply? }) -> { state, ... }
+ * joinWorkspace({ repo, identity, alias, apply?, about?, preferences? }) -> { state, ... }
+ *
+ * `about` and `preferences` are Markdown files outside the clone, added to the new desk's README.md (who they are) and
+ * AGENTS.md (how they like their agent to work) before its first push. An uncommitted change to the team's roster (the
+ * agent's entry for the newcomer) is the only uncommitted change the clone may hold; it lands in the same pull request
+ * as the desk-list row, merged three ways with what teammates changed meanwhile. A workspace with no roster file yet
+ * gets Crew's starter in that pull request.
  *
  * `state`: "plan", "joined", "member" (the identity already has a row; nothing written), "pr_open" (the desk is pushed
- * and the roster row waits in an open pull request), "not_crew", "refused" or "failed" (with `stage`).
+ * and the row waits in an open pull request), "not_crew", "refused" or "failed" (with `stage`; at `people`, a
+ * teammate changed the same roster lines first).
  */
-export async function joinWorkspace({ repo, identity, alias, apply = false, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
+export async function joinWorkspace({ repo, identity, alias, apply = false, about, preferences, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
   const refuse = (message) => ({ action: "join", state: "refused", repo, identity, alias, message: `Nothing was written: ${message}.` })
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
   if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
-  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
+  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the desk list as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
   if (status.member !== null) return memberResult(status.member)
   const problem = aliasProblem(alias)
   if (problem !== null) return refuse(problem)
+  const { notes, refused } = readNotes({ about, preferences })
+  if (refused !== undefined) return refuse(refused)
   const top = status.repo
   const git = gitIn(top, spawnGit)
-  // Who holds what on the roster now: this identity's row, or another identity's row for the alias.
+  // Who holds what on the desk list now: this identity's row, or another identity's row for the alias.
   const holders = () => {
     const { crew, roster: rows } = crewWorkspace(top)
-    if (!crew) throw new Failed("roster", "the default branch on GitHub is no longer a Crew workspace: its roster and desks/ are gone")
+    if (!crew) throw new Failed("roster", "the default branch on GitHub is no longer a Crew workspace: its desk list and desks/ are gone")
     return { mine: rows.find((row) => row.alias !== "" && sameIdentity(row.identity, identity)), other: rows.find((row) => row.alias === alias && !sameIdentity(row.identity, identity)) }
   }
   const taken = (row) => `the alias ${alias} belongs to ${row.identity}; choose another alias`
@@ -1017,19 +1170,36 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
   }
   const resumed = exists(top, desk)
   if (resumed && deskProblem() !== null) return refuse(deskProblem())
+  const people = status.people.path
+  const pending = pendingPeople(git, top, people)
+  if (pending.refused !== undefined) return refuse(`this clone ${pending.refused}`)
+  // The roster change: the agent's edit, or Crew's starter when the workspace has no roster file yet.
+  const change = pending.edit ?? (status.people.exists ? null : { base: null, ours: starterRoster(), eol: "\n" })
   const member = { alias, identity, origin: status.origin }
   const roster = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : null
   const header = markdownTables(roster ?? "").find((table) => table.header.includes("alias") && table.header.includes("identity"))?.header ?? ROSTER_COLUMNS
-  const result = { action: "join", repo: top, identity, alias, desk, files, row: rosterRow(header, member), tooling: status.tooling }
+  const answers = resumed ? [] : notes.map(([target]) => `${desk}/${target}`)
+  const result = { action: "join", repo: top, identity, alias, desk, files, answers, row: rosterRow(header, member), people: describePeople(git, people, pending, change), tooling: status.tooling }
   if (!apply) {
     const deskPart = resumed ? `${desk}/ is already in place, so joining adds` : `Joining adds ${desk}/ (${plural(files.length, "file")}) and then`
-    return { ...result, state: "plan", message: `Plan only: nothing was written. ${deskPart} the roster row for ${identity}. Run again with --apply to make the change.` }
+    const peoplePart = {
+      none: ` The team's roster ${people} has no change in this clone, so it will not list ${identity} yet.`,
+      starter: ` The team's roster ${people} does not exist yet; it is created from Crew's starter, with no entry for ${identity} yet.`,
+      create: ` The team's roster ${people} is created as this clone has it, in the same pull request as the row.`,
+      edit: ` The change to the team's roster ${people} lands in the same pull request as the row.`,
+    }[result.people.change]
+    const notesPart = notes.length === 0 ? "" : answers.length === 0 ? ` ${desk}/ is already pushed, so --about and --preferences are not added to it again.` : ` What they told us goes into ${answers.join(" and ")}.`
+    return { ...result, state: "plan", message: `Plan only: nothing was written. ${deskPart} the desk-list row for ${identity}.${peoplePart}${notesPart} Run again with --apply to make the change.` }
   }
   const toolingNote = status.tooling === null ? "" : ` ${status.tooling.message}`
   const created = new Set()
   let deskPushed = false
+  let checkout
+  // Whether the roster change needs no putting back: there is none, it landed, or it conflicted.
+  let settled = pending.edit === null
   try {
-    const checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result }))
+    if (pending.edit !== null) takeEdit(git, top, people, pending.edit)
+    checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result }))
     if (checkout.refused) return refuse(`this clone ${checkout.refused}`)
     if (checkout.mode !== "remote") return refuse("this clone has no origin with a default branch to push the desk to")
     // The clone is now the default branch as it is: someone may have joined, or taken the alias or the desk, meanwhile.
@@ -1046,47 +1216,114 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
           if (claim !== null) throw new Failed("desk", claim)
           return null
         }
-        writeFiles(top, Object.fromEntries(template.map((rel) => [`${desk}/${rel}`, render(readFileSync(path.join(top, ...TEMPLATE.split("/"), ...rel.split("/")), "utf8"), member)])), created)
+        const deskFiles = Object.fromEntries(template.map((rel) => [`${desk}/${rel}`, render(readFileSync(path.join(top, ...TEMPLATE.split("/"), ...rel.split("/")), "utf8"), member)]))
+        for (const [target, note] of notes) deskFiles[`${desk}/${target}`] = withNote(deskFiles[`${desk}/${target}`], note)
+        writeFiles(top, deskFiles, created)
         return [`${desk}/`]
       }
       // The member's own desk: they are its only writer, so it goes straight to the default branch.
       await landByPush({ git, base: checkout.base, write: writeDesk, message: `Crew: add ${alias}'s desk\n\n${IDENTITY_TRAILER}: ${identity}`, created })
       deskPushed = true
     }
-    let settled
+    let mine
     const writeRow = () => {
       const now1 = holders()
       if (now1.mine !== undefined) {
-        settled = now1.mine
+        mine = now1.mine
         return null
       }
       if (now1.other !== undefined) throw new Failed("alias", `${taken(now1.other)}. ${desk}/ is pushed and unused`)
       const current = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : null
       writeFiles(top, { [ROSTER]: withRosterRow(current, member) }, created)
-      return [ROSTER]
+      return [ROSTER, ...(change === null ? [] : writePeople(top, people, change, spawnGit, created))]
     }
     const mark = `${IDENTITY_TRAILER}: ${identity}`
     const prefix = `crew/join-${alias}-`
-    const reuse = await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(prefix)}[0-9a-z]+$`, "u"), identity, paths: [ROSTER] })
-    const message = `Crew: add ${alias} to the roster`
-    const body = `${message}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.\n\n${mark}`
+    const reuse = await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(prefix)}[0-9a-z]+$`, "u"), identity, paths: change === null ? [ROSTER] : [ROSTER, people] })
+    const message = `Crew: add ${alias} to the team`
+    const body = `${message}: the desk-list row${change === null ? "" : " and the team's roster"}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.\n\n${mark}`
     const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeRow, message, body, prefix, stamp: now(), hub: checkout.hub, wait, result, reuse, created })
     if (resumed) result.resumed = true
     if (landed.unchanged) {
-      const unused = settled.alias === alias ? "" : ` It joined as ${settled.alias} from another machine meanwhile, so ${desk}/ is unused.`
-      return memberResult(settled, unused)
+      const unused = mine.alias === alias ? "" : ` It joined as ${mine.alias} from another machine meanwhile, so ${desk}/ is unused.`
+      return memberResult(mine, unused)
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
+    settled = true
     const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
     const missing = [
-      [holders().mine?.alias !== alias, `the roster row for ${identity} as ${alias}`, "roster row"],
+      [holders().mine?.alias !== alias, `the desk-list row for ${identity} as ${alias}`, "desk-list row"],
       [!files.every((rel) => exists(top, rel)), `${desk}/`, "desk"],
     ].filter(([gone]) => gone)
     if (missing.length > 0) return notConfirmed(result, checkout.base, missing.map(([, item]) => item), `${identity}'s ${missing.map(([, , plain]) => plain).join(" and ")}`, "Next: run the same join again; it adds only what is missing.")
-    return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. ${next}` }
+    result.people.listed = exists(top, people) && listedIn(readFileSync(path.join(top, ...people.split("/")), "utf8"), [alias, identity])
+    const listedNote = result.people.listed ? ` The team's roster ${people} lists them.` : ` The team's roster ${people} does not list them yet.`
+    return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the desk list as ${alias}, with an own desk at ${desk}/. The desk-list row merged in ${result.pr}.${listedNote} ${next}` }
   } catch (error) {
-    return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; run join again to add the roster row.` : "")
+    settled = settled || peopleFailure(git, checkout?.base, error)
+    const pushed = deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; run join again to add the desk-list row.` : ""
+    return failedResult(result, error, `${pushed}${error.stage === "people" ? peopleNext(people, "join") : ""}`)
+  } finally {
+    if (!settled) putBack(git, top, people, pending.edit, spawnGit)
+  }
+}
+
+// ── roster ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * updateRoster({ repo, identity, apply? }) -> { state, ... }
+ *
+ * Lands the clone's uncommitted change to the team's roster, a member's edit (a contact who came up in the work, or
+ * their own entry), through a pull request merged at once, merged three ways with what teammates changed meanwhile.
+ * Only a member on the desk list changes it; a newcomer's entry lands with their join. `state`: "plan", "updated",
+ * "unchanged" (nothing to land), "pr_open", "not_crew", "refused" or "failed" (with `stage`; at `people`, a teammate
+ * changed the same lines first, and the clone is left on the default branch as it is now).
+ */
+export async function updateRoster({ repo, identity, apply = false, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
+  const action = "roster"
+  const status = await crewStatus({ repo, identity, spawnGit })
+  if (status.state !== "crew") return { action, ...status }
+  const refuse = (message) => ({ action, state: "refused", repo: status.repo, identity, message: `Nothing was written: ${message}.` })
+  if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
+  if (status.member === null) return refuse(`${identity} is not on the desk list, and the team's roster is changed by a teammate who is; join first with crew:join-crew, which adds the newcomer's own entry`)
+  const top = status.repo
+  const people = status.people.path
+  const { alias } = status.member
+  const git = gitIn(top, spawnGit)
+  const pending = pendingPeople(git, top, people)
+  if (pending.refused !== undefined) return refuse(`this clone ${pending.refused}`)
+  const result = { action, repo: top, identity, alias, people: describePeople(git, people, pending, pending.edit) }
+  if (pending.edit === null) return { ...result, state: "unchanged", message: `Nothing to land: the team's roster ${people} has no change in this clone. Edit it first, then run this again.` }
+  if (!apply) return { ...result, state: "plan", message: `Plan only: nothing was written. The change to the team's roster ${people} lands through a pull request merged at once. Run again with --apply to make the change.` }
+  const created = new Set()
+  let checkout
+  let settled = false
+  try {
+    takeEdit(git, top, people, pending.edit)
+    checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result }))
+    if (checkout.refused) return refuse(`this clone ${checkout.refused}`)
+    if (checkout.mode !== "remote") return refuse("this clone has no origin with a default branch to land the change on")
+    const write = () => {
+      const written = writePeople(top, people, pending.edit, spawnGit, created)
+      return written.length === 0 ? null : written
+    }
+    const mark = `${IDENTITY_TRAILER}: ${identity}`
+    const prefix = `crew/roster-${alias}-`
+    const reuse = await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(prefix)}[0-9a-z]+$`, "u"), identity, paths: [people] })
+    const message = `Crew: ${alias} updates the team's roster`
+    const body = `${message}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.\n\n${mark}`
+    const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write, message, body, prefix, stamp: now(), hub: checkout.hub, wait, result, reuse, created })
+    if (landed.open !== undefined) return openResult(result, landed, checkout.base, "Not in effect yet: ")
+    settled = true
+    if (landed.unchanged) return { ...result, state: "unchanged", message: `Nothing to land: the team's ${checkout.base} branch already has this change to ${people}.` }
+    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "updated", "Updated", "Teammates see the change once their copies are up to date.")
+    return { ...result, state: "updated", commit: landed.commit, message: `Updated: the change to the team's roster ${people} merged in ${result.pr}.` }
+  } catch (error) {
+    settled = peopleFailure(git, checkout?.base, error)
+    return failedResult(result, error, error.stage === "people" ? peopleNext(people, "roster") : "")
+  } finally {
+    if (!settled) putBack(git, top, people, pending.edit, spawnGit)
   }
 }
