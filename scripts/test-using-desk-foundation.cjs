@@ -2,6 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -254,6 +255,21 @@ function checkStartupHooks(skill) {
 }
 
 function main() {
+  assert.match(
+    section(read(skillPath), "Engineering work"),
+    /REQUIRED: Use `desk:draining-issues`/u,
+    "assigned issue drains must receive the shared method through the startup foundation",
+  );
+  const drain = read(path.join(pluginRoot, "skills", "draining-issues", "SKILL.md"));
+  assert.match(drain, /^name: draining-issues$/mu);
+  assert.match(drain, /^description: Use when .*draining issues.*issue drain.*prompt requests/mu);
+  // Byte-for-byte bundle of https://github.com/ourostack/ouroboros-skills/blob/main/skills/draining-issues/SKILL.md.
+  // Refresh from the canonical library and review its behavior before updating this digest.
+  assert.equal(
+    crypto.createHash("sha256").update(drain).digest("hex"),
+    "719d741ae94c107a35b5c3254eac48055a0034a0aad1c763c0f3cbc8335577ea",
+    "draining-issues must match the reviewed canonical library copy",
+  );
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
 
   const skill = read(skillPath);
