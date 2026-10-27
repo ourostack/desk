@@ -411,6 +411,8 @@ async function otherHosts() {
   await skill(`${cache}/entries/old`, "removed-since")
   await put(".copilot/installed-plugins/mkt/copilot-only/plugin.json", { name: "copilot-only" })
   await skill(".copilot/installed-plugins/mkt/copilot-only", "from-copilot")
+  // A folder at the deepest level read that holds no plugin is passed over, not searched further.
+  await put(".copilot/installed-plugins/mkt/not-a-plugin/notes.json", { note: "no manifest here" })
   await put(".codex/plugins/cache/mkt/codex-only/1.0.0/.codex-plugin/plugin.json", { name: "codex-only", version: "1.0.0" })
   await skill(".codex/plugins/cache/mkt/codex-only/1.0.0", "from-codex")
   return home
