@@ -114,7 +114,17 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       routing,
     };
     if (!validMarker(marker)) return "invalid";
-    await outbox.writeMarker(env, marker);
+    // A turn's capture runs detached, so it can land after the session's end is recorded (a session that ends right after a turn,
+    // as every `-p` run does). It must never undo that end: the read and the write share one lock per session, and a capture with
+    // no end keeps the end already recorded. Later activity in a resumed session still reopens it when derived (session-lifetime).
+    await outbox.withNamedLock(env, `marker-${marker.host}-${id}`, async () => {
+      if (!ended) {
+        const file = path.join(await outbox.factoryStateRoot(env), "markers", `${marker.host}-${id}.json`);
+        const recorded = await outbox.readMarker(env, file).catch(() => null);
+        if (recorded?.ended_at) Object.assign(marker, { end_reason: recorded.end_reason, ended_at: recorded.ended_at });
+      }
+      await outbox.writeMarker(env, marker);
+    }, { deskRoot });
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
     const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");

@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { promises as fs } from "node:fs"
+import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { Readable, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
@@ -15,6 +15,7 @@ import { ID, scratch, session } from "./_session_helpers.js"
 
 import { runBoundedHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
+const SESSION_END = fileURLToPath(new URL("../../../../../plugins/desk/hooks/session-end.cjs", import.meta.url))
 const WAIT_MS = 30000
 
 const stopPayload = (ctx, marker) => ({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" })
@@ -71,20 +72,44 @@ function collect() {
   return { stream: new Writable({ write(chunk, _encoding, done) { text += chunk; done() } }), text: () => text }
 }
 
+// Only the deadline case has a short deadline: the others must never race Node's start-up on a loaded machine.
 const cases = [
-  ["slow", "deadline", false],
-  ["exit", "exit 3", false],
+  ["slow", "deadline", false, 700],
+  ["exit", "exit 3", false, 20000],
   // SIGKILL, because a test runner's preload may handle SIGTERM.
-  ["signal", "signal SIGKILL", process.platform === "win32" ? "Windows has no signals" : false],
+  ["signal", "signal SIGKILL", process.platform === "win32" ? "Windows has no signals" : false, 20000],
 ]
-for (const [mode, reason, skip] of cases) {
+for (const [mode, reason, skip, deadlineMs] of cases) {
   test(`a bounded child that fails says why: ${reason}`, { skip }, () => scratch(async (ctx) => {
     const entry = await fakeEntry(ctx, mode)
     const stderr = collect()
     const stdout = collect()
     const input = Readable.from([JSON.stringify({ session_id: ID, cwd: ctx.desk, transcript_path: path.join(ctx.base, "t.jsonl"), hook_event_name: "Stop" })])
-    await runBoundedHook("claude", input, entry, { deadlineMs: 700, stderr: stderr.stream, stdout: stdout.stream, env: ctx.env })
+    await runBoundedHook("claude", input, entry, { deadlineMs, stderr: stderr.stream, stdout: stdout.stream, env: ctx.env })
     assert.equal(stderr.text(), `[desk-delivery] unverified: hook_worker_unavailable (${reason})\n`)
     assert.equal(stdout.text(), "")
   }))
 }
+
+// A turn's capture now runs detached, so when a session ends right after a turn (every `-p` run) the turn's capture can land
+// after the session-end capture. It must never undo the end that is already recorded.
+test("a turn-end capture that lands after session end keeps the recorded end", (t) => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const receipt = path.join(ctx.base, "slow-capture-done")
+  const slow = path.join(ctx.base, "slow-capture.cjs")
+  await fs.writeFile(slow, `if (process.argv.includes("--detached")) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000); process.on("exit", () => require("node:fs").writeFileSync(${JSON.stringify(receipt)}, "done")) }\n`)
+  const stop = spawnSync(process.execPath, [SCRIPT, "claude"], { env: { ...ctx.env, NODE_OPTIONS: `--require ${JSON.stringify(slow)}` }, input: JSON.stringify(stopPayload(ctx, marker)), encoding: "utf8", timeout: 5000 })
+  assert.equal(stop.status, 0, stop.stderr)
+  const end = spawnSync(process.execPath, [SESSION_END, "claude"], { env: { ...ctx.env, NODE_OPTIONS: "" }, input: JSON.stringify({ ...stopPayload(ctx, marker), hook_event_name: "SessionEnd", reason: "prompt_input_exit" }), encoding: "utf8", timeout: 5000 })
+  assert.equal(end.status, 0, end.stderr)
+  const deadline = Date.now() + WAIT_MS
+  const ended = async () => (await listMarkers(ctx.env))[0]?.end_reason === "prompt_input_exit"
+  while (!(await ended()) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(await ended(), true, "the session-end capture recorded the end")
+  while (!existsSync(receipt) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(existsSync(receipt), true, "the slow turn-end capture finished")
+  const [saved] = await listMarkers(ctx.env)
+  t.diagnostic(`marker after both captures: end_reason ${saved.end_reason}, ended_at ${saved.ended_at}`)
+  assert.equal(saved.end_reason, "prompt_input_exit")
+  assert.notEqual(saved.ended_at, null)
+}))
