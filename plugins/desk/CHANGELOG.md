@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.30 — 2026-10-27
+
+Crew can now start a team workspace in a new or existing repository, and a new teammate joins with one command. [`mcp/scripts/crew.js`](mcp/scripts/crew.js) (`status`, `start`, `join`) prints a plan first and changes nothing until `--apply`. Starting adds Crew's layout (`_meta/desks.md`, `desks/_template/`, `_shared/landscape/`, `_shared/decisions/`) and deletes, moves and overwrites nothing: every existing file stays byte-identical, except the root `AGENTS.md`, which gains one `## Crew workspace` section, and folders outside Crew's layout are listed for the team to move in with Crew's new `start-crew` skill.
+
+A workspace is a monorepo (the team's plugin in its own `plugins/`, as every workspace so far) or dual-repo (the plugin in a separate tooling repository, preferred for new teams). The new `_meta/crew.json` ([`src/desk/crew-config.js`](mcp/src/desk/crew-config.js)) records which; `join` installs the plugin from wherever it lives, or points to a tooling repository that has no plugin yet. A repository that is not a Crew workspace yet gets one plain message pointing to `start-crew`.
+
+Every shared write goes through a pull request the script merges itself, as `lesson_add` does, signed in as the gh account that can push to the workspace. Run again after it left a pull request open, it reuses that pull request instead of opening another, but only one the same account opened from the workspace's own repository for this exact start or join, changing exactly its files, and only after rebuilding it from this run's own write; anyone else's pull request is never merged. It merges with a method the repository allows and reports success only once the default branch, read back as Git stores it, holds the change, so clones that convert line endings (Git for Windows' default) are not misreported. When a teammate's change lands first, it checks again that no alias or person gets two roster rows and that no file a teammate added is overwritten. A first push to an empty repository that fails takes its commit back, and a top-level README or AGENTS.md spelled in another case is kept rather than joined by a second file. A dual-repo start checks that the tooling repository exists and holds the declared plugin and marketplace. The install command always fetches the team plugin's current version, and text added to files with Windows line endings keeps them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.29 — 2026-10-27
 
 A session end is no longer lost after a turn-end capture is killed while it records the session. Its lock on the session's factory marker stayed behind, and later captures waited on it for 10 minutes, longer than their own 60-second limit, so they gave up without recording the end. A capture now removes a marker lock whose holder has ended ([`hooks/lib/factory-end.cjs`](hooks/lib/factory-end.cjs)). A turn-end capture also leaves the marker as it is when the marker exists but cannot be read, instead of replacing an end it could not see.
