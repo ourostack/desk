@@ -133,7 +133,7 @@ agency plugin install github:ourostack/desk:plugins/desk@main --cache-policy aut
 agency plugin list
 ```
 
-Installing Desk pulls in Superpowers and Plain Language (`plugins/desk/agency.json`). `--cache-policy auto --cache-ttl 0` makes each new session start from the copy already downloaded and fetch the latest `main` in the background, so an update loads at the next session with no further step. Leave out `--fetch-mode foreground`: it downloads every plugin before the session starts, which slows each start and makes the GitHub Copilot app in Agency mode fail with "Agency startup timed out" (the app gives Agency 15 seconds).
+Installing Desk pulls in Superpowers and Plain Language (`plugins/desk/agency.json`). `--cache-policy auto --cache-ttl 0` makes each new session start from the copy already downloaded and fetch the latest `main` in the background, so an update loads at the next session with no further step. Leave out `--fetch-mode foreground`: it downloads every plugin before the session starts, which slows each start and makes the GitHub Copilot app in Agency mode fail with "Agency startup timed out" (the app gives Agency 30 seconds).
 
 ### 3. Host settings
 
