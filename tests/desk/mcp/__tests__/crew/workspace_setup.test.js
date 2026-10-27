@@ -240,20 +240,20 @@ test("a conflict rebuilds the branch on the new main and merges; GitHub still wo
       return { code: 0, stdout: JSON.stringify({ state: "OPEN", mergeable: views === 1 ? "UNKNOWN" : "CONFLICTING", mergeStateStatus: "DIRTY" }) }
     },
   })
-  // A teammate lands a change after the branch is pushed, so the first merge cannot fast-forward.
+  // A teammate adds to the end of AGENTS.md after the branch is pushed, where the start appends too: a real conflict.
   let created = false
   const racing = async (args) => {
     const answer = await gh(args)
     if (args[1] === "create" && !created) {
       created = true
-      await pushFromElsewhere(repo, { "guides/new-guide.md": "Placeholder\n" })
+      await pushFromElsewhere(repo, { "AGENTS.md": `${CIT_SHAPED["AGENTS.md"]}\nA teammate's placeholder line.\n` })
     }
     return answer
   }
   const result = await startWorkspace(startCit(repo, { apply: true, gh: racing }))
   assert.equal(result.state, "published", result.message)
   assert.ok(state.merges >= 2)
-  assert.ok(mainFiles(repo.bare).includes("guides/new-guide.md"))
+  assert.match(onMain(repo.bare, "AGENTS.md"), /A teammate's placeholder line\.\n\n## Crew workspace\n/u)
   assert.ok(mainFiles(repo.bare).includes("_meta/crew.json"))
 })
 

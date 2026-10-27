@@ -25,6 +25,11 @@ The tooling repository and its files are made by hand, before `start`: the scrip
 
 The workspace records its setup in `_meta/crew.json`; `crew.js status` reports it as `setup`.
 
+## What the repository must allow
+
+- **Direct pushes to the default branch by members.** Each member's own desk is pushed straight to the default branch when they join, so branch protection or a ruleset that requires pull requests for the default branch stops every join (GitHub's `GH006` "Protected branch update failed"). Keep the default branch open to pushes from members, or exempt them; Crew's shared files still change only through pull requests.
+- **Members merging Crew's pull requests.** The script merges its own `crew/` pull requests at once, with whichever merge method the repository allows (squash first, then a merge commit, then rebase). A required review or required check leaves each shared write waiting as `pr_open` until someone merges it.
+
 ## Start
 
 1. Run `status` on the team's local clone. `crew` means it already is a Crew workspace: nothing to set up; teammates join with `crew:join-crew`. `not_crew` means continue. For a dual-repo workspace, make sure the tooling repository exists first (see above).
@@ -37,12 +42,12 @@ Starting deletes, moves and overwrites nothing. Every existing file stays byte-i
 
 `--apply` needs a clean clone on the default branch, in step with origin; the script refuses anything else before writing. It lands the change through a pull request it merges itself, so it does not depend on a team's own merge workflow. What each result means, and what to do next:
 
-- `published`: the change is on the default branch, with the pull request it merged in. Tell teammates to join with `crew:join-crew`.
-- `pr_open`: the change waits in an open pull request and is not in effect yet; `reason` is GitHub's (`BLOCKED`: the branch's rules need a review, a check or someone allowed to merge). Tell the person the message's plain reason. Running the same `start --apply` again later reuses that pull request and tries to merge it again; it never opens a second one.
+- `published`: the change is on the default branch, with the pull request it merged in; the script read the default branch back and found it there. Tell teammates to join with `crew:join-crew`. With `confirmed: false`, GitHub merged it but this clone could not fetch it afterwards: run `git pull` in the clone, then `status`, which says `crew`.
+- `pr_open`: the change waits in an open pull request and is not in effect yet; `reason` is GitHub's (`BLOCKED`: the branch's rules need a review, a check or someone allowed to merge). Tell the person the message's plain reason. Running the same `start --apply` again later, signed in as the same account, reuses that pull request and tries to merge it again; it never opens a second one. It reuses only a pull request it opened itself, unchanged; anyone else's `crew/start-` pull request is left alone and never merged.
 - `committed`: a local repository with no origin. Add the team's GitHub repository as origin and run `start --apply` again; it pushes the commit.
-- `refused`: nothing was written. Fix what the message names (a dirty clone, a file Crew would overwrite, a missing tooling repository) and run it again.
-- `failed`: it stopped at the named `stage`, and the clone is back as it was, including an empty repository whose first push was refused: nothing that looks like a workspace is left behind. Fix the cause (often `account`: sign in to gh as an account that can push) and run it again.
-- `already_crew`: nothing to do; teammates join with `crew:join-crew`. A clone holding a start that never reached GitHub gets a plan or a push instead.
+- `refused`: nothing was written. Fix what the message names (a dirty clone, a file Crew would overwrite, a missing tooling repository) and run it again. A local start whose origin GitHub created with a README or other first commit is refused too: recreate the GitHub repository empty and run `start --apply` again, or clone the GitHub repository and start in that clone.
+- `failed`: it stopped at the named `stage`, and the clone is back as it was, including an empty repository whose first push was refused: nothing that looks like a workspace is left behind. Fix the cause (often `account`: sign in to gh as an account that can push) and run it again. `verify` is different: GitHub reported the pull request merged, but the default branch, read back, does not hold what the start wrote; run `status` and tell the person what it shows instead of running `start` again.
+- `already_crew`: nothing to do; teammates join with `crew:join-crew`. A clone holding a start that never reached an empty GitHub repository gets a plan or a push instead, and a clone whose first push GitHub took although the answer was lost is brought up to date.
 
 Do not fall back to editing the files by hand.
 

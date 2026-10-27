@@ -338,6 +338,17 @@ const exists = (top, rel) => {
   }
 }
 
+// The name a top-level file has in this clone, compared without case (a repository may hold \`readme.md\` or
+// \`Agents.md\`), or null. On a case-sensitive file system the exact name wins.
+function rootName(top, name) {
+  const entries = readdirSync(top)
+  if (entries.includes(name)) return name
+  return entries.find((entry) => entry.toLowerCase() === name.toLowerCase()) ?? null
+}
+
+// Whether a file Crew would add is already there: a top-level one in any case.
+const present = (top, rel) => (rel.includes("/") ? exists(top, rel) : rootName(top, rel) !== null)
+
 // Writes `files` and adds to `created` each folder it had to make, outermost first, so a failure can remove them.
 function writeFiles(top, files, created) {
   for (const [rel, content] of Object.entries(files)) {
@@ -474,7 +485,9 @@ async function prepareCheckout(git, connect) {
   const base = named
   if (branch !== base) return { refused: `is on ${branch ?? "a detached HEAD"}, not the default branch ${base}; switch to ${base} first` }
   fetchBase(git, base)
-  if (!git(["merge-base", "--is-ancestor", "HEAD", `origin/${base}`]).ok) return { refused: `has commits that are not on origin/${base}; push or drop them first` }
+  // A clone with no commit (a first push GitHub took although its answer was lost) simply takes origin's branch.
+  const born = git(["rev-parse", "--verify", "--quiet", "HEAD"]).ok
+  if (born && !git(["merge-base", "--is-ancestor", "HEAD", `origin/${base}`]).ok) return { refused: `has commits that are not on origin/${base}; push or drop them first` }
   git.must(["merge", "--quiet", "--ff-only", `origin/${base}`], "fetch")
   return { mode: "remote", base, hub }
 }
@@ -511,14 +524,59 @@ const ghJson = (answer) => {
   }
 }
 
-// An open pull request a run of this script left behind, from a branch named `prefix...` and carrying `mark` in its
-// body when one is given; or undefined.
-async function openPullRequest(hub, origin, prefix, mark) {
-  const answer = await hub(["pr", "list", "--repo", origin, "--state", "open", "--json", "url,headRefName,body", "--limit", "100"])
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+
+// The identities a pull request body names on lines of their own.
+const identityLines = (body) => [...String(body).matchAll(new RegExp(`^[ \\t]*${IDENTITY_TRAILER}:[ \\t]*(\\S.*?)[ \\t]*$`, "gmu"))].map((match) => match[1])
+
+/**
+ * The open pull request an earlier run of this script left behind, or undefined. Only one that is certainly this
+ * run's own work is reused, because it is then merged as it is: opened by `account`, from a branch in this repository
+ * (not a fork) named by `branch`, aimed at `base`, naming `identity` on a line of its own when one is given, and
+ * changing exactly `paths`. Anyone else's pull request is left alone.
+ */
+async function openPullRequest(hub, origin, { account, base, branch, identity, paths }) {
+  const answer = await hub(["pr", "list", "--repo", origin, "--state", "open", "--author", account, "--json", "url,headRefName,body,author,isCrossRepository,baseRefName,files", "--limit", "100"])
   if (answer.code !== 0) throw new Failed("pull_request", `could not list the open pull requests: ${firstLine(answer.stderr)}`)
   const list = ghJson(answer)
-  const found = (Array.isArray(list) ? list : []).find((pr) => String(pr?.headRefName).startsWith(prefix) && (mark === undefined || String(pr?.body).includes(mark)))
+  const wanted = [...paths].sort().join("\n")
+  const filesOf = (pr) => (Array.isArray(pr?.files) ? pr.files.map((file) => String(file?.path)).sort().join("\n") : null)
+  const found = (Array.isArray(list) ? list : []).find(
+    (pr) =>
+      sameIdentity(pr?.author?.login, account) &&
+      pr?.isCrossRepository === false &&
+      pr?.baseRefName === base &&
+      branch.test(String(pr?.headRefName)) &&
+      (identity === undefined || identityLines(pr?.body).some((named) => sameIdentity(named, identity))) &&
+      filesOf(pr) === wanted,
+  )
   return found === undefined ? undefined : { url: found.url, branch: found.headRefName }
+}
+
+// A branch name `prefix<stamp>` that no branch on origin has yet, counting the stamp up from `stamp`.
+function freeBranch(git, prefix, stamp) {
+  for (let next = stamp; ; next += 1) {
+    const name = `${prefix}${next.toString(36)}`
+    const seen = git(["ls-remote", "--heads", git.remote, `refs/heads/${name}`], { network: true })
+    if (!seen.ok) throw new Failed("fetch", `could not reach origin: ${firstLine(seen.stderr)}`)
+    if (seen.stdout === "") return name
+  }
+}
+
+const MERGE_METHODS = [
+  ["--squash", "squashMergeAllowed"],
+  ["--merge", "mergeCommitAllowed"],
+  ["--rebase", "rebaseMergeAllowed"],
+]
+
+// The `gh pr merge` flag for a merge method `origin` allows: squash first, then a merge commit, then rebase.
+async function mergeMethod(hub, origin) {
+  const answer = await hub(["repo", "view", origin, "--json", MERGE_METHODS.map(([, field]) => field).join(",")])
+  if (answer.code !== 0) throw new Failed("pull_request", `could not read which merge methods ${origin} allows: ${firstLine(answer.stderr)}`)
+  const allowed = ghJson(answer)
+  const method = MERGE_METHODS.find(([, field]) => allowed[field] === true)
+  if (method === undefined) throw new Failed("pull_request", `${origin} allows no merge method gh can use (squash, merge commit or rebase)`)
+  return method[0]
 }
 
 // Commits what `write` writes and pushes it to the default branch; when the branch moved, rebuilds on it and pushes
@@ -554,10 +612,11 @@ const prView = async (hub, url) => ghJson(await hub(["pr", "view", url, "--json"
  * would add; it throws a Failed when a teammate's change makes the write wrong. On a conflict it runs again on the new
  * default branch; a rebuild with nothing left to add, or that fails, closes the pull request.
  */
-async function landByPullRequest({ git, base, origin, write, message, body, branch, hub, wait, result, reuse, created }) {
+async function landByPullRequest({ git, base, origin, write, message, body, prefix, stamp, hub, wait, result, reuse, created }) {
   if (origin === null) throw new Failed("pull_request", "this workspace's shared writes land through a GitHub pull request, and this clone's origin is not on GitHub")
   const start = git(["rev-parse", "HEAD"]).stdout
-  const name = reuse?.branch ?? branch
+  const method = await mergeMethod(hub, origin)
+  const name = reuse?.branch ?? freeBranch(git, prefix, stamp)
   let paths = []
   let pushed = false
   const unpush = () => git(["push", "--quiet", git.remote, "--delete", name], { network: true })
@@ -593,7 +652,7 @@ async function landByPullRequest({ git, base, origin, write, message, body, bran
     let state = {}
     let refusal = ""
     for (let attempt = 1; ; attempt += 1) {
-      const answer = await hub(["pr", "merge", result.pr, "--squash"])
+      const answer = await hub(["pr", "merge", result.pr, method])
       refusal = answer.code === 0 ? "" : firstLine(answer.stderr)
       state = await prView(hub, result.pr)
       // A merge command that succeeded may only have queued the pull request: only GitHub's own state says it merged.
@@ -633,10 +692,13 @@ async function landByPullRequest({ git, base, origin, write, message, body, bran
       result.branch = name
       return { open: state.mergeStateStatus ?? "unknown", refusal }
     }
-    fetchBase(git, base)
-    git.must(["merge", "--quiet", "--ff-only", `origin/${base}`], "fetch")
     unpush()
-    return { commit: state.mergeCommit?.oid ?? git(["rev-parse", "HEAD"]).stdout }
+    const commit = state.mergeCommit?.oid ?? null
+    // GitHub merged it: a fetch that fails now leaves the change in effect, unconfirmed by this clone.
+    const fetched = git(["fetch", "--quiet", git.remote, `+refs/heads/${base}:refs/remotes/origin/${base}`], { network: true })
+    if (!fetched.ok) return { commit, unfetched: firstLine(fetched.stderr) }
+    git.must(["merge", "--quiet", "--ff-only", `origin/${base}`], "fetch")
+    return { commit: commit ?? git(["rev-parse", "HEAD"]).stdout }
   } catch (error) {
     if (pushed && result.pr === undefined) unpush()
     restore(git, base, start, paths, created, currentBranch(git) === base ? undefined : name)
@@ -649,6 +711,12 @@ function failedResult(result, error, extra = "") {
   const open = result.pr ? ` The pull request ${result.pr} is open.` : ""
   return { ...result, state: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the shared write stopped at ${error.stage} (${error.message}).${open}${extra}` }
 }
+
+// GitHub reports the pull request merged, yet the default branch, read back, does not hold `missing`.
+const notConfirmed = (result, base, missing) => ({ ...result, state: "failed", stage: "verify", reason: `${base} does not hold ${missing.join(", ")}`, message: `Not confirmed: GitHub reports ${result.pr} merged, but ${base} does not hold ${missing.join(", ")}. Someone may have changed ${base} since. Run crew.js status to see the workspace as it is.` })
+
+// GitHub merged the pull request, and this clone could not fetch the default branch to read it back.
+const unconfirmedResult = (result, landed, base, state, done, next) => ({ ...result, state, confirmed: false, commit: landed.commit, message: `${done}: GitHub merged ${result.pr}, but this clone could not fetch ${base} afterwards to confirm it (${landed.unfetched}). Run git pull, then crew.js status to confirm. ${next}` })
 
 // A pull request left open, with GitHub's reason in plain words and the next step.
 function openResult(result, landed, base, lead) {
@@ -672,15 +740,23 @@ function declarationFor({ tooling }) {
 
 // A clone that already holds a Crew workspace whose origin has no commits: a start whose first push never happened.
 // A rerun pushes it; any other Crew workspace has nothing to start.
-async function finishStart({ action, top, git, apply, connect, result }) {
-  const already = { action, state: "already_crew", repo: top, changes: [], message: "This repository is already a Crew workspace; nothing to change. Teammates join it with crew:join-crew." }
+const alreadyCrew = (action, top) => ({ action, state: "already_crew", repo: top, changes: [], message: "This repository is already a Crew workspace; nothing to change. Teammates join it with crew:join-crew." })
+
+async function finishStart({ action, top, git, apply, connect, result, origin }) {
+  const already = alreadyCrew(action, top)
   // A clone that ever fetched a commit from its origin has a remote-tracking branch: that origin is not empty.
   const fetched = git(["for-each-ref", "--count=1", "refs/remotes/origin/"]).stdout !== ""
   if (fetched || !git(["config", "--get", "remote.origin.url"]).ok || !git(["rev-parse", "--verify", "--quiet", "HEAD"]).ok) return already
   try {
     await connect()
     const { empty, named = currentBranch(git) } = remoteHead(git)
-    if (!empty) return already
+    if (!empty) {
+      // Origin has commits: this start is on GitHub only if origin's branch holds it. Fetched without a
+      // remote-tracking branch, so a rerun asks again.
+      git.must(["fetch", "--quiet", git.remote, `refs/heads/${named}`], "fetch", "could not fetch from origin: ", { network: true })
+      if (git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"]).ok) return already
+      return { ...result, state: "refused", changes: [], message: `Nothing was pushed: this clone holds a Crew workspace that is not on GitHub, and ${origin}'s ${named} already has commits this clone does not share (GitHub's "Add a README" option makes one). Create the GitHub repository empty and run start again, or clone it and run start in that clone.` }
+    }
     if (!apply) return { ...result, state: "plan", changes: [], message: `Plan only: nothing was written. This clone already holds a Crew workspace that is not on GitHub yet: its origin has no commits. Run again with --apply to push it to ${named}.` }
     git.must(["push", "--quiet", git.remote, `HEAD:refs/heads/${named}`], "push", "the push was refused: ", { network: true })
     return { ...result, state: "published", changes: [], commit: git(["rev-parse", "HEAD"]).stdout, message: `Started: this clone's Crew workspace, which was not on GitHub yet, is pushed to ${named}. Teammates join it with crew:join-crew.` }
@@ -707,7 +783,7 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   const parsed = parseCrewConfig(JSON.stringify(declaration))
   const result = { action, repo: top, setup: parsed.setup, declaration: { tooling: parsed.tooling } }
   const connect = () => connectTo(git, origin, { gh, result })
-  if (crewWorkspace(top).crew) return finishStart({ action, top, git, apply, connect, result })
+  if (crewWorkspace(top).crew) return finishStart({ action, top, git, apply, connect, result, origin })
   if (parsed.problems.length > 0) return refuse(parsed.problems.join("; "))
   if (founder !== undefined) {
     const problem = aliasProblem(founder.alias)
@@ -719,13 +795,13 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   const files = {}
   if (!exists(top, FACTS)) files[`${FACTS}README.md`] = HOME_README.facts
   if (!exists(top, DECISIONS)) files[`${DECISIONS}README.md`] = HOME_README.decisions
-  if (!exists(top, "README.md")) files["README.md"] = startReadme(team ?? path.basename(top))
+  if (rootName(top, "README.md") === null) files["README.md"] = startReadme(team ?? path.basename(top))
   files[CONFIG] = `${JSON.stringify(declaration, null, 2)}\n`
   for (const [rel, content] of Object.entries(TEMPLATE_FILES)) files[`${TEMPLATE}${rel}`] = content
   if (founder !== undefined) {
     for (const [rel, content] of Object.entries(TEMPLATE_FILES)) files[`${deskOf(founder.alias)}/${rel}`] = render(content, founder)
   }
-  const conflicts = [...Object.keys(files), ROSTER].filter((rel) => exists(top, rel)).sort()
+  const conflicts = [...Object.keys(files), ROSTER].filter((rel) => present(top, rel)).sort()
   if (conflicts.length > 0) return refuse(`${conflicts.join(", ")} already exists, and starting a crew never overwrites a file`)
 
   // Where the team's plugin is: the tooling repository must hold what is declared; a monorepo's plugin must be there.
@@ -740,33 +816,45 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     if (plugin?.several) return refuse(`this repository has several plugins in plugins/ (${plugin.several.join(", ")}); name the team's with --tooling-path plugins/<name> --tooling-plugin <name>`)
   }
 
-  const agentsAtPlan = exists(top, "AGENTS.md")
-  const changes = [{ path: "AGENTS.md", change: agentsAtPlan ? "append" : "add" }, { path: ROSTER, change: "add" }, ...Object.keys(files).map((rel) => ({ path: rel, change: "add" }))]
+  const agentsAtPlan = rootName(top, "AGENTS.md")
+  const changes = [{ path: agentsAtPlan ?? "AGENTS.md", change: agentsAtPlan === null ? "add" : "append" }, { path: ROSTER, change: "add" }, ...Object.keys(files).map((rel) => ({ path: rel, change: "add" }))]
     .sort((a, b) => (a.path < b.path ? -1 : 1))
   const shape = parsed.setup === "dual-repo" ? SHAPE : [...SHAPE, "plugins/"]
   const outside = teamContent(tracked(git)).filter((entry) => entry.endsWith("/") && !shape.includes(entry))
   Object.assign(result, { changes, outside })
   if (!apply) {
     const added = changes.filter((change) => change.change === "add").length
-    const appended = agentsAtPlan ? " and appends a section to AGENTS.md" : ""
+    const appended = agentsAtPlan === null ? "" : ` and appends a section to ${agentsAtPlan}`
     const loose = outside.length > 0 ? ` These top-level folders are outside Crew's shape, and nothing in them is moved: ${outside.join(", ")}. Move their content into the shape with the team afterwards.` : ""
     return { ...result, state: "plan", message: `Plan only: nothing was written. Starting a ${parsed.setup} crew adds ${plural(added, "file")}${appended}.${loose} Run again with --apply to make the change.` }
   }
 
   const created = new Set()
+  const section = (eol) => withEol(crewSection({ tooling: plugin, outside }), eol)
+  let written = {}
   const write = () => {
     // Rebuilt on a newer default branch, the change still never overwrites a file a teammate added meanwhile, and
     // appends to an AGENTS.md a teammate added rather than replacing it.
-    const appeared = [...Object.keys(files), ROSTER].filter((rel) => exists(top, rel))
+    const appeared = [...Object.keys(files), ROSTER].filter((rel) => present(top, rel))
     if (appeared.length > 0) throw new Failed("rebuild", `${appeared.join(", ")} appeared on the default branch meanwhile, and starting a crew never overwrites a file`)
-    const current = exists(top, "AGENTS.md") ? readFileSync(path.join(top, "AGENTS.md"), "utf8") : startAgents()
+    const agents = rootName(top, "AGENTS.md")
+    const current = agents === null ? startAgents() : readFileSync(path.join(top, agents), "utf8")
     const eol = eolOf(current)
     const separator = current.endsWith("\n") ? eol : `${eol}${eol}`
-    const section = withEol(crewSection({ tooling: plugin, outside }), eol)
     const roster = founder === undefined ? rosterFile() : withRosterRow(null, { ...founder, origin })
-    writeFiles(top, { ...files, "AGENTS.md": `${current}${separator}${section}`, [ROSTER]: roster }, created)
-    return changes.map((change) => change.path)
+    written = { ...files, [agents ?? "AGENTS.md"]: `${current}${separator}${section(eol)}`, [ROSTER]: roster }
+    writeFiles(top, written, created)
+    return Object.keys(written).sort()
   }
+  // What the default branch must hold once the start merged: every file, the settings and the section as written.
+  const notHeld = () =>
+    Object.keys(written)
+      .sort()
+      .flatMap((rel) => {
+        if (!exists(top, rel)) return [rel]
+        const exact = rel === CONFIG || /^agents\.md$/iu.test(rel)
+        return exact && readFileSync(path.join(top, rel), "utf8") !== written[rel] ? [`${rel} as this run wrote it`] : []
+      })
   const message = "Crew: start this Crew workspace"
   try {
     const checkout = await prepareCheckout(git, connect)
@@ -787,11 +875,17 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
       if (checkout.mode === "local") return { ...result, state: "committed", commit, message: `Started: committed on ${checkout.branch}. This clone has no origin, so nothing was pushed; add the team's GitHub repository as origin, then run start again to push it.` }
       return { ...result, state: "published", commit, message: `Started: this repository is now a ${parsed.setup} Crew workspace. The repository had no commits for a pull request to merge into, so the first commit was pushed straight to ${checkout.branch}. Teammates join it with crew:join-crew.` }
     }
-    const reuse = origin === null ? undefined : await openPullRequest(checkout.hub, origin, "crew/start-")
+    // Brought up to date, the clone may show the workspace is already on GitHub (a start whose answer was lost).
+    if (crewWorkspace(top).crew) return alreadyCrew(action, top)
+    const reuse = origin === null ? undefined : await openPullRequest(checkout.hub, origin, { account: result.account, base: checkout.base, branch: /^crew\/start-[0-9a-z]+$/u, paths: changes.map((change) => change.path) })
     const body = `${message}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.`
-    const landed = await landByPullRequest({ git, base: checkout.base, origin, write, message, body, branch: `crew/start-${now().toString(36)}`, hub: checkout.hub, wait, result, reuse, created })
+    const landed = await landByPullRequest({ git, base: checkout.base, origin, write, message, body, prefix: "crew/start-", stamp: now(), hub: checkout.hub, wait, result, reuse, created })
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, "Not in effect yet: ")
-    return { ...result, state: "published", commit: landed.commit, message: `Started: this repository is now a ${parsed.setup} Crew workspace. The change merged in ${result.pr}. Teammates join it with crew:join-crew.` }
+    const next = "Teammates join it with crew:join-crew."
+    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, checkout.base, "published", "Started", next)
+    const missing = notHeld()
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing)
+    return { ...result, state: "published", commit: landed.commit, message: `Started: this repository is now a ${parsed.setup} Crew workspace. The change merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error)
   }
@@ -897,17 +991,23 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
       return [ROSTER]
     }
     const mark = `${IDENTITY_TRAILER}: ${identity}`
-    const reuse = await openPullRequest(checkout.hub, status.origin, `crew/join-${alias}-`, mark)
+    const prefix = `crew/join-${alias}-`
+    const reuse = await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(prefix)}[0-9a-z]+$`, "u"), identity, paths: [ROSTER] })
     const message = `Crew: add ${alias} to the roster`
     const body = `${message}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.\n\n${mark}`
-    const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeRow, message, body, branch: `crew/join-${alias}-${now().toString(36)}`, hub: checkout.hub, wait, result, reuse, created })
+    const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeRow, message, body, prefix, stamp: now(), hub: checkout.hub, wait, result, reuse, created })
     if (resumed) result.resumed = true
     if (landed.unchanged) {
       const unused = settled.alias === alias ? "" : ` It joined as ${settled.alias} from another machine meanwhile, so ${desk}/ is unused.`
       return memberResult(settled, unused)
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
-    return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. Desk sessions in this clone find that desk from the roster.${toolingNote}` }
+    const next = `Desk sessions in this clone find that desk from the roster.${toolingNote}`
+    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, checkout.base, "joined", "Joined", next)
+    // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
+    const missing = [...(holders().mine?.alias === alias ? [] : [`the roster row for ${identity} as ${alias}`]), ...(files.every((rel) => exists(top, rel)) ? [] : [`${desk}/`])]
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing)
+    return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; run join again to add the roster row.` : "")
   }

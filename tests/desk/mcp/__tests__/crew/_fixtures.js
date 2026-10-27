@@ -70,7 +70,8 @@ export async function teamRepo(files = {}, { origin = `${ORIGIN}.git` } = {}) {
 /** A second clone of the same bare repository, as a teammate's machine. */
 export async function secondClone(repo) {
   const other = path.join(repo.base, `other-${Math.random().toString(36).slice(2, 8)}`)
-  spawnSync("git", ["clone", "-q", repo.bare, other])
+  const cloned = spawnSync("git", ["clone", "-q", repo.bare, other], { encoding: "utf8" })
+  assert.equal(cloned.status, 0, `git clone: ${cloned.stderr}`)
   git(other, ["config", "user.email", "other@example.com"])
   git(other, ["config", "user.name", "Other"])
   return other
@@ -105,22 +106,34 @@ export const CIT_SHAPED = Object.freeze({
 export const TOOLING_REPOS = Object.freeze({ "acme/team-tooling": { "plugins/team/plugin.json": "{\"name\":\"team\"}\n" } })
 
 /**
- * A fake `gh` acting on the bare repository. `pr create` records the head branch; `pr merge` fast-forwards main to it
- * when main is its ancestor and is a conflict otherwise (or does what `merge(state)` says); `pr view` reports the state;
- * `pr list` lists the pull requests still open, and `pr close` closes one. The signed-in `accounts` (by default one,
+ * A fake `gh` acting on the bare repository the way GitHub does. `pr create` opens a pull request (numbered from 12)
+ * authored by the account whose token it was given; `pr merge` squash-merges it onto main when the two do not conflict
+ * and refuses otherwise (or does what `merge(state)` says); `pr view` reports its state; `pr list` lists the open ones
+ * with their author, fork flag, base branch and changed files, filtered by `--author`; `pr close` closes one; `repo view`
+ * reports the merge methods `methods` allows (null: the call fails). The signed-in `accounts` (by default one,
  * `tester`, whose token is `tok`; another account's token is `tok-<account>`, and `token(account)` returning null makes
  * gh fail to give one) see every repository except those in `hidden` and may push where `canPush(account, repo)` says.
- * It answers the GitHub contents API from `repos`: `{ "owner/name": { "path/in/repo": "text" } }`, by default the tooling repository
- * `acme/team-tooling` holding the plugin `team` in `plugins/team/`. Every call is recorded with the token it was given.
+ * It answers the GitHub contents API from `repos`: `{ "owner/name": { "path/in/repo": "text" } }`, by default the
+ * tooling repository `acme/team-tooling` holding the plugin `team` in `plugins/team/`. Every call is recorded with the
+ * token it was given. A test adds someone else's pull request with `plantPullRequest`.
  */
-export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLING_REPOS, hidden = [], list, accounts = ["tester"], canPush = () => true, token = (account) => (account === "tester" ? "tok" : `tok-${account}`) } = {}) {
+export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLING_REPOS, hidden = [], list, accounts = ["tester"], canPush = () => true, token = (account) => (account === "tester" ? "tok" : `tok-${account}`), methods = { squash: true, merge: true, rebase: true } } = {}) {
   const calls = []
   const tokens = []
-  const state = { head: null, merged: false, merges: 0, closed: false, prs: [] }
+  const state = { head: null, merged: false, merges: 0, closed: false, prs: [], method: null }
+  const inBare = (args, env = {}) => spawnSync("git", ["--git-dir", bare, ...args], { encoding: "utf8", env: { ...process.env, ...env } })
+  const prOf = (url) => state.prs.find((pr) => pr.url === url)
+  // The tree a squash merge of `branch` onto main would make, or null on a conflict.
+  const squashTree = (branch) => {
+    const tree = inBare(["merge-tree", "--write-tree", "main", `refs/heads/${branch}`])
+    return tree.status === 0 ? tree.stdout.trim().split("\n")[0] : null
+  }
+  const changed = (branch) => inBare(["diff", "--name-only", `main...refs/heads/${branch}`]).stdout.trim().split("\n").filter(Boolean).map((file) => ({ path: file, additions: 1, deletions: 0 }))
   const gh = async (args, options = {}) => {
     calls.push(args)
     tokens.push(options.token)
     const [a, b] = args
+    const asking = accounts.find((login) => token(login) === options.token)
     if (a === "auth" && b === "status") return { code: 0, stdout: `github.com\n${accounts.map((login, index) => `  ✓ Logged in to github.com account ${login} (keyring)\n  - Active account: ${index === 0}\n`).join("")}`, stderr: "" }
     if (a === "auth" && b === "token") {
       const given = token(args[3])
@@ -131,47 +144,76 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLIN
       const contents = /^repos\/([^/]+\/[^/]+)\/contents\/([^?]+)\?ref=(.+)$/u.exec(route)
       const repo = contents === null ? route.replace(/^repos\//u, "") : contents[1]
       if (hidden.includes(repo)) return { code: 1, stdout: "{\"message\":\"Not Found\"}", stderr: "gh: Not Found (HTTP 404)" }
-      const asking = accounts.find((login) => token(login) === options.token)
       if (contents === null) return { code: 0, stdout: JSON.stringify({ full_name: repo, default_branch: "main", permissions: { push: canPush(asking, repo) } }), stderr: "" }
       const text = repos[repo]?.[decodeURIComponent(contents[2])]
       if (text === undefined) return { code: 1, stdout: "{\"message\":\"Not Found\"}", stderr: "gh: Not Found (HTTP 404)" }
       return { code: 0, stdout: JSON.stringify({ type: "file", content: Buffer.from(text).toString("base64") }), stderr: "" }
     }
+    if (a === "repo" && b === "view") {
+      if (methods === null) return { code: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" }
+      return { code: 0, stdout: JSON.stringify({ squashMergeAllowed: methods.squash === true, mergeCommitAllowed: methods.merge === true, rebaseMergeAllowed: methods.rebase === true }), stderr: "" }
+    }
     if (a === "pr" && b === "list") {
       if (list !== undefined) return list(state)
-      return { code: 0, stdout: JSON.stringify(state.prs.filter((pr) => pr.open).map(({ url, headRefName, body }) => ({ url, headRefName, body }))), stderr: "" }
+      const author = args.includes("--author") ? args[args.indexOf("--author") + 1] : undefined
+      const open = state.prs.filter((pr) => pr.open && (author === undefined || pr.author === author))
+      return { code: 0, stdout: JSON.stringify(open.map((pr) => ({ url: pr.url, headRefName: pr.headRefName, body: pr.body, author: { login: pr.author }, isCrossRepository: pr.isCrossRepository, baseRefName: pr.baseRefName, files: pr.files === undefined ? changed(pr.headRefName) : pr.files }))), stderr: "" }
     }
     if (a === "pr" && b === "close") {
       state.closed = true
-      for (const pr of state.prs) pr.open = false
+      for (const pr of state.prs) if (pr.url === args[2]) pr.open = false
       return { code: 0, stdout: "", stderr: "" }
     }
     if (a === "pr" && b === "create") {
       state.head = args[args.indexOf("--head") + 1]
       state.merged = false
       if (create.code !== 0) return { code: 1, stdout: "", stderr: "GraphQL: no permission\nmore" }
-      state.prs.push({ url: PR, headRefName: state.head, body: args[args.indexOf("--body") + 1], open: true })
-      return { code: 0, stdout: `Creating pull request\n${PR}\n`, stderr: "" }
+      const url = `${ORIGIN}/pull/${12 + state.prs.length}`
+      state.prs.push({ url, headRefName: state.head, title: args[args.indexOf("--title") + 1], body: args[args.indexOf("--body") + 1], open: true, author: asking, isCrossRepository: false, baseRefName: args[args.indexOf("--base") + 1] })
+      return { code: 0, stdout: `Creating pull request\n${url}\n`, stderr: "" }
     }
     if (a === "pr" && b === "merge") {
       state.merges += 1
+      state.method = args[3]
       if (merge !== undefined) return merge(state)
-      const ok = spawnSync("git", ["--git-dir", bare, "merge-base", "--is-ancestor", "main", state.head]).status === 0
-      if (ok) {
-        spawnSync("git", ["--git-dir", bare, "update-ref", "refs/heads/main", `refs/heads/${state.head}`])
-        state.merged = true
-        for (const pr of state.prs) pr.open = false
-      }
-      return { code: ok ? 0 : 1, stdout: "", stderr: ok ? "" : "Pull request is not mergeable" }
+      const pr = prOf(args[2])
+      const tree = squashTree(pr.headRefName)
+      if (tree === null) return { code: 1, stdout: "", stderr: "Pull request is not mergeable" }
+      const who = { GIT_AUTHOR_NAME: "GitHub", GIT_AUTHOR_EMAIL: "noreply@github.com", GIT_COMMITTER_NAME: "GitHub", GIT_COMMITTER_EMAIL: "noreply@github.com" }
+      const commit = inBare(["commit-tree", tree, "-p", "main", "-m", `${pr.title ?? pr.headRefName} (#${pr.url.split("/").pop()})`], who).stdout.trim()
+      inBare(["update-ref", "refs/heads/main", commit])
+      pr.open = false
+      pr.merged = true
+      state.merged = true
+      return { code: 0, stdout: "", stderr: "" }
     }
     if (a === "pr" && b === "view") {
       if (view !== undefined) return view(state)
-      const oid = spawnSync("git", ["--git-dir", bare, "rev-parse", "main"], { encoding: "utf8" }).stdout.trim()
-      return { code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", mergeCommit: { oid } } : { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", mergeCommit: null }), stderr: "" }
+      const pr = prOf(args[2])
+      const oid = inBare(["rev-parse", "main"]).stdout.trim()
+      if (pr.merged) return { code: 0, stdout: JSON.stringify({ state: "MERGED", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", mergeCommit: { oid } }), stderr: "" }
+      return { code: 0, stdout: JSON.stringify(squashTree(pr.headRefName) === null ? { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", mergeCommit: null } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", mergeCommit: null }), stderr: "" }
     }
     throw new Error(`unexpected gh ${args.join(" ")}`)
   }
   return { gh, calls, tokens, state }
+}
+
+/**
+ * Someone's pull request on "GitHub": a branch `branch` off main holding `files`, opened by `author`, listed by the fake
+ * `gh` in `fake` with the given `body`, fork flag and base branch, and with `listedFiles` as its changed files when
+ * given (otherwise what the branch changes). Returns its URL.
+ */
+export async function plantPullRequest(repo, fake, { branch, files, body = "", author = "someone_else", isCrossRepository = false, baseRefName = "main", listedFiles, number = 90 + fake.state.prs.length }) {
+  const other = await secondClone(repo)
+  git(other, ["switch", "-q", "-c", branch])
+  await writeAll(other, files)
+  git(other, ["add", "-A"])
+  git(other, ["commit", "-q", "-m", `planted ${branch}`])
+  git(other, ["push", "-q", "origin", branch])
+  const url = `${ORIGIN}/pull/${number}`
+  fake.state.prs.push({ url, headRefName: branch, body, open: true, author, isCrossRepository, baseRefName, ...(listedFiles === undefined ? {} : { files: listedFiles }) })
+  return url
 }
 
 export const noWait = async () => {}

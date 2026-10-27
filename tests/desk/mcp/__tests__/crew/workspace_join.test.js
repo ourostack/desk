@@ -59,7 +59,7 @@ test("a new member joins: own desk pushed first, then the roster row merged; too
   assert.equal(onMain(repo.bare, "desks/newbie/AGENTS.md"), onMain(repo.bare, "desks/_template/AGENTS.md").replaceAll("{{alias}}", "newbie"))
   // The desk commit is on main before the roster commit: the row never points at a missing desk.
   const log = git(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
-  assert.deepEqual(log, ["Crew: add newbie to the roster", "Crew: add newbie's desk"])
+  assert.deepEqual(log, ["Crew: add newbie to the roster (#12)", "Crew: add newbie's desk"])
   // Only the roster row went through the pull request.
   const created = calls.find((args) => args[0] === "pr" && args[1] === "create")
   assert.equal(created[created.indexOf("--head") + 1], "crew/join-newbie-mjuohs00")
