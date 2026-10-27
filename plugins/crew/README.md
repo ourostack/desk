@@ -17,6 +17,9 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
 - **crew onboarding** -- clone a shared workspace through an overlay-supplied identity, resolve the
   committed identity-to-alias mapping, seed a new member from the complete repo template, and bind writes
   to that member's desk.
+- **start a crew** -- give a new or existing repository the workspace layout without deleting or moving
+  anything, as a dual-repo workspace (the team's plugin in a separate tooling repository) or a monorepo
+  (the plugin in its own `plugins/`). Desk's `crew.js` script does each step.
 
 Vendor-neutral. Layers on top of `desk`. A corporate overlay supplies
 the identity skin (how a teammate's writes authenticate); this plugin is the substrate-neutral core.
@@ -26,3 +29,4 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 - `shared-desk-conventions` -- the layout, the taxonomy, the write protocol and team lessons.
 - `perspective-query` -- the read side: answer perspective- and status-shaped questions honestly.
 - `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.
+- `start-crew` -- start a workspace in a new or existing repository, monorepo or dual-repo.

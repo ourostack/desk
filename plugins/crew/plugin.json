@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.2.7",
-  "description": "The multi-person shared-workspace layer on top of desk: crew onboarding, read-across/write-own desks, the facts/perspectives/decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries.",
+  "version": "0.2.8",
+  "description": "The multi-person shared-workspace layer on top of desk: starting a team workspace (monorepo or dual-repo), crew onboarding, read-across/write-own desks, the facts/perspectives/decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries.",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/desk"
@@ -20,7 +20,7 @@
     "copilot": {
       "dependencyProvider": {
         "id": "crew",
-        "version": "0.2.7",
+        "version": "0.2.8",
         "resolution": "flattened"
       }
     }

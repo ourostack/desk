@@ -56,6 +56,10 @@ one table, one row per desk. keep it human-readable — a non-agent teammate mus
 
 a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` at all, or one that holds something else, such as a hub's cross-desk routing registry (its own "Solo desks" and "Crew desks" tables) or a spoke desk's pointer to its hub. either way, when the workspace has no `desks/` folder, it is a single desk: behave as today, and read a hub's registry as routing context only. don't synthesize a roster; don't warn about its absence. the exception fails closed: a `desks/` folder with no roster, or a `_meta/desks.md` that cannot be read, is treated as a crew workspace whose person cannot be resolved, so nothing is written at the workspace root until a roster names this session's desk.
 
+### the crew declaration: `_meta/crew.json`
+
+a crew workspace may also commit `_meta/crew.json`. it changes nothing about the layout above; it says where the team's plugin lives. with `tooling.repo` the workspace is dual-repo (the plugin is in that separate tooling repository); without it, or without the file, it is a monorepo (the plugin, if any, in its own `plugins/`). `node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone>` reports the setup and how to install the plugin. a repository with no roster and no `desks/` folder is not a crew workspace: `crew:start-crew` starts one.
+
 ### remap-tolerance note
 
 `desks/<alias>/**/task.md` globs already match nested paths, so the boot script's active-task scan picks up person-scoped task cards without change — this step only adds the *awareness* layer (the desk-set + which-desk-am-I framing). the scan itself is remap-transparent.

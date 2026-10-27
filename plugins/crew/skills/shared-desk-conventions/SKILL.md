@@ -33,6 +33,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
   AGENTS.md                             # crew conventions and team lessons; Desk's session start prints it
   _meta/
     desks.md                            # the desk registry (one row per desk) -- see desk:session-start
+    crew.json                           # Crew's settings: where the team's plugin lives (see "Two setups")
   _shared/                              # the common area -- team-neutral, the contention hotspot
     landscape/                          # FACTS: externally true, team-neutral (read by everyone)
       <topic>.md
@@ -58,6 +59,15 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
     <other-alias>/                      # attributed peer desk; contributions need authority
   plugins/                              # (optional) the crew's bundled tooling source -- a shared path
 ```
+
+## Two setups: where the team's plugin lives
+
+Every Crew workspace has the floor plan above. The two setups differ only in where the team's own plugin lives:
+
+- **Dual-repo** (preferred for new teams): this repository holds the team's context, and a separate tooling repository holds the plugin. `_meta/crew.json` names it: `{"tooling": {"repo": "<owner>/<name>", "path": "<dir>", "plugin": "<name>"}}`. No `plugins/` folder here.
+- **Monorepo**: the plugin lives in this repository's `plugins/<name>/`. A workspace with no `_meta/crew.json`, or one without `tooling.repo`, is a monorepo.
+
+`crew:start-crew` writes `_meta/crew.json`; `node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone>` reports the setup and the install command, and `crew:join-crew` installs the plugin from wherever it lives.
 
 The key identity: **`desks/<alias>/` is one person's full desk** -- everything `desk:directory-structure` describes (tracks, tasks, iterations, `_planning/`, `_friction/`, `_meta/`, `_archive/`) lives *under* that prefix, unchanged. The `desks/<alias>/` prefix just re-roots the same floor plan one person at a time. A person's agent treats `desks/<alias>/` as its effective `$DESK`.
 
@@ -105,7 +115,7 @@ When an agent writes its own `desks/<you>/`, it is the **sole writer** of that s
 
 ### A shared path → auto pull-`main` → branch → write → PR → merge-now
 
-A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
+A **shared path** is anything outside your own desk that multiple agents may write: `_shared/` (facts + decisions), `plugins/` (the bundled tooling source), `_shared/tracks/` (shared-track coordination cards), `_meta/desks.md` (the registry), `_meta/crew.json` (Crew's settings), and the root `AGENTS.md` (conventions and team lessons). When an agent recognizes "this isn't my desk," it **automatically**:
 
 1. **pulls latest `main`** (so it's writing on top of everyone else's work),
 2. **branches** off that latest `main`,
@@ -161,5 +171,6 @@ The shared repo must be useful as **plain markdown** to a teammate who never run
 - `desk:directory-structure` -- the single-operator floor plan this skill overlays. The `desks/<alias>/` subtree is exactly that layout, re-rooted.
 - `perspective-query` -- operationalizes this taxonomy: "what would `<person>` think / what's `<person>` doing / what's agreed vs just fact," with the attribution discipline this skill defines.
 - `desk:session-start` -- reads `_meta/desks.md` and surfaces the desk-set + "which desk am I."
+- `crew:start-crew` -- gives a new or existing repository this floor plan, monorepo or dual-repo.
 - `desk:git-hygiene` -- the underlying push / branch / merge mechanics the write protocol drives.
 - Your overlay's identity skill -- the identity your writes push under. The generic crew layer is identity-neutral; a corporate overlay supplies the concrete account model.
