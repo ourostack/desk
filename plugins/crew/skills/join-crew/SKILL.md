@@ -42,7 +42,7 @@ Read the committed `_meta/desks.md` registry (`crew.js status --identity <login>
 
 Use this phase only after a current V2 repository is present and the authenticated identity has no registry row. Derive a candidate alias through the overlay, then run `crew.js join --identity <login> --alias <alias>`, read the plan, and run it again with `--apply`. The script requires a nonempty committed `desks/_template/`, copies the complete template tree including hidden and nested paths into `desks/<alias>/`, applies only the `{{alias}}` and `{{identity}}` substitutions, and verifies every template-relative path before registry mutation. It commits and pushes the new member's own-desk tree first, then adds the identity-to-alias row through the conflict-safe shared-path protocol (a pull request merged at once). It never adds a valid-looking registry row for an incomplete desk, refuses an alias that belongs to another identity or a desk pushed for someone else, checks both again when a teammate's change lands first, and on a rerun after an interrupted join adds only the missing row. The script signs in as the signed-in gh account that can push to the workspace; no account switch is needed. What each result means, and what to do next:
 
-- `joined`: the script read the default branch back and found the row and the desk. Install the team's tooling (below), then run the completion check. With `confirmed: false`, GitHub merged the row but this clone could not fetch it afterwards (`reason` has Git's words, for you, not the person). Once the network is back, run `git pull` in the clone and `status --identity <login>` yourself, then tell the person in plain words that they joined, or what `status` shows instead.
+- `joined`: the script read the default branch back and found the row and the desk. Install the team's tooling (below), give the short interview (below), then run the completion check. With `confirmed: false`, GitHub merged the row but this clone could not fetch it afterwards (`reason` has Git's words, for you, not the person). Once the network is back, run `git pull` in the clone and `status --identity <login>` yourself, then tell the person in plain words that they joined, or what `status` shows instead.
 - `member`: the identity already had a row, possibly added from another machine meanwhile; nothing more to write. Use the alias the result names.
 - `pr_open`: the desk is pushed and the row waits in an open pull request, so the member is not on the roster yet. Tell the person the message's plain reason. Do not open another pull request or edit the roster by hand: running the same `join --apply` again later, signed in as the same account, reuses that pull request and tries to merge it again, and someone allowed to merge into the default branch can merge it meanwhile. The script reuses only a pull request it opened itself for this exact identity and alias, changing only the roster, and rebuilds it from this run's own row before merging, so nothing pushed onto it meanwhile is merged; anyone else's pull request is left alone and never merged.
 - `refused`: nothing was written; for a taken alias or desk, choose another alias.
@@ -75,6 +75,16 @@ For an absent local workspace only, confirm the remote contains `_meta/desks.md`
 
 Read `_meta/desks.md` after local resolution. An existing identity routes to Phase 2. A new identity routes to Phase 3. The registry is authoritative; do not cache or invent a second binding.
 
+## Short interview
+
+A new member is interviewed briefly, once, right after they join; nobody fills in a roster entry about them beforehand. A returning member with no entry in the team roster gets the same offer once.
+
+1. Find the team roster with `crew:roster`.
+2. Ask in **one** plain chat message, never a form, and say any question can be skipped. Use the questions the roster lists for new teammates, if it lists any; otherwise ask what name they go by, their role, their pronouns, what they work on or know well, how and when teammates should reach them, and anything else the team should know. Ask separately, in the same message, how they like their agent to work with them.
+3. Write their answers to the roster as one entry in the roster's own format (a new table row, or their existing row filled in), with nothing they skipped and nothing made up. The roster is a shared path, so use the write protocol in `crew:shared-desk-conventions`.
+4. Write how they like their agent to work with them only in their own `desks/<alias>/AGENTS.md`, never in the roster, and push it directly.
+5. If they skip everything, write nothing, and say they can ask "add me to the team roster" later.
+
 ## Completion check
 
 Run `crew.js status --repo <clone> --identity <login>` after the join and the tooling install. Its `session` says what a Desk session started in the clone binds, from Desk's own resolvers: `session.ready` true means the next session there binds the workspace and writes to `desks/<alias>/` as this person, which is the activation check, done in this session. Only then is the join deliverable: move the task to `done` and give the delivery with "Accept or send back?". When `session.ready` is false, tell the person `session.message` in plain words (for example, sign in to gh as the account that joined) and what is left, keep the task open, and do not ask for acceptance. Tell the person to start their sessions anywhere inside the clone (a repository cloned inside it is its own project and does not count). In a later session, the answer to "am I set up?" is `desk_status` `write_scope`: `mode: person` with their alias and source `crew-roster` means yes; `activation.source` describes how Desk itself was started and says nothing about the member.
@@ -86,4 +96,5 @@ Onboarding is complete only when repository identity and origin are proven, any 
 - `desk:first-run-bootstrap`: the single-operator Desk path.
 - `crew:start-crew`: start a Crew workspace in a new or existing repository, monorepo or dual-repo.
 - `crew:shared-desk-conventions`: layout, ownership, and shared-path serialization.
+- `crew:roster`: where the team roster is and how to add to it.
 - The active overlay's identity and transport skill: authentication, transport, and alias defaults.
