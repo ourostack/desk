@@ -27,4 +27,4 @@ function main(argv = process.argv, stdin = process.stdin) {
   work.then(() => process.exit(0), () => process.exit(0));
 }
 
-module.exports = { main, runJobs };
+module.exports = { main };
