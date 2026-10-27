@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.26 — 2026-10-27
+
+The one-time desk tidy (the `02-tidy-desk` migration) and `desk_doctor` no longer report `agency.toml` at the desk root as a loose file. MS Desk keeps the workspace MCP config there because Agency reads it from the desk root, so on a fresh MS Desk install the tidy went on hold, stayed pending and showed a failure at every session start. Only that exact name, and only at the desk root, is allowed; see [`directory-structure`](skills/directory-structure/SKILL.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.25 — 2026-10-26
 
 `desk_search`, `desk_recall` and the other search tools now find lessons recorded with `lesson_add`. Since lessons moved into AGENTS.md, search did not index that file, so a lesson written a moment earlier could not be found. Search now indexes the AGENTS.md that session start prints, the desk's own and a person's `desks/<alias>/AGENTS.md`, as kind `instructions`.
