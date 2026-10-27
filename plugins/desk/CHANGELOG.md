@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.28 — 2026-10-27
+
+`lesson_add` for a desk lesson now names the improvement card it opens: the reply carries `improvement_key` and `improvement_path`, and its message gives the card's path. The card is titled from the lesson, `Lesson for <owner>: <topic>`, instead of the fixed "System friction in the desk plugin". The library still builds every title: it checks the whole topic before cutting it to length, uses the fixed words when the topic is not one line (any control character, U+2028 or U+2029) or holds private text, and writes a lesson's card only when its exact text reads back as a card. An owner `skill:<plugin>:<skill>` is accepted when the plugin is present for any host on the machine (Claude Code's registry, Copilot's own installs, Agency's cache or Codex's plugin folder, following linked plugin folders), so a lesson for MS Desk recorded from Claude Code no longer fails when MS Desk is installed for Copilot only. An unknown plugin is still refused, and the refusal now says how to file the lesson instead. `friction_add` returns the same two card fields for any system friction that opens a card.
+
+The shared check that keeps private text out of card titles, kaizen issues and Desk-problem reports now also catches Slack tokens, a password given with its value, Windows network paths (`\\server\share`), `~user/`, `$HOME/` and `%USERPROFILE%`. Ordinary prose about passwords and tokens still passes. Lesson owners and Agency's migration roots now share one reader for Agency's cache index, which skips an index over 4 MiB. See [`lesson-owners.js`](mcp/src/tools/lesson-owners.js).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.27 — 2026-10-27
 
 A machine with no Node.js now gets a plain message at session start instead of only `Failed to connect to MCP server "desk" … program not found`. The session-start command in both hook manifests checks for `node` in the host's own shell before anything else (`command -v node` in bash or Git Bash, `Get-Command node` in Windows PowerShell). Without it, the shell prints one message from [`hooks/node-missing.sh`](hooks/node-missing.sh), or the matching PowerShell text in [`hooks/copilot-hooks.json`](hooks/copilot-hooks.json): Desk needs Node.js 20 or newer, the install command for the platform (`winget install --id OpenJS.NodeJS.LTS …` on Windows, or `nvm install lts` and `nvm use lts` when nvm-windows is installed; `nvm install --lts` when nvm is installed on macOS or Linux; otherwise `brew install node` on macOS and the distribution package on Linux), and that the person must open a new terminal and start a new session because tool servers load only when a session starts. The check runs shell builtins only and installs nothing.
