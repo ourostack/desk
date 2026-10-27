@@ -176,10 +176,11 @@ const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}]/u
 
 /**
  * `lessonTitle({ owner, topic }) -> string | null`: the title of a lesson's friction card, "Lesson for <owner>: <topic>",
- * cut to the title limit, so the card says which lesson it carries. Null when the owner is not an owner's shape, the whole
- * topic is not one line or holds private text (a credential, email, private path or absolute path), or the cut title would
- * fail the checks every card title gets on read; the card then takes the fixed words. The topic is judged whole, before the
- * cut, so no part of a secret survives it, and the cut never splits a character.
+ * cut to the title limit, so the card says which lesson it carries. Null when the owner is not an owner's shape or the whole
+ * topic is not one line or holds private text (a credential, email, private path or absolute path); the card then takes the
+ * fixed words. The topic is judged whole, before the cut, so no part of a secret survives it, and the cut never splits a
+ * character. A cut title can still fail a check the whole one passed (a run of numbers cut into an IPv4 address), so
+ * `openImprovement` writes it only when the card reads back.
  */
 function lessonTitle(lesson) {
   const { owner, topic } = lesson !== null && typeof lesson === "object" ? lesson : {}
@@ -187,7 +188,7 @@ function lessonTitle(lesson) {
   const full = `Lesson for ${owner}: ${topic.trim()}`
   if (NOT_ONE_LINE.test(full) || !isCleanTitle(full)) return null
   const title = full.length <= MAX_TITLE ? full : `${full.slice(0, MAX_TITLE - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
-  return isFrictionTitle(title) && isCleanTitle(title) ? title : null
+  return title
 }
 
 /** `cardKey(source, id) -> string`: the stable key `<source>:<id>`; throws `invalid_source` for an id the source does not allow. */

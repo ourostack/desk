@@ -256,6 +256,8 @@ test("a lesson topic the card file cannot carry on one line, or that holds priva
     "check the gate before merging", "check the gate before merging", "check the gate\u0085before merging", "tab\there",
     // A secret that straddles the title's cut is judged on the whole topic, not on what survives the cut.
     `${"y".repeat(80)} ${hex}`,
+    // A whole topic that passes, cut where it would read as an IPv4 address ("1.2.3.4567" becomes "1.2.3.4…").
+    `${"z".repeat(93)} 1.2.3.4567`,
     // Private shapes the shared scrub now knows.
     "use xoxb-1234-5678-abcdefghijklmnop to post", "the password hunter2 works", "password: open sesame", "open \\\\server\\share\\ari first",
     "notes in ~ari/notes", "notes in $HOME/secret/notes", "notes in ${HOME}/secret", "notes in %USERPROFILE%\\secret",
