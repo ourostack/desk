@@ -47,7 +47,7 @@ Helper faults leave task authority intact. Preserve effects (`desk-problem`). Us
 
 ## Engineering work
 
-Resolve the canonical task (`desk:start-task`) before handoff. Enter Superpowers through `desk:using-superpowers-with-desk`; review uses `superpowers:requesting-code-review`. Assigned an issue drain or prompt requests? REQUIRED: Use `desk:draining-issues`.
+Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers:requesting-code-review` for reviews. For issue drains, REQUIRED: Use `desk:draining-issues`.
 
 ## Source and channels
 
