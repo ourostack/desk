@@ -187,7 +187,7 @@ test("friction_add about system records a kaizen candidate on the desk and files
     env,
   })
   const fp = await fingerprintOf(env, { plugin: "desk", frictionClass: "mcp_tool", title: "Shell tool calls fail often" })
-  assert.deepEqual(result, { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "candidate", improvement: "opened", improvement_commit: "not_git" })
+  assert.deepEqual(withoutCard(result), { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "candidate", improvement: "opened", improvement_commit: "not_git" })
   assert.equal(calls.length, 0)
   const content = await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8")
   assert.equal(content, `Most tool failures are shell calls.\n\nSystem friction: "Shell tool calls fail often"; plugin \`desk\`, class \`mcp_tool\`, measure \`tool_failures\`, evidence jobs ${JOB}.\n\nImprovement card key: \`friction_candidate:${fp}\`.\n`)
@@ -204,12 +204,12 @@ test("friction_add with file_card files the card after the desk write is ready a
   const input = { about: "system", file_card: true, track: "t1", theme: "tools", title: "Shell tool calls fail often", body: "Most tool failures are shell calls.", plugin: "desk", friction_class: "mcp_tool", signal: "tool_failures", evidence_jobs: [JOB] }
   const result = await friction_add({ deskRoot: root, input, env, fileCard })
   assert.match(result.path, /^t1\/_friction\/\d{4}-\d{2}-\d{2}-tools\.md$/u)
-  assert.deepEqual(result, { status: "filed", path: result.path, url: URL, kaizen: "filed", improvement: "opened", improvement_commit: "not_git" })
+  assert.deepEqual(withoutCard(result), { status: "filed", path: result.path, url: URL, kaizen: "filed", improvement: "opened", improvement_commit: "not_git" })
   assert.equal(calls[0].env, env)
   assert.deepEqual(calls[0].options, { deskRoot: root, title: "Shell tool calls fail often", body: "Most tool failures are shell calls.", plugin: "desk", frictionClass: "mcp_tool", signal: "tool_failures", evidenceJobs: [JOB] })
   assert.match(await fs.readFile(path.join(root, result.path), "utf8"), /Kaizen card for "Shell tool calls fail often": filed at https:\/\/github\.com\/ourostack\/factory\/issues\/12\n\nImprovement card key: `friction_candidate:[0-9a-f]{32}`\.\n$/u)
   const again = cardFiler({ result: "duplicate", store: "ourostack/factory", url: URL, visibility: "public" })
-  assert.deepEqual(await friction_add({ deskRoot: root, input, env, fileCard: again.fileCard }), { status: "filed", path: result.path, url: URL, kaizen: "duplicate", improvement: "duplicate", improvement_commit: "not_git" })
+  assert.deepEqual(withoutCard(await friction_add({ deskRoot: root, input, env, fileCard: again.fileCard })), { status: "filed", path: result.path, url: URL, kaizen: "duplicate", improvement: "duplicate", improvement_commit: "not_git" })
   assert.match(await fs.readFile(path.join(root, result.path), "utf8"), /already open at https:\/\/github\.com\/ourostack\/factory\/issues\/12\n\nImprovement card key: `friction_candidate:[0-9a-f]{32}`\.\n$/u)
 })
 
@@ -217,7 +217,7 @@ test("friction_add with file_card keeps the candidate on the desk with the reaso
   const root = await mkTempDeskRoot()
   const { calls, fileCard } = cardFiler({ result: "route_unknown" })
   const result = await friction_add({ deskRoot: root, input: { about: "system", file_card: true, title: "A generic title", body: "The friction." }, env: await stateEnv(), fileCard })
-  assert.deepEqual(result, { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "route_unknown", improvement: "opened", improvement_commit: "not_git" })
+  assert.deepEqual(withoutCard(result), { status: "added", path: path.posix.join("_meta", "friction.md"), kaizen: "route_unknown", improvement: "opened", improvement_commit: "not_git" })
   assert.deepEqual(calls[0].options, { deskRoot: root, title: "A generic title", body: "The friction.", plugin: "desk", frictionClass: "other", signal: null, evidenceJobs: [] })
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /^Kaizen card for "A generic title": not filed \(route_unknown\); it stays a candidate\.\n\nImprovement card key: `friction_candidate:[0-9a-f]{32}`\.\n$/u)
 })
@@ -447,9 +447,37 @@ test("friction_add schedules a push exactly once with the desk root after a succ
 const NOTE = "Private sentinel body: the operator's api notes live at /Users/someone/secret.txt"
 const sysInput = (extra = {}) => ({ about: "system", title: "Shell tool calls fail often", body: NOTE, friction_class: "mcp_tool", signal: "tool_failures", evidence_jobs: [JOB], ...extra })
 
+// A result without the card's key and path, which the tests below check on their own.
+const withoutCard = ({ improvement_key: _key, improvement_path: _path, ...rest }) => rest
+
 async function cardsOf(root, prefix = "") {
   return (await readCards({ deskRoot: root, personPrefix: prefix })).cards
 }
+
+test("a system friction call names the card it opened or found: its key and its path in the desk", async () => {
+  const root = await mkTempDeskRoot()
+  const env = await stateEnv()
+  const fingerprint = await fingerprintOf(env, { plugin: "desk", frictionClass: "mcp_tool", title: "Shell tool calls fail often" })
+  const result = await friction_add({ deskRoot: root, input: sysInput(), env })
+  assert.equal(result.improvement_key, `friction_candidate:${fingerprint}`)
+  assert.equal(path.join(root, ...result.improvement_path.split("/")), cardFile(root, "", result.improvement_key))
+  assert.match(result.improvement_path, /^_meta\/improvement\/friction_candidate--[0-9a-f]{12}\.md$/u)
+  assert.equal(await exists(path.join(root, ...result.improvement_path.split("/"))), true)
+  const again = await friction_add({ deskRoot: root, input: sysInput({ body: "other words" }), env })
+  assert.deepEqual([again.improvement, again.improvement_key, again.improvement_path], ["duplicate", result.improvement_key, result.improvement_path])
+  // No card, nothing named.
+  const bare = await mkTempDeskRoot()
+  const none = await friction_add({ deskRoot: await mkTempDeskRoot(), input: sysInput(), env: osEnv({ HOME: bare, XDG_STATE_HOME: path.join(bare, "state") }) })
+  assert.deepEqual([none.improvement, none.improvement_key, none.improvement_path], ["factory_state_unavailable", undefined, undefined])
+})
+
+test("a lesson's system friction gives its card the lesson's owner and topic as the title", async () => {
+  const root = await mkTempDeskRoot()
+  const env = await stateEnv()
+  const result = await friction_add({ deskRoot: root, input: sysInput({ title: "Lesson for skill:desk:interaction-style: credential gates need evidence" }), env, lesson: { owner: "skill:desk:interaction-style", topic: "credential gates need evidence" } })
+  assert.equal(result.improvement, "opened")
+  assert.equal((await cardsOf(root))[0].title, "Lesson for skill:desk:interaction-style: credential gates need evidence")
+})
 
 test("a system friction call opens exactly one card keyed by the fingerprint, holding none of the note's body", async () => {
   const root = await mkTempDeskRoot()

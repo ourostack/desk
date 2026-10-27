@@ -167,6 +167,23 @@ export function cardTitle(source, id, { plugin, signal } = {}) {
   }
 }
 
+// A lesson's owner as lesson_add names it: a plugin's skill, a Desk tool, the child brief or the always-on foundation.
+const LESSON_OWNER = /^(?:skill:[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_]{0,63}|brief|foundation)$/u
+
+/**
+ * `lessonTitle({ owner, topic }) -> string | null`: the title of a lesson's friction card, "Lesson for <owner>: <topic>",
+ * cut to the title limit, so the card says which lesson it carries. Null when the owner is not an owner's shape or the
+ * title would fail the checks every card title gets on read (one line, no credential, email, private text or absolute
+ * path); the card then takes the fixed words.
+ */
+function lessonTitle(lesson) {
+  const { owner, topic } = lesson !== null && typeof lesson === "object" ? lesson : {}
+  if (typeof owner !== "string" || !LESSON_OWNER.test(owner) || typeof topic !== "string" || topic.trim() === "") return null
+  const full = `Lesson for ${owner}: ${topic.trim()}`
+  const title = full.length <= MAX_TITLE ? full : `${full.slice(0, MAX_TITLE - 1)}…`
+  return isFrictionTitle(title) && isCleanTitle(title) ? title : null
+}
+
 /** `cardKey(source, id) -> string`: the stable key `<source>:<id>`; throws `invalid_source` for an id the source does not allow. */
 export function cardKey(source, id) {
   const key = `${source}:${id}`
@@ -513,22 +530,24 @@ const mergeEvidence = (old, added) => [...old, ...added.filter((pointer) => !old
 const unique = (list) => [...new Set(list)]
 
 /**
- * `openImprovement({ deskRoot, personPrefix, key, source, title?, evidence, plugin, signal, now, lockWaitMs? })
+ * `openImprovement({ deskRoot, personPrefix, key, source, title?, lesson?, evidence, plugin, signal, now, lockWaitMs? })
  * -> { result: "opened" | "duplicate" | "reopened", file } | { result: <refusal code> }`.
- * The library builds the title for every source (`cardTitle`) and a caller-supplied `title` is refused. An open card with the key is a `duplicate` (no byte
+ * The library builds the title for every source (`cardTitle`) and a caller-supplied `title` is refused. A friction
+ * candidate opened for a lesson (`lesson: { owner, topic }`) is titled from it (`lessonTitle`), or with the fixed words
+ * when that title would not pass; `lesson` on any other source is refused as a title. An open card with the key is a `duplicate` (no byte
  * changes); a closed card is `reopened` (recurrences + 1, `last_opened_at` moves, evidence merged, countermeasure, version,
  * `kaizen_url` and check fields cleared). Refusals: `invalid_location`, `invalid_source`, `title_not_allowed`,
  * `invalid_evidence`, `invalid_plugin`, `invalid_signal`, `unreadable_folder`, `too_many_cards` (the card's own file
  * is bad and the folder is too large to have been repaired), `lock_busy`.
  */
-export async function openImprovement({ deskRoot, personPrefix, key, source, title, evidence, plugin, signal, now, lockWaitMs, lockHooks }) {
+export async function openImprovement({ deskRoot, personPrefix, key, source, title, lesson, evidence, plugin, signal, now, lockWaitMs, lockHooks }) {
   const at = toDate(now).toISOString()
   const refuse = (result) => ({ result })
   if (locationFolder(deskRoot, personPrefix) === null) return refuse("invalid_location")
   const parts = keyParts(key, true)
   if (parts === null || parts.source !== source) return refuse("invalid_source")
-  if (title !== undefined) return refuse("title_not_allowed")
-  const fixed = cardTitle(source, parts.id, { plugin, signal })
+  if (title !== undefined || (lesson !== undefined && source !== "friction_candidate")) return refuse("title_not_allowed")
+  const fixed = (lesson === undefined ? null : lessonTitle(lesson)) ?? cardTitle(source, parts.id, { plugin, signal })
   const pointers = Array.isArray(evidence) ? unique(evidence) : null
   if (pointers === null || !isEvidence(pointers)) return refuse("invalid_evidence")
   if (!PATCHABLE.plugin[0](plugin)) return refuse("invalid_plugin")

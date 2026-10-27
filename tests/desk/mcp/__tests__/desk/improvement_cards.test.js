@@ -228,6 +228,25 @@ test("opening a key whose card is closed reopens it, counts the recurrence, clea
   assert.deepEqual((await read(where))[0].evidence, many)
 })
 
+test("a lesson's card is titled by the library from its owner and topic, and falls back to fixed words when the topic is not clean", async () => {
+  const where = await desk()
+  const fp = (n) => `${FP.slice(0, 31)}${n}`
+  const lessonCard = async (n, lesson) => {
+    const key = `friction_candidate:${fp(n)}`
+    const opened = await open(where, { key, lesson })
+    return opened.result === "opened" ? (await read(where)).find((card) => card.key === key).title : opened.result
+  }
+  assert.equal(await lessonCard(1, { owner: "skill:desk:interaction-style", topic: "credential gates need evidence" }), "Lesson for skill:desk:interaction-style: credential gates need evidence")
+  assert.equal(await lessonCard(2, { owner: "tool:lesson_add", topic: "say the card" }), "Lesson for tool:lesson_add: say the card")
+  assert.equal(await lessonCard(3, { owner: "foundation", topic: "x".repeat(200) }), `Lesson for foundation: ${"x".repeat(96)}…`)
+  // A topic or owner the card's own checks would not accept: the card still opens, with the fixed words.
+  for (const [n, lesson] of [[4, { owner: "brief", topic: "token ab12cd34ef56gh78ij90kl in the brief" }], [5, { owner: "brief", topic: "look in /Users/someone/work" }], [6, { owner: "brief", topic: "two\nlines" }], [7, { owner: "Look at this", topic: "fine" }], [8, { owner: "brief", topic: "" }], [9, { owner: "brief" }], [0, "not an object"]]) {
+    assert.equal(await lessonCard(n, lesson), "System friction in the desk plugin", JSON.stringify(lesson))
+  }
+  // Only a friction candidate is a lesson's card.
+  assert.equal((await open(where, { lesson: { owner: "brief", topic: "x" } })).result, "title_not_allowed")
+})
+
 test("every source builds its own title; a supplied title is refused, a friction candidate's too", async () => {
   const where = await desk()
   const key = `friction_candidate:${FP}`
