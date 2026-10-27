@@ -8,9 +8,9 @@ import {
 import { SESSION_ID_V4, validatePublished } from "./published-schema.js"
 import { normalizePublished, stableStringify } from "./pipeline/normalize.js"
 
-export const CONTEXT_SCHEMA = "desk.factory.context/1"
-// Read support precedes emission so existing store readers can be upgraded first.
-const RECOMMENDATION_SCHEMA = "desk.factory.context/2"
+const CONTEXT_SCHEMA = "desk.factory.context/1"
+// Preserve the legacy identifier while new templates use the recommendation schema.
+export const RECOMMENDATION_SCHEMA = "desk.factory.context/2"
 export const CONTEXT_PATH = /^context\/([0-9a-f]{32})\.json$/u
 export const CONTEXT_MAX_BYTES = 128 * 1024
 const SHA256 = /^[0-9a-f]{64}$/u

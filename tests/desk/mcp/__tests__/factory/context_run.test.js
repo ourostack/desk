@@ -12,7 +12,7 @@ import { acceptContextCandidate, listContextWork, prepareTaskContexts, readyTask
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
 import { contextFacts, contextRecord } from "./_context_fixture.js"
-import { contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
+import { contextPayloadHash, contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
 import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
@@ -343,6 +343,74 @@ test("current-source work proceeds without consuming older privacy work", async 
   assert.equal(state.phase, "privacy")
   assert.equal(state.candidate.evaluator.plugin_version, NEXT_VERSION)
 })
+
+test("ordinary candidate briefs emit context2 with an empty recommendation template", async () => {
+  const f = await fixture()
+  const result = await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    runHeadless: async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      assert.equal(brief.template.schema, "desk.factory.context/2")
+      assert.deepEqual(brief.template.recommendations, [])
+      assert.equal(brief.template.privacy, null)
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(result.accepted, 1)
+})
+
+for (const changedReview of [false, true]) {
+  test(`ordinary context2 recommendations ${changedReview ? "reject a different payload hash" : "need a separate exact-payload privacy review"}`, async () => {
+    const f = await fixture()
+    const phases = []
+    const recommendation = {
+      id: "fedcba9876543210", observations: ["0123456789abcdef"],
+      problem: "The connection result needed a clearer summary.",
+      change: "Keep one short summary of the observed result.",
+      hypothesis: "A shared summary may make follow-up checks easier.",
+      check: "Ask the next reviewer to locate the result without repeating the check.",
+      confidence: "medium",
+    }
+    const runHeadless = async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      phases.push(brief.phase)
+      let output
+      if (brief.phase === "candidate") {
+        const input = JSON.parse(await readFile(brief.input_file, "utf8"))
+        output = {
+          ...contextRecord(input.sources[0], brief.job), schema: brief.template.schema,
+          evaluator: brief.evaluator, privacy: null, recommendations: [recommendation],
+        }
+      } else {
+        const changed = structuredClone(brief.candidate)
+        changed.recommendations[0].change = "Use a different proposed summary."
+        output = {
+          schema: "desk.factory.context-review/1", verdict: "approved",
+          payload_sha256: changedReview ? contextPayloadHash(changed) : brief.payload_sha256,
+          reviewer: brief.evaluator, reason: "safe",
+        }
+        assert.deepEqual(brief.candidate.recommendations, [recommendation])
+      }
+      await writeFile(brief.output, json(output))
+      return { state: "ran", cost_usd: 0.1 }
+    }
+    const candidate = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless })
+    assert.equal(candidate.accepted, 1)
+    assert.deepEqual(await readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
+    const privacy = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless })
+    assert.deepEqual(phases, ["candidate", "privacy"])
+    assert.equal(privacy.accepted, changedReview ? 0 : 1)
+    assert.equal(privacy.refused, changedReview ? 1 : 0)
+    const ready = await readyTaskContexts(f.env, { store: STORE, entries: f.entries })
+    assert.equal(ready.length, changedReview ? 0 : 1)
+    if (!changedReview) {
+      const record = JSON.parse(ready[0].bytes)
+      assert.equal(record.schema, "desk.factory.context/2")
+      assert.deepEqual(record.recommendations, [recommendation])
+      assert.equal(record.privacy.verdict, "approved")
+    }
+  })
+}
 
 test("ordinary context runs generate then separately review, bounded to one launch and eight jobs", async () => {
   assert.ok(runner, "the ordinary context runner is not implemented")

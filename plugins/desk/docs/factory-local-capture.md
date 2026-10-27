@@ -28,8 +28,9 @@ The Stop hook gives the lookup 400 ms. After that, every source is `null` and th
 ## Optional public task explanations
 
 Task context is a separate record, `context/<public-job>.json` with schema
-`desk.factory.context/1`. Numerical facts and waste labels still reject free
-prose. Their contribution permission does not authorize publishing explanations.
+`desk.factory.context/2`; existing `desk.factory.context/1` records remain
+readable. Numerical facts and waste labels still reject free prose. Their
+contribution permission does not authorize publishing explanations.
 A compatible store advertises `{"task_context":1}` in `context.json`; that
 declaration is maintenance, never contributor data.
 It may additionally advertise `"loop_context":1` in that same closed object.
@@ -69,7 +70,7 @@ references to eight per event; canonical bytes are limited to 128 KiB. Partial
 event lists state their omission count and retain the terminal observation.
 `published`, `withheld` and `unavailable` remain distinct.
 
-Validators also read `desk.factory.context/2`, which adds a closed
+New candidate templates use `desk.factory.context/2`, which adds a closed
 `recommendations` list to the same record. Each of at most eight recommendations
 has a stable ID, one to eight distinct `observations` naming events in that
 record, a `problem`, a proposed `change`, a `hypothesis`, a verification `check`
@@ -83,9 +84,12 @@ Recommendations are advice, not a work claim or permission to act. Their bytes
 are part of the exact independently reviewed payload. A proposed change is not
 a shipped change or a demonstrated benefit. Withheld and unavailable records
 have no recommendations; an older context/1 record has no recommendation field,
-which does not mean zero improvement opportunities. This release adds read
-support only: ordinary producers still emit context/1 until store readers have
-been upgraded for context/2.
+which does not mean zero improvement opportunities. Generation and independent
+privacy review use the existing ordinary evaluator and exact-payload hash.
+Prose-free invalidations also use context/2 with an empty recommendation list.
+Store readers must understand context/2 before the producer is upgraded; read
+support and the compatible public reader were delivered before this emission
+change. Existing context/1 records are not rewritten.
 
 A source change can mechanically replace old wording with a prose-free
 `unavailable` record while a fresh explanation is reviewed. Its privacy verdict

@@ -49,11 +49,25 @@ Set `state` to `published` when a safe, supported explanation is established. Th
 
   Preserve the terminal observation as the last event when omitting. Explain uncertainty; do not pretend the reader now knows all elapsed time.
 
+For a context/2 template, retain `recommendations`, even when empty. When the evidence establishes a concrete problem and a useful system change to try, include a small number of specific proposals, at most eight. Do not generate generic advice merely to fill the list.
+
+Each recommendation has exactly `id`, `observations`, `problem`, `change`, `hypothesis`, `check` and `confidence`:
+
+- `id`: a unique stable 16-lowercase-hex identifier.
+- `observations`: one to eight distinct IDs of events in this same record. Those events must support the observed problem using this job's own evidence.
+- `problem`: the observed issue, at most 240 characters. A failure count or capture gap alone does not establish a cause or avoidable loss.
+- `change`: one concrete system change to try, at most 240 characters. A proposal is not execution permission or a claim that the change shipped.
+- `hypothesis`: what the change might improve and why, at most 160 characters. Keep uncertainty explicit; never invent savings or a demonstrated causal effect.
+- `check`: a specific prospective check and what would support or reject the hypothesis, at most 240 characters. Do not present an unperformed comparison as a result.
+- `confidence`: `high`, `medium` or `low`, reflecting support for the proposal, not proof it will help.
+
+Use an empty list when no safe, supported proposal can be established. That means no proposal was written, not that there are zero improvement opportunities. Legacy context/1 records have no recommendation field; do not retrofit one.
+
 Publish general, nonsensitive, evidence-supported actions and outcomes. Exclude names/contact details, personal matters, credentials, private organizations/customers/repositories, filesystem paths, URLs, exact dates, raw transcript quotations and unsupported claims.
 
 Prefer a safe general description over unnecessary specifics. Numeric facts already provide time; the explanation does not recalculate work, waste, savings or efficiency.
 
-When safe wording cannot be established, set `state` to `withheld`, heading to null, events to empty and coverage to unavailable with `withheld`. When evidence cannot establish an explanation, use `unavailable`, null heading, empty events and unavailable coverage with `not_recorded`.
+When safe wording cannot be established, set `state` to `withheld`, heading to null, events to empty and coverage to unavailable with `withheld`. When evidence cannot establish an explanation, use `unavailable`, null heading, empty events and unavailable coverage with `not_recorded`. In either case, set `recommendations` to an empty list when the template has that field.
 
 Do not turn either into "no work", "no waiting" or a guessed explanation.
 
@@ -64,6 +78,10 @@ You are a fresh reviewer. Do not author replacement wording or edit the candidat
 Read the underlying evidence independently. Check both semantic support and privacy: identity, personal circumstances, private customer or organization details, private repository names, hidden paths or secrets, raw quotations and unnecessary technical specifics. Mechanical keyword checks are insufficient.
 
 Check the Waiting classification, prerequisite and resumption independently; a capture gap alone is not a dependency. Check partial coverage, terminal state and that no duration or causality has been invented. Uncertainty is a reason to withhold, not to approve.
+
+Review every recommendation string and its observation references. Independently establish that the cited events support the problem, the proposed change has an evidence-backed rationale, the hypothesis remains uncertain and the check is a meaningful future test rather than a fabricated result.
+
+A merged change is not proof of benefit. Neither a proposal nor your review grants permission to execute it. Withhold the candidate if any proposal is unsupported or unsafe; do not replace its wording yourself.
 
 Write exactly:
 
