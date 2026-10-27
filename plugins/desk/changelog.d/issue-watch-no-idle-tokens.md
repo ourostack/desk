@@ -1,1 +1,0 @@
-Issue drains now use deterministic detection when watching for new issues: a quiet queue causes no model turn or AI-credit/token spending. The shared method requires stable-identity deduplication and a durable event before waking the drain, preserves observable failures and seen markers, and distinguishes an attached command's lifetime from persistent coverage.

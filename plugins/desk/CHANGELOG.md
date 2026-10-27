@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.34 — 2026-10-27
+
+Issue drains now use deterministic detection when watching for new issues: a quiet queue causes no model turn or AI-credit/token spending. The shared method requires stable-identity deduplication and a durable event before waking the drain, preserves observable failures and seen markers, and distinguishes an attached command's lifetime from persistent coverage.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.33 — 2026-10-27
 
 Factory validators can now read evidence-linked improvement proposals in
