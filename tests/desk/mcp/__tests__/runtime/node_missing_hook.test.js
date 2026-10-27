@@ -189,8 +189,11 @@ test("with no node and nvm installed, the shell message says to install through 
   const home = mkdtempSync(path.join(ROOT, "nvm-home-"))
   mkdirSync(path.join(home, ".nvm"), { recursive: true })
   writeFileSync(path.join(home, ".nvm", "nvm.sh"), "# nvm\n")
-  const posix = run(SHELLS.sh, claudeCommandFor(), { ...env(SHELLS.pathWithoutNode), HOME: home, OS: "", MSYSTEM: "" })
-  assertNodeMessage(t, "claude with nvm", posix, { shape: "claude", install: NVM_POSIX })
+  // Git Bash always marks itself as Windows (MSYSTEM), so the macOS and Linux case runs only there.
+  if (!WINDOWS) {
+    const posix = run(SHELLS.sh, claudeCommandFor(), { ...env(SHELLS.pathWithoutNode), HOME: home })
+    assertNodeMessage(t, "claude with nvm", posix, { shape: "claude", install: NVM_POSIX })
+  }
   const windows = run(SHELLS.sh, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
   assertNodeMessage(t, "claude with nvm-windows", windows, { shape: "claude", install: NVM_WINDOWS })
 })
