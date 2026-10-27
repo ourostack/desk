@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 // Loaded only when a worker starts: the Stop hook runs after every turn.
 const compatibleNode = (options) => require("../compatible-node.cjs").compatibleNode(options);
@@ -71,6 +72,65 @@ function childThread(payload, log) {
   } catch { return false; }
 }
 
+// Outbox counts a lock as abandoned only after 10 minutes, but its holder here is a capture that stops itself after 60 s
+// (detach-worker.cjs) and holds the lock for milliseconds. A capture killed inside that section (its own time limit, which skips
+// cleanup, a crash or a forced kill) would leave every later capture for the session waiting until it gives up, and a session
+// end in that window would never be recorded. The lock file names its holder's process (outbox.js withLock), so while waiting
+// this removes a lock whose holder is gone, or one still without a holder after far longer than writing it takes.
+const LOCK_SWEEP_MS = 200;
+// Outbox creates the lock and then writes the holder's process id. A holder whose event loop is blocked in between (the session-end
+// worker runs Git synchronously, up to 10 s per call) still holds it, so only a lock unnamed for this long is abandoned.
+const LOCK_UNNAMED_MS = 30_000;
+
+function holderGone(text, stat) {
+  let pid;
+  try { pid = JSON.parse(text).pid; } catch { /* not written yet */ }
+  if (!Number.isSafeInteger(pid) || pid <= 0) return Date.now() - Number(stat.mtimeMs) > LOCK_UNNAMED_MS;
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    // EPERM: the process exists but is not ours to signal.
+    return error.code === "ESRCH";
+  }
+}
+
+const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mtimeNs === b.mtimeNs;
+
+function clearAbandonedLock(lockFile) {
+  let before;
+  try {
+    before = fs.statSync(lockFile, { bigint: true });
+    if (!holderGone(fs.readFileSync(lockFile, "utf8"), before)) return;
+  } catch { return; /* gone already: outbox's own wait applies */ }
+  // Another waiter may judge the same lock, remove it and take its own in the instant before this one removes it. Moving the
+  // lock aside is atomic, so this waiter then holds exactly one file, and removes it only if it is the lock it judged.
+  const aside = `${lockFile}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.stale`;
+  try { fs.renameSync(lockFile, aside); } catch { return; /* already moved or removed by another waiter */ }
+  try {
+    if (sameFile(fs.statSync(aside, { bigint: true }), before)) {
+      fs.unlinkSync(aside);
+      return;
+    }
+    // Another waiter's live lock: put it back without replacing anything created there since (a link never overwrites).
+    fs.linkSync(aside, lockFile);
+    fs.unlinkSync(aside);
+  } catch {
+    try { if (!fs.existsSync(lockFile)) fs.renameSync(aside, lockFile); } catch { /* cannot be put back without risking a newer lock */ }
+  }
+}
+
+async function withAbandonedLockCleared(lockFile, body) {
+  clearAbandonedLock(lockFile);
+  const sweep = setInterval(() => clearAbandonedLock(lockFile), LOCK_SWEEP_MS);
+  try {
+    return await body();
+  } finally {
+    clearInterval(sweep);
+  }
+}
+
 async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot, launch: start = launch, supportsFinalize } = {}) {
   try {
     // A headless evaluator session is never captured: no marker, no derive.
@@ -117,14 +177,26 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     // A turn's capture runs detached, so it can land after the session's end is recorded (a session that ends right after a turn,
     // as every `-p` run does). It must never undo that end: the read and the write share one lock per session, and a capture with
     // no end keeps the end already recorded. Later activity in a resumed session still reopens it when derived (session-lifetime).
-    await outbox.withNamedLock(env, `marker-${marker.host}-${id}`, async () => {
+    // Only a missing record has no end: a record that exists but cannot be read or checked (a failed Windows permission step, a file
+    // that changed under the read) may hold one, so that capture leaves it as it is.
+    const lockName = `marker-${marker.host}-${id}`;
+    const stateRoot = await outbox.factoryStateRoot(env);
+    let kept = false;
+    await withAbandonedLockCleared(path.join(stateRoot, "locks", `${lockName}.lock`), () => outbox.withNamedLock(env, lockName, async () => {
       if (!ended) {
-        const file = path.join(await outbox.factoryStateRoot(env), "markers", `${marker.host}-${id}.json`);
-        const recorded = await outbox.readMarker(env, file).catch(() => null);
+        const file = path.join(stateRoot, "markers", `${marker.host}-${id}.json`);
+        let recorded = null;
+        try {
+          recorded = await outbox.readMarker(env, file);
+          kept = recorded === null;
+        } catch (error) {
+          kept = error?.code !== "ENOENT";
+        }
+        if (kept) return;
         if (recorded?.ended_at) Object.assign(marker, { end_reason: recorded.end_reason, ended_at: recorded.ended_at });
       }
       await outbox.writeMarker(env, marker);
-    }, { deskRoot });
+    }, { deskRoot }));
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
     const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");
@@ -148,7 +220,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       // starts it when the evaluator step is due (a request newer than its last run, or requests waiting past its gap), or when a task context evaluation is due.
       if (jobs.length === 0) await kickAtTurnEnd(workerEnv, start, resolveOnce, scope);
     }
-    return "written";
+    return kept ? "kept" : "written";
   } catch {
     // Accounting remains fail-open. The separate wrapper reply check never changes these markers.
     return "unavailable";
