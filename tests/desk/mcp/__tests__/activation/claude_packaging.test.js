@@ -415,7 +415,7 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
   assert.equal(hooks.hooks.SessionStart[0].matcher, "startup|resume|clear|compact")
   assert.equal(
     hooks.hooks.SessionStart[0].hooks[0].command,
-    'node "${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs" "${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md"',
+    'if command -v node >/dev/null 2>&1; then node "${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs" "${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md"; else desk_host=claude; . "${CLAUDE_PLUGIN_ROOT}/hooks/node-missing.sh"; fi',
   )
   // Desk starts through its cross-platform bootstrap, found through the host-expanded plugin root or the working directory.
   const desk = mcp.mcpServers.desk

@@ -8,7 +8,7 @@
 //
 // It must parse and run on very old Node (8 and later), so it uses ES5 syntax only (var, function, no arrow functions, template literals, destructuring or optional chaining) and only the child_process, fs, os, path and url built-ins.
 //
-// Known limit: with no `node` executable at all, the host cannot start this file, so Desk cannot answer. Desk's setup and desk_doctor make sure Node is installed.
+// Known limit: with no `node` executable at all, the host cannot start this file, so Desk cannot answer. The session-start hook command checks for `node` in the host's own shell first and tells the session what to install (hooks/node-missing.sh); Desk's setup and desk_doctor make sure Node is installed.
 //
 // DESK_NODE_SYSTEM_PREFIX prefixes the fixed Homebrew and system paths on macOS and Linux, so tests can point them at a fixture tree.
 
@@ -601,6 +601,7 @@ function run(options) {
 }
 
 module.exports = {
+  PROBE_BUDGET_MS: PROBE_BUDGET_MS,
   TOOL_NAMES: TOOL_NAMES,
   candidatePaths: candidatePaths,
   importIndex: importIndex,

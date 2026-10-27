@@ -52,6 +52,13 @@ function emit(additionalContext) {
   try {
     // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
     try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
+    // A Node older than Desk needs, with no newer one installed: say what to install and that a new session is needed, and nothing else.
+    let nodeRequired = "";
+    try { nodeRequired = require("./lib/node-required.cjs").nodeRequiredLine(); } catch { /* a check that cannot load never blocks the session */ }
+    if (nodeRequired) {
+      emit(nodeRequired);
+      return;
+    }
     let foundation;
     try {
       foundation = stripTrailingNewlines(fs.readFileSync(foundationPath, "utf8"));

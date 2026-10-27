@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs\" \"${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md\"",
+            "command": "if command -v node >/dev/null 2>&1; then node \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-session-start.cjs\" \"${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md\"; else desk_host=claude; . \"${CLAUDE_PLUGIN_ROOT}/hooks/node-missing.sh\"; fi",
             "timeout": 10
           }
         ]
