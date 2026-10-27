@@ -38,6 +38,13 @@ test("a tooling repository with no plugin yet is a stub, still dual-repo", () =>
   assert.deepEqual(config.tooling, { repo: "example-org/stub", path: "", plugin: null, ref: "main", marketplace: null })
 })
 
+test("an Enterprise Managed Users owner, with an underscore, is a valid tooling repository", () => {
+  const config = parseCrewConfig(JSON.stringify({ tooling: { repo: "pat_example/team-tooling" } }))
+  assert.deepEqual(config.problems, [])
+  assert.equal(config.tooling.repo, "pat_example/team-tooling")
+  assert.equal(parseCrewConfig(JSON.stringify({ tooling: { repo: "_leading/x" } })).tooling, null)
+})
+
 test("tooling inside the workspace is a path with no repository: a monorepo", () => {
   const config = parseCrewConfig(JSON.stringify({ tooling: { path: "./plugins/team/", plugin: "team" } }))
   assert.equal(config.setup, "monorepo")

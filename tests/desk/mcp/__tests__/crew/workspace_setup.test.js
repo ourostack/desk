@@ -168,7 +168,7 @@ test("start on a local repository with no origin: committed, and the push is lef
 })
 
 test("start refuses what it cannot honor before writing anything, and never overwrites a file", async () => {
-  const repo = await teamRepo({ ...CIT_SHAPED, "_shared/decisions/README.md": "Existing decisions index\n" })
+  const repo = await teamRepo({ ...CIT_SHAPED, "_shared/decisions/README.md": "Existing decisions index\n", "_shared/landscape/notes.md": "Existing facts\n" })
   const cases = [
     [{ tooling: { repo: "not a repo" } }, /tooling\.repo: "not a repo" is not owner\/name/u],
     [{ mergeWorkflow: "../outside.yml" }, /shared_writes\.merge_workflow: "\.\.\/outside\.yml" is not a file inside the repository/u],
@@ -180,9 +180,9 @@ test("start refuses what it cannot honor before writing anything, and never over
     assert.equal(result.state, "refused", JSON.stringify(extra))
     assert.match(result.message, reason)
   }
-  // An existing _shared/decisions/ folder is kept as it is: nothing is added to it.
+  // Existing _shared/decisions/ and _shared/landscape/ folders are kept as they are: nothing is added to them.
   const kept = await startWorkspace(startCit(repo))
-  assert.equal(kept.changes.some((change) => change.path.startsWith("_shared/decisions/")), false)
+  assert.equal(kept.changes.some((change) => change.path.startsWith("_shared/")), false)
   const taken = await teamRepo({ ...CIT_SHAPED, "_meta/crew.json": "{\"note\":\"someone else's\"}\n" })
   const refused = await startWorkspace(startCit(taken, { apply: true }))
   assert.equal(refused.state, "refused")
