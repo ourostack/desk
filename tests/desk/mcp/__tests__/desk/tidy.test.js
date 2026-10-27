@@ -284,6 +284,15 @@ test("tidy is not needed on a clean desk", () => {
   assert.deepEqual(result.findings, [])
 })
 
+test("an MS Desk workspace MCP config, agency.toml at the desk root, never makes the tidy needed", () => {
+  const root = soloDesk({ messy: false })
+  write(root, "agency.toml", "[mcps.servers.example]\ncommand = \"node\"\n")
+  const result = status(root)
+  assert.equal(result.needed, false)
+  assert.equal(result.reason, "nothing to tidy")
+  assert.deepEqual(result.findings, [])
+})
+
 test("stale tasks alone never make the tidy needed, but the report still lists them", () => {
   const root = soloDesk({ messy: false })
   write(root, "billing-disputes/old-refund-audit/task.md", "---\ntitle: old-refund-audit\nstatus: processing\nupdated: '2026-07-01T00:00:00Z'\n---\n")

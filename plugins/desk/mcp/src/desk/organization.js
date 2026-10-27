@@ -23,7 +23,8 @@
 // Loose-file allow-lists (rulings, 2026-09-25):
 //   - desk root: track folders, underscore folders, `desks/` (crew), the
 //     shared `artifacts/` folder `directory-structure` defines (M4-5),
-//     `AGENTS.md`, `README.md`, `CLAUDE.md`, dotfiles.
+//     `AGENTS.md`, `README.md`, `CLAUDE.md`, `agency.toml` (the workspace
+//     MCP config MS Desk keeps where Agency finds it), dotfiles.
 //   - track root: `track.md`, task folders, underscore folders.
 // At the desk root, dotfiles include dot-folders such as `.git/` (M4-5): a
 // Git desk always has one, and the tidy's Detect must not fire on every Git
@@ -116,7 +117,8 @@ const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000
 
-const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"])
+// `agency.toml` is the workspace MCP config: Agency reads it from the desk root, so it may not move.
+const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md", "agency.toml"])
 
 // Plain (non-underscore) folders a desk root may hold besides tracks: the
 // shared `artifacts/` folder, which operators use for exports and reports.
