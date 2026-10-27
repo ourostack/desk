@@ -8,7 +8,7 @@ import {
 import { SESSION_ID_V4, validatePublished } from "./published-schema.js"
 import { normalizePublished, stableStringify } from "./pipeline/normalize.js"
 
-export const CONTEXT_SCHEMA = "desk.factory.context/1"
+const CONTEXT_SCHEMA = "desk.factory.context/1"
 // Preserve the legacy identifier while new templates use the recommendation schema.
 export const RECOMMENDATION_SCHEMA = "desk.factory.context/2"
 export const CONTEXT_PATH = /^context\/([0-9a-f]{32})\.json$/u
