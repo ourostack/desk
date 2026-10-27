@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.29 — 2026-10-27
+
+A session end is no longer lost after a turn-end capture is killed while it records the session. Its lock on the session's factory marker stayed behind, and later captures waited on it for 10 minutes, longer than their own 60-second limit, so they gave up without recording the end. A capture now removes a marker lock whose holder has ended ([`hooks/lib/factory-end.cjs`](hooks/lib/factory-end.cjs)). A turn-end capture also leaves the marker as it is when the marker exists but cannot be read, instead of replacing an end it could not see.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.28 — 2026-10-27
 
 `lesson_add` for a desk lesson now names the improvement card it opens: the reply carries `improvement_key` and `improvement_path`, and its message gives the card's path. The card is titled from the lesson, `Lesson for <owner>: <topic>`, instead of the fixed "System friction in the desk plugin". The library still builds every title: it checks the whole topic before cutting it to length, uses the fixed words when the topic is not one line (any control character, U+2028 or U+2029) or holds private text, and writes a lesson's card only when its exact text reads back as a card. An owner `skill:<plugin>:<skill>` is accepted when the plugin is present for any host on the machine (Claude Code's registry, Copilot's own installs, Agency's cache or Codex's plugin folder, following linked plugin folders), so a lesson for MS Desk recorded from Claude Code no longer fails when MS Desk is installed for Copilot only. An unknown plugin is still refused, and the refusal now says how to file the lesson instead. `friction_add` returns the same two card fields for any system friction that opens a card.
