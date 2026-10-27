@@ -144,3 +144,13 @@ test("migrations.js roots prints one root per line, honours --engine, and defaul
   const fallback = await run(["roots"], { env: {} })
   assert.equal(fallback.code, 0)
 })
+
+test("an Agency index past its size limit has no roots, the same index under it has its root", async () => {
+  const fixture = await agencyHome([{ spec: "copilot:github:org/ms:plugins/ms-desk@main", dir: "ms", name: "ms-desk", fetched_at: 1 }])
+  const index = path.join(fixture.home, ".local", "agency", "plugins", "cache", "cache_index.json")
+  const parsed = JSON.parse(readFileSync(index, "utf8"))
+  writeFileSync(index, JSON.stringify({ ...parsed, pad: "x".repeat(3 * 1024 * 1024) }))
+  assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [fixture.folder("ms")])
+  writeFileSync(index, JSON.stringify({ ...parsed, pad: "x".repeat(4 * 1024 * 1024) }))
+  assert.deepEqual(agencyMigrationRoots({ home: fixture.home }), [])
+})

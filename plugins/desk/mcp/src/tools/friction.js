@@ -94,9 +94,10 @@ async function fingerprintIfReady(env, deskRoot, card) {
 
 // Opens (or finds, or reopens) the improvement card for system friction, as its own committed write after the friction
 // entry. Never throws: the entry is already written, so every failure is a stable code on the result. The library builds
-// the card's title from fixed words; the card holds the key (which carries the fingerprint), the plugin, the signal and
-// the evidence jobs as pointers, and nothing of the note.
-async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }) {
+// the card's title from fixed words, or for a lesson from its owner and topic; the card holds the key (which carries the
+// fingerprint), the plugin, the signal and the evidence jobs as pointers, and nothing of the note. The result names the
+// card it opened or found, by key and desk-relative path, so the caller can point at it.
+async function openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush }) {
   if (fingerprint === null) return { improvement: "factory_state_unavailable" }
   const prefix = deskRelativePath(deskRoot, personPrefix(deskRoot, person))
   const key = cardKey("friction_candidate", fingerprint)
@@ -108,9 +109,10 @@ async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, 
       message: (written) => cardCommitMessage("friction", written.file_name ?? "set_aside"),
       spawnGit,
       schedulePush,
-      write: () => openImprovement({ deskRoot, personPrefix: prefix, key, source: "friction_candidate", evidence, plugin: card.plugin, signal: card.signal, now }),
+      write: () => openImprovement({ deskRoot, personPrefix: prefix, key, source: "friction_candidate", lesson, evidence, plugin: card.plugin, signal: card.signal, now }),
     })
     const out = { improvement: result.result }
+    if (OPENED_CODES.has(result.result) && typeof result.file_name === "string") Object.assign(out, { improvement_key: key, improvement_path: path.posix.join(prefix, "_meta", "improvement", result.file_name) })
     if (OPENED_CODES.has(result.result) && commit !== "committed" && commit !== "no_change" && commit !== "no_files") out.improvement_commit = commit
     return out
   } catch {
@@ -152,7 +154,9 @@ async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, 
  * retry never opens a second card; a closed card with the key is reopened), as a second, separate committed write; the
  * result gains `improvement`: "opened" | "duplicate" | "reopened" or the card library's refusal code (for example
  * `not_generic`), or `factory_state_unavailable` (no machine secret, so no fingerprint) or `card_write_failed`; and
- * `improvement_commit` when the card was written but not committed. A refused or failed card never loses the entry.
+ * `improvement_commit` when the card was written but not committed; an opened, found or reopened card is named by
+ * `improvement_key` and `improvement_path` (desk-relative). `lesson: { owner, topic }` (lesson_add's own call) titles
+ * the card from the lesson. A refused or failed card never loses the entry.
  * The call behaves the same in a noninteractive session; only picking a card up is refused there.
  *
  * Returns: { status: "added", path, commit? }; { status: "added", path,
@@ -161,7 +165,7 @@ async function openCard({ deskRoot, person, card, fingerprint, now, commitCard, 
  * { status: "added", path, kaizen: <code>, commit? } when the card was not
  * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault, lesson }) {
   const values = input ?? {}
   const { track, theme } = values
   const { body } = values
@@ -259,6 +263,6 @@ export async function friction_add({ deskRoot, input, person = null, search, env
     result = { status: "added", path: written, kaizen: filed.result }
   }
   if (commit) result.commit = commit
-  if (card !== null) Object.assign(result, await openCard({ deskRoot, person, card, fingerprint, now, commitCard, spawnGit, schedulePush }))
+  if (card !== null) Object.assign(result, await openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush }))
   return result
 }

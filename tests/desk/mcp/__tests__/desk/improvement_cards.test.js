@@ -228,6 +228,60 @@ test("opening a key whose card is closed reopens it, counts the recurrence, clea
   assert.deepEqual((await read(where))[0].evidence, many)
 })
 
+test("a lesson's card is titled by the library from its owner and topic, and falls back to fixed words when the topic is not clean", async () => {
+  const where = await desk()
+  const fp = (n) => `${FP.slice(0, 31)}${n}`
+  const lessonCard = async (n, lesson) => {
+    const key = `friction_candidate:${fp(n)}`
+    const opened = await open(where, { key, lesson })
+    return opened.result === "opened" ? (await read(where)).find((card) => card.key === key).title : opened.result
+  }
+  assert.equal(await lessonCard(1, { owner: "skill:desk:interaction-style", topic: "credential gates need evidence" }), "Lesson for skill:desk:interaction-style: credential gates need evidence")
+  assert.equal(await lessonCard(2, { owner: "tool:lesson_add", topic: "say the card" }), "Lesson for tool:lesson_add: say the card")
+  assert.equal(await lessonCard(3, { owner: "foundation", topic: "x".repeat(200) }), `Lesson for foundation: ${"x".repeat(96)}…`)
+  // A topic or owner the card's own checks would not accept: the card still opens, with the fixed words.
+  for (const [n, lesson] of [[4, { owner: "brief", topic: "token ab12cd34ef56gh78ij90kl in the brief" }], [5, { owner: "brief", topic: "look in /Users/someone/work" }], [6, { owner: "brief", topic: "two\nlines" }], [7, { owner: "Look at this", topic: "fine" }], [8, { owner: "brief", topic: "" }], [9, { owner: "brief" }], [0, "not an object"]]) {
+    assert.equal(await lessonCard(n, lesson), "System friction in the desk plugin", JSON.stringify(lesson))
+  }
+  // Only a friction candidate is a lesson's card.
+  assert.equal((await open(where, { lesson: { owner: "brief", topic: "x" } })).result, "title_not_allowed")
+})
+
+test("a lesson topic the card file cannot carry on one line, or that holds private text anywhere, gets the fixed words, and the card reads back", async () => {
+  const where = await desk()
+  const fp = (n) => `${FP.slice(0, 30)}${String(n).padStart(2, "0")}`
+  const hex = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  const topics = [
+    // Line and paragraph separators, a next-line and any other control character: the card's front matter would not parse.
+    "check the gate before merging", "check the gate before merging", "check the gate\u0085before merging", "tab\there",
+    // A secret that straddles the title's cut is judged on the whole topic, not on what survives the cut.
+    `${"y".repeat(80)} ${hex}`,
+    // A whole topic that passes, cut where it would read as an IPv4 address ("1.2.3.4567" becomes "1.2.3.4…").
+    `${"z".repeat(93)} 1.2.3.4567`,
+    // Private shapes the shared scrub now knows.
+    "use xoxb-1234-5678-abcdefghijklmnop to post", "the password hunter2 works", "password: open sesame", "open \\\\server\\share\\ari first",
+    "notes in ~ari/notes", "notes in $HOME/secret/notes", "notes in ${HOME}/secret", "notes in %USERPROFILE%\\secret",
+  ]
+  for (const [n, topic] of topics.entries()) {
+    const key = `friction_candidate:${fp(n)}`
+    assert.equal((await open(where, { key, lesson: { owner: "brief", topic } })).result, "opened", JSON.stringify(topic))
+    const listing = await readCards(where)
+    assert.equal(listing.cards.find((card) => card.key === key)?.title, "System friction in the desk plugin", JSON.stringify(topic))
+    assert.deepEqual(listing.skipped, {}, JSON.stringify(topic))
+  }
+  // Ordinary prose about the same things keeps its lesson title, and a cut never splits a character in two.
+  const kept = async (n, topic) => {
+    const key = `friction_candidate:${fp(n)}`
+    await open(where, { key, lesson: { owner: "brief", topic } })
+    return (await read(where)).find((card) => card.key === key).title
+  }
+  assert.equal(await kept(50, "never paste a password into chat"), "Lesson for brief: never paste a password into chat")
+  assert.equal(await kept(51, "store the token in the keychain"), "Lesson for brief: store the token in the keychain")
+  const emoji = await kept(52, `${"z".repeat(100)}\u{1F600}tail`)
+  assert.equal(emoji, `Lesson for brief: ${"z".repeat(100)}…`)
+  assert.ok(emoji.length <= 120)
+})
+
 test("every source builds its own title; a supplied title is refused, a friction candidate's too", async () => {
   const where = await desk()
   const key = `friction_candidate:${FP}`

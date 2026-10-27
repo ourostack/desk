@@ -14,7 +14,7 @@
 // Before this, lessons went to `_meta/tips/<topic>.md`, which nothing loaded. The tips files that remain stay
 // searchable; this tool no longer writes them.
 
-import { promises as fs, existsSync, readFileSync } from "node:fs"
+import { promises as fs, existsSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { today, slugify, pathExists } from "../util/fm.js"
@@ -24,12 +24,11 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
-import { deskPluginRoot } from "../package-metadata.js"
-import { compareVersions } from "../runtime/stale-desk.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stagingAllowed, stageAndCommitFile } from "./_card-commit.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
+import { installedPlugins } from "./lesson-owners.js"
 import { addTeamLesson } from "./lesson-team.js"
 import { lead, oneLine, topicOf, withLesson } from "./lesson-lines.js"
 import { AGENTS_MD_CAP_BYTES, personAgentsCap, printedPart, readAgentsMd } from "../runtime/agents-md.js"
@@ -44,44 +43,6 @@ const SCOPES = new Set(["personal", "desk", "team"])
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/u
 // An empty folder, so Git never sees it; it serialises writes to one AGENTS.md across sessions.
 const LOCK_NAME = ".agents-md.lock"
-
-function pluginManifest(dir) {
-  for (const manifest of ["plugin.json", path.join(".claude-plugin", "plugin.json")]) {
-    try {
-      const { name, version } = JSON.parse(readFileSync(path.join(dir, manifest), "utf8"))
-      if (typeof name === "string") return { name, version: typeof version === "string" ? version : null }
-    } catch {
-      // No manifest here; try the other place a host keeps it.
-    }
-  }
-  return null
-}
-
-// Whether `next` is a newer install of the same plugin than `kept`: a version beats none, and the higher version wins.
-function newer(next, kept) {
-  if (next.version === null) return false
-  if (kept.version === null) return true
-  return compareVersions(next.version, kept.version) === 1
-}
-
-/**
- * The installed plugins a desk lesson can name, as a map of plugin name to its active folder: Desk's own plugin folder
- * plus the plugins the host has installed beside it, read the way the factory reads them (`factoryPluginScan`). Built
- * from what is installed, never from a fixed list, so an overlay's skills (MS Desk, Platform Workflows) are owners too.
- * A host's cache keeps old versions beside the active one; only the running Desk and the newest version of each other
- * plugin count, so a skill an upgrade removed is no owner.
- */
-function installedPlugins(env, scan) {
-  const plugins = new Map()
-  const deskRoot = deskPluginRoot(env)
-  for (const dir of [deskRoot, ...scan(env).dirs]) {
-    const manifest = pluginManifest(dir)
-    if (manifest === null) continue
-    const kept = plugins.get(manifest.name)
-    if (kept === undefined || (kept.dir !== deskRoot && newer(manifest, kept))) plugins.set(manifest.name, { dir, version: manifest.version })
-  }
-  return plugins
-}
 
 /**
  * `ownerOf(owner) -> { owner, plugin, frictionClass }`: where a desk lesson takes effect. `skill:<plugin>:<skill>` is a
@@ -101,7 +62,9 @@ function ownerOf(owner, { env, scan }) {
   if (!skill || !NAME.test(skill[1]) || !NAME.test(skill[2])) throw new Error(usage)
   const plugins = installedPlugins(env, scan)
   const plugin = plugins.get(skill[1])
-  if (plugin === undefined) throw new Error(`lesson_add: no installed plugin is named ${skill[1]} (installed: ${[...plugins.keys()].sort().join(", ")})`)
+  if (plugin === undefined) {
+    throw new Error(`lesson_add: no plugin named ${skill[1]} is installed for any host on this machine (installed: ${[...plugins.keys()].sort().join(", ")}). If ${skill[1]} is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues.`)
+  }
   if (!existsSync(path.join(plugin.dir, "skills", skill[2], "SKILL.md"))) throw new Error(`lesson_add: the ${skill[1]} plugin has no skill named ${skill[2]}`)
   return { owner, plugin: skill[1], frictionClass: "skill" }
 }
@@ -185,6 +148,8 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
       friction_class: target.frictionClass,
       body: `Lesson for \`${target.owner}\`: **${topic}.** ${body}`,
     },
+    // The card is titled from the lesson, so it can be matched to it from the card alone.
+    lesson: { owner: target.owner, topic },
   })
   const opened = ["opened", "duplicate", "reopened"].includes(added.improvement)
   const result = {
@@ -195,10 +160,10 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
     improvement: added.improvement,
     in_effect: false,
     message: opened
-      ? `Not in effect yet. An improvement card is open against ${target.owner}; the lesson takes effect when the change it asks for ships.`
+      ? `Not in effect yet. ${added.improvement_path === undefined ? "An improvement card" : `Improvement card ${added.improvement_path}`} is open against ${target.owner}; the lesson takes effect when the change it asks for ships.`
       : `Not in effect, and no improvement card opened (${added.improvement}), so nothing will act on this lesson yet. The note is in ${added.path}.`,
   }
-  for (const field of ["commit", "improvement_commit"]) if (added[field] !== undefined) result[field] = added[field]
+  for (const field of ["improvement_key", "improvement_path", "commit", "improvement_commit"]) if (added[field] !== undefined) result[field] = added[field]
   return result
 }
 
@@ -211,7 +176,8 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
  *
  * Returns, by scope:
  *   personal: { status: "added" | "updated", scope, path, in_effect, message, commit? }
- *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, commit?, improvement_commit? }
+ *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, improvement_key?, improvement_path?, commit?,
+ *               improvement_commit? }
  *   team:     { status: "merged" | "pr_open" | "failed", scope, repo, path, section, line, in_effect, message, pr?,
  *               commit?, account?, replaces?, stage?, reason?, claude_code_loads? }
  *

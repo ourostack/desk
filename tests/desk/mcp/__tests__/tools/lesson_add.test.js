@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url"
 import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { createSearchEngine } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import { osEnv } from "../_os_env.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
@@ -263,14 +264,15 @@ test("lesson_add desk refuses a lesson with no owner, or an owner nothing has", 
   const scan = () => ({ dirs: [] })
   await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:desk:no-such-skill"), addFriction }), /the desk plugin has no skill named no-such-skill/u)
   await assert.rejects(() => lesson_add({ deskRoot: root, input: desk("tool:no_such_tool"), addFriction }), /no_such_tool/u)
-  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:elsewhere:x"), addFriction }), /no installed plugin is named elsewhere \(installed: desk\)/u)
+  await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:elsewhere:x"), addFriction }), /no plugin named elsewhere is installed for any host on this machine \(installed: desk\)/u)
   await assert.rejects(() => lesson_add({ deskRoot: root, scan, input: desk("skill:Bad:x"), addFriction }), /owner/u)
   assert.equal(calls.length, 0)
 })
 
 test("lesson_add desk records system friction against the owner and says it is not in effect until the card ships", async () => {
   const root = await mkTempDeskRoot()
-  const { calls, addFriction } = frictionSpy({ status: "added", path: "_meta/friction.md", kaizen: "candidate", improvement: "opened" })
+  const card = "_meta/improvement/friction_candidate--0123456789ab.md"
+  const { calls, addFriction } = frictionSpy({ status: "added", path: "_meta/friction.md", kaizen: "candidate", improvement: "opened", improvement_key: "friction_candidate:0123", improvement_path: card })
   const env = { marker: true }
   const result = await lesson_add({ deskRoot: root, person: "ari", env, input: { scope: "desk", topic: "Answer before a long wait", body: "Reply before a blocking wait.", owner: "skill:desk:interaction-style" }, addFriction })
   assert.equal(calls.length, 1)
@@ -284,14 +286,18 @@ test("lesson_add desk records system friction against the owner and says it is n
     friction_class: "skill",
     body: "Lesson for `skill:desk:interaction-style`: **Answer before a long wait.** Reply before a blocking wait.",
   })
+  // The card is titled from the lesson: its owner and topic.
+  assert.deepEqual(calls[0].lesson, { owner: "skill:desk:interaction-style", topic: "Answer before a long wait" })
   assert.deepEqual(result, {
     status: "routed",
     scope: "desk",
     owner: "skill:desk:interaction-style",
     path: "_meta/friction.md",
     improvement: "opened",
+    improvement_key: "friction_candidate:0123",
+    improvement_path: card,
     in_effect: false,
-    message: "Not in effect yet. An improvement card is open against skill:desk:interaction-style; the lesson takes effect when the change it asks for ships.",
+    message: `Not in effect yet. Improvement card ${card} is open against skill:desk:interaction-style; the lesson takes effect when the change it asks for ships.`,
   })
 })
 
@@ -376,9 +382,68 @@ test("lesson_add desk opens a real improvement card when the factory state is re
   const base = await mkTempDeskRoot()
   const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
   await factoryStateRoot(env)
-  const result = await lesson_add({ deskRoot: root, env, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "brief" } })
+  const result = await lesson_add({ deskRoot: root, env, input: { scope: "desk", topic: "credential gates need evidence", body: "Do it.", owner: "brief" } })
   assert.equal(result.improvement, "opened")
   assert.equal((await fs.readdir(path.join(root, "_meta", "improvement"))).filter((name) => name.endsWith(".md")).length, 1)
+  // The reply names the card, and the card names the lesson.
+  assert.match(result.improvement_key, /^friction_candidate:[0-9a-f]{32}$/u)
+  assert.match(result.improvement_path, /^_meta\/improvement\/friction_candidate--[0-9a-f]{12}\.md$/u)
+  assert.equal(result.message, `Not in effect yet. Improvement card ${result.improvement_path} is open against brief; the lesson takes effect when the change it asks for ships.`)
+  assert.match(await fs.readFile(path.join(root, ...result.improvement_path.split("/")), "utf8"), /\n# Lesson for brief: credential gates need evidence\n/u)
+  // A topic with a line or paragraph separator opens a card that Desk reads back, under the fixed words.
+  for (const topic of ["check the gate\u2028before merging", "check the build\u2029before shipping"]) {
+    const separated = await lesson_add({ deskRoot: root, env, input: { scope: "desk", topic, body: "Do it.", owner: "brief" } })
+    assert.equal(separated.improvement, "opened", JSON.stringify(topic))
+    const listing = await readCards({ deskRoot: root, personPrefix: "" })
+    assert.deepEqual(listing.skipped, {}, JSON.stringify(topic))
+    assert.equal(listing.cards.find((card) => separated.improvement_key === card.key)?.title, "System friction in the desk plugin", JSON.stringify(topic))
+  }
+})
+
+// A home folder with plugins installed for other hosts than the one running: Claude Code's registry, Copilot CLI's own
+// installs, Agency's cache (Copilot under Agency) and Codex's plugin folder.
+async function otherHosts() {
+  const home = await mkTempDeskRoot()
+  const put = async (rel, content) => {
+    await fs.mkdir(path.dirname(path.join(home, rel)), { recursive: true })
+    await fs.writeFile(path.join(home, rel), typeof content === "string" ? content : JSON.stringify(content), "utf8")
+  }
+  const skill = (dir, name) => put(path.join(dir, "skills", name, "SKILL.md"), "---\nname: x\n---\n")
+  await put(".claude/plugins/installed_plugins.json", { version: 2, plugins: { "claude-only@mkt": [{ installPath: path.join(home, "claude-cache", "claude-only", "1.0.0"), version: "1.0.0" }], "broken@mkt": "not a list" } })
+  await put("claude-cache/claude-only/1.0.0/.claude-plugin/plugin.json", { name: "claude-only", version: "1.0.0" })
+  await skill("claude-cache/claude-only/1.0.0", "from-claude")
+  const cache = ".local/agency/plugins/cache"
+  await put(`${cache}/cache_index.json`, { entries: { "copilot:github:acme/ms-desk:plugins/ms-desk@main": { dir_name: "new" }, "copilot:github:acme/ms-desk:plugins/ms-desk@old": { dir_name: "old" }, "copilot:market:x": { dir_name: "../escape" }, odd: null } })
+  await put(`${cache}/entries/new/agency.json`, { name: "ms-desk", version: "2.0.0" })
+  await skill(`${cache}/entries/new`, "using-ms-desk")
+  await put(`${cache}/entries/old/plugin.json`, { name: "ms-desk", version: "1.0.0" })
+  await skill(`${cache}/entries/old`, "removed-since")
+  await put(".copilot/installed-plugins/mkt/copilot-only/plugin.json", { name: "copilot-only" })
+  await skill(".copilot/installed-plugins/mkt/copilot-only", "from-copilot")
+  // A folder at the deepest level read that holds no plugin is passed over, not searched further.
+  await put(".copilot/installed-plugins/mkt/not-a-plugin/notes.json", { note: "no manifest here" })
+  await put(".codex/plugins/cache/mkt/codex-only/1.0.0/.codex-plugin/plugin.json", { name: "codex-only", version: "1.0.0" })
+  await skill(".codex/plugins/cache/mkt/codex-only/1.0.0", "from-codex")
+  return home
+}
+
+test("lesson_add desk accepts a skill of a plugin installed for any host on this machine, its newest version, and never a made-up one", async () => {
+  const root = await mkTempDeskRoot()
+  const home = await otherHosts()
+  const { calls, addFriction } = frictionSpy({ improvement: "opened" })
+  const scan = () => ({ dirs: [] })
+  const desk = (owner) => lesson_add({ deskRoot: root, env: { HOME: home }, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner } })
+  for (const owner of ["skill:ms-desk:using-ms-desk", "skill:claude-only:from-claude", "skill:copilot-only:from-copilot", "skill:codex-only:from-codex"]) assert.equal((await desk(owner)).owner, owner)
+  assert.deepEqual(calls.map((call) => call.input.plugin), ["ms-desk", "claude-only", "copilot-only", "codex-only"])
+  // The newest install of a plugin is the one that counts.
+  await assert.rejects(() => desk("skill:ms-desk:removed-since"), /the ms-desk plugin has no skill named removed-since/u)
+  // A plugin no host has installed is refused, with how to file a lesson for a real one.
+  await assert.rejects(() => desk("skill:made-up:thing"), /^Error: lesson_add: no plugin named made-up is installed for any host on this machine \(installed: claude-only, codex-only, copilot-only, desk, ms-desk\)\. If made-up is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues\.$/u)
+  // CODEX_HOME, COPILOT_HOME and CLAUDE_CONFIG_DIR move those hosts' folders.
+  const moved = await mkTempDeskRoot()
+  await fs.rename(path.join(home, ".codex"), path.join(moved, "codex"))
+  await assert.rejects(() => desk("skill:codex-only:from-codex"), /no plugin named codex-only/u)
+  assert.equal((await lesson_add({ deskRoot: root, env: { HOME: home, CODEX_HOME: path.join(moved, "codex") }, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:codex-only:from-codex" } })).owner, "skill:codex-only:from-codex")
 })
 
 // ── team ────────────────────────────────────────────────────────────────────
@@ -440,5 +505,66 @@ test("lesson_add personal: desk_search finds the lesson right after it is writte
     assert.deepEqual((await search.lexical({ query: "bbxfeed1234" })).results, [])
     await lesson_add({ deskRoot: root, person, search, input: personal("Blackbox bbxfeed1234", "Real-host check bbxfeed1234 secret.") })
     assert.deepEqual((await search.lexical({ query: "bbxfeed1234" })).results.map((result) => result.path), [where])
+  }
+})
+
+test("lesson_add desk reads other hosts' plugins within bounds, and skips registries it cannot read", async () => {
+  const root = await mkTempDeskRoot()
+  const home = await mkTempDeskRoot()
+  const { addFriction } = frictionSpy({ improvement: "opened" })
+  const scan = () => ({ dirs: [] })
+  await fs.mkdir(path.join(home, ".claude", "plugins"), { recursive: true })
+  await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{}", "utf8")
+  await fs.mkdir(path.join(home, ".local", "agency", "plugins", "cache"), { recursive: true })
+  await fs.writeFile(path.join(home, ".local", "agency", "plugins", "cache", "cache_index.json"), "{}", "utf8")
+  // More plugins than one host's reading looks at: it stops at 512 folders, whatever order they are listed in.
+  const installs = path.join(home, ".copilot", "installed-plugins")
+  for (let i = 0; i < 520; i++) {
+    await fs.mkdir(path.join(installs, `p${i}`), { recursive: true })
+    await fs.writeFile(path.join(installs, `p${i}`, "plugin.json"), JSON.stringify({ name: `p${i}` }), "utf8")
+  }
+  const refused = await lesson_add({ deskRoot: root, env: { USERPROFILE: home }, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:made-up:x" } }).catch((error) => error.message)
+  const installed = /\(installed: ([^)]*)\)/u.exec(refused)[1].split(", ")
+  assert.equal(installed.filter((name) => /^p\d+$/u.test(name)).length, 512)
+})
+
+test("lesson_add desk follows a linked plugin folder once, skips a dangling link, a loop and an oversized manifest, and falls back to the account's home folder", async () => {
+  const root = await mkTempDeskRoot()
+  const home = await mkTempDeskRoot()
+  const elsewhere = await mkTempDeskRoot()
+  const { addFriction } = frictionSpy({ improvement: "opened" })
+  const scan = () => ({ dirs: [] })
+  const link = (target, at) => fs.symlink(target, at, process.platform === "win32" ? "junction" : "dir")
+  const plugin = async (dir, name, manifest = JSON.stringify({ name })) => {
+    await fs.mkdir(path.join(dir, "skills", "rule"), { recursive: true })
+    await fs.writeFile(path.join(dir, "plugin.json"), manifest, "utf8")
+    await fs.writeFile(path.join(dir, "skills", "rule", "SKILL.md"), "---\nname: rule\n---\n", "utf8")
+  }
+  const market = path.join(home, ".copilot", "installed-plugins", "local")
+  await fs.mkdir(market, { recursive: true })
+  // A local install is often a link to the plugin's own checkout.
+  await plugin(path.join(elsewhere, "linked-checkout"), "linked")
+  await link(path.join(elsewhere, "linked-checkout"), path.join(market, "linked"))
+  await link(path.join(elsewhere, "linked-checkout"), path.join(market, "linked-again"))
+  await link(path.join(elsewhere, "gone"), path.join(market, "dangling"))
+  await link(path.join(home, ".copilot"), path.join(market, "loop"))
+  // A manifest past the size limit is not read.
+  await plugin(path.join(market, "huge"), "huge", JSON.stringify({ name: "huge", pad: "x".repeat(70 * 1024) }))
+  const desk = (env, owner) => lesson_add({ deskRoot: root, env, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner } })
+  assert.equal((await desk({ HOME: home }, "skill:linked:rule")).owner, "skill:linked:rule")
+  await assert.rejects(() => desk({ HOME: home }, "skill:huge:rule"), /no plugin named huge is installed for any host on this machine \(installed: desk, linked\)/u)
+  // A home folder that is not absolute reads no host's folders.
+  await assert.rejects(() => desk({ HOME: "relative-home" }, "skill:linked:rule"), /no plugin named linked/u)
+  // With neither HOME nor USERPROFILE set, the account's home folder is read.
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+  try {
+    assert.equal((await desk({}, "skill:linked:rule")).owner, "skill:linked:rule")
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
   }
 })
