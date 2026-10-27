@@ -1564,8 +1564,16 @@ export async function bootOnce({
   }
   // A clone seen with no remote and no card url is recorded on its card as local-only, once: the only record the done
   // check trusts for a commit with nowhere to push (`tools/local-only.js`).
+  // In a Crew workspace only the member's own cards are written, the scope the tool server gives this session; with no
+  // member, or when the member lookup failed, none are.
+  const ownDesk = member?.crew === true && member.person !== null ? path.join(root.path, "desks", member.person) : null
+  const isOwn = (card) => {
+    const rel = path.relative(ownDesk, card.file)
+    return !rel.startsWith("..") && !path.isAbsolute(rel)
+  }
+  const own = member?.crew === false ? cards : ownDesk === null ? [] : cards.filter(isOwn)
   try {
-    await localOnlyFn({ cards, deskRoot: root.path, spawnGit, homeDir, stateBranch: stateBranchFn({ env, homeDir }) })
+    await localOnlyFn({ cards: own, deskRoot: root.path, spawnGit, homeDir, stateBranch: stateBranchFn({ env, homeDir }) })
   } catch {
     // Recording is a convenience and never a reason to degrade a boot.
   }

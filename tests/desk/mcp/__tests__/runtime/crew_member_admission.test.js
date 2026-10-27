@@ -105,3 +105,13 @@ test("a personal desk is unchanged: DESK_PERSON is ignored and writes stay at th
   const status = await desk.statusUntil((payload) => payload.write_scope !== undefined)
   assert.deepEqual(status.write_scope, { mode: "workspace", person: null, relative_path: "." })
 })
+
+test("a personal desk with a track folder named desks still writes: only a real Crew workspace gets member scoping", async (t) => {
+  const root = await mkTempRoot("desk-crew-admission-desks-track-")
+  for (const dir of ["_meta", "_archive", "desks"]) mkdirSync(path.join(root, dir), { recursive: true })
+  writeFileSync(path.join(root, "desks", "track.md"), "---\nname: desks\n---\n# Desks\n")
+  const desk = await start(t, { root, env: { GH_CONFIG_DIR: await ghConfig("someone") } })
+  const created = await desk.call("task_create", { track: "ops", slug: "solo", title: "Solo write" })
+  assert.equal(created.isError, false, JSON.stringify(created.payload))
+  assert.equal(created.payload.path, "ops/solo/task.md")
+})

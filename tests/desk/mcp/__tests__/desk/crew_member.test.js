@@ -6,6 +6,9 @@ import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
+import { ghLogins } from "../../../../../plugins/desk/mcp/src/desk/gh-logins.js"
+import { isCrewWorkspace } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+import { envValue } from "../../../../../plugins/desk/mcp/src/util/env-value.js"
 import {
   forgetMemberAnswers, localMember, memberMessage, memberSourceLabel, originRepository, resolveMember, settleMember,
 } from "../../../../../plugins/desk/mcp/src/desk/crew-member.js"
@@ -134,17 +137,21 @@ test("gh lists no login: gh api user names the login, with an ambient token when
   assert.deepEqual({ person: member.person, source: member.source, identity: member.identity }, { person: "bob", source: "crew-roster", identity: "bob_microsoft" })
   forgetMemberAnswers()
   const offline = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({}), readLogins: logins() })
-  assert.equal(offline.problem, "not_on_roster")
-  assert.match(memberMessage(offline), /^No GitHub account signed in to gh is not on|^No GitHub account signed in to gh is/u)
+  assert.equal(offline.problem, "github_unreachable")
+  assert.match(memberMessage(offline), /^gh lists no signed-in account here and Desk could not ask GitHub which account gh acts as, so Desk keeps this team workspace read-only in this session\. To write to your own desk, sign in to gh as the account you joined with \(gh auth login\) and check that GitHub can be reached; then call desk_status, which checks again\.$/u)
   forgetMemberAnswers()
   const stranger = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({ "api user --jq .login": { code: 0, stdout: "stranger\n" } }), readLogins: logins() })
   assert.equal(stranger.problem, "not_on_roster")
 })
 
-test("a Crew clone with desks/ but no roster file has nobody on its roster", async () => {
+test("a desk with desks/ is a Crew workspace only with _meta/crew.json or a roster; a marked one with no roster has nobody on it", async () => {
   forgetMemberAnswers()
   const root = await mkTempRoot("desk-crew-member-noroster-")
   await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.mkdir(path.join(root, "_meta"), { recursive: true })
+  // A personal desk with a track folder named desks: no member scoping, as before Crew.
+  assert.deepEqual(localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft") }), { crew: false, person: null, source: null, identity: null, problem: null })
+  await fs.writeFile(path.join(root, "_meta", "crew.json"), "{}\n")
   assert.equal(localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft") }).problem, "not_on_roster")
   const asked = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({ "api user --jq .login": { code: 0, stdout: "ari_microsoft\n" } }), readLogins: logins() })
   assert.equal(asked.problem, "not_on_roster")
@@ -171,4 +178,86 @@ test("labels and messages for each source", () => {
   assert.equal(memberSourceLabel({ source: null }), "authority provider")
   assert.equal(memberMessage({ crew: true, person: "ari", problem: null }), null)
   assert.equal(memberMessage(null), null)
+})
+
+// gh's hosts.yml with two accounts: `users:` in sign-in order, the active one in `user:`.
+async function ghConfig(hosts) {
+  const dir = await mkTempRoot("desk-crew-member-hosts-")
+  await fs.writeFile(path.join(dir, "hosts.yml"), hosts)
+  return dir
+}
+
+test("two roster accounts signed in: the session writes as gh's active account, the one crew.js pushes as", async () => {
+  forgetMemberAnswers()
+  const root = await crewClone()
+  const config = await ghConfig("github.com:\n    users:\n        ari_microsoft:\n        bob_microsoft:\n    git_protocol: https\n    user: bob_microsoft\n")
+  const local = localMember({ deskRoot: root, env: { GH_CONFIG_DIR: config } })
+  assert.equal(local.pending, "choose")
+  assert.deepEqual(local.candidates.map((row) => row.identity), ["bob_microsoft", "ari_microsoft"], "active account first")
+  // In a team workspace every member can push; the active account is asked first and wins.
+  const gh = fakeGh({
+    "auth token --hostname github.com --user bob_microsoft": { code: 0, stdout: "tb\n" },
+    "api repos/acme/team --jq .permissions.push@tb": { code: 0, stdout: "true\n" },
+    "auth token --hostname github.com --user ari_microsoft": { code: 0, stdout: "ta\n" },
+    "api repos/acme/team --jq .permissions.push@ta": { code: 0, stdout: "true\n" },
+  })
+  const settled = await settleMember(local, { deskRoot: root, gh })
+  assert.deepEqual({ person: settled.person, identity: settled.identity }, { person: "bob", identity: "bob_microsoft" })
+  assert.deepEqual(gh.calls, ["auth token --hostname github.com --user bob_microsoft", "api repos/acme/team --jq .permissions.push@tb"])
+})
+
+test("the active account is not on the roster: one other roster account is the member; several are refused", async () => {
+  forgetMemberAnswers()
+  const root = await crewClone()
+  const one = await ghConfig("github.com:\n    users:\n        ari_microsoft:\n        ari-personal:\n    user: ari-personal\n")
+  const member = localMember({ deskRoot: root, env: { GH_CONFIG_DIR: one } })
+  assert.deepEqual({ person: member.person, pending: member.pending }, { person: "ari", pending: undefined })
+  const two = await ghConfig("github.com:\n    users:\n        ari_microsoft:\n        bob_microsoft:\n        ari-personal:\n    user: ari-personal\n")
+  const refused = localMember({ deskRoot: root, env: { GH_CONFIG_DIR: two } })
+  assert.deepEqual({ person: refused.person, problem: refused.problem, pending: refused.pending }, { person: null, problem: "several_accounts", pending: undefined })
+  assert.equal(await settleMember(refused, { deskRoot: root, gh: () => assert.fail("no GitHub call") }), refused)
+  assert.equal(memberMessage(refused), "Several GitHub accounts signed in to gh are on this team workspace's roster (ari_microsoft, bob_microsoft), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, so Desk keeps this team workspace read-only in this session. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; then call desk_status, which checks again.")
+})
+
+test("one GitHub account on two roster rows is refused, not bound to the first row", async () => {
+  const root = await crewClone({ roster: "| alias | identity |\n|---|---|\n| ari | ari_microsoft |\n| arimendelow | ARI_microsoft |\n" })
+  for (const member of [
+    localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft") }),
+    localMember({ deskRoot: root, env: { DESK_IDENTITY: "ari_microsoft" } }),
+  ]) {
+    assert.deepEqual({ person: member.person, problem: member.problem, aliases: member.aliases }, { person: null, problem: "several_rows", aliases: ["ari", "arimendelow"] })
+    assert.equal(memberMessage(member), "This session's GitHub account ari_microsoft is on more than one row of this team workspace's roster (ari, arimendelow), so Desk keeps this team workspace read-only in this session. Ask the team to remove the extra row from _meta/desks.md through a pull request; then call desk_status, which checks again.")
+  }
+  forgetMemberAnswers()
+  const asked = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({ "api user --jq .login": { code: 0, stdout: "ari_microsoft\n" } }), readLogins: logins() })
+  assert.equal(asked.problem, "several_rows")
+})
+
+test("on Windows, gh's config is found under APPDATA in a plain copy of the environment, as the tool server holds it", async () => {
+  const root = await crewClone()
+  const home = await mkTempRoot("desk-crew-member-win-")
+  const appData = path.join(home, "AppData", "Roaming")
+  await fs.mkdir(path.join(appData, "GitHub CLI"), { recursive: true })
+  await fs.writeFile(path.join(appData, "GitHub CLI", "hosts.yml"), "github.com:\r\n    users:\r\n        ari_microsoft:\r\n        ari-personal:\r\n    user: ari-personal\r\n")
+  // Windows spells it APPDATA; the server's environment is a plain object, so only a lookup that ignores case finds it.
+  const env = { APPDATA: appData, USERPROFILE: home, desk_identity: undefined }
+  const win32 = (options) => ghLogins({ ...options, platform: "win32" })
+  assert.deepEqual(win32({ env, homeDir: home }), ["ari-personal", "ari_microsoft"])
+  const member = localMember({ deskRoot: root, env, homeDir: home, readLogins: win32, platform: "win32" })
+  assert.deepEqual({ person: member.person, source: member.source, identity: member.identity }, { person: "ari", source: "crew-roster", identity: "ari_microsoft" })
+  // Every variable the resolver reads is matched without regard to case on Windows, and only there.
+  assert.equal(localMember({ deskRoot: root, env: { Desk_Person: "bob" }, readLogins: logins(), platform: "win32" }).person, "bob")
+  assert.equal(localMember({ deskRoot: root, env: { Desk_Identity: "bob_microsoft" }, readLogins: logins("ari_microsoft"), platform: "win32" }).person, "bob")
+  assert.equal(localMember({ deskRoot: root, env: { Desk_Person: "bob" }, readLogins: logins("ari_microsoft"), platform: "linux" }).person, "ari")
+  assert.equal(envValue({ APPDATA: "a", AppData: "b" }, "AppData", "win32"), "b", "an exact spelling wins")
+  assert.equal(envValue({}, "APPDATA", "win32"), undefined)
+  assert.equal(envValue(null, "APPDATA", "win32"), undefined)
+  assert.equal(envValue({ APPDATA: "a" }, "APPDATA"), "a")
+})
+
+test("a folder is a Crew workspace only with _meta/crew.json or a roster with a named row", async () => {
+  assert.equal(isCrewWorkspace(await crewClone()), true)
+  assert.equal(isCrewWorkspace(await crewClone({ roster: "| alias | identity |\n|---|---|\n" })), false)
+  assert.equal(isCrewWorkspace(""), false)
+  assert.equal(isCrewWorkspace(undefined), false)
 })

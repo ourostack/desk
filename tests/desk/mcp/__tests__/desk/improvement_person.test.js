@@ -86,3 +86,13 @@ test("with no login signed in, a cached login that is not on the roster, or whos
   await cached("bsmith")
   assert.deepEqual(await improvementPerson({ deskRoot: root, env, now }), { status: "unresolved", reason: "invalid_member" })
 })
+
+test("a desk with a track folder named desks is solo, and a roster problem or an unreachable GitHub is unresolved", async () => {
+  const solo = await mkTempRoot("desk-improvement-person-desks-track-")
+  for (const dir of ["_meta", "_archive", path.join("desks", "a-task")]) await fs.mkdir(path.join(solo, dir), { recursive: true })
+  assert.deepEqual(await improvementPerson({ deskRoot: solo, env: {} }), { status: "ok", personPrefix: "" })
+  const root = await crewDesk()
+  const env = { HOME: root }
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env, member: { crew: true, person: null, problem: "several_rows" } }), { status: "unresolved", reason: "invalid_member" })
+  assert.deepEqual(await improvementPerson({ deskRoot: root, env, member: { crew: true, person: null, problem: "github_unreachable" } }), { status: "unresolved", reason: "login_not_cached" })
+})

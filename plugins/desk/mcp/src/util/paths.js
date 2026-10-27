@@ -7,12 +7,14 @@
 //   3. The project folder the host opened (Claude Code's CLAUDE_PROJECT_DIR,
 //      Copilot's session record), only when it is itself a desk workspace: the
 //      person opened that desk, so it wins over the saved binding on every
-//      host. Any other folder falls through silently.
-//   3a. The launch folder, when no host project folder is known, only when it
-//      is a Crew workspace clone (`_meta/` and `desks/`): a person who starts a
-//      session inside a team workspace means that workspace, and a `DESK` or a
-//      saved binding set once for the personal desk must not send its writes
-//      elsewhere. Reported as `host-project`, like step 3.
+//      host. A folder inside a Crew workspace clone binds the clone (see 3a).
+//      Any other folder falls through silently.
+//   3a. The launch folder, when no host project folder is known, when it is a
+//      Crew workspace clone (`isCrewWorkspaceFolder`) or a folder inside one,
+//      up to its Git top level: a person who starts a session inside a team
+//      workspace means that workspace, and a `DESK` or a saved binding set once
+//      for the personal desk must not send its writes elsewhere. Reported as
+//      `host-project`, like step 3.
 //   4. Activation config desk.root (the saved binding)
 //   5. $DESK env var
 //   5a. The launch folder, when no host project folder is known, only when it
@@ -40,6 +42,7 @@ import * as os from "node:os"
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, promises as fs } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { agencySessionPluginParents } from "./agency-session.cjs"
+import { isCrewWorkspace } from "../desk/crew-roster.js"
 
 // Raised only when no source names a desk at all, as opposed to an explicit
 // root that is wrong. Hosts may treat it as "no desk yet" and start setup.
@@ -141,17 +144,22 @@ export function resolveDeskRootWithSource({
     const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })
     if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
+    const clone = crewWorkspaceAbove(resolved)
+    if (clone !== null) {
+      tried.push({ source: "host-project", path: clone })
+      return { root: clone, source: "host-project", tried }
+    }
   }
 
-  // A launch folder that is a Crew workspace clone ranks with the host's project
+  // A launch folder in a Crew workspace clone ranks with the host's project
   // folder (step 3a): the boot script and shell-run scripts on Copilot know only
   // their working folder, and they must bind the same team workspace the
   // server binds from Copilot's session record, whatever $DESK says.
   if (!hasText(hostProjectRoot) && hasText(projectRootHint)) {
-    const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
-    if (isCrewWorkspaceFolder(resolved)) {
-      tried.push({ source: "host-project", path: resolved })
-      return { root: resolved, source: "host-project", tried }
+    const clone = crewWorkspaceAbove(resolveRootPath(projectRootHint, { cwd, homeDir }))
+    if (clone !== null) {
+      tried.push({ source: "host-project", path: clone })
+      return { root: clone, source: "host-project", tried }
     }
   }
 
@@ -277,10 +285,21 @@ export function isDeskWorkspace(dir) {
   return isChildDir(dir, "_meta") && (isChildDir(dir, "_archive") || isChildDir(dir, "desks"))
 }
 
-// A Crew workspace clone: `_meta/` plus `desks/`, one folder per person.
+// A Crew workspace clone: `_meta/` plus `desks/`, one folder per person, and marked as a real Crew workspace
+// (`_meta/crew.json` or a roster with a named row), so a personal desk with a track named `desks` is not one.
 export function isCrewWorkspaceFolder(dir) {
   if (!hasText(dir)) return false
-  return isChildDir(dir, "_meta") && isChildDir(dir, "desks")
+  return isChildDir(dir, "_meta") && isChildDir(dir, "desks") && isCrewWorkspace(dir)
+}
+
+// The Crew workspace clone `dir` is in: `dir` itself or its nearest parent that is one, or null. The walk stops at
+// the first folder holding `.git`, the Git top level, so a repository nested inside a clone is its own project.
+export function crewWorkspaceAbove(dir) {
+  if (!hasText(dir)) return null
+  for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+    if (isCrewWorkspaceFolder(current)) return current
+    if (existsSync(path.join(current, ".git")) || path.dirname(current) === current) return null
+  }
 }
 
 // Where Claude Code keeps this plugin's desk binding. CLAUDE_PLUGIN_DATA

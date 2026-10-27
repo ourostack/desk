@@ -16,6 +16,8 @@ const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-
 test("an unresolved crew person cannot pass an inherited scope to finalization", () => scratch(async (ctx) => {
   const marker = await session(ctx)
   await fs.mkdir(path.join(ctx.desk, "desks"), { recursive: true })
+  // A real Crew workspace (marked by _meta/crew.json) with nobody on its roster; a bare desks/ folder is a personal desk's track.
+  await fs.writeFile(path.join(ctx.desk, "_meta", "crew.json"), "{}\n")
   await requestFinalize(ctx.env, { job: "4".repeat(32), deskRoot: ctx.desk })
   const calls = []
   const result = await runHook({

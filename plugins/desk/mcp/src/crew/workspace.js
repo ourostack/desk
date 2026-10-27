@@ -993,7 +993,7 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
   if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
-  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; crew.js status --identity ${identity} checks it.` })
+  const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
   if (status.member !== null) return memberResult(status.member)
   const problem = aliasProblem(alias)
   if (problem !== null) return refuse(problem)
@@ -1077,7 +1077,7 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
       return memberResult(settled, unused)
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
-    const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; crew.js status --identity ${identity} checks it.${toolingNote}`
+    const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
     const missing = [

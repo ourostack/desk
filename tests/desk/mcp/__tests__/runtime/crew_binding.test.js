@@ -49,6 +49,37 @@ test("a personal desk as the launch folder stays below DESK, as before", async (
   assert.equal(resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, hostProjectRoot: f.root, projectRootHint: f.crew }).source, "env:DESK")
 })
 
+test("a session started in a folder inside a Crew clone binds the clone, up to the Git top level", async () => {
+  const f = await fixture()
+  mkdirSync(path.join(f.crew, ".git"), { recursive: true })
+  const inside = path.join(f.crew, "desks", "ari", "ops", "some-task")
+  mkdirSync(inside, { recursive: true })
+  const fromHint = resolveDeskRootWithSource({ env: { DESK: f.personal }, activationConfigPath: f.binding, homeDir: f.home, cwd: inside, projectRootHint: inside })
+  assert.deepEqual({ root: fromHint.root, source: fromHint.source }, { root: f.crew, source: "host-project" })
+  const fromHost = resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, hostProjectRoot: path.join(f.crew, "desks", "ari") })
+  assert.deepEqual({ root: fromHost.root, source: fromHost.source }, { root: f.crew, source: "host-project" })
+  // A repository nested inside the clone is its own project: the walk stops at its top level.
+  const nested = path.join(f.crew, "repos", "tool", "src")
+  mkdirSync(path.join(f.crew, "repos", "tool", ".git"), { recursive: true })
+  mkdirSync(nested, { recursive: true })
+  assert.equal(resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, cwd: nested, projectRootHint: nested }).source, "env:DESK")
+  assert.equal(paths.crewWorkspaceAbove(nested), null)
+  assert.equal(paths.crewWorkspaceAbove(""), null)
+  assert.equal(paths.crewWorkspaceAbove(f.root), null, "a folder above every clone, with no .git, walks to the top and finds none")
+})
+
+test("only a real Crew workspace outranks DESK: _meta/crew.json or a roster, never a personal desk's track named desks", async () => {
+  const f = await fixture()
+  // A personal desk with a track folder named desks, started in, stays below DESK as before.
+  mkdirSync(path.join(f.other, "desks", "some-task"), { recursive: true })
+  assert.equal(paths.isCrewWorkspaceFolder(f.other), false)
+  assert.equal(resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, cwd: f.other, projectRootHint: f.other }).source, "env:DESK")
+  // A new workspace marked by _meta/crew.json, before anyone has joined, is one.
+  writeFileSync(path.join(f.other, "_meta", "crew.json"), "{\"schema_version\": 1}\n")
+  assert.equal(paths.isCrewWorkspaceFolder(f.other), true)
+  assert.equal(resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, cwd: f.other, projectRootHint: f.other }).root, f.other)
+})
+
 test("the boot script binds what the tool server binds: the Crew clone, with a user-wide DESK set", async () => {
   const f = await fixture()
   const env = { HOME: f.home, XDG_STATE_HOME: path.join(f.home, "state"), DESK: f.personal }
@@ -117,4 +148,22 @@ test("a member lookup that throws never stops the boot: the Crew clone shows no 
   const result = await bootIn(f.crew, env, { memberFn: async () => { throw new Error("unexpected") } })
   assert.equal(result.root.path, f.crew)
   assert.equal(result.person, null)
+})
+
+test("the boot records local-only clones only on the member's own cards in a Crew clone", async () => {
+  const f = await fixture()
+  for (const [dir, title] of [[path.join(f.crew, "desks", "ari", "ops", "mine"), "Mine"], [path.join(f.crew, "desks", "bob", "ops", "theirs"), "Theirs"]]) {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "task.md"), `---\ntitle: ${title}\nstatus: active\ncreated: 2026-10-27\nupdated: 2026-10-27\n---\n# ${title}\n`)
+  }
+  const seen = (cards) => cards.map((card) => path.relative(f.crew, card.file).split(path.sep).join("/")).sort()
+  const run = async (gh, extra = {}) => {
+    let passed = null
+    const env = { HOME: f.home, XDG_STATE_HOME: path.join(f.home, "state"), DESK: f.personal, GH_CONFIG_DIR: ghConfig(path.join(f.root, gh), gh) }
+    await bootIn(f.crew, env, { localOnlyFn: async ({ cards }) => { passed = cards; return [] }, ...extra })
+    return seen(passed)
+  }
+  assert.deepEqual(await run("ari_microsoft"), ["desks/ari/ops/mine/task.md"])
+  assert.deepEqual(await run("stranger"), [], "a session with no member writes no card")
+  assert.deepEqual(await run("ari_microsoft", { memberFn: async () => { throw new Error("unexpected") } }), [], "nor does one whose lookup failed")
 })

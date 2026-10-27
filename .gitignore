@@ -10,3 +10,6 @@ coverage/
 
 # Repository-level tooling install (knip).
 node_modules/
+
+# Node trace-event output (node --trace-events-enabled, --cpu-prof runs)
+node_trace.*.log

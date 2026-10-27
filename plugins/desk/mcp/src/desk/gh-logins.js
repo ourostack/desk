@@ -12,6 +12,7 @@
 import { closeSync, openSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { envValue } from "../util/env-value.js"
 
 export const MAX_HOSTS_BYTES = 64 * 1024
 
@@ -21,13 +22,14 @@ function hasText(value) {
 
 /**
  * gh's config directory, resolved the way gh resolves it: `GH_CONFIG_DIR`,
- * else `$XDG_CONFIG_HOME/gh`, else `%AppData%\GitHub CLI` on Windows, else
- * `~/.config/gh`.
+ * else `$XDG_CONFIG_HOME/gh`, else `%APPDATA%\GitHub CLI` on Windows, else
+ * `~/.config/gh`. Windows variable names are matched without regard to case.
  */
 export function ghConfigDir({ env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
-  if (hasText(env.GH_CONFIG_DIR)) return env.GH_CONFIG_DIR
-  if (hasText(env.XDG_CONFIG_HOME)) return path.join(env.XDG_CONFIG_HOME, "gh")
-  if (platform === "win32" && hasText(env.AppData)) return path.join(env.AppData, "GitHub CLI")
+  const value = (name) => envValue(env, name, platform)
+  if (hasText(value("GH_CONFIG_DIR"))) return value("GH_CONFIG_DIR")
+  if (hasText(value("XDG_CONFIG_HOME"))) return path.join(value("XDG_CONFIG_HOME"), "gh")
+  if (platform === "win32" && hasText(value("APPDATA"))) return path.join(value("APPDATA"), "GitHub CLI")
   return path.join(homeDir, ".config", "gh")
 }
 
@@ -38,12 +40,17 @@ function scalar(text) {
 }
 
 /**
- * The logins in a `hosts.yml` text: each host's `user:` value and every key
- * under its `users:` map, in file order. Anything else, including every
- * token, is skipped.
+ * The logins in a `hosts.yml` text, each once: github.com's active account
+ * (its `user:` value) first, then each host's `user:` value and every key
+ * under its `users:` map, in file order. gh lists `users:` in sign-in order, so the
+ * active account must be put first explicitly: it is the account `crew.js`
+ * tries first for its pushes. Anything else, including every token, is
+ * skipped.
  */
 export function parseGhHostLogins(raw) {
   const logins = []
+  let active = null
+  let host = null
   let hostIndent = null
   let usersIndent = null
   let userKeyIndent = null
@@ -55,6 +62,7 @@ export function parseGhHostLogins(raw) {
     const indent = line.length - line.trimStart().length
     const key = scalar(entry[1])
     if (indent === 0) {
+      host = key.toLowerCase()
       hostIndent = null
       usersIndent = null
       continue
@@ -63,14 +71,17 @@ export function parseGhHostLogins(raw) {
     if (indent <= hostIndent) {
       usersIndent = key === "users" ? indent : null
       userKeyIndent = null
-      if (key === "user" && entry[2] !== undefined && scalar(entry[2]) !== "") logins.push(scalar(entry[2]))
+      if (key === "user" && entry[2] !== undefined && scalar(entry[2]) !== "") {
+        logins.push(scalar(entry[2]))
+        if (host === "github.com") active ??= scalar(entry[2])
+      }
       continue
     }
     if (usersIndent === null) continue
     userKeyIndent ??= indent
     if (indent === userKeyIndent) logins.push(key)
   }
-  return logins
+  return [...new Set(active === null ? logins : [active, ...logins])]
 }
 
 function readBounded(file) {

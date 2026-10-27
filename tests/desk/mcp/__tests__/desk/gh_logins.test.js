@@ -44,11 +44,17 @@ test("gh's config directory is found the way gh finds it", () => {
   assert.equal(ghConfigDir({ env: { AppData: "C:\\AppData" }, platform: "darwin", homeDir: "/home/a" }), path.join("/home/a", ".config", "gh"))
   assert.equal(ghConfigDir({ env: { GH_CONFIG_DIR: " " }, platform: "win32", homeDir: "/home/a" }), path.join("/home/a", ".config", "gh"))
   assert.equal(typeof ghConfigDir(), "string")
+  // Windows names variables without regard to case, but the tool server holds a plain copy of the environment.
+  assert.equal(ghConfigDir({ env: { APPDATA: "C:\\Roaming" }, platform: "win32", homeDir: "/home/a" }), path.join("C:\\Roaming", "GitHub CLI"))
+  assert.equal(ghConfigDir({ env: { gh_config_dir: "C:\\gh", APPDATA: "C:\\Roaming" }, platform: "win32", homeDir: "/home/a" }), "C:\\gh")
+  assert.equal(ghConfigDir({ env: { gh_config_dir: "/gh" }, platform: "linux", homeDir: "/home/a" }), path.join("/home/a", ".config", "gh"), "only Windows ignores case")
 })
 
-test("every host's user and users keys are logins; tokens never are", () => {
+test("every host's user and users keys are logins, github.com's active account first; tokens never are", () => {
   const logins = parseGhHostLogins(HOSTS)
-  assert.deepEqual(logins, ["example-login", "second-login", "example-login", "enterprise-login"])
+  assert.deepEqual(logins, ["example-login", "second-login", "enterprise-login"])
+  // gh lists users in sign-in order; the active account, named last in `user:`, comes first.
+  assert.deepEqual(parseGhHostLogins("ghe.example.com:\n    user: ghe-login\ngithub.com:\n    users:\n        older:\n        newer:\n    user: newer\n"), ["newer", "ghe-login", "older"])
   assert.ok(!logins.some((login) => login.includes("gho_")), "no token value is ever returned")
   assert.deepEqual(parseGhHostLogins("github.com:\r\n  user: \"\"\r\n  users:\r\n  # a comment\r\n  - not a key\r\n    crlf-login:\r\n"), ["crlf-login"])
   assert.deepEqual(parseGhHostLogins("github.com:\n  settings:\n    nested: not-a-login\n  user: only-login\n"), ["only-login"], "keys nested under anything but users are not logins")
@@ -58,7 +64,7 @@ test("every host's user and users keys are logins; tokens never are", () => {
 
 test("the hosts config is read locally, bounded, and tolerated when missing or malformed", async () => {
   const dir = await ghConfig(HOSTS)
-  assert.deepEqual(ghLogins({ env: { GH_CONFIG_DIR: dir } }), ["example-login", "second-login", "example-login", "enterprise-login"])
+  assert.deepEqual(ghLogins({ env: { GH_CONFIG_DIR: dir } }), ["example-login", "second-login", "enterprise-login"])
   assert.deepEqual(ghLogins({ env: { GH_CONFIG_DIR: await ghConfig(null) } }), [], "missing")
   assert.deepEqual(ghLogins(), [], "the test process's own isolated config folder has no gh config")
   assert.deepEqual(ghLogins({ env: { GH_CONFIG_DIR: await ghConfig("\u0000\u0001 {{{ ::: ]]]") } }), [], "malformed")

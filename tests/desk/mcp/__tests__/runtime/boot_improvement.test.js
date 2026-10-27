@@ -125,12 +125,12 @@ test("bootOnce never stops for a bad DESK_PERSON, and finds a crew desk's person
   seen = []
   await boot(root, { env: { DESK: root, DESK_IDENTITY: "bsmith" }, improvementFn: reader })
   assert.equal(seen[0].personPrefix, path.posix.join("desks", "bob"))
-  // gh lists no login and GitHub cannot say who this is: the boot says the cards were not checked, and does not read the solo folder.
+  // gh lists no login and GitHub cannot be reached: the boot says the person is not known (not that it matches no member), and does not read the solo folder.
   seen = []
   const offline = async (args) => (args[0] === "api" ? { code: 1, stdout: "", stderr: "offline" } : runner(args))
   const unknown = await boot(root, { env: { DESK: root, HOME: root, XDG_STATE_HOME: path.join(root, "state") }, gh: offline, improvementFn: reader })
   assert.deepEqual(seen, [])
-  assert.ok(unknown.instructions.some((line) => line.includes("matches no member of this crew desk's roster")), JSON.stringify(unknown.instructions))
+  assert.ok(unknown.instructions.some((line) => line.includes("this session's person is not known without a network call")), JSON.stringify(unknown.instructions))
   const stranger = await boot(root, { env: { DESK: root, DESK_IDENTITY: "nobody" }, improvementFn: reader })
   assert.ok(stranger.instructions.some((line) => line.includes("matches no member of this crew desk's roster")))
 })

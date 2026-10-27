@@ -274,9 +274,21 @@ async function runWorkspaceTidy(ctx) {
 // The factory and desk-health checks.
 // ---------------------------------------------------------------------------
 
-function personPrefix(env) {
-  const alias = typeof env.DESK_PERSON === "string" ? env.DESK_PERSON.trim() : "";
+// The person's folder as the factory names it (`desks/<alias>`), or "" when there is none or the alias is not one the factory accepts.
+function factoryPrefix(who) {
+  const alias = who.status === "ok" ? who.personPrefix.replace(/^desks\//u, "") : "";
   return PERSON.test(alias) ? `desks/${alias}` : "";
+}
+
+/**
+ * The person the Desk tools resolve for this start, from what is known without a network call
+ * (`improvement-person.js`, which uses the tool server's own resolver), read once and kept in `ctx.shared`.
+ */
+function sessionPerson(ctx, root) {
+  ctx.shared.person ??= import("../../mcp/src/desk/improvement-person.js")
+    .then(({ improvementPerson }) => improvementPerson({ deskRoot: root, env: ctx.env, now: Date.now() }))
+    .catch(() => ({ status: "unresolved", reason: "invalid_member" }));
+  return ctx.shared.person;
 }
 
 /**
@@ -324,8 +336,9 @@ const factoryCheck = {
       // An unreadable plugin set leaves only the desk's own declaration.
     }
     if (plugins.timedOut) throw Object.assign(new Error("plugin scan past the check's deadline"), { code: "boot_check_budget" });
+    const who = await sessionPerson(ctx, root);
     const result = factoryBootCheck({
-      env: ctx.env, deskRoot: root, personPrefix: personPrefix(ctx.env), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
+      env: ctx.env, deskRoot: root, personPrefix: factoryPrefix(who), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
     });
     const repair = result.jobs?.length ? { command: compatibleCommand(FACTORY_SCRIPT, "finalize", ...result.jobs.flatMap((job) => ["--job", job])) } : undefined;
     return { line: result.line, repair };
@@ -341,9 +354,9 @@ function improvementCards(ctx) {
   ctx.shared.improvement ??= (async () => {
     const root = await boundRoot(ctx);
     if (!root) return null;
-    const [{ improvementBootCheck }, { improvementPerson }] = await Promise.all([import("../../mcp/src/factory/boot-check.js"), import("../../mcp/src/desk/improvement-person.js")]);
+    const { improvementBootCheck } = await import("../../mcp/src/factory/boot-check.js");
     // The person the Desk tools resolve, from what is known without a network call; a crew desk whose person is not known is said, never read as empty.
-    const who = await improvementPerson({ deskRoot: root, env: ctx.env, now: Date.now() }).catch(() => ({ status: "unresolved", reason: "invalid_member" }));
+    const who = await sessionPerson(ctx, root);
     if (who.status !== "ok") return { status: "unchecked", reason: who.reason };
     return improvementBootCheck({ deskRoot: root, personPrefix: who.personPrefix, env: ctx.env, now: Date.now() });
   })();

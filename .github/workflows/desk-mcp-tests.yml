@@ -140,6 +140,7 @@ jobs:
         run: >-
           node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test
           ../../../tests/desk/mcp/__tests__/desk/crew_member.test.js
+          ../../../tests/desk/mcp/__tests__/desk/gh_logins.test.js
           ../../../tests/desk/mcp/__tests__/runtime/crew_binding.test.js
           ../../../tests/desk/mcp/__tests__/runtime/crew_member_admission.test.js
           ../../../tests/desk/mcp/__tests__/runtime/crew_member_end_to_end.test.js

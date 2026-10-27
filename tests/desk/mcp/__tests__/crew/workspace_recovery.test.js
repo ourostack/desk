@@ -98,7 +98,7 @@ test("GitHub merged the roster row but the fetch after it failed: joined, with a
   const result = await joinWorkspace({ repo: repo.clone, spawnGit: flaky, gh, identity: "fay_example", alias: "fay", wait: noWait, now: NOW, apply: true })
   assert.equal(result.state, "joined", result.message)
   assert.equal(result.confirmed, false)
-  assert.match(result.message, /^Joined: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. Next: once the network is back, update this copy of the workspace and check its status\. A Desk session started in this clone writes to desks\/fay\/ while gh is signed in as fay_example; crew\.js status --identity fay_example checks it\./u)
+  assert.match(result.message, /^Joined: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. Next: once the network is back, update this copy of the workspace and check its status\. A Desk session started in this clone writes to desks\/fay\/ while gh is signed in as fay_example; Desk checks this before it reports the join as done\./u)
   assert.doesNotMatch(result.message, /fatal|git pull/u)
   assert.match(onMain(repo.bare, "_meta/desks.md"), /\| fay \| fay_example \|/u)
 })

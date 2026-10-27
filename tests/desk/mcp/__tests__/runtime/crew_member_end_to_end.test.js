@@ -1,7 +1,8 @@
 // The real boot script and the real tool server, each started as its own process in a member's Crew clone, with a
 // user-wide DESK pointing at the member's personal desk and no --person: both bind the clone and name the same member,
 // and a write lands in the member's own desk. The clone is checked out with core.autocrlf=true, as a Windows member's
-// is, so the roster has CRLF line endings. No network: gh's own hosts.yml names the signed-in account.
+// is, so the roster has CRLF line endings. No network: gh's own hosts.yml names the signed-in account. On Windows it sits
+// where gh keeps it there, under %APPDATA%\GitHub CLI with no GH_CONFIG_DIR, and `crew.js status` must agree too.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -13,6 +14,7 @@ import { indexPath, isolatedEnv, makeIsolatedHome } from "../launch/_mcp_handsha
 import { openSession } from "../launch/_mcp_session.js"
 
 const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-boot.js", import.meta.url))
+const CREW = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/crew.js", import.meta.url))
 const ROSTER = "# Desks\n\n| alias | identity | path |\n|---|---|---|\n| pat | pat_example | desks/pat |\n| sam | sam_example | desks/sam |\n"
 
 function git(cwd, env, ...args) {
@@ -21,12 +23,15 @@ function git(cwd, env, ...args) {
 
 async function fixture() {
   const f = await makeIsolatedHome("desk-crew-e2e-")
-  const env = isolatedEnv(f, { DESK: f.desk, GH_CONFIG_DIR: path.join(f.root, "gh") })
+  // On Windows gh's config is under APPDATA (isolatedEnv sets it), found only by a lookup that ignores the name's case.
+  const windows = process.platform === "win32"
+  const env = isolatedEnv(f, { DESK: f.desk, ...(windows ? { GH_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined } : { GH_CONFIG_DIR: path.join(f.root, "gh") }) })
+  const ghDir = windows ? path.join(env.APPDATA, "GitHub CLI") : env.GH_CONFIG_DIR
   // The member's personal desk, named by a user-wide DESK.
   for (const dir of ["_meta", "_archive"]) mkdirSync(path.join(f.desk, dir), { recursive: true })
-  // gh signed in as two accounts, one of them the member's.
-  mkdirSync(env.GH_CONFIG_DIR, { recursive: true })
-  writeFileSync(path.join(env.GH_CONFIG_DIR, "hosts.yml"), "github.com:\n    users:\n        pat-personal:\n        pat_example:\n    user: pat_example\n")
+  // gh signed in as two accounts, one of them the member's; the other is the active one.
+  mkdirSync(ghDir, { recursive: true })
+  writeFileSync(path.join(ghDir, "hosts.yml"), "github.com:\n    users:\n        pat_example:\n        pat-personal:\n    user: pat-personal\n")
   writeFileSync(path.join(f.home, ".gitconfig"), "[user]\n\tname = Pat\n\temail = pat@example.test\n[core]\n\tautocrlf = true\n[init]\n\tdefaultBranch = main\n")
   // The team workspace: committed with LF, cloned with autocrlf.
   const source = path.join(f.root, "source")
@@ -51,6 +56,10 @@ test("boot and tool server in a Crew clone, with a user-wide DESK and no --perso
   const boot = JSON.parse(execFileSync(process.execPath, [BOOT, "--json"], { cwd: clone, env, encoding: "utf8", windowsHide: true, timeout: 120000 }))
   assert.deepEqual({ path: realpathSync(boot.root.path), source: boot.root.source }, { path: clone, source: "host-project" })
   assert.deepEqual(boot.person, { alias: "pat", source: "crew-roster", identity: "pat_example", write_path: "desks/pat", problem: null })
+
+  const crew = JSON.parse(execFileSync(process.execPath, [CREW, "status", "--repo", clone, "--identity", "pat_example"], { cwd: clone, env, encoding: "utf8", windowsHide: true, timeout: 120000 }))
+  assert.deepEqual({ ready: crew.session.ready, person: crew.session.person, source: crew.session.person_source, root: realpathSync(crew.session.root) },
+    { ready: true, person: boot.person.alias, source: boot.person.source, root: clone })
 
   const server = await openSession({ command: process.execPath, args: [indexPath], cwd: clone, env, timeoutMs: 60000 })
   try {
