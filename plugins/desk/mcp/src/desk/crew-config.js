@@ -19,7 +19,7 @@ import * as path from "node:path"
 
 export const CREW_CONFIG_FILE = path.join("_meta", "crew.json")
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
-const REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/u
+const REPO = /^[A-Za-z0-9][A-Za-z0-9_-]*\/[A-Za-z0-9._-]+$/u
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const shown = (value) => JSON.stringify(value)

@@ -89,7 +89,7 @@ test("an AGENTS.md with no final newline; a dual-repo workspace counts a leftove
 })
 
 test("a workspace with no merge workflow: the message names none; a repository with only a non-YAML file there finds none", async () => {
-  const repo = await teamRepo({ "README.md": "# New\n", ".github/workflows/notes.txt": "gh pr merge\n" })
+  const repo = await teamRepo({ "README.md": "# New\n", ".github/workflows/notes.txt": "gh pr merge\n", ".github/workflows/ci.yml": "name: CI\non: push\n" })
   const plan = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, now: NOW })
   assert.equal(plan.declaration.shared_writes.merge_workflow, null)
   const { gh } = fakeGh(repo.bare, { merge: () => ({ code: 1, stderr: "blocked" }), view: BLOCKED })
@@ -150,6 +150,15 @@ test("a teammate who started the crew at the same time: the rebuild refuses to o
   assert.match(result.message, /_meta\/crew\.json appeared on the default branch meanwhile/u)
   assert.match(result.message, /The pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open\./u)
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
+})
+
+test("a Git step that fails with no message is named by its command", async () => {
+  const repo = await teamRepo(CIT_SHAPED)
+  const spawnGit = (cmd, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "" } : repo.spawnGit(cmd, args, options))
+  const result = await startWorkspace(adopt(repo, { apply: true, spawnGit, gh: fakeGh(repo.bare).gh }))
+  assert.equal(result.state, "failed")
+  assert.equal(result.stage, "commit")
+  assert.match(result.reason, /the commit was refused \(this repository's commit hooks or signing\): git commit failed$/u)
 })
 
 test("apply on a detached HEAD is refused", async () => {

@@ -18,7 +18,7 @@ node <Desk plugin folder>/mcp/scripts/crew.js start --repo <clone> [options]
 
 Every Crew workspace has the same shape: the root `AGENTS.md`, `_meta/desks.md` (the roster), `desks/<alias>/` and `desks/_template/`, `_shared/landscape/` for team facts and `_shared/decisions/` for agreed decisions. The setups differ only in where the team's plugin lives:
 
-- **Dual-repo** (preferred for new teams): this repository holds the team's context; a separate tooling repository holds the team plugin. Pass `--tooling-repo <owner/name>`, and once it holds a plugin, `--tooling-path <dir>`, `--tooling-plugin <name>`, `--tooling-ref <branch>` and `--tooling-marketplace <name>`. A tooling repository with no plugin yet is still recorded; `join-crew` points to it and installs nothing.
+- **Dual-repo** (preferred for new teams): this repository holds the team's context; a separate tooling repository holds the team plugin. Pass `--tooling-repo <owner/name>`, and once it holds a plugin, `--tooling-path <dir>`, `--tooling-plugin <name>` and `--tooling-ref <branch>`. Pass `--tooling-marketplace <name>` only when the tooling repository has a `.claude-plugin/marketplace.json`, with the `name` it declares; otherwise Claude Code's install command would point at a marketplace that does not exist. A tooling repository with no plugin yet is still recorded; `join-crew` points to it and installs nothing.
 - **Monorepo**: the plugin lives in this repository's `plugins/<name>/`. Leave out `--tooling-repo`. Every workspace made before `_meta/crew.json` existed is a monorepo and keeps working unchanged.
 
 The workspace records its setup in `_meta/crew.json`; `crew.js status` reports it as `setup`.
