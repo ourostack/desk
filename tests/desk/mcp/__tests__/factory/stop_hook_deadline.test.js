@@ -60,7 +60,7 @@ async function fakeEntry(ctx, mode) {
   const body = {
     slow: "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000)",
     exit: "process.exit(3)",
-    signal: 'process.kill(process.pid, "SIGTERM"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000)',
+    signal: 'process.kill(process.pid, "SIGKILL"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000)',
   }[mode]
   await fs.writeFile(file, `if (process.argv.includes("--detached")) process.exit(0)\n${body}\n`)
   return file
@@ -74,7 +74,8 @@ function collect() {
 const cases = [
   ["slow", "deadline", false],
   ["exit", "exit 3", false],
-  ["signal", "signal SIGTERM", process.platform === "win32" ? "Windows has no signals" : false],
+  // SIGKILL, because a test runner's preload may handle SIGTERM.
+  ["signal", "signal SIGKILL", process.platform === "win32" ? "Windows has no signals" : false],
 ]
 for (const [mode, reason, skip] of cases) {
   test(`a bounded child that fails says why: ${reason}`, { skip }, () => scratch(async (ctx) => {
