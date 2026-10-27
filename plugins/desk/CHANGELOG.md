@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.32 — 2026-10-27
+
+Assigned issue drains now load `draining-issues`: each issue is a prompt request whose useful outcome must reach its agreed delivery endpoint. The bundled canonical method keeps dependency order, existing owners and unresolved native evidence visible without adding another engineering lifecycle.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.31 — 2026-10-27
 
 A member's session in a joined Crew workspace now knows who the member is and which desk it is in, on Copilot and Claude Code alike, with no launch setting. In a Crew workspace with no authority provider, the person comes from `--person`, then `DESK_PERSON`, then the roster row whose `identity` is the GitHub login the session acts as: the accounts signed in to gh, read from gh's own `hosts.yml` with no network call; With several of them on the roster, gh's active account is the member, as it is for `crew.js` pushes: GitHub is asked once per process which of them can push, active account first, and only then. With several roster accounts signed in and the active one not among them, or one account on two roster rows, writes are refused. On Windows, gh's config under `APPDATA` is found by the tool server too (it holds a plain copy of the environment, so names are now matched without regard to case). Writes then land only under that member's `desks/<alias>/`. An account that is not on the roster can still read and search, and every write is refused as `degraded:crew_member_unknown` with one plain message: join with `crew:join-crew`, or sign in to gh as the account that joined. The boot line, `desk_status` (`write_scope.person` and `write_scope.source`) and `crew.js status` (`session`) all report the same person from the same resolver ([crew-member.js](mcp/src/desk/crew-member.js)).

@@ -1,1 +1,0 @@
-Assigned issue drains now load `draining-issues`: each issue is a prompt request whose useful outcome must reach its agreed delivery endpoint. The bundled canonical method keeps dependency order, existing owners and unresolved native evidence visible without adding another engineering lifecycle.
