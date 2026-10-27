@@ -998,7 +998,7 @@ test("bounded publication preserves ready progress and resumes beyond its first 
     let elapsed = 0
     const plan = await withFsFault(t, {
       readFile: (original, file, ...args) => {
-        if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 700
+        if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 1200
         return original(file, ...args)
       },
     }, () => queue.planContextPublication(f.env, {
@@ -1146,7 +1146,7 @@ test("a freshness check that spends the publication allowance cannot return a la
     },
   }, () => withFsFault(t, {
     lstatSync: (original, file, ...args) => {
-      if (inputRead && String(file) === f.entries[0].logPath) elapsed = 1000
+      if (inputRead && String(file) === f.entries[0].logPath) elapsed = 2000
       return original(file, ...args)
     },
   }, () => queue.planContextPublication(f.env, {
