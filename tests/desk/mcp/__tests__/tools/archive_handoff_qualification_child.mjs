@@ -254,6 +254,9 @@ function bounded(promise, ms, label) {
     timer = setTimeout(() => reject(new Error(`${label} exceeded ${ms}ms`)), ms)
   })]).finally(() => clearTimeout(timer))
 }
+// A forked actor's start includes importing Desk, which the coverage run instruments for every changed source file; that
+// alone took the two-actor race from 3.6 s to 6.8 s locally, so the start gets a wider bound than each later message.
+const STARTUP_MS = 20000
 function next(actor, type) {
   const read = () => actor.messages.find((message) => message.type === type)
   if (read()) return Promise.resolve(read())
@@ -264,7 +267,7 @@ function next(actor, type) {
       else if (actor.exit) { actor.waiters.delete(wake); reject(new Error(`Actor ${actor.pid} exited before ${type}`)) }
     }
     actor.waiters.add(wake)
-  }), 6000, `${actor.role}:${type}`)
+  }), type === "hello" ? STARTUP_MS : 6000, `${actor.role}:${type}`)
 }
 export const actorMessage = next
 export function send(actor, value) {
