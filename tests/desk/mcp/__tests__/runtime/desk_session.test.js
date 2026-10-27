@@ -2546,3 +2546,14 @@ test("a session disposed while the member's GitHub question is pending admits no
   assert.equal(session.context.person, null)
   assert.equal(session.context.authorityAdmitted, false)
 })
+
+test("a member lookup that throws ends admission in a named degraded state, not a crash", async (t) => {
+  const runtime = fakeRuntime({ settleMember: async () => { throw new TypeError("unexpected member failure") } })
+  const root = path.join(await mkTempRoot("desk-session-member-throws-"), "desk")
+  mkdirSync(root, { recursive: true })
+  const member = { crew: true, person: null, source: null, identity: null, logins: [], pending: "whoami", problem: null }
+  const { session } = await makeSession(t, { runtime, resolveInputs: async () => ({ ...inputs({ root }), member }) })
+  await session.admission.refresh({ force: true })
+  assert.equal(session.admission.snapshot().state, "degraded:admission_exception")
+  assert.equal(session.context.authorityAdmitted, false)
+})

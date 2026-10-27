@@ -61,6 +61,8 @@ test("a session that would write as someone else, or bind another desk, is not r
   assert.equal(nobody.session.message, "A Desk session started in this clone writes as sam (DESK_PERSON), not as new_person, who has no roster row.")
   const anyone = await crewStatus({ repo: repo.clone, session: true, env: { HOME: process.env.HOME, DESK_PERSON: "sam" } })
   assert.equal(anyone.session.ready, true, "with no identity given, any person will do")
+  // With no HOME in the environment, the resolver uses the account's home folder; the clone still binds.
+  assert.equal((await crewStatus({ repo: repo.clone, session: true, env: { DESK_PERSON: "sam" } })).session.ready, true)
   // A clone with a roster but no desks/ folder yet is not a desk a session binds: it binds DESK, or nothing.
   const bare = await teamRepo({ "_meta/desks.md": ROSTER })
   const personal = await personalDesk()

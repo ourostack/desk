@@ -261,7 +261,7 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync, session
  * the root is this clone and the person is `identity`'s roster alias (any person when no identity is given): the
  * member's next session is set up. This is the activation check a join can run in the same session.
  */
-async function sessionIn(top, { identity, member, env = process.env, memberFn = resolveMember }) {
+async function sessionIn(top, { identity, member, env, memberFn }) {
   let bound
   let here = false
   try {
