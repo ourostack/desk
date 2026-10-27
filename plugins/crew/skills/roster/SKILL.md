@@ -9,14 +9,15 @@ The roster is the team's people file: the team, and over time everyone the team 
 
 ## Find it
 
-1. If the workspace's root `AGENTS.md` or `README.md` names a roster or people file (for example `team/roster.md`), that file is the roster.
-2. Otherwise use `_shared/landscape/roster.md`. If it does not exist yet, create it with a one-line purpose and a `## Team` section the first time someone is added.
+1. If the workspace's root `AGENTS.md` names a roster or people file (for example `team/roster.md`), that file is the roster. Otherwise, if its root `README.md` names one, use that.
+2. Otherwise look for an existing `roster.md` or `team/roster*` in the repository; if exactly one exists, use it and tell the person which file you used.
+3. Only if there is none, use `_shared/landscape/roster.md`, created with a one-line purpose and a `## Team` section the first time someone is added.
 
 `_meta/desks.md` is the desk list Crew's scripts read. Never treat it as the roster or edit it by hand.
 
 ## Write to it
 
-- The roster is a shared path: pull the default branch, branch, edit, open a pull request and merge it at once, as `crew:shared-desk-conventions` describes. Retry from the latest default branch if someone else's change landed first.
+- The roster is a shared path: never push it straight to the default branch. In a temporary worktree from the latest default branch (never the person's own working tree, which may hold their uncommitted files), branch, edit, open a pull request and merge it at once, as `crew:shared-desk-conventions` describes. Retry from the latest default branch if someone else's change landed first. If the merge is refused, leave the pull request open and tell the person in plain words.
 - Keep the file's own format and sections. Add a person as one entry (a table row, or a short section) where similar people are; change only the entry you mean to change.
 - Facts only, each with where it came from (the person themselves, a meeting and date, a document). An opinion about a person is a perspective: it goes in the holder's own desk, attributed, never in the roster.
 - Never write something a person asked to keep out, and never make up a field to fill a column; leave it empty.
