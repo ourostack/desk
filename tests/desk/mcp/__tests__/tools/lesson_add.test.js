@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url"
 import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { createSearchEngine } from "../../../../../plugins/desk/mcp/src/search/engine.js"
 import { osEnv } from "../_os_env.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
@@ -389,6 +390,14 @@ test("lesson_add desk opens a real improvement card when the factory state is re
   assert.match(result.improvement_path, /^_meta\/improvement\/friction_candidate--[0-9a-f]{12}\.md$/u)
   assert.equal(result.message, `Not in effect yet. Improvement card ${result.improvement_path} is open against brief; the lesson takes effect when the change it asks for ships.`)
   assert.match(await fs.readFile(path.join(root, ...result.improvement_path.split("/")), "utf8"), /\n# Lesson for brief: credential gates need evidence\n/u)
+  // A topic with a line or paragraph separator opens a card that Desk reads back, under the fixed words.
+  for (const topic of ["check the gate\u2028before merging", "check the build\u2029before shipping"]) {
+    const separated = await lesson_add({ deskRoot: root, env, input: { scope: "desk", topic, body: "Do it.", owner: "brief" } })
+    assert.equal(separated.improvement, "opened", JSON.stringify(topic))
+    const listing = await readCards({ deskRoot: root, personPrefix: "" })
+    assert.deepEqual(listing.skipped, {}, JSON.stringify(topic))
+    assert.equal(listing.cards.find((card) => separated.improvement_key === card.key)?.title, "System friction in the desk plugin", JSON.stringify(topic))
+  }
 })
 
 // A home folder with plugins installed for other hosts than the one running: Claude Code's registry, Copilot CLI's own
@@ -517,4 +526,45 @@ test("lesson_add desk reads other hosts' plugins within bounds, and skips regist
   const refused = await lesson_add({ deskRoot: root, env: { USERPROFILE: home }, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "skill:made-up:x" } }).catch((error) => error.message)
   const installed = /\(installed: ([^)]*)\)/u.exec(refused)[1].split(", ")
   assert.equal(installed.filter((name) => /^p\d+$/u.test(name)).length, 512)
+})
+
+test("lesson_add desk follows a linked plugin folder once, skips a dangling link, a loop and an oversized manifest, and falls back to the account's home folder", async () => {
+  const root = await mkTempDeskRoot()
+  const home = await mkTempDeskRoot()
+  const elsewhere = await mkTempDeskRoot()
+  const { addFriction } = frictionSpy({ improvement: "opened" })
+  const scan = () => ({ dirs: [] })
+  const link = (target, at) => fs.symlink(target, at, process.platform === "win32" ? "junction" : "dir")
+  const plugin = async (dir, name, manifest = JSON.stringify({ name })) => {
+    await fs.mkdir(path.join(dir, "skills", "rule"), { recursive: true })
+    await fs.writeFile(path.join(dir, "plugin.json"), manifest, "utf8")
+    await fs.writeFile(path.join(dir, "skills", "rule", "SKILL.md"), "---\nname: rule\n---\n", "utf8")
+  }
+  const market = path.join(home, ".copilot", "installed-plugins", "local")
+  await fs.mkdir(market, { recursive: true })
+  // A local install is often a link to the plugin's own checkout.
+  await plugin(path.join(elsewhere, "linked-checkout"), "linked")
+  await link(path.join(elsewhere, "linked-checkout"), path.join(market, "linked"))
+  await link(path.join(elsewhere, "linked-checkout"), path.join(market, "linked-again"))
+  await link(path.join(elsewhere, "gone"), path.join(market, "dangling"))
+  await link(path.join(home, ".copilot"), path.join(market, "loop"))
+  // A manifest past the size limit is not read.
+  await plugin(path.join(market, "huge"), "huge", JSON.stringify({ name: "huge", pad: "x".repeat(70 * 1024) }))
+  const desk = (env, owner) => lesson_add({ deskRoot: root, env, scan, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner } })
+  assert.equal((await desk({ HOME: home }, "skill:linked:rule")).owner, "skill:linked:rule")
+  await assert.rejects(() => desk({ HOME: home }, "skill:huge:rule"), /no plugin named huge is installed for any host on this machine \(installed: desk, linked\)/u)
+  // A home folder that is not absolute reads no host's folders.
+  await assert.rejects(() => desk({ HOME: "relative-home" }, "skill:linked:rule"), /no plugin named linked/u)
+  // With neither HOME nor USERPROFILE set, the account's home folder is read.
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+  try {
+    assert.equal((await desk({}, "skill:linked:rule")).owner, "skill:linked:rule")
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })

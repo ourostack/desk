@@ -2,8 +2,9 @@
 //
 // A card lives on the desk at `<desk>/<person prefix>/_meta/improvement/<source>--<12 hex of
 // sha256(key)>.md`. `personPrefix` is "" for a solo desk and `desks/<alias>` in a crew desk.
-// A card holds pointers and counts only: never prompt text, command text, file content or an
-// absolute path. The only URLs are `countermeasure` (a GitHub pull request) and `kaizen_url`
+// A card holds pointers, counts and a title the library builds: never prompt text, command text, file content or an
+// absolute path. The only free text is a lesson's topic in its card's title, checked whole before it is written
+// (`lessonTitle`). The only URLs are `countermeasure` (a GitHub pull request) and `kaizen_url`
 // (a GitHub issue), each checked by shape. This module does not commit to Git: every function
 // that writes returns the card file's absolute path so the caller can commit exactly that file.
 //
@@ -150,7 +151,7 @@ const LOOP_TITLES = {
 
 /**
  * `cardTitle(source, id, { plugin, signal }?) -> string | null`: the title the library builds for every source, from frozen
- * tables, so no free text enters a card. A friction candidate's title is fixed words plus the plugin name when it is a
+ * tables, so no free text enters a card through it. A friction candidate's title is fixed words plus the plugin name when it is a
  * public plugin and the signal when it is a known measure (null only for an unknown source).
  */
 export function cardTitle(source, id, { plugin, signal } = {}) {
@@ -170,17 +171,22 @@ export function cardTitle(source, id, { plugin, signal } = {}) {
 // A lesson's owner as lesson_add names it: a plugin's skill, a Desk tool, the child brief or the always-on foundation.
 const LESSON_OWNER = /^(?:skill:[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_]{0,63}|brief|foundation)$/u
 
+// Any character that would break the card's one-line front matter: controls, U+2028 and U+2029.
+const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}]/u
+
 /**
  * `lessonTitle({ owner, topic }) -> string | null`: the title of a lesson's friction card, "Lesson for <owner>: <topic>",
- * cut to the title limit, so the card says which lesson it carries. Null when the owner is not an owner's shape or the
- * title would fail the checks every card title gets on read (one line, no credential, email, private text or absolute
- * path); the card then takes the fixed words.
+ * cut to the title limit, so the card says which lesson it carries. Null when the owner is not an owner's shape, the whole
+ * topic is not one line or holds private text (a credential, email, private path or absolute path), or the cut title would
+ * fail the checks every card title gets on read; the card then takes the fixed words. The topic is judged whole, before the
+ * cut, so no part of a secret survives it, and the cut never splits a character.
  */
 function lessonTitle(lesson) {
   const { owner, topic } = lesson !== null && typeof lesson === "object" ? lesson : {}
   if (typeof owner !== "string" || !LESSON_OWNER.test(owner) || typeof topic !== "string" || topic.trim() === "") return null
   const full = `Lesson for ${owner}: ${topic.trim()}`
-  const title = full.length <= MAX_TITLE ? full : `${full.slice(0, MAX_TITLE - 1)}…`
+  if (NOT_ONE_LINE.test(full) || !isCleanTitle(full)) return null
+  const title = full.length <= MAX_TITLE ? full : `${full.slice(0, MAX_TITLE - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
   return isFrictionTitle(title) && isCleanTitle(title) ? title : null
 }
 
@@ -315,7 +321,13 @@ function isCard(card) {
 
 function serialize(card) {
   const front = FIELDS.map((field) => `${field}: ${JSON.stringify(card[field])}`).join("\n")
-  return `---\n${front}\n---\n# ${card.title}\n\nStanding improvement card. It holds pointers and counts only; read the front matter.\n`
+  return `---\n${front}\n---\n# ${card.title}\n\nStanding improvement card. Desk builds its title; the rest is pointers and counts. Read the front matter.\n`
+}
+
+// Whether the text `serialize` writes for `card` parses back to a valid card.
+function readsBack(card) {
+  const back = parse(serialize(card))
+  return back !== null && isCard(back)
 }
 
 function parse(text) {
@@ -547,7 +559,8 @@ export async function openImprovement({ deskRoot, personPrefix, key, source, tit
   const parts = keyParts(key, true)
   if (parts === null || parts.source !== source) return refuse("invalid_source")
   if (title !== undefined || (lesson !== undefined && source !== "friction_candidate")) return refuse("title_not_allowed")
-  const fixed = (lesson === undefined ? null : lessonTitle(lesson)) ?? cardTitle(source, parts.id, { plugin, signal })
+  const named = lesson === undefined ? null : lessonTitle(lesson)
+  const fixed = cardTitle(source, parts.id, { plugin, signal })
   const pointers = Array.isArray(evidence) ? unique(evidence) : null
   if (pointers === null || !isEvidence(pointers)) return refuse("invalid_evidence")
   if (!PATCHABLE.plugin[0](plugin)) return refuse("invalid_plugin")
@@ -556,11 +569,14 @@ export async function openImprovement({ deskRoot, personPrefix, key, source, tit
     const file = path.join(folder, cardFileName(key))
     const found = await inspect(file)
     if (found.kind === "missing") {
-      const card = {
-        schema: SCHEMA, key, source, title: fixed, evidence: pointers, opened_at: at, last_opened_at: at, state: "open", claim: null, claim_log: [],
+      const build = (cardTitleText) => ({
+        schema: SCHEMA, key, source, title: cardTitleText, evidence: pointers, opened_at: at, last_opened_at: at, state: "open", claim: null, claim_log: [],
         countermeasure: null, plugin, signal, kaizen_url: null, shipped_version: null, checks_run: 0, last_check_at: null, last_check_result: null, verifying_since: null,
         recurrences: 0, reopened: 0, closed_at: null, close_reason: null,
-      }
+      })
+      // A lesson's card is written only when its exact text reads back as a card; otherwise it takes the fixed words.
+      const lessonCard = named === null ? null : build(named)
+      const card = lessonCard !== null && readsBack(lessonCard) ? lessonCard : build(fixed)
       return { result: "opened", file: await writeCard(card, folder, meta) }
     }
     if (found.card === undefined) return refuse("too_many_cards")

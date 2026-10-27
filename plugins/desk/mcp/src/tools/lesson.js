@@ -176,7 +176,8 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
  *
  * Returns, by scope:
  *   personal: { status: "added" | "updated", scope, path, in_effect, message, commit? }
- *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, commit?, improvement_commit? }
+ *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, improvement_key?, improvement_path?, commit?,
+ *               improvement_commit? }
  *   team:     { status: "merged" | "pr_open" | "failed", scope, repo, path, section, line, in_effect, message, pr?,
  *               commit?, account?, replaces?, stage?, reason?, claude_code_loads? }
  *

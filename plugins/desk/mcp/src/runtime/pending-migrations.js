@@ -35,7 +35,7 @@
 // and imports nothing outside Node's built-ins, because the hooks run in
 // whatever Node the host puts first on PATH.
 
-import { readdirSync, readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -388,10 +388,33 @@ function fetchedSeconds(value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+// Agency's cache index is metadata: one past this size is not read.
+const MAX_AGENCY_INDEX_BYTES = 4 * 1024 * 1024
+
 /**
- * The plugin folders under Agency's cache whose `migrations/` the driver should walk, one per plugin. Agency keeps
- * every fetch of every plugin source under `~/.local/agency/plugins/cache/entries/<dir_name>/` and maps each source
- * spec to its folder in `cache_index.json` (`entries[spec].dir_name`, `fetched_at`). The rule:
+ * `agencyCacheEntries(home) -> [{ spec, dir, fetched }]`: every plugin source Agency has fetched, from its cache index
+ * `~/.local/agency/plugins/cache/cache_index.json` (`entries[spec].dir_name`, `fetched_at`), each with the folder Agency keeps
+ * it in under `entries/`. A `dir_name` that could name a folder outside `entries/` is skipped. An unreadable, malformed or
+ * oversized index has no entries. Shared by the migration roots below and `lesson_add`'s plugin owners.
+ */
+export function agencyCacheEntries(home) {
+  const cache = path.join(home, ".local", "agency", "plugins", "cache")
+  const file = path.join(cache, "cache_index.json")
+  let entries
+  try {
+    if (statSync(file).size > MAX_AGENCY_INDEX_BYTES) return []
+    entries = Object.entries(JSON.parse(readFileSync(file, "utf8")).entries)
+  } catch {
+    return []
+  }
+  return entries
+    .filter(([, entry]) => typeof entry?.dir_name === "string" && /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/u.test(entry.dir_name))
+    .map(([spec, entry]) => ({ spec, dir: path.join(cache, "entries", entry.dir_name), fetched: fetchedSeconds(entry.fetched_at) }))
+}
+
+/**
+ * The plugin folders under Agency's cache whose `migrations/` the driver should walk, one per plugin (`agencyCacheEntries`).
+ * The rule:
  *   - only specs that start with the running engine's prefix (`copilot:` by default);
  *   - never Desk's own plugin (its migrations run from the startup hooks, and the cache holds several old copies);
  *   - one folder per plugin name (from the folder's `plugin.json`, else its `agency.json`), the one with the newest `fetched_at`;
@@ -399,18 +422,9 @@ function fetchedSeconds(value) {
  * An unreadable index has no roots. Result is sorted by plugin name.
  */
 export function agencyMigrationRoots({ home, engine = "copilot" }) {
-  const cache = path.join(home, ".local", "agency", "plugins", "cache")
-  let entries
-  try {
-    entries = Object.entries(JSON.parse(readFileSync(path.join(cache, "cache_index.json"), "utf8")).entries)
-  } catch {
-    return []
-  }
   const newest = new Map()
-  for (const [spec, entry] of entries) {
-    const dirName = entry?.dir_name
-    if (!spec.startsWith(`${engine}:`) || typeof dirName !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/u.test(dirName)) continue
-    const dir = path.join(cache, "entries", dirName)
+  for (const { spec, dir, fetched } of agencyCacheEntries(home)) {
+    if (!spec.startsWith(`${engine}:`)) continue
     let name
     for (const manifest of ["plugin.json", "agency.json"]) {
       try {
@@ -425,7 +439,6 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
     } catch {
       continue
     }
-    const fetched = fetchedSeconds(entry.fetched_at)
     if (typeof name === "string" && name !== "desk" && !(newest.get(name)?.fetched >= fetched)) newest.set(name, { dir, fetched })
   }
   return [...newest.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, { dir }]) => dir)

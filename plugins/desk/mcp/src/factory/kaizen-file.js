@@ -80,10 +80,19 @@ const HIGHER_IS_BETTER = new Set(["flow_efficiency"])
 // departure spec.md's fingerprint design calls out is the fingerprint
 // itself (no machine secret), not this credential/path/email defense.
 const PRIVATE_TEXT = [
-  /(^|[\s("'`])~[\\/]/u,
+  // A home folder: `~/`, `~user/`, `$HOME/`, `${HOME}/`, `%USERPROFILE%`, `/Users/`, `/home/`.
+  /(^|[\s("'`])~(?:[A-Za-z][A-Za-z0-9._-]*)?[\\/]/u,
+  /\$\{?(?:HOME|USERPROFILE)\}?[\\/]/u,
+  /%(?:USERPROFILE|HOMEPATH|APPDATA|LOCALAPPDATA)%/iu,
   /\/(Users|home)\//u,
+  // A drive path or a Windows network path (`\\server\share`).
   /[A-Za-z]:\\/u,
+  /(^|[\s("'`])\\\\[^\s\\]+\\/u,
   /[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/u,
+  // A Slack token, and a password or secret given with its value; "a password into chat" is prose, not a value.
+  /\bxox[a-z]-[A-Za-z0-9-]{8,}/iu,
+  /\b(?:password|passwd|passphrase|pwd|secret|token|api[-_]?key)s?\s*[:=]\s*\S/iu,
+  /\b(?:password|passwd|passphrase|pwd)s?\s+(?:is\s+)?["'`]?(?=[^\s"'`]*[0-9!#$%^&*+=@])[^\s"'`]{4,}/iu,
 ]
 
 export const isGeneric = (text) => !isCredentialLike(text) && !text.split(/\s+/u).some(isCredentialLike) && !PRIVATE_TEXT.some((pattern) => pattern.test(text))
