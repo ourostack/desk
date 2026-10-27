@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 // Loaded only when a worker starts: the Stop hook runs after every turn.
 const compatibleNode = (options) => require("../compatible-node.cjs").compatibleNode(options);
@@ -77,7 +78,9 @@ function childThread(payload, log) {
 // end in that window would never be recorded. The lock file names its holder's process (outbox.js withLock), so while waiting
 // this removes a lock whose holder is gone, or one still without a holder after far longer than writing it takes.
 const LOCK_SWEEP_MS = 200;
-const LOCK_UNNAMED_MS = 5000;
+// Outbox creates the lock and then writes the holder's process id. A holder whose event loop is blocked in between (the session-end
+// worker runs Git synchronously, up to 10 s per call) still holds it, so only a lock unnamed for this long is abandoned.
+const LOCK_UNNAMED_MS = 30_000;
 
 function holderGone(text, stat) {
   let pid;
@@ -88,18 +91,34 @@ function holderGone(text, stat) {
     process.kill(pid, 0);
     return false;
   } catch (error) {
+    // EPERM: the process exists but is not ours to signal.
     return error.code === "ESRCH";
   }
 }
 
+const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mtimeNs === b.mtimeNs;
+
 function clearAbandonedLock(lockFile) {
+  let before;
   try {
-    const before = fs.statSync(lockFile, { bigint: true });
+    before = fs.statSync(lockFile, { bigint: true });
     if (!holderGone(fs.readFileSync(lockFile, "utf8"), before)) return;
-    // Remove only the lock that was judged: another waiter may already have replaced it with its own.
-    const now = fs.statSync(lockFile, { bigint: true });
-    if (now.ino === before.ino && now.dev === before.dev && now.mtimeNs === before.mtimeNs) fs.unlinkSync(lockFile);
-  } catch { /* gone already, or not ours to judge: outbox's own wait applies */ }
+  } catch { return; /* gone already: outbox's own wait applies */ }
+  // Another waiter may judge the same lock, remove it and take its own in the instant before this one removes it. Moving the
+  // lock aside is atomic, so this waiter then holds exactly one file, and removes it only if it is the lock it judged.
+  const aside = `${lockFile}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.stale`;
+  try { fs.renameSync(lockFile, aside); } catch { return; /* already moved or removed by another waiter */ }
+  try {
+    if (sameFile(fs.statSync(aside, { bigint: true }), before)) {
+      fs.unlinkSync(aside);
+      return;
+    }
+    // Another waiter's live lock: put it back without replacing anything created there since (a link never overwrites).
+    fs.linkSync(aside, lockFile);
+    fs.unlinkSync(aside);
+  } catch {
+    try { if (!fs.existsSync(lockFile)) fs.renameSync(aside, lockFile); } catch { /* cannot be put back without risking a newer lock */ }
+  }
 }
 
 async function withAbandonedLockCleared(lockFile, body) {

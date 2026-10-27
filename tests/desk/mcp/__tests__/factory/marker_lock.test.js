@@ -29,8 +29,8 @@ async function plantLock(ctx, content, ageMs = 0) {
   return lock
 }
 
-function endSession(ctx, marker) {
-  const run = spawnSync(process.execPath, [SESSION_END, "claude"], { env: { ...ctx.env, NODE_OPTIONS: "" }, input: JSON.stringify(payload(ctx, marker, "SessionEnd")), encoding: "utf8", timeout: 10000 })
+function endSession(ctx, marker, nodeOptions = "") {
+  const run = spawnSync(process.execPath, [SESSION_END, "claude"], { env: { ...ctx.env, NODE_OPTIONS: nodeOptions }, input: JSON.stringify(payload(ctx, marker, "SessionEnd")), encoding: "utf8", timeout: 10000 })
   assert.equal(run.status, 0, run.stderr)
 }
 
@@ -45,7 +45,7 @@ const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid
 
 for (const [name, content, ageMs] of [
   ["holder's process has ended", () => JSON.stringify({ pid: deadPid(), started_at: new Date().toISOString() }), 0],
-  ["holder died before writing its process id", () => "", 10000],
+  ["holder died before writing its process id", () => "", 60000],
 ]) {
   test(`a session end is recorded at once past a marker lock whose ${name}`, () => scratch(async (ctx) => {
     const marker = await session(ctx)
@@ -56,18 +56,72 @@ for (const [name, content, ageMs] of [
   }))
 }
 
-test("a session end waits for a marker lock whose holder is alive, and records the end once that holder is gone", () => scratch(async (ctx) => {
-  const marker = await session(ctx)
-  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
-  try {
-    await plantLock(ctx, JSON.stringify({ pid: holder.pid, started_at: new Date().toISOString() }))
-    endSession(ctx, marker)
-    assert.equal(await endRecorded(ctx, 3000), false, "a live holder's lock is respected")
-  } finally {
-    holder.kill("SIGKILL")
+const sleeper = () => spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+const named = (pid) => JSON.stringify({ pid, started_at: new Date().toISOString() })
+// A process that exists but refuses the check (EPERM): the system's first process, for a user other than root.
+const refusingPid = () => {
+  const pid = process.platform === "win32" ? 4 : 1
+  try { process.kill(pid, 0) } catch (error) { if (error.code === "EPERM") return pid }
+  return null
+}
+
+// Each case plants a lock that must be respected, checks that the session end waits for it, then releases it.
+const respected = [
+  ["is held by a live process", async (ctx) => {
+    const holder = sleeper()
+    await plantLock(ctx, named(holder.pid))
+    return { release: () => holder.kill("SIGKILL") }
+  }],
+  ["is held by a process that refuses the process check", async (ctx, t) => {
+    const pid = refusingPid()
+    if (pid === null) return t.skip("no process here refuses the check")
+    const lock = await plantLock(ctx, named(pid))
+    return { release: () => fs.unlink(lock).catch(() => {}) }
+  }],
+  ["has no process id yet, and was created 10 s ago", async (ctx) => {
+    const lock = await plantLock(ctx, "", 10000)
+    return { release: () => fs.unlink(lock).catch(() => {}) }
+  }],
+  // Two waiters judge the same abandoned lock: the other one removes it and takes the lock in the instant before this one
+  // removes it. The worker's preload stands in for the other waiter at that instant.
+  ["was abandoned, but another waiter replaced it just before this one removed it", async (ctx) => {
+    const holder = sleeper()
+    const lock = await plantLock(ctx, named(deadPid()))
+    const preload = path.join(ctx.base, "other-waiter.cjs")
+    await fs.writeFile(preload, `const fs = require("node:fs")
+const lock = ${JSON.stringify(lock)}
+const unlink = fs.unlinkSync
+let replaced = false
+for (const name of ["renameSync", "unlinkSync"]) {
+  const original = fs[name]
+  fs[name] = function (file, ...rest) {
+    if (!replaced && file === lock) {
+      replaced = true
+      unlink(lock)
+      fs.writeFileSync(lock, ${JSON.stringify(named(holder.pid))})
+    }
+    return original.call(this, file, ...rest)
   }
-  assert.equal(await endRecorded(ctx), true, "the end is recorded once the holder is gone")
-}))
+}
+`)
+    return { nodeOptions: `--require ${JSON.stringify(preload)}`, release: () => holder.kill("SIGKILL"), lock, holder: holder.pid }
+  }],
+]
+for (const [name, plant] of respected) {
+  test(`a session end waits for a marker lock that ${name}, and is recorded once it is released`, (t) => scratch(async (ctx) => {
+    const marker = await session(ctx)
+    const planted = await plant(ctx, t)
+    if (!planted) return
+    try {
+      endSession(ctx, marker, planted.nodeOptions)
+      assert.equal(await endRecorded(ctx, 5000), false, "the lock is respected")
+      if (planted.lock) assert.equal(JSON.parse(await fs.readFile(planted.lock, "utf8")).pid, planted.holder, "the other waiter's lock is still in place")
+    } finally {
+      await planted.release()
+    }
+    assert.equal(await endRecorded(ctx), true, "the end is recorded once the lock is released")
+  }))
+}
 
 const unreadable = [
   ["the record cannot be read", { skip: process.platform === "win32" || process.getuid?.() === 0 ? "needs POSIX file modes and a non-root user" : false },
