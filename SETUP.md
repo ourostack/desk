@@ -129,11 +129,11 @@ Node, the browser and `gh` need what the Claude Code step 1 lists.
 ### 2. Install the plugins
 
 ```bash
-agency plugin install github:ourostack/desk:plugins/desk@main --cache-policy auto --cache-ttl 0 --fetch-mode foreground
+agency plugin install github:ourostack/desk:plugins/desk@main --cache-policy auto --cache-ttl 0
 agency plugin list
 ```
 
-Installing Desk pulls in Superpowers and Plain Language (`plugins/desk/agency.json`). `--cache-policy auto --cache-ttl 0 --fetch-mode foreground` makes each new session fetch and load the latest `main` before it starts, so updates need no further step.
+Installing Desk pulls in Superpowers and Plain Language (`plugins/desk/agency.json`). `--cache-policy auto --cache-ttl 0` makes each new session start from the copy already downloaded and fetch the latest `main` in the background, so an update loads at the next session with no further step. Leave out `--fetch-mode foreground`: it downloads every plugin before the session starts, which slows each start and makes the GitHub Copilot app in Agency mode fail with "Agency startup timed out" (the app gives Agency 15 seconds).
 
 ### 3. Host settings
 
