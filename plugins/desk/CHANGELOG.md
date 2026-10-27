@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.35 — 2026-10-27
+
+Public task explanations can now carry concrete, evidence-linked system improvement proposals through the ordinary candidate and separate privacy-review path. New templates and prose-free invalidations use context/2; existing context/1 records remain readable. Proposals stay distinct from permission to act, shipped changes and demonstrated benefits, with the existing source, consent, payload-hash and shared-quota guards unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.34 — 2026-10-27
 
 Issue drains now use deterministic detection when watching for new issues: a quiet queue causes no model turn or AI-credit/token spending. The shared method requires stable-identity deduplication and a durable event before waking the drain, preserves observable failures and seen markers, and distinguishes an attached command's lifetime from persistent coverage.
