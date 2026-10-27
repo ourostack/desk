@@ -1,5 +1,16 @@
 # desk plugin — changelog
 
+## 3.2.33 — 2026-10-27
+
+Factory validators can now read evidence-linked improvement proposals in
+context/2 while keeping context/1 unchanged. Proposals name their observed
+events, a concrete change, a hypothesis and a way to check it. They retain the
+same independent privacy review, exact-payload hash and source-freshness gates;
+they never authorize work or claim a proven benefit. Ordinary producers still
+emit context/1 so store readers can be upgraded before the new format is used.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.32 — 2026-10-27
 
 Assigned issue drains now load `draining-issues`: each issue is a prompt request whose useful outcome must reach its agreed delivery endpoint. The bundled canonical method keeps dependency order, existing owners and unresolved native evidence visible without adding another engineering lifecycle.
