@@ -84,7 +84,7 @@ test("the plain-language hook the unused-code check lists is the one its registr
 // On Windows a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed, where it exits 1. Every registered Desk hook command is Node, so none depends on which shell comes first.
 // The session-start commands first check, in the host's own shell, that a `node` is on PATH, and otherwise source hooks/node-missing.sh (or print the PowerShell literal) to say what to install; they still start no other shell.
 const NODE_GUARD = /^if command -v node >\/dev\/null 2>&1; then node "[^"]+"(?: "[^"]+")*; else desk_host=(?:claude|copilot); \. "[^"]+\/hooks\/node-missing\.sh"; fi$/u
-const NODE_GUARD_POWERSHELL = /^if \(Get-Command node -CommandType Application -ErrorAction SilentlyContinue\) \{ node "[^"]+" \} else \{ '\{"additionalContext":"[^']+"\}' \}$/u
+const NODE_GUARD_POWERSHELL = /^if \(Get-Command node -CommandType Application -ErrorAction SilentlyContinue\) \{ node "[^"]+" \} elseif \(\$env:NVM_HOME\) \{ '\{"additionalContext":"[^']+"\}' \} else \{ '\{"additionalContext":"[^']+"\}' \}$/u
 test("no command in hooks.json or copilot-hooks.json starts with bash or sh, and only session start runs a node check first", () => {
   const claude = JSON.parse(read("plugins", "desk", "hooks", "hooks.json"))
   const copilot = JSON.parse(read("plugins", "desk", "hooks", "copilot-hooks.json"))

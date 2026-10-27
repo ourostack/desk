@@ -601,6 +601,7 @@ function run(options) {
 }
 
 module.exports = {
+  PROBE_BUDGET_MS: PROBE_BUDGET_MS,
   TOOL_NAMES: TOOL_NAMES,
   candidatePaths: candidatePaths,
   importIndex: importIndex,

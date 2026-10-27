@@ -3,8 +3,15 @@
 # nothing, and prints the session's context: the Node.js Desk needs (the engines floor in mcp/package.json), the install command for
 # this platform, and that a new session is needed because tool servers load only when a session starts. `desk_host` (claude or
 # copilot) picks the host's output shape. The text goes into JSON through printf, so it holds no double quote, backslash or percent sign.
+# A version manager the bootstrap would use comes first. nvm-windows also needs `nvm use`, because the host needs a `node` on PATH.
 if [ "$OS" = Windows_NT ] || [ -n "$MSYSTEM" ]; then
-  desk_install='run `winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements` in a terminal'
+  if [ -n "$NVM_HOME" ]; then
+    desk_install='run `nvm install lts` and then `nvm use lts` in a terminal'
+  else
+    desk_install='run `winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements` in a terminal'
+  fi
+elif [ -s "$NVM_DIR/nvm.sh" ] || [ -s "$HOME/.nvm/nvm.sh" ]; then
+  desk_install='run `nvm install --lts` in a terminal'
 elif [ -d /System/Library/CoreServices ]; then
   desk_install='run `brew install node` in a terminal (without Homebrew, use the installer from https://nodejs.org/en/download)'
 else

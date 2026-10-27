@@ -92,4 +92,4 @@ function compatibleNode({
   return { node: selection.node ? selection.node.path : null, range };
 }
 
-module.exports = { compatibleNode, hookProbe, PROBE_BUDGET_MS };
+module.exports = { atLeast, compatibleNode, engineFloor, hookProbe, PROBE_BUDGET_MS };

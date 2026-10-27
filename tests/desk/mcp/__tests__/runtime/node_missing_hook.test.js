@@ -129,8 +129,9 @@ test("the shell messages name the Node.js floor in mcp/package.json, so the two 
   for (const text of [script, copilotStart.powershell]) assert.ok(text.includes(`Desk needs Node.js ${floor} or newer`), text.slice(0, 200))
   assert.ok(script.includes(`prints v${floor} or newer`))
   // The text reaches JSON through printf or a PowerShell literal: no character there may need escaping.
-  const literal = /'(\{"additionalContext":[^']*)'/u.exec(copilotStart.powershell)[1]
-  assert.doesNotThrow(() => JSON.parse(literal))
+  const literals = [...copilotStart.powershell.matchAll(/'(\{"additionalContext":[^']*)'/gu)].map((match) => match[1])
+  assert.equal(literals.length, 2)
+  for (const literal of literals) assert.doesNotThrow(() => JSON.parse(literal))
   for (const match of script.matchAll(/desk_(?:install|text)='([^']*)'/gu)) assert.doesNotMatch(match[1], /["\\%]/u)
 })
 
@@ -141,7 +142,7 @@ const noneCompatible = () => ({ node: null, range: `>=${floor}.0.0` })
 
 test("a node older than Desk needs, with no newer one installed, gets the same message with the version it found", () => {
   const home = mkdtempSync(path.join(ROOT, "old-home-"))
-  const windows = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, find: noneCompatible })
+  const windows = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: noneCompatible })
   assert.match(windows, new RegExp(`^Desk needs Node\\.js ${floor} or newer, and the \`node\` on PATH is v16\\.20\\.2 with no newer Node\\.js installed`, "u"))
   assert.ok(windows.includes(`run \`${WINGET}\` in a terminal`))
   assert.ok(windows.includes(RESTART))
@@ -149,15 +150,53 @@ test("a node older than Desk needs, with no newer one installed, gets the same m
   const bin = mkdtempSync(path.join(ROOT, "brew-bin-"))
   writeFileSync(path.join(bin, "brew"), "#!/bin/sh\n")
   chmodSync(path.join(bin, "brew"), 0o755)
-  const mac = nodeRequiredLine({ env: { HOME: home, PATH: bin }, platform: "darwin", current: old, find: noneCompatible })
+  const mac = nodeRequiredLine({ env: { HOME: home, PATH: bin }, platform: "darwin", current: old, select: noneCompatible })
   if (!WINDOWS) assert.ok(mac.includes("run `brew install node` in a terminal"), mac)
 
-  const range = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, find: () => ({ node: null, range: `>=${floor}.11.0` }) })
+  const range = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: () => ({ node: null, range: `>=${floor}.11.0` }) })
   assert.match(range, new RegExp(`^Desk needs Node\\.js >=${floor}\\.11\\.0, and`, "u"), "a range that is not a plain major floor is named as written")
 })
 
 test("a node Desk can use, here or installed elsewhere, gets no message, and a failed check never blocks the session", () => {
-  assert.equal(nodeRequiredLine({ current: old, find: () => ({ node: "/newer/bin/node", range: `>=${floor}.0.0` }) }), "")
-  assert.equal(nodeRequiredLine({ find: () => { throw new Error("broken") } }), "")
+  assert.equal(nodeRequiredLine({ current: old, select: () => ({ node: { path: "/newer/bin/node" }, range: `>=${floor}.0.0` }) }), "")
+  assert.equal(nodeRequiredLine({ current: old, select: () => { throw new Error("broken") } }), "")
   assert.equal(nodeRequiredLine(), "", "the Node running this test is new enough")
+})
+
+// The hook must never say Node is missing when the tool server would find one. Both search with the bootstrap's own rule and time
+// budget, and a search that ran out of time says nothing, because the server, starting later, may still find a Node.
+test("an old node first on PATH with a slow, unversioned newer Node beside it gets no message, as the tool server would find it", { skip: WINDOWS ? "a POSIX shell wrapper stands in for the slow Node" : false }, () => {
+  const bin = mkdtempSync(path.join(ROOT, "slow-node-bin-"))
+  writeFileSync(path.join(bin, "node"), `#!/bin/sh\n/bin/sleep 0.4\nexec ${JSON.stringify(process.execPath)} "$@"\n`)
+  chmodSync(path.join(bin, "node"), 0o755)
+  const home = mkdtempSync(path.join(ROOT, "slow-node-home-"))
+  const env = { PATH: bin, HOME: home, DESK_NODE_SYSTEM_PREFIX: path.join(ROOT, "no-system-prefix") }
+  assert.equal(nodeRequiredLine({ env, platform: process.platform, current: old }), "")
+})
+
+test("a search cut short by its time budget never claims Node is missing", () => {
+  let clock = 0
+  const exhausted = (options) => { clock += 60_000; return { node: null, range: `>=${floor}.0.0`, probeBudgetMs: options.probeBudgetMs } }
+  assert.equal(nodeRequiredLine({ env: { HOME: ROOT }, platform: "linux", current: old, select: exhausted, now: () => clock }), "")
+})
+
+// With a version manager installed, the advice uses it, as the bootstrap's own fix does. Here `node` must end up on PATH for the
+// host to start anything, so nvm-windows also needs `nvm use`.
+const NVM_WINDOWS = "run `nvm install lts` and then `nvm use lts` in a terminal"
+const NVM_POSIX = "run `nvm install --lts` in a terminal"
+
+test("with no node and nvm installed, the shell message says to install through nvm", { skip: SHELLS.sh ? false : "no POSIX shell" }, (t) => {
+  const home = mkdtempSync(path.join(ROOT, "nvm-home-"))
+  mkdirSync(path.join(home, ".nvm"), { recursive: true })
+  writeFileSync(path.join(home, ".nvm", "nvm.sh"), "# nvm\n")
+  const posix = run(SHELLS.sh, claudeCommandFor(), { ...env(SHELLS.pathWithoutNode), HOME: home, OS: "", MSYSTEM: "" })
+  assertNodeMessage(t, "claude with nvm", posix, { shape: "claude", install: NVM_POSIX })
+  const windows = run(SHELLS.sh, claudeCommandFor(), env(SHELLS.pathWithoutNode, { OS: "Windows_NT", NVM_HOME: "C:\\nvm" }))
+  assertNodeMessage(t, "claude with nvm-windows", windows, { shape: "claude", install: NVM_WINDOWS })
+})
+
+test("with no node and nvm-windows installed, the PowerShell message says to install and use a version through nvm", { skip: SHELLS.powershell ? false : "no PowerShell here" }, (t) => {
+  const empty = mkdtempSync(path.join(ROOT, "empty-path-"))
+  const result = run(SHELLS.powershell, copilotCommandFor("powershell"), env(empty, { NVM_HOME: "C:\\nvm" }))
+  assertNodeMessage(t, "copilot with nvm-windows", result, { shape: "copilot", install: NVM_WINDOWS })
 })
