@@ -109,7 +109,7 @@ test("readCrewConfig reads the file at the root, and a missing or unreadable one
   assert.equal(readCrewConfig(odd).declared, false)
 })
 
-test("people names the team's roster: a Markdown file in the repository, by default _shared/landscape/roster.md", () => {
+test("people names the team's roster: a Markdown file in a folder of the repository, by default _shared/landscape/roster.md", () => {
   assert.equal(DEFAULT_PEOPLE, "_shared/landscape/roster.md")
   assert.equal(parseCrewConfig(null).people, DEFAULT_PEOPLE)
   assert.equal(parseCrewConfig("{}").people, DEFAULT_PEOPLE)
@@ -117,9 +117,10 @@ test("people names the team's roster: a Markdown file in the repository, by defa
   const named = parseCrewConfig(JSON.stringify({ people: "./team\\roster.md" }))
   assert.equal(named.people, "team/roster.md")
   assert.deepEqual(named.problems, [])
-  for (const raw of ["../roster.md", "team/roster.txt", "_meta/people.md", "desks/pat/roster.md", "Agents.md", "", 5]) {
+  assert.equal(parseCrewConfig(JSON.stringify({ people: "docs/.github-notes/roster.md" })).people, "docs/.github-notes/roster.md")
+  for (const raw of ["../roster.md", "team/roster.txt", "_meta/people.md", "desks/pat/roster.md", "Agents.md", "README.md", "roster.md", ".git/roster.md", "team/.GIT/roster.md", "", 5]) {
     const config = parseCrewConfig(JSON.stringify({ people: raw }))
     assert.equal(config.people, DEFAULT_PEOPLE, String(raw))
-    assert.deepEqual(config.problems, [`people: ${JSON.stringify(raw)} is not a Markdown file inside this repository outside _meta/, desks/ and AGENTS.md`])
+    assert.deepEqual(config.problems, [`people: ${JSON.stringify(raw)} is not a Markdown file in a folder of this repository outside _meta/, desks/ and .git/`])
   }
 })

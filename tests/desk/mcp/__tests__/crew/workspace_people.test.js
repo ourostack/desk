@@ -6,10 +6,11 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, unlinkSync, existsSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, CIT_STANDIN_ROSTER, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { DEFAULT_QUESTIONS, starterRoster } from "../../../../../plugins/desk/mcp/src/crew/people.js"
 
@@ -85,7 +86,7 @@ test("start --people with a file that does not exist creates it from Crew's star
   assert.ok(plan.changes.some((change) => change.path === STARTER && change.change === "add"))
   const refused = await startWorkspace({ repo: plain.clone, spawnGit: plain.spawnGit, gh: fakeGh(plain.bare).gh, now: NOW, tooling: TOOLING, people: "_meta/people.md", apply: true })
   assert.equal(refused.state, "refused")
-  assert.match(refused.message, /people: "_meta\/people\.md" is not a Markdown file inside this repository/u)
+  assert.match(refused.message, /people: "_meta\/people\.md" is not a Markdown file in a folder of this repository/u)
 })
 
 test("status reports the roster: path, whether it exists, whether it lists the member, and the questions to ask", async () => {
@@ -189,7 +190,7 @@ test("a teammate changed the same roster lines first: stage people, the desk pus
   const first = await joinWorkspace(join(repo, { apply: true }))
   assert.equal(first.state, "failed")
   assert.equal(first.stage, "people")
-  assert.match(first.message, /stopped at people \(a teammate changed the same lines of the team's roster _shared\/landscape\/roster\.md first\)\. desks\/newbie\/ is pushed; run join again to add the desk-list row\. Next: read the team's roster _shared\/landscape\/roster\.md again as it is now, write the entry again in it, and run join --apply again; it adds only what is missing\.$/u)
+  assert.match(first.message, /stopped at people \(a teammate changed the same entry of the team's roster _shared\/landscape\/roster\.md first\)\. desks\/newbie\/ is pushed; run join again to add the desk-list row\. Next: read the team's roster _shared\/landscape\/roster\.md again as it is now, write the entry again in it \(what was written before is kept at \S+crew-roster-edit\.json\), and run join --apply again; it adds only what is missing\.$/u)
   assert.ok(mainFiles(repo.bare).includes("desks/newbie/AGENTS.md"))
   assert.doesNotMatch(onMain(repo.bare, "_meta/desks.md"), /newbie/u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -263,6 +264,12 @@ test("git that cannot merge the roster stops at stage people with Git's words", 
   const result = await joinWorkspace(join(repo, { apply: true, spawnGit }))
   assert.equal(result.stage, "people")
   assert.match(result.reason, /could not be merged: error: could not merge$/u)
+  // With no entry of their own (Crew's starter for a workspace that had no roster), the message names no kept change.
+  const older = memberClone(await teamRepo({ "_meta/desks.md": "| alias | identity |\n|---|---|\n| pat | pat_example |\n", "desks/_template/AGENTS.md": "# {{alias}}\n" }), "older")
+  await pushFromElsewhere(older, { [STARTER]: "# Our people\n" })
+  const starter = await joinWorkspace(join(older, { apply: true, spawnGit: (cmd, args, options) => (args[0] === "merge-file" ? { status: 255, stdout: "", stderr: "error: could not merge\n" } : older.spawnGit(cmd, args, options)) }))
+  assert.equal(starter.stage, "people", starter.message)
+  assert.match(starter.message, /write the entry again in it, and run join --apply again/u)
 })
 
 test("a pull request left open: the roster edit is back in the clone, and the rerun reuses the pull request", async () => {
@@ -298,8 +305,199 @@ test("joined from another machine meanwhile: a member, and the roster edit stays
   }
   const result = await joinWorkspace(join(repo, { apply: true, gh }))
   assert.equal(result.state, "member", result.message)
+  assert.match(result.message, /The change to the team's roster _shared\/landscape\/roster\.md has not landed: land it with crew\.js roster --apply\./u)
   assert.equal(read(repo, STARTER), withEntry(starterRoster()))
   assert.equal(onMain(repo.bare, STARTER), starterRoster())
+  // Run again, the join answers at once that they are a member, and still names the change to land.
+  const again = await joinWorkspace(join(repo, { apply: true }))
+  assert.equal(again.state, "member")
+  assert.match(again.message, /has not landed: land it with crew\.js roster --apply\./u)
+  // Without a change, or with one the clone cannot take, it says nothing about the roster.
+  write(repo, "README.md", "# Changed\n")
+  assert.doesNotMatch((await joinWorkspace(join(repo))).message, /has not landed/u)
+})
+
+// ── CIT's roster: one table row per teammate ─────────────────────────────────────────────────────────────────────
+
+const CIT_FILES = { ...CIT_SHAPED, [CIT_ROSTER]: CIT_STANDIN_ROSTER }
+const standinRow = (name) => CIT_STANDIN_ROSTER.split("\n").find((line) => line.startsWith(`| ${name} |`))
+const fixRow = (text, name, from, to) => text.replace(standinRow(name), standinRow(name).replace(from, to))
+const joiner = (alias) => ({ identity: `${alias}_example`, alias })
+
+test("CIT's roster: two joiners each fixing their own neighbouring row both land, with no conflict", async () => {
+  const team = await started(CIT_FILES, { people: CIT_ROSTER })
+  const theo = memberClone(team, "theo")
+  const mina = memberClone(team, "mina")
+  write(theo, CIT_ROSTER, fixRow(read(theo, CIT_ROSTER), "Theo Lindqvist", "| not recorded |", "| he/him |"))
+  write(mina, CIT_ROSTER, fixRow(read(mina, CIT_ROSTER), "Mina Castellanos", "pronouns confirmed by Robin", "told us when joining"))
+  assert.equal((await joinWorkspace(join(theo, { apply: true, ...joiner("tlindqvist") }))).state, "joined")
+  const second = await joinWorkspace(join(mina, { apply: true, ...joiner("minac") }))
+  assert.equal(second.state, "joined", second.message)
+  const both = fixRow(fixRow(CIT_STANDIN_ROSTER, "Theo Lindqvist", "| not recorded |", "| he/him |"), "Mina Castellanos", "pronouns confirmed by Robin", "told us when joining")
+  assert.equal(onMain(team.bare, CIT_ROSTER), both)
+})
+
+test("CIT's roster: a new row added under a row a teammate just edited lands after it", async () => {
+  const team = await started(CIT_FILES, { people: CIT_ROSTER })
+  const repo = memberClone(team)
+  const theo = standinRow("Theo Lindqvist")
+  const newRow = citRow("Newbie Example", "newbie")
+  write(repo, CIT_ROSTER, read(repo, CIT_ROSTER).replace(`${theo}\n`, `${theo}\n${newRow}`))
+  const edited = fixRow(CIT_STANDIN_ROSTER, "Theo Lindqvist", "| not recorded |", "| he/him |")
+  await pushFromElsewhere(repo, { [CIT_ROSTER]: edited })
+  const result = await joinWorkspace(join(repo, { apply: true }))
+  assert.equal(result.state, "joined", result.message)
+  assert.equal(onMain(team.bare, CIT_ROSTER), edited.replace(`${theo.replace("| not recorded |", "| he/him |")}\n`, `${theo.replace("| not recorded |", "| he/him |")}\n${newRow}`))
+})
+
+test("CIT's roster: the same row changed both ways, and GitHub failing after the fetch: the entry is kept, never dropped, and lands once written again", async () => {
+  const repo = memberClone(await started(CIT_FILES, { people: CIT_ROSTER }))
+  write(repo, CIT_ROSTER, fixRow(read(repo, CIT_ROSTER), "Theo Lindqvist", "| not recorded |", "| he/him (told us when joining) |"))
+  const teammate = fixRow(CIT_STANDIN_ROSTER, "Theo Lindqvist", "| not recorded |", "| they/them (per teammate) |")
+  await pushFromElsewhere(repo, { [CIT_ROSTER]: teammate })
+  // GitHub does not answer the merge-method question: the run stops at pull_request, after the fetch.
+  const first = await joinWorkspace(join(repo, { apply: true, ...joiner("tlindqvist"), gh: fakeGh(repo.bare, { methods: null }).gh }))
+  assert.equal(first.state, "failed")
+  assert.equal(first.stage, "pull_request")
+  assert.match(first.message, /desks\/tlindqvist\/ is pushed; run join again to add the desk-list row\. The change to the team's roster could not be put back in team\/roster\.md as it is now; it is kept at \S+crew-roster-edit\.json, and running join --apply again lands it, or says what to do if it still does not merge\.$/u)
+  assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
+  // The rerun takes the kept entry, and stops at people: the same row really changed both ways.
+  const plan = await joinWorkspace(join(repo, joiner("tlindqvist")))
+  assert.equal(plan.people.from, "kept")
+  const second = await joinWorkspace(join(repo, { apply: true, ...joiner("tlindqvist") }))
+  assert.equal(second.stage, "people")
+  assert.match(second.message, /what was written before is kept at \S+crew-roster-edit\.json/u)
+  // Written again on the row as it is now, it lands, and nothing stays kept.
+  write(repo, CIT_ROSTER, read(repo, CIT_ROSTER).replace("| they/them (per teammate) |", "| he/him (told us when joining) |"))
+  const third = await joinWorkspace(join(repo, { apply: true, ...joiner("tlindqvist") }))
+  assert.equal(third.state, "joined", third.message)
+  assert.match(onMain(repo.bare, CIT_ROSTER), /\| Theo Lindqvist \| tlindqvist \| Principal TPM \| he\/him \(told us when joining\) \|/u)
+  assert.equal(existsSync(path.join(repo.clone, ".git", "crew-roster-edit.json")), false)
+})
+
+test("a committed roster entry is refused with the command that keeps it uncommitted", async () => {
+  const repo = memberClone(await started({ "README.md": "# Team\n" }))
+  write(repo, STARTER, withEntry(read(repo, STARTER)))
+  git(repo.clone, ["commit", "-qam", "entry"])
+  const refused = await joinWorkspace(join(repo, { apply: true }))
+  assert.equal(refused.state, "refused")
+  assert.match(refused.message, /has the change to the team's roster _shared\/landscape\/roster\.md committed, and Crew lands it from the uncommitted change; undo the commit and keep the change with git reset --soft origin\/main/u)
+  // Any other commit gets the general refusal.
+  write(repo, "notes/x.md", "x\n")
+  git(repo.clone, ["add", "notes/x.md"])
+  git(repo.clone, ["commit", "-qm", "x"])
+  assert.match((await joinWorkspace(join(repo, { apply: true }))).message, /has commits that are not on origin\/main; push or drop them first/u)
+})
+
+test("--about saved as UTF-16 is refused; a byte-order mark is left out of the desk", async () => {
+  const repo = memberClone(await started({ "README.md": "# Team\n" }))
+  const utf16 = path.join(repo.base, "about-utf16.md")
+  writeFileSync(utf16, Buffer.from("\uFEFF## About me\r\n\r\nPlaceholder.\r\n", "utf16le"))
+  const refused = await joinWorkspace(join(repo, { apply: true, about: utf16 }))
+  assert.equal(refused.state, "refused")
+  assert.match(refused.message, /--about \S+about-utf16\.md is not UTF-8 text; write it again as UTF-8/u)
+  const bom = path.join(repo.base, "about-bom.md")
+  writeFileSync(bom, "\uFEFF## About me\n\nPlaceholder.\n")
+  const result = await joinWorkspace(join(repo, { apply: true, about: bom }))
+  assert.equal(result.state, "joined", result.message)
+  assert.equal(onMain(repo.bare, "desks/newbie/README.md").includes("\uFEFF"), false)
+})
+
+// ── Symbolic links: Crew reads and writes only inside the clone ─────────────────────────────────────────────────
+
+const NO_LINKS = process.platform === "win32" && "Git for Windows checks links out as plain files"
+
+// A teammate's commit that makes `link` a symbolic link to `target`.
+function pushLink(repo, link, target) {
+  const other = memberClone(repo, `linker-${Math.random().toString(36).slice(2, 8)}`)
+  git(other.clone, ["rm", "-rq", "--ignore-unmatch", link])
+  mkdirSync(path.dirname(path.join(other.clone, ...link.split("/"))), { recursive: true })
+  symlinkSync(target, path.join(other.clone, ...link.split("/")))
+  git(other.clone, ["add", link])
+  git(other.clone, ["commit", "-qm", "link"])
+  git(other.clone, ["push", "-q", repo.bare, "HEAD:main"])
+  return other
+}
+
+test("a roster folder linked outside the clone: status does not read it, and the join is refused before anything is written", { skip: NO_LINKS }, async () => {
+  const repo = memberClone(await started({ "README.md": "# Team\n" }))
+  const outside = mkdtempSync(path.join(os.tmpdir(), "crew-outside-"))
+  writeFileSync(path.join(outside, "roster.md"), "# Elsewhere\n\n## What we ask new teammates\n\n1. Not ours?\n")
+  pushLink(repo, "_shared/landscape", outside)
+  git(repo.clone, ["pull", "-q", repo.bare, "main"])
+  const status = await crewStatus({ repo: repo.clone, identity: "newbie_example" })
+  assert.equal(status.people.problem, "Crew writes only inside this clone, and a symbolic link leads outside it at _shared/landscape/roster.md; ask the teammate who added the link to replace it with a real folder or file")
+  assert.equal(status.people.exists, false)
+  assert.deepEqual(status.people.questions, [...DEFAULT_QUESTIONS])
+  const result = await joinWorkspace(join(repo, { apply: true }))
+  assert.equal(result.state, "refused")
+  assert.equal(result.message, `Nothing was written: ${status.people.problem}.`)
+  assert.deepEqual(readdirSync(outside), ["roster.md"])
+  assert.equal(mainFiles(repo.bare).includes("desks/newbie/AGENTS.md"), false)
+})
+
+test("a desk folder, a roster file, a link into .git or a link to nothing: each refused", { skip: NO_LINKS }, async () => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), "crew-outside-"))
+  for (const [link, target, shown] of [
+    ["desks/newbie", outside, "desks/newbie"],
+    ["_shared/landscape/roster.md", "../../README.md", STARTER],
+    ["_shared/landscape", "../.git", STARTER],
+    ["_shared/landscape", "../no-such-folder", STARTER],
+  ]) {
+    const repo = memberClone(await started({ "README.md": "# Team\n" }))
+    pushLink(repo, link, target)
+    git(repo.clone, ["pull", "-q", repo.bare, "main"])
+    const result = await joinWorkspace(join(repo, { apply: true }))
+    assert.equal(result.state, "refused", link)
+    assert.match(result.message, new RegExp(`a symbolic link leads outside it at ${shown.replace(/[/.]/gu, "\\$&")};`, "u"), link)
+  }
+  assert.deepEqual(readdirSync(outside), [])
+})
+
+test("a link that arrives with the fetch stops the join before anything is written outside, and the entry stays kept", { skip: NO_LINKS }, async () => {
+  const repo = memberClone(await started({ "README.md": "# Team\n" }))
+  write(repo, STARTER, withEntry(read(repo, STARTER)))
+  const outside = mkdtempSync(path.join(os.tmpdir(), "crew-outside-"))
+  pushLink(repo, "_shared/landscape", outside)
+  const result = await joinWorkspace(join(repo, { apply: true }))
+  assert.equal(result.state, "failed", result.message)
+  assert.equal(result.stage, "outside")
+  assert.match(result.message, /kept at \S+crew-roster-edit\.json/u)
+  assert.deepEqual(readdirSync(outside), [])
+  // A desk folder linked the same way is not a desk this join may use.
+  const other = memberClone(await started({ "README.md": "# Team\n" }), "other")
+  pushLink(other, "desks/newbie", outside)
+  const desk = await joinWorkspace(join(other, { apply: true }))
+  assert.equal(desk.state, "refused")
+  assert.match(desk.message, /desks\/newbie\/ already exists and does not match the template/u)
+  assert.deepEqual(readdirSync(outside), [])
+})
+
+test("a link that arrives with the fetch stops a start before anything is written outside", { skip: NO_LINKS }, async () => {
+  const repo = await teamRepo({ "README.md": "# Team\n", "_shared/notes.md": "x\n" })
+  const outside = mkdtempSync(path.join(os.tmpdir(), "crew-outside-"))
+  pushLink(repo, "_shared/landscape", outside)
+  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
+  assert.equal(result.state, "failed", result.message)
+  assert.equal(result.stage, "outside")
+  assert.match(result.message, /Crew writes only inside this clone, and a symbolic link leads outside it at _shared\/landscape\/README\.md, _shared\/landscape\/roster\.md;/u)
+  assert.deepEqual(readdirSync(outside), [])
+})
+
+test("start refuses a roster path that leads outside, and a roster file that is not committed", async (t) => {
+  const repo = await teamRepo({ "README.md": "# Team\n", ".gitignore": "team/private.md\n" })
+  write(repo, "team/roster.md", "# Ours, not committed\n")
+  const untracked = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, tooling: TOOLING, people: "team/roster.md" })
+  assert.equal(untracked.state, "refused")
+  assert.match(untracked.message, /team\/roster\.md is in this folder but not committed, so teammates' clones would not have it; commit it first, or name another file with --people/u)
+  write(repo, "team/private.md", "# Ignored\n")
+  assert.equal((await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, tooling: TOOLING, people: "team/private.md" })).state, "refused")
+  if (NO_LINKS) return t.skip(NO_LINKS)
+  const outside = mkdtempSync(path.join(os.tmpdir(), "crew-outside-"))
+  symlinkSync(outside, path.join(repo.clone, "people"))
+  const linked = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, tooling: TOOLING, people: "people/roster.md" })
+  assert.equal(linked.state, "refused")
+  assert.match(linked.message, /a symbolic link leads outside it at people\/roster\.md;/u)
 })
 
 test("--about and --preferences: unreadable or empty is refused; a template without the file gets one; a resumed desk is not changed", async () => {

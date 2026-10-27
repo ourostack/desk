@@ -102,6 +102,12 @@ export const CIT_SHAPED = Object.freeze({
   "team/roster.md": "# Placeholder team roster\n\n| Name | Alias | Title | Pronouns | Source |\n|---|---|---|---|---|\n| Pat Example | pexample | Placeholder title | not recorded | Invented |\n| Sam Sample | ssample | Placeholder title | they/them | Invented |\n",
 })
 
+/**
+ * A copy of the stand-in for CIT's real roster (a table with an Alias column, one row per teammate, and a table without
+ * one), from the join-interview task: every row is invented except Ari Mendelow's.
+ */
+export const CIT_STANDIN_ROSTER = "# Team roster\n\nWho is on the team and how to refer to them. Every teammate and agent can read this. If you are an agent, use these names and pronouns, and never guess a pronoun from a name: where the pronouns column says \"not recorded\", write the person's name or \"they\".\n\nLast checked: 2026-10-27.\n\n## People\n\nName, alias and title come from each person's directory profile (all invented except Ari Mendelow's row).\n\n| Name | Alias | Title | Pronouns | Source |\n|---|---|---|---|---|\n| Robin Okafor | rokafor | CVP, Customer Innovation | not recorded | Directory profile 2026-10-27 |\n| Ari Mendelow | arimendelow | Senior Software Engineer | not recorded | Directory profile 2026-10-27 |\n| Mina Castellanos | minac | Principal Product Manager | she/her | Directory profile 2026-10-27; pronouns confirmed by Robin 2026-10-27 |\n| Theo Lindqvist | tlindqvist | Principal TPM | not recorded | Directory profile 2026-10-27 |\n\n## Agents on the team\n\n| Agent | What it is | Owner | Source |\n|---|---|---|---|\n| Each teammate's agent | The personal agent each teammate runs | The teammate it belongs to | Invented for this test |\n"
+
 /** The default tooling repository on "GitHub": `acme/team-tooling`, with the plugin `team` in `plugins/team/`. */
 export const TOOLING_REPOS = Object.freeze({ "acme/team-tooling": { "plugins/team/plugin.json": "{\"name\":\"team\"}\n" } })
 

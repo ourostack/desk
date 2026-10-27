@@ -35,7 +35,7 @@ The workspace records its setup in `_meta/crew.json`; `crew.js status` reports i
 1. Run `status` on the team's local clone. `crew` means it already is a Crew workspace: nothing to set up; teammates join with `crew:join-crew`. `not_crew` means continue. For a dual-repo workspace, make sure the tooling repository exists first (see above).
 2. Read the repository's own `README.md` and `AGENTS.md`, and look at its top-level folders.
 3. Run `start` without `--apply`. The plan lists every file it adds, says whether it appends a section to `AGENTS.md`, and lists in `outside` the top-level folders that are outside Crew's shape.
-4. Find the team's people file, if it keeps one (a team list, a "who's who"): pass it as `--people <file>`, and it becomes the roster, left byte-identical. Without one, the roster is a new `_shared/landscape/roster.md` from Crew's starter (or a new file at the `--people` path). `crew:roster` owns how it is written.
+4. Find the team's people file, if it keeps one (a team list, a "who's who"): pass it as `--people <file>`, and it becomes the roster, left byte-identical. It must be committed and in a folder, not at the top level; start refuses a file that is not committed. Without one, the roster is a new `_shared/landscape/roster.md` from Crew's starter (or a new file at the `--people` path). `crew:roster` owns how it is written.
 5. Add `--founder <alias>=<identity>` only when the first member should join in the same change; otherwise each person joins with `crew:join-crew`.
 6. Run again with `--apply`.
 

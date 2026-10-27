@@ -11,7 +11,11 @@ It is not the desk list. `_meta/desks.md` binds each member's account to their d
 
 ## Where it lives
 
-`people` in `_meta/crew.json` names the roster's path; without it, the roster is `_shared/landscape/roster.md`. `crew.js status` reports it as `people.path`, with `people.exists`, and with `--identity`, `people.listed` (whether the member's alias or identity appears in it). A team that already keeps a people file names it when the workspace starts (`crew.js start --people <file>`); the file is used as it is. A workspace with no roster file gets one from Crew's starter: `crew.js status` returns the starter as `people.starter` while the file is missing, and the next join creates it.
+`people` in `_meta/crew.json` names the roster's path; without it, the roster is `_shared/landscape/roster.md`. `crew.js status` reports it as `people.path`, with `people.exists`, and with `--identity`, `people.listed` (whether the member's alias or identity appears in it). A team that already keeps a people file names it when the workspace starts (`crew.js start --people <file>`); the file must be committed, in a folder (not at the top level), and outside `_meta/`, `desks/` and `.git/`, and it is used as it is. A workspace with no roster file gets one from Crew's starter: `crew.js status` returns the starter as `people.starter` while the file is missing, and the next join creates it.
+
+A workspace started before the roster existed uses `_shared/landscape/roster.md`; `crew.js start` does nothing in a workspace that is already Crew. To use another file there, set `people` in `_meta/crew.json` and add the roster line to the root `AGENTS.md`'s Crew section, both in one pull request, as for any shared path (`crew:shared-desk-conventions`).
+
+When `people.problem` is set, the roster's path leads outside the clone through a symbolic link: Crew neither reads nor writes it. Tell the person what the message says, and do not write the file yourself.
 
 ```bash
 node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone> [--identity <login>]
@@ -32,6 +36,7 @@ Match the file's own format: a row in a table roster, a section in a roster of s
 - Keep anything private or sensitive out: health, family, pay, performance, anything said in confidence.
 - Never invent anything. A missing fact stays missing.
 - Include the member's alias or GitHub identity in their own entry, so `crew.js status` can tell that the roster lists them.
+- Save the file as UTF-8 with your own file tool. Crew refuses a roster saved in another encoding, such as the UTF-16 that Windows PowerShell's `>` writes.
 
 ## The questions a newcomer is asked
 
@@ -51,7 +56,7 @@ Ask all of them in one chat message, numbered, saying any can be skipped; never 
 ## When to add or update an entry
 
 - **At join**: `crew:join-crew` interviews the newcomer and lands their entry with their desk-list row.
-- **At the set-up check**: a member whose `people.listed` is false is offered the same short interview once; land the entry with `crew.js roster` (below). If they decline, do not ask again.
+- **At the set-up check**: `crew.js status --repo <clone> --identity <login>` reports `people.listed`. A member whose entry is missing is offered the same short interview once, unless their own `desks/<alias>/AGENTS.md` records that they declined. Land the entry with `crew.js roster` (below), and put their answer about how they like their agent to work in their own `desks/<alias>/AGENTS.md`, pushed like any write to their own desk. If they decline, add `- Roster interview: declined on <date>; do not offer it again.` to that file and push it, so no later session asks again.
 - **When a person comes up in your work**: a teammate's new role, a partner who owns something, a customer contact, a better way to reach someone. Add or update their entry, with where you learned it and the date. Move a contact to Teammates when they join, if the file has both sections.
 
 ## Answering questions about people
@@ -62,7 +67,7 @@ For "who is Y?", "who should I ask about X?", "how do I reach Y?" or "what are Y
 
 The roster is a shared file, so an edit lands through a pull request that Crew's script opens and merges at once; never commit it straight to the default branch, and never open the pull request by hand.
 
-1. Edit the roster in the clone's working tree. Nothing else may be uncommitted: the script refuses any other change.
+1. Edit the roster in the clone's working tree and leave the change uncommitted; the script refuses a committed one and names the `git reset --soft` command that undoes the commit and keeps the change. Nothing else may be uncommitted: the script refuses any other change.
 2. Run the plan, then apply:
 
    ```bash
@@ -73,12 +78,18 @@ The roster is a shared file, so an edit lands through a pull request that Crew's
    Only a member on the desk list can run it. A newcomer's own entry lands with `crew.js join` instead.
 3. Tell the person the result's `message` in plain words:
    - `updated`: merged; with `confirmed: false`, merged on GitHub but not yet downloaded here.
-   - `unchanged`: there was nothing to land, or the default branch already has it.
+   - `unchanged`: the clone has no change and no earlier run kept one, or the default branch already has the change.
    - `pr_open`: waiting for GitHub to merge it; the edit is back in the clone, and running the same command again reuses that pull request.
-   - `failed` at stage `people`: a teammate changed the same lines first. The clone now shows the roster as it is; read it again, write the entry again, and run `roster --apply` again.
+   - `failed` at stage `people`: a teammate changed the same entry first. The clone now shows the roster as it is, and the message names the file that keeps what was written before. Read the roster again, write the entry again in it, and run `roster --apply` again.
+   - `failed` at another stage (GitHub did not answer, for example): the edit is back in the clone. If it no longer fits the roster as it is now, it is kept in the file the message names instead, and running `roster --apply` again lands it, or stops at `people` as above.
    - `refused`: nothing was written; fix what the message names.
 
-The script merges the edit with what teammates changed meanwhile. Two entries added at the same place both land, the teammate's first; only a change to the same existing lines stops at stage `people`.
+While a run lands an edit, the script keeps a copy in the clone's `.git/crew-roster-edit.json`, so a run that fails or is stopped partway never loses it. The next `roster` or `join` run takes it when the clone has no new change (the plan says so), or replaces it with the clone's new change. The copy goes once the edit lands or is back in the clone.
+
+The script merges the edit with what teammates changed meanwhile:
+
+- **A table** (a header row, then a `|---|` line), when the file has that table once: row by row. A row's identity is its `Alias` column when the table has one, otherwise the whole row. Two people changing different rows both land, even neighbouring rows, and a row added under a row a teammate changed lands after it. Only one row changed differently by both stops at stage `people`; in a table with no `Alias` column, that means both replaced the same row.
+- **Everything else** (sections, prose, a table that appears twice or repeats an alias): line by line. Two entries added at the same place both land, the teammate's first. A change next to or over a line a teammate changed stops at stage `people`.
 
 ## Cross-references
 

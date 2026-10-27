@@ -68,12 +68,13 @@ function readTooling(raw, problems) {
   return { repo, path: toolPath, plugin, ref, marketplace }
 }
 
-// The roster's repository-relative path: a Markdown file outside Crew's own files (`_meta/`, `desks/`, the root AGENTS.md).
+// The roster's repository-relative path: a Markdown file in a folder (the top level holds the repository's own README.md
+// and AGENTS.md), outside Crew's own `_meta/` and `desks/` and outside Git's `.git/`.
 function readPeople(raw, problems) {
   if (raw === undefined || raw === null) return DEFAULT_PEOPLE
   const rel = inside(raw)
-  if (rel !== null && /\.md$/iu.test(rel) && !/^(?:_meta|desks)\//iu.test(rel) && rel.toLowerCase() !== "agents.md") return rel
-  problems.push(`people: ${shown(raw)} is not a Markdown file inside this repository outside _meta/, desks/ and AGENTS.md`)
+  if (rel !== null && /^[^/]+\/.*\.md$/iu.test(rel) && !/^(?:_meta|desks)\//iu.test(rel) && !rel.split("/").some((part) => part.toLowerCase() === ".git")) return rel
+  problems.push(`people: ${shown(raw)} is not a Markdown file in a folder of this repository outside _meta/, desks/ and .git/`)
   return DEFAULT_PEOPLE
 }
 
