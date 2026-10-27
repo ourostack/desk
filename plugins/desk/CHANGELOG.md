@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.36 — 2026-10-27
+
+Task explanation preparation and publication now alternate first use of their existing shared two-second turn. A valid operation that needs more than half that turn can finish instead of being deferred forever. The total deadline, numerical-delivery reserve, independent privacy review, source checks and model limits are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.35 — 2026-10-27
 
 Public task explanations can now carry concrete, evidence-linked system improvement proposals through the ordinary candidate and separate privacy-review path. New templates and prose-free invalidations use context/2; existing context/1 records remain readable. Proposals stay distinct from permission to act, shipped changes and demonstrated benefits, with the existing source, consent, payload-hash and shared-quota guards unchanged.
