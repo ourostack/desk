@@ -91,14 +91,15 @@ test("a start the clone holds but GitHub does not, such as a local start given a
   assert.equal(plan.state, "plan")
   assert.match(plan.message, /^Plan only: nothing was written\. This clone already holds a Crew workspace that is not on GitHub yet: its origin has no commits\. Run again with --apply to push it to main\.$/u)
   assert.deepEqual(mainFiles(repo.bare), [])
-  const pushed = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })
-  assert.equal(pushed.state, "published", pushed.message)
-  assert.equal(git(repo.bare, ["rev-parse", "main"]), local.commit)
-  // Once GitHub has it, a rerun has nothing to do; one that cannot reach GitHub says so.
-  assert.equal((await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })).state, "already_crew")
+  // A rerun that cannot reach GitHub to see whether it has the start says so.
   const offline = await startWorkspace({ repo: repo.clone, spawnGit: (cmd, args, options) => (args.includes("ls-remote") ? { status: 128, stderr: "fatal: unable to access" } : repo.spawnGit(cmd, args, options)), gh: fakeGh(repo.bare).gh, now: NOW, apply: true })
   assert.equal(offline.state, "failed")
   assert.equal(offline.stage, "fetch")
+  const pushed = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })
+  assert.equal(pushed.state, "published", pushed.message)
+  assert.equal(git(repo.bare, ["rev-parse", "main"]), local.commit)
+  // Once GitHub has it, a rerun has nothing to do.
+  assert.equal((await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })).state, "already_crew")
 })
 
 test("a rebuild appends to an AGENTS.md a teammate added meanwhile instead of replacing it", async () => {
