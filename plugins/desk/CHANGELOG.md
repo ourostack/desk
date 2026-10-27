@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.27 — 2026-10-27
+
+A machine with no Node.js now gets a plain message at session start instead of only `Failed to connect to MCP server "desk" … program not found`. The session-start command in both hook manifests checks for `node` in the host's own shell before anything else (`command -v node` in bash or Git Bash, `Get-Command node` in Windows PowerShell). Without it, the shell prints one message from [`hooks/node-missing.sh`](hooks/node-missing.sh), or the matching PowerShell text in [`hooks/copilot-hooks.json`](hooks/copilot-hooks.json): Desk needs Node.js 20 or newer, the install command for the platform (`winget install --id OpenJS.NodeJS.LTS …` on Windows, or `nvm install lts` and `nvm use lts` when nvm-windows is installed; `nvm install --lts` when nvm is installed on macOS or Linux; otherwise `brew install node` on macOS and the distribution package on Linux), and that the person must open a new terminal and start a new session because tool servers load only when a session starts. The check runs shell builtins only and installs nothing.
+
+When the hook's `node` is older than Desk needs and no newer Node is installed, both session-start hooks now give the same message with the version they found and the install command `desk_status` would name, instead of the usual startup context ([`hooks/lib/node-required.cjs`](hooks/lib/node-required.cjs)). The check searches exactly as the MCP bootstrap does, with its own time budget, and says nothing when that search runs out of time, so it never tells a session to install Node when the tool server would find one. The startup context is unchanged whenever Desk can run. The hooks reach this check on Node 16 and newer; with an older `node` first on PATH they still fail to start, and `desk_status` names the fix.
+
+Session end is now one hook command per host instead of two. [`hooks/session-end.cjs`](hooks/session-end.cjs) reads the payload once and hands it to one detached worker that runs both the factory capture and the unpushed-commit check, so Copilot on Windows starts one PowerShell and one Node instead of two of each; each PowerShell process alone costs about 0.75 s there. Claude Code's `SessionEnd` had the same doubling and gets the same single command. The `hooks/sync-end.cjs` entry is gone; its check lives on in [`hooks/lib/sync-end.cjs`](hooks/lib/sync-end.cjs).
+
+At the end of each turn (Claude Code `Stop`, Copilot `agentStop`) the factory capture now also runs detached, and the hook waits only for the delivery check, whose answer the host uses. The capture was about 200 ms of the bounded worker's 206 ms on macOS, and on Windows it pushed the worker past its 1500 ms deadline on most turns, so `[desk-delivery] unverified: hook_worker_unavailable` appeared almost every turn. That warning now says why the worker failed: `(deadline)`, `(exit <code>)`, `(signal <name>)` or `(spawn <error code>)`.
+
+Because the turn-end capture is now detached, it can finish after the session-end capture when a session ends right after a turn, as every `-p` run does. It keeps an end that is already recorded instead of replacing it: the factory marker's read and write share one lock per session ([`hooks/lib/factory-end.cjs`](hooks/lib/factory-end.cjs)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.26 — 2026-10-27
 
 The one-time desk tidy (the `02-tidy-desk` migration) and `desk_doctor` no longer report `agency.toml` at the desk root as a loose file. MS Desk keeps the workspace MCP config there because Agency reads it from the desk root, so on a fresh MS Desk install the tidy went on hold, stayed pending and showed a failure at every session start. Only that exact name, and only at the desk root, is allowed; see [`directory-structure`](skills/directory-structure/SKILL.md).
