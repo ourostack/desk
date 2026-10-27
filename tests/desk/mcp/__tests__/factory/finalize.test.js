@@ -26,7 +26,8 @@ const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-g
 const JOB = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
 const sessionId = (n) => `${n.toString(16).padStart(8, "0")}-0000-4000-8000-${n.toString(16).padStart(12, "0")}`
 const nameOf = (n) => `claude-code-${sessionId(n)}.json`
-const REQUESTED = "2026-09-27T10:00:00.000Z"
+// Recent, on a whole minute: markers older than 30 days by the real clock are pruned, so a fixed date stops working a month on.
+const REQUESTED = new Date(Math.floor(Date.now() / 60000) * 60000 - 60 * 60 * 1000).toISOString()
 const at = (offsetMs) => new Date(Date.parse(REQUESTED) + offsetMs).toISOString()
 
 async function marker(ctx, n, updatedAt) {
