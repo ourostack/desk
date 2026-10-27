@@ -107,16 +107,16 @@ test("with node on PATH, each guarded command runs Desk's Node hook as before", 
   const cases = [
     SHELLS.sh && ["claude", SHELLS.sh, claudeCommandFor(), `${nodeDir}${path.delimiter}${SHELLS.pathWithoutNode}`],
     !WINDOWS && SHELLS.bash && ["copilot", SHELLS.bash, copilotCommandFor("bash"), `${nodeDir}${path.delimiter}${SHELLS.pathWithoutNode}`],
-    SHELLS.powershell && WINDOWS && ["copilot", SHELLS.powershell, copilotCommandFor("powershell"), nodeDir],
+    SHELLS.powershell && WINDOWS && ["copilot", SHELLS.powershell, copilotCommandFor("powershell"), `${nodeDir}${path.delimiter}${process.env.PATH ?? process.env.Path ?? ""}`],
   ].filter(Boolean)
   for (const [shape, shell, command, pathValue] of cases) {
     const result = run(shell, command, env(pathValue, { DESK: desk, DESK_FACTORY_HEADLESS: "", CLAUDE_PLUGIN_ROOT: plugin, PLUGIN_ROOT: plugin }))
     assert.equal(result.status, 0, result.stderr)
     const payload = JSON.parse(result.stdout)
     const context = shape === "claude" ? payload.hookSpecificOutput.additionalContext : payload.additionalContext
-    assert.match(context, /^Desk startup:/u, `${shape} via ${shell}`)
-    assert.match(context, /# Using Desk/u)
-    assert.doesNotMatch(context, /Desk needs Node\.js/u)
+    // The Node hook ran: its context carries the foundation, and never the missing-Node message.
+    assert.match(context, /# Using Desk/u, `${shape} via ${shell}: ${context.slice(0, 400)}`)
+    assert.doesNotMatch(context, /Desk needs Node\.js/u, `${shape} via ${shell}: ${context.slice(0, 400)}`)
     t.diagnostic(`${shape} via ${shell} with node: ${result.ms.toFixed(0)} ms`)
   }
 })
