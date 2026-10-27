@@ -12,10 +12,10 @@ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugin
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
 const NOW = () => 1767225600000
-const adopt = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, tooling: { repo: "acme/team-tooling" }, wait: noWait, now: NOW, ...extra })
+const adopt = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, tooling: { repo: "acme/team-tooling" }, wait: noWait, now: NOW, ...extra })
 const BLOCKED = () => ({ code: 0, stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) })
 
-test("with no gh given, the real gh runs; signed in to nothing, it opens no pull request and the clone is put back", async () => {
+test("with no gh given, the real gh runs; signed in to nothing, it writes nothing and names the sign-in it needs", async () => {
   const repo = await teamRepo(CIT_SHAPED)
   const saved = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN, GH_CONFIG_DIR: process.env.GH_CONFIG_DIR }
   // No token and an empty gh configuration, so gh refuses before reaching GitHub (or is not installed at all).
@@ -23,9 +23,10 @@ test("with no gh given, the real gh runs; signed in to nothing, it opens no pull
   delete process.env.GITHUB_TOKEN
   process.env.GH_CONFIG_DIR = await mkTempRoot("crew-no-gh-config-")
   try {
-    const result = await startWorkspace(adopt(repo, { apply: true }))
+    const result = await startWorkspace(adopt(repo, { apply: true, gh: undefined, tooling: undefined }))
     assert.equal(result.state, "failed")
-    assert.equal(result.stage, "pull_request")
+    assert.equal(result.stage, "account")
+    assert.match(result.reason, /no signed-in GitHub account can push to acme\/team \((no gh account is signed in|gh is not installed or could not start)\)/u)
     assert.deepEqual(branches(repo.bare), ["main"])
     assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
   } finally {
@@ -81,21 +82,30 @@ test("an AGENTS.md with no final newline; a dual-repo workspace counts a leftove
   const repo = await teamRepo({ ...CIT_SHAPED, "AGENTS.md": "# Agents\n\nNo final newline", "plugins/old/plugin.json": "{}\n", ".github/workflows/notes.txt": "gh pr merge is mentioned here but this is not a workflow\n" })
   const { gh } = fakeGh(repo.bare)
   const plan = await startWorkspace(adopt(repo))
-  assert.equal(plan.declaration.shared_writes.merge_workflow, ".github/workflows/merge-agent-prs.yml")
   assert.deepEqual(plan.outside, ["context/", "guides/", "plugins/", "team/"])
   const result = await startWorkspace(adopt(repo, { apply: true, gh, tooling: {} }))
   assert.equal(result.state, "published", result.message)
   assert.match(onMain(repo.bare, "AGENTS.md"), /^# Agents\n\nNo final newline\n\n## Crew workspace\n/u)
 })
 
-test("a workspace with no merge workflow: the message names none; a repository with only a non-YAML file there finds none", async () => {
-  const repo = await teamRepo({ "README.md": "# New\n", ".github/workflows/notes.txt": "gh pr merge\n", ".github/workflows/ci.yml": "name: CI\non: push\n" })
-  const plan = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, now: NOW })
-  assert.equal(plan.declaration.shared_writes.merge_workflow, null)
-  const { gh } = fakeGh(repo.bare, { merge: () => ({ code: 1, stderr: "blocked" }), view: BLOCKED })
-  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true })
-  assert.equal(result.state, "pr_open")
-  assert.doesNotMatch(result.message, /merge workflow/u)
+test("an ambient GH_TOKEN counts as the account when gh has none signed in, as at Desk's boot", async () => {
+  const repo = await teamRepo(CIT_SHAPED)
+  const saved = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN, GH_CONFIG_DIR: process.env.GH_CONFIG_DIR }
+  delete process.env.GH_TOKEN
+  process.env.GITHUB_TOKEN = "  placeholder-not-a-token  "
+  process.env.GH_CONFIG_DIR = await mkTempRoot("crew-env-token-gh-config-")
+  try {
+    // The real gh is asked with that token and GitHub refuses it (or gh is missing): either way nothing is written.
+    const result = await startWorkspace(adopt(repo, { apply: true, gh: undefined, tooling: undefined }))
+    assert.equal(result.state, "failed")
+    assert.equal(result.stage, "account")
+    assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })
 
 test("an answer GitHub could not give is an open pull request in an unknown state", async () => {
@@ -103,7 +113,8 @@ test("an answer GitHub could not give is an open pull request in an unknown stat
   const { gh } = fakeGh(repo.bare, { merge: () => ({ code: 1, stderr: "x" }), view: () => ({ code: 1, stdout: "not json" }) })
   const result = await startWorkspace(adopt(repo, { apply: true, gh }))
   assert.equal(result.state, "pr_open")
-  assert.match(result.message, /has not merged \(unknown\)/u)
+  assert.equal(result.reason, "unknown")
+  assert.match(result.message, /has not merged: GitHub reports unknown\. GitHub said: x\./u)
 })
 
 test("a merged pull request with no merge commit in GitHub's answer uses the fetched default branch", async () => {
@@ -126,16 +137,17 @@ test("a local branch already named like the change's branch: refused at the bran
 
 test("an unexpected error is thrown, not dressed up as a result, and the clone is put back first", async () => {
   const repo = await teamRepo(CIT_SHAPED)
-  await assert.rejects(startWorkspace(adopt(repo, { apply: true, gh: async () => { throw new Error("boom") } })), /boom/u)
+  const fake = fakeGh(repo.bare).gh
+  await assert.rejects(startWorkspace(adopt(repo, { apply: true, gh: async (args, options) => { if (args[0] === "pr" && args[1] === "create") throw new Error("boom"); return fake(args, options) } })), /boom/u)
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
   assert.deepEqual(branches(repo.bare), ["main"])
 })
 
-test("a teammate who started the crew at the same time: the rebuild refuses to overwrite, and the pull request is named", async () => {
+test("a teammate who started the crew at the same time: the rebuild refuses to overwrite, and closes its pull request", async () => {
   const repo = await teamRepo(CIT_SHAPED)
   let created = false
-  const { gh } = fakeGh(repo.bare)
+  const { gh, calls } = fakeGh(repo.bare)
   const racing = async (args) => {
     const answer = await gh(args)
     if (args[1] === "create" && !created) {
@@ -148,7 +160,10 @@ test("a teammate who started the crew at the same time: the rebuild refuses to o
   assert.equal(result.state, "failed")
   assert.equal(result.stage, "rebuild")
   assert.match(result.message, /_meta\/crew\.json appeared on the default branch meanwhile/u)
-  assert.match(result.message, /The pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open\./u)
+  // The pull request has nothing left to do, so it is closed with its branch.
+  assert.equal(result.pr, undefined)
+  assert.ok(calls.some((args) => args[0] === "pr" && args[1] === "close"))
+  assert.deepEqual(branches(repo.bare), ["main"])
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
 })
 
@@ -194,7 +209,7 @@ test("join: a roster row that cannot merge leaves the desk pushed and the pull r
   const { gh } = fakeGh(repo.bare, { merge: () => ({ code: 1, stderr: "blocked" }), view: BLOCKED })
   const result = await joinWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, identity: "a_example", alias: "a", apply: true, wait: noWait, now: NOW })
   assert.equal(result.state, "pr_open")
-  assert.match(result.message, /^Not joined yet: desks\/a\/ is pushed, and the pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open on branch crew\/join-a-mjuohs00 and has not merged \(BLOCKED\)\. It takes effect when it merges\.$/u)
+  assert.match(result.message, /^Not joined yet: desks\/a\/ is pushed, and the pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open on branch crew\/join-a-mjuohs00 and has not merged: GitHub's rules for main block merging it/u)
   assert.ok(onMain(repo.bare, "desks/a/AGENTS.md") !== null)
   // The plan for a desk that is already in place says only the roster row is left.
   const plan = await joinWorkspace({ repo: repo.clone, identity: "a_example", alias: "a" })
@@ -220,10 +235,27 @@ test("join refuses a dirty clone and a clone with no origin", async () => {
 })
 
 test("a monorepo with a declared plugin path is named in the AGENTS.md section", async () => {
-  const repo = await teamRepo({ "README.md": "# New\n" })
+  const repo = await teamRepo({ "README.md": "# New\n", "plugins/team/plugin.json": "{}\n" })
   const { gh } = fakeGh(repo.bare)
   const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true, tooling: { path: "plugins/team", plugin: "team" } })
   assert.equal(result.state, "published", result.message)
   assert.equal(result.setup, "monorepo")
   assert.match(onMain(repo.bare, "AGENTS.md"), /- \*\*Team tooling\*\*: the team's plugin is in `plugins\/team\/`\./u)
+})
+
+test("text added to files with Windows line endings keeps them: the AGENTS.md section and the roster row", async () => {
+  const repo = await teamRepo({ "AGENTS.md": "# Rules\r\n\r\nLine.\r\n", "README.md": "# Team\r\n" })
+  const started = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true })
+  assert.equal(started.state, "published", started.message)
+  const agents = onMain(repo.bare, "AGENTS.md")
+  assert.ok(agents.startsWith("# Rules\r\n\r\nLine.\r\n\r\n## Crew workspace\r\n"))
+  assert.equal(/(?<!\r)\n/u.test(agents), false, "no line ends with a bare LF")
+  const crlf = await teamRepo({ "desks/_template/AGENTS.md": "# {{alias}}\n", "_meta/desks.md": "# Desks\r\n\r\n| alias | identity |\r\n|---|---|\r\n| pat | pat_example |\r\n\r\nAfter.\r\n" })
+  const joined = await joinWorkspace({ repo: crlf.clone, spawnGit: crlf.spawnGit, gh: fakeGh(crlf.bare).gh, identity: "a_example", alias: "a", apply: true, wait: noWait, now: NOW })
+  assert.equal(joined.state, "joined", joined.message)
+  assert.equal(onMain(crlf.bare, "_meta/desks.md"), "# Desks\r\n\r\n| alias | identity |\r\n|---|---|\r\n| pat | pat_example |\r\n| a | a_example |\r\n\r\nAfter.\r\n")
+  const noTable = await teamRepo({ "desks/_template/AGENTS.md": "# {{alias}}\n", "_meta/desks.md": "# Desks\r\n\r\nNo table yet\r\n\r\n" })
+  const first = await joinWorkspace({ repo: noTable.clone, spawnGit: noTable.spawnGit, gh: fakeGh(noTable.bare).gh, identity: "a_example", alias: "a", apply: true, wait: noWait, now: NOW })
+  assert.equal(first.state, "joined", first.message)
+  assert.equal(/(?<!\r)\n/u.test(onMain(noTable.bare, "_meta/desks.md")), false)
 })

@@ -1,10 +1,9 @@
 // The crew declaration: `_meta/crew.json` at a Crew workspace's root, beside the roster in `_meta/desks.md`. Every Crew
 // workspace has the same shape (`desks/`, `_shared/landscape/`, `_shared/decisions/`, the root AGENTS.md); the
-// declaration says only where the team's plugin lives and which workflow merges the repository's pull requests:
+// declaration says only where the team's plugin lives:
 //
 //   { "schema_version": 1,
-//     "tooling": { "repo": "owner/name", "path": "plugins/x", "plugin": "x", "ref": "main", "marketplace": "owner" },
-//     "shared_writes": { "merge_workflow": ".github/workflows/merge.yml" } }
+//     "tooling": { "repo": "owner/name", "path": "plugins/x", "plugin": "x", "ref": "main", "marketplace": "owner" } }
 //
 // `tooling.repo` makes the workspace dual-repo: the plugin lives in that separate tooling repository. Without it the
 // workspace is a monorepo, with the plugin in its own `plugins/` folder, which is how every workspace made before the
@@ -32,13 +31,6 @@ function inside(raw) {
   const parts = text.split("/").filter((part) => part !== "" && part !== ".")
   if (parts.length === 0 || parts.includes("..")) return null
   return parts.join("/")
-}
-
-function file(raw, field, problems) {
-  if (raw === undefined || raw === null) return null
-  const rel = inside(raw)
-  if (rel === null) problems.push(`${field}: ${shown(raw)} is not a file inside the repository`)
-  return rel
 }
 
 function name(raw, field, problems, what = "a name") {
@@ -73,15 +65,14 @@ function readTooling(raw, problems) {
 }
 
 /**
- * parseCrewConfig(text) -> { declared, setup: "monorepo" | "dual-repo", tooling, shared_writes: { merge_workflow },
- * problems }
+ * parseCrewConfig(text) -> { declared, setup: "monorepo" | "dual-repo", tooling, problems }
  *
  * `text` is the file's content, or null when there is no file. `tooling` is null when nothing is declared; a tooling
  * repository with no `plugin` is a stub to point to, with nothing to install.
  */
 export function parseCrewConfig(text) {
   const problems = []
-  const config = { declared: text !== null, setup: "monorepo", tooling: null, shared_writes: { merge_workflow: null }, problems }
+  const config = { declared: text !== null, setup: "monorepo", tooling: null, problems }
   if (text === null) return config
   let raw
   try {
@@ -95,8 +86,6 @@ export function parseCrewConfig(text) {
   }
   config.tooling = readTooling(block(raw.tooling, "tooling", problems), problems)
   if (config.tooling?.repo) config.setup = "dual-repo"
-  const writes = block(raw.shared_writes, "shared_writes", problems)
-  config.shared_writes.merge_workflow = file(writes.merge_workflow, "shared_writes.merge_workflow", problems)
   return config
 }
 

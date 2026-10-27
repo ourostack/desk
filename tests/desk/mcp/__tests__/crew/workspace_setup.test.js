@@ -15,7 +15,7 @@ import { crewWorkspace, readCrewRoster } from "../../../../../plugins/desk/mcp/s
 
 const NOW = () => 1767225600000
 const TOOLING = { repo: "acme/team-tooling", path: "plugins/team", plugin: "team" }
-const startCit = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, tooling: TOOLING, wait: noWait, now: NOW, ...extra })
+const startCit = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, tooling: TOOLING, wait: noWait, now: NOW, ...extra })
 
 const bytes = (bare, file) => spawnSync("git", ["--git-dir", bare, "show", `main:${file}`]).stdout
 
@@ -36,7 +36,7 @@ test("start on an existing team repository: the plan lists what it adds and the 
     { path: "desks/_template/_meta/friction.md", change: "add" },
   ])
   assert.deepEqual(plan.outside, ["context/", "guides/", "team/"])
-  assert.equal(plan.declaration.shared_writes.merge_workflow, ".github/workflows/merge-agent-prs.yml")
+  assert.equal(plan.declaration.shared_writes, undefined)
   assert.equal(plan.message, "Plan only: nothing was written. Starting a dual-repo crew adds 7 files and appends a section to AGENTS.md. These top-level folders are outside Crew's shape, and nothing in them is moved: context/, guides/, team/. Move their content into the shape with the team afterwards. Run again with --apply to make the change.")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
   assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), before)
@@ -63,7 +63,9 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
   assert.match(section, /\*\*Team facts\*\* go in `_shared\/landscape\/`/u)
   assert.match(section, /\*\*Agreed team decisions\*\* go in `_shared\/decisions\/`/u)
   assert.match(section, /separate \[acme\/team-tooling\]\(https:\/\/github\.com\/acme\/team-tooling\) repository/u)
-  assert.match(section, /\.github\/workflows\/merge-agent-prs\.yml/u)
+  // Crew merges its own pull requests, so the team's workflow (which merges only copilot/ branches) is not named.
+  assert.doesNotMatch(section, /merge-agent-prs|merge workflow/u)
+  assert.match(section, /land through a pull request that the writer merges at once/u)
   assert.match(section, /\*\*Not yet in Crew's shape\*\*: `context\/`, `guides\/`, `team\/`\./u)
   assert.match(section, /join-crew/u)
   const files = mainFiles(repo.bare)
@@ -72,7 +74,6 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
   assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), {
     schema_version: 1,
     tooling: { repo: "acme/team-tooling", path: "plugins/team", plugin: "team" },
-    shared_writes: { merge_workflow: ".github/workflows/merge-agent-prs.yml" },
   })
   // The clone is on main at the merged commit, clean, with no leftover branch here or on "GitHub".
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -84,7 +85,7 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
   assert.deepEqual(crewWorkspace(repo.clone), { crew: true, roster: [] })
   const status = await crewStatus({ repo: repo.clone })
   assert.equal(status.setup, "dual-repo")
-  assert.equal(status.tooling.install.copilot, "agency plugin install github:acme/team-tooling:plugins/team@main --engine copilot")
+  assert.equal(status.tooling.install.copilot, "agency plugin install github:acme/team-tooling:plugins/team@main --engine copilot --cache-policy auto --cache-ttl 0")
   const created = calls.find((args) => args[0] === "pr" && args[1] === "create")
   assert.deepEqual(created.slice(0, 8), ["pr", "create", "--repo", "acme/team", "--base", "main", "--head", "crew/start-mjuohs00"])
   // Running it again changes nothing.
@@ -118,7 +119,7 @@ test("start a monorepo: its plugins/ folder is part of the shape, and the plugin
   assert.match(onMain(repo.bare, "AGENTS.md"), /\*\*Team tooling\*\*: the team's plugin is in `plugins\/team\/`\./u)
   const status = await crewStatus({ repo: repo.clone })
   assert.equal(status.setup, "monorepo")
-  assert.equal(status.tooling.install.copilot, "agency plugin install github:acme/team:plugins/team@main --engine copilot")
+  assert.equal(status.tooling.install.copilot, "agency plugin install github:acme/team:plugins/team@main --engine copilot --cache-policy auto --cache-ttl 0")
 })
 
 test("start brings a clone that is behind up to date before writing", async () => {
@@ -132,7 +133,7 @@ test("start brings a clone that is behind up to date before writing", async () =
 
 test("start: a new repository gets Crew's shape and a plain front page", async () => {
   const repo = await teamRepo({ "README.md": "# Fresh\n", ".gitignore": "node_modules\n" })
-  const { gh } = fakeGh(repo.bare)
+  const { gh } = fakeGh(repo.bare, { repos: { "acme/crew-tooling": { "plugins/crew-tools/.claude-plugin/plugin.json": "{}" } } })
   const plan = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, team: "Placeholder Crew", now: NOW })
   assert.deepEqual(plan.changes.map((change) => change.path), ["AGENTS.md", "_meta/crew.json", "_meta/desks.md", "_shared/decisions/README.md", "_shared/landscape/README.md", "desks/_template/AGENTS.md", "desks/_template/README.md", "desks/_template/_meta/friction.md"])
   assert.equal(plan.changes[0].change, "add")
@@ -147,7 +148,7 @@ test("start: a new repository gets Crew's shape and a plain front page", async (
 
 test("start on an empty GitHub repository: the first commit is pushed, since there is nothing to merge into yet", async () => {
   const repo = await teamRepo({})
-  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, team: "Placeholder Crew", apply: true, now: NOW })
+  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, team: "Placeholder Crew", apply: true, now: NOW })
   assert.equal(result.state, "published", result.message)
   assert.match(result.message, /first commit was pushed straight to main/u)
   assert.match(onMain(repo.bare, "README.md"), /^# Placeholder Crew\n/u)
@@ -171,7 +172,6 @@ test("start refuses what it cannot honor before writing anything, and never over
   const repo = await teamRepo({ ...CIT_SHAPED, "_shared/decisions/README.md": "Existing decisions index\n", "_shared/landscape/notes.md": "Existing facts\n" })
   const cases = [
     [{ tooling: { repo: "not a repo" } }, /tooling\.repo: "not a repo" is not owner\/name/u],
-    [{ mergeWorkflow: "../outside.yml" }, /shared_writes\.merge_workflow: "\.\.\/outside\.yml" is not a file inside the repository/u],
     [{ founder: { alias: "Bad Alias", identity: "x" } }, /"Bad Alias" is not a valid alias/u],
     [{ founder: { alias: "ok", identity: "a|b" } }, /is not a valid identity/u],
   ]
@@ -215,7 +215,8 @@ test("a pull request that cannot merge stays open with its branch, and the clone
   const result = await startWorkspace(startCit(repo, { apply: true, gh }))
   assert.equal(result.state, "pr_open")
   assert.equal(result.branch, "crew/start-mjuohs00")
-  assert.match(result.message, /^Not in effect yet: the pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open on branch crew\/start-mjuohs00 and has not merged \(BLOCKED\)\. This repository's merge workflow is \.github\/workflows\/merge-agent-prs\.yml\./u)
+  assert.equal(result.reason, "BLOCKED")
+  assert.equal(result.message, "Not in effect yet: the pull request https://github.com/acme/team/pull/12 is open on branch crew/start-mjuohs00 and has not merged: GitHub's rules for main block merging it (a required review, a required check or a merge restriction). Someone allowed to merge into main merges it; for Crew's writes to land at once, the team lets its members merge Crew's crew/ pull requests. GitHub said: Protected branch: review required. Running the same command again reuses this pull request and tries to merge it again; it never opens a second one.")
   assert.ok(branches(repo.bare).includes("crew/start-mjuohs00"))
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -293,4 +294,87 @@ test("a folder that is not a Git clone is refused", async () => {
   const result = await startWorkspace({ repo: dir })
   assert.equal(result.state, "refused")
   assert.match(result.message, /is not a Git clone/u)
+})
+
+test("a dual-repo start checks the tooling repository and says plainly what to create when something is missing", async () => {
+  const repo = await teamRepo(CIT_SHAPED)
+  const plan = (gh, tooling = TOOLING) => startWorkspace(startCit(repo, { gh, tooling }))
+  const missing = await plan(fakeGh(repo.bare, { hidden: ["acme/team-tooling"] }).gh)
+  assert.equal(missing.state, "refused")
+  assert.match(missing.message, /^Nothing was written: the tooling repository acme\/team-tooling does not exist, or no signed-in gh account can see it\. Create it on GitHub first \(private is fine, with read access for the whole team\)/u)
+  const empty = await plan(fakeGh(repo.bare, { repos: {} }).gh)
+  assert.match(empty.message, /acme\/team-tooling has no plugin at plugins\/team\/ on main: add plugins\/team\/plugin\.json \(for Copilot through Agency\) and plugins\/team\/\.claude-plugin\/plugin\.json \(for Claude Code\) there/u)
+  // A stub, with no plugin declared yet, needs only the repository.
+  assert.equal((await plan(fakeGh(repo.bare, { repos: {} }).gh, { repo: "acme/team-tooling" })).state, "plan")
+  // A declared marketplace must be the repository's own, listing the plugin.
+  const withMarket = { ...TOOLING, marketplace: "acme-team" }
+  const market = (text) => fakeGh(repo.bare, { repos: { "acme/team-tooling": { "plugins/team/plugin.json": "{}", ...(text === undefined ? {} : { ".claude-plugin/marketplace.json": text }) } } }).gh
+  for (const text of [undefined, "not json", JSON.stringify({ name: "other", plugins: [{ name: "team" }] }), JSON.stringify({ name: "acme-team", plugins: [{ name: "else" }] })]) {
+    const refused = await plan(market(text), withMarket)
+    assert.equal(refused.state, "refused", String(text))
+    assert.match(refused.message, /has no \.claude-plugin\/marketplace\.json on main named acme-team that lists the plugin team: add one, or leave out --tooling-marketplace/u)
+  }
+  const ok = await plan(market(JSON.stringify({ name: "acme-team", plugins: [{ name: "team", source: "./plugins/team" }] })), withMarket)
+  assert.equal(ok.state, "plan", ok.message)
+  // An answer from the contents API that is not JSON, or not a file, counts as missing.
+  const garbled = fakeGh(repo.bare)
+  const odd = await plan(async (args, options) => (args[0] === "api" && args.at(-1).includes("/contents/") ? { code: 0, stdout: args.at(-1).includes(".claude-plugin") ? "{\"type\":\"dir\"}" : "not json", stderr: "" } : garbled.gh(args, options)))
+  assert.match(odd.message, /acme\/team-tooling has no plugin at plugins\/team\//u)
+  // A tooling repository that is itself the plugin, with no --tooling-path, holds the manifest at its root.
+  const atRoot = { repo: "acme/team-tooling", plugin: "team" }
+  assert.equal((await plan(fakeGh(repo.bare, { repos: { "acme/team-tooling": { ".claude-plugin/plugin.json": "{}" } } }).gh, atRoot)).state, "plan")
+  const noRoot = await plan(fakeGh(repo.bare).gh, atRoot)
+  assert.match(noRoot.message, /acme\/team-tooling has no plugin at its root on main: add plugin\.json \(for Copilot through Agency\) and \.claude-plugin\/plugin\.json \(for Claude Code\) there/u)
+  // gh that cannot be asked at all is named, not mistaken for a missing repository.
+  const noGh = await startWorkspace(startCit(repo, { gh: async () => ({ code: null, stdout: "", stderr: "", spawnError: "ENOENT" }) }))
+  assert.match(noGh.message, /could not check the tooling repository acme\/team-tooling \(gh is not installed or could not start\)/u)
+  assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
+})
+
+test("start signs in as the signed-in account that can push to the workspace, never simply the active one", async () => {
+  const repo = await teamRepo(CIT_SHAPED)
+  // The active account can only read the workspace; the second one, an Enterprise Managed Users login, can push.
+  const fake = fakeGh(repo.bare, { accounts: ["reader", "pat_example"], canPush: (account) => account === "pat_example" })
+  const result = await startWorkspace(startCit(repo, { apply: true, gh: fake.gh }))
+  assert.equal(result.state, "published", result.message)
+  assert.equal(result.account, "pat_example")
+  // Every pull request call carries that account's token.
+  fake.calls.forEach((args, index) => {
+    if (args[0] === "pr") assert.equal(fake.tokens[index], "tok-pat_example", args.join(" "))
+  })
+  const none = await teamRepo(CIT_SHAPED)
+  const attempt = (options) => startWorkspace(startCit(none, { apply: true, gh: fakeGh(none.bare, options).gh }))
+  const readOnly = await attempt({ canPush: () => false })
+  assert.equal(readOnly.state, "failed")
+  assert.equal(readOnly.stage, "account")
+  assert.match(readOnly.message, /no signed-in GitHub account can push to acme\/team \(none of them has write access to it\)\. Sign in to gh as an account with write access to it \(gh auth login\), then run this again/u)
+  // A token gh cannot give is named, for the tooling check and for the workspace.
+  const expired = await attempt({ token: () => null })
+  assert.match(expired.message, /could not check the tooling repository acme\/team-tooling \(its token failed; sign it in again with gh auth login\)/u)
+  const lostWriter = await attempt({ accounts: ["tester", "writer"], token: (account) => (account === "writer" ? null : "tok"), canPush: () => false })
+  assert.match(lostWriter.message, /can push to acme\/team \(its token failed; sign it in again with gh auth login\)/u)
+  // No account signed in, gh that cannot start, and GitHub that cannot be reached are each named.
+  assert.match((await attempt({ accounts: [] })).message, /could not check the tooling repository acme\/team-tooling \(no gh account is signed in\)/u)
+  const offline = fakeGh(none.bare)
+  const unreachable = await startWorkspace(startCit(none, { apply: true, gh: async (args, options) => (args[0] === "api" ? { code: 1, stdout: "", stderr: "error connecting to api.github.com" } : offline.gh(args, options)) }))
+  assert.match(unreachable.message, /\(GitHub could not be asked: error connecting to api\.github\.com\)/u)
+  const silent = await startWorkspace(startCit(none, { apply: true, gh: async (args, options) => (args[0] === "api" ? { code: 1, stdout: "", stderr: "" } : offline.gh(args, options)) }))
+  assert.match(silent.message, /\(GitHub could not be asked: no answer\)/u)
+  assert.equal(git(none.clone, ["status", "--porcelain"]), "")
+})
+
+test("a monorepo with several plugins: start names none of them unless told which is the team's", async () => {
+  const files = { "README.md": "# Mono\n", "plugins/alpha-helpers/plugin.json": "{}", "plugins/team/plugin.json": "{}" }
+  const repo = await teamRepo(files)
+  const refused = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, now: NOW })
+  assert.equal(refused.state, "refused")
+  assert.match(refused.message, /several plugins in plugins\/ \(alpha-helpers, team\); name the team's with --tooling-path plugins\/<name> --tooling-plugin <name>/u)
+  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: { path: "plugins/team", plugin: "team" } })
+  assert.equal(result.state, "published", result.message)
+  assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { path: "plugins/team", plugin: "team" } })
+  assert.equal((await crewStatus({ repo: repo.clone })).tooling.plugin, "team")
+  // A named monorepo plugin must be there.
+  const absent = await teamRepo({ "README.md": "# Mono\n" })
+  const named = await startWorkspace({ repo: absent.clone, spawnGit: absent.spawnGit, now: NOW, tooling: { path: "plugins/team", plugin: "team" } })
+  assert.match(named.message, /plugins\/team\/ in this repository has no plugin\.json or \.claude-plugin\/plugin\.json; add the plugin there first/u)
 })

@@ -101,20 +101,56 @@ export const CIT_SHAPED = Object.freeze({
   "team/roster.md": "# Placeholder team roster\n\n| Name | Alias | Title | Pronouns | Source |\n|---|---|---|---|---|\n| Pat Example | pexample | Placeholder title | not recorded | Invented |\n| Sam Sample | ssample | Placeholder title | they/them | Invented |\n",
 })
 
+/** The default tooling repository on "GitHub": `acme/team-tooling`, with the plugin `team` in `plugins/team/`. */
+export const TOOLING_REPOS = Object.freeze({ "acme/team-tooling": { "plugins/team/plugin.json": "{\"name\":\"team\"}\n" } })
+
 /**
  * A fake `gh` acting on the bare repository. `pr create` records the head branch; `pr merge` fast-forwards main to it
- * when main is its ancestor and is a conflict otherwise (or does what `merge(state)` says); `pr view` reports the state.
+ * when main is its ancestor and is a conflict otherwise (or does what `merge(state)` says); `pr view` reports the state;
+ * `pr list` lists the pull requests still open, and `pr close` closes one. The signed-in `accounts` (by default one,
+ * `tester`, whose token is `tok`; another account's token is `tok-<account>`, and `token(account)` returning null makes
+ * gh fail to give one) see every repository except those in `hidden` and may push where `canPush(account, repo)` says.
+ * It answers the GitHub contents API from `repos`: `{ "owner/name": { "path/in/repo": "text" } }`, by default the tooling repository
+ * `acme/team-tooling` holding the plugin `team` in `plugins/team/`. Every call is recorded with the token it was given.
  */
-export function fakeGh(bare, { create = { code: 0 }, merge, view } = {}) {
+export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLING_REPOS, hidden = [], list, accounts = ["tester"], canPush = () => true, token = (account) => (account === "tester" ? "tok" : `tok-${account}`) } = {}) {
   const calls = []
-  const state = { head: null, merged: false, merges: 0, closed: false }
-  const gh = async (args) => {
+  const tokens = []
+  const state = { head: null, merged: false, merges: 0, closed: false, prs: [] }
+  const gh = async (args, options = {}) => {
     calls.push(args)
+    tokens.push(options.token)
     const [a, b] = args
+    if (a === "auth" && b === "status") return { code: 0, stdout: `github.com\n${accounts.map((login, index) => `  ✓ Logged in to github.com account ${login} (keyring)\n  - Active account: ${index === 0}\n`).join("")}`, stderr: "" }
+    if (a === "auth" && b === "token") {
+      const given = token(args[3])
+      return given === null ? { code: 1, stdout: "", stderr: "no token" } : { code: 0, stdout: `${given}\n`, stderr: "" }
+    }
+    if (a === "api") {
+      const route = args[args.length - 1]
+      const contents = /^repos\/([^/]+\/[^/]+)\/contents\/([^?]+)\?ref=(.+)$/u.exec(route)
+      const repo = contents === null ? route.replace(/^repos\//u, "") : contents[1]
+      if (hidden.includes(repo)) return { code: 1, stdout: "{\"message\":\"Not Found\"}", stderr: "gh: Not Found (HTTP 404)" }
+      const asking = accounts.find((login) => token(login) === options.token)
+      if (contents === null) return { code: 0, stdout: JSON.stringify({ full_name: repo, default_branch: "main", permissions: { push: canPush(asking, repo) } }), stderr: "" }
+      const text = repos[repo]?.[decodeURIComponent(contents[2])]
+      if (text === undefined) return { code: 1, stdout: "{\"message\":\"Not Found\"}", stderr: "gh: Not Found (HTTP 404)" }
+      return { code: 0, stdout: JSON.stringify({ type: "file", content: Buffer.from(text).toString("base64") }), stderr: "" }
+    }
+    if (a === "pr" && b === "list") {
+      if (list !== undefined) return list(state)
+      return { code: 0, stdout: JSON.stringify(state.prs.filter((pr) => pr.open).map(({ url, headRefName, body }) => ({ url, headRefName, body }))), stderr: "" }
+    }
+    if (a === "pr" && b === "close") {
+      state.closed = true
+      for (const pr of state.prs) pr.open = false
+      return { code: 0, stdout: "", stderr: "" }
+    }
     if (a === "pr" && b === "create") {
       state.head = args[args.indexOf("--head") + 1]
       state.merged = false
       if (create.code !== 0) return { code: 1, stdout: "", stderr: "GraphQL: no permission\nmore" }
+      state.prs.push({ url: PR, headRefName: state.head, body: args[args.indexOf("--body") + 1], open: true })
       return { code: 0, stdout: `Creating pull request\n${PR}\n`, stderr: "" }
     }
     if (a === "pr" && b === "merge") {
@@ -124,6 +160,7 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view } = {}) {
       if (ok) {
         spawnSync("git", ["--git-dir", bare, "update-ref", "refs/heads/main", `refs/heads/${state.head}`])
         state.merged = true
+        for (const pr of state.prs) pr.open = false
       }
       return { code: ok ? 0 : 1, stdout: "", stderr: ok ? "" : "Pull request is not mergeable" }
     }
@@ -134,7 +171,7 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view } = {}) {
     }
     throw new Error(`unexpected gh ${args.join(" ")}`)
   }
-  return { gh, calls, state }
+  return { gh, calls, tokens, state }
 }
 
 export const noWait = async () => {}

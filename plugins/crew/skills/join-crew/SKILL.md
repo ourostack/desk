@@ -40,7 +40,13 @@ Read the committed `_meta/desks.md` registry (`crew.js status --identity <login>
 
 ### Phase 3 — new member join
 
-Use this phase only after a current V2 repository is present and the authenticated identity has no registry row. Derive a candidate alias through the overlay, then run `crew.js join --identity <login> --alias <alias>`, read the plan, and run it again with `--apply`. The script requires a nonempty committed `desks/_template/`, copies the complete template tree including hidden and nested paths into `desks/<alias>/`, applies only the `{{alias}}` and `{{identity}}` substitutions, and verifies every template-relative path before registry mutation. It commits and pushes the new member's own-desk tree first, then adds the identity-to-alias row through the conflict-safe shared-path protocol (a pull request merged at once). It never adds a valid-looking registry row for an incomplete desk, refuses an alias that belongs to another identity, and on a rerun after an interrupted join adds only the missing row. `joined` is complete; `pr_open` means the desk is pushed and the row waits in an open pull request, so the member is not on the roster yet; `member` means the identity already had a row and nothing was written.
+Use this phase only after a current V2 repository is present and the authenticated identity has no registry row. Derive a candidate alias through the overlay, then run `crew.js join --identity <login> --alias <alias>`, read the plan, and run it again with `--apply`. The script requires a nonempty committed `desks/_template/`, copies the complete template tree including hidden and nested paths into `desks/<alias>/`, applies only the `{{alias}}` and `{{identity}}` substitutions, and verifies every template-relative path before registry mutation. It commits and pushes the new member's own-desk tree first, then adds the identity-to-alias row through the conflict-safe shared-path protocol (a pull request merged at once). It never adds a valid-looking registry row for an incomplete desk, refuses an alias that belongs to another identity or a desk pushed for someone else, checks both again when a teammate's change lands first, and on a rerun after an interrupted join adds only the missing row. The script signs in as the signed-in gh account that can push to the workspace; no account switch is needed. What each result means, and what to do next:
+
+- `joined`: complete. Install the team's tooling (below).
+- `member`: the identity already had a row, possibly added from another machine meanwhile; nothing more to write. Use the alias the result names.
+- `pr_open`: the desk is pushed and the row waits in an open pull request, so the member is not on the roster yet. Tell the person the message's plain reason. Do not open another pull request or edit the roster by hand: running the same `join --apply` again later reuses that pull request and tries to merge it again, and someone allowed to merge into the default branch can merge it meanwhile.
+- `refused`: nothing was written; for a taken alias or desk, choose another alias.
+- `failed`: it stopped at the named `stage`; when the desk is already pushed the message says so, and running `join --apply` again adds only the row.
 
 ## Inputs from the overlay
 
@@ -53,7 +59,9 @@ A Crew workspace is one of two setups, which differ only in where the team's plu
 - **dual-repo**: `_meta/crew.json` names a separate tooling repository (`tooling.repo`) that holds the team plugin;
 - **monorepo**: the plugin is in the workspace's own `plugins/<name>/`, which is how every workspace made before `_meta/crew.json` existed works.
 
-`crew.js status` and `join` report the plugin as `tooling`, with the install command for each host in `tooling.install` (`copilot` for Copilot through Agency, `claude` for Claude Code). Run the one for this host. When `tooling.install` is null, either the tooling repository holds no plugin yet (tell the person where it is and install nothing) or a monorepo's origin is not on GitHub (install from the clone). A workspace with no plugin at all reports `tooling: null`.
+`crew.js status` and `join` report the plugin as `tooling`, with the install command for each host in `tooling.install` (`copilot` for Copilot through Agency, `claude` for Claude Code). Run the one for this host; the Copilot command always fetches the team plugin's current version. When `tooling.install` is null, `tooling.message` says why: the tooling repository holds no plugin yet (tell the person where it is and install nothing), a monorepo's origin is not on GitHub (install from the clone), or a monorepo has several plugins and none is named as the team's (ask the team which, and record it as `tooling.path` and `tooling.plugin` in `_meta/crew.json` through a pull request). A workspace with no plugin at all reports `tooling: null`.
+
+On Claude Code, `tooling.install.claude` is null whenever there is no Claude Code marketplace for the plugin: always in a monorepo, and in a dual-repo workspace whose tooling repository has no `.claude-plugin/marketplace.json`. Tell the person the team plugin cannot be installed in Claude Code yet and where it lives; the team can add the marketplace file to the tooling repository and `tooling.marketplace` to `_meta/crew.json` through a pull request. Do not install it some other way.
 
 ## Step 1: resolve the crew workspace
 
@@ -61,7 +69,7 @@ Inspect the target local path first. If it contains a legacy Crew-v1 local works
 
 ## Step 2: offer once, then clone
 
-For an absent local workspace only, confirm the remote contains `_meta/desks.md`, `desks/`, and `_shared/`, prove authenticated read access, and ask once whether to clone it to the target path. A remote with neither is not a Crew workspace yet: say so and point to `crew:start-crew` instead of cloning it as one. On yes, run the overlay-supplied transport and verify origin; on no, stop without filesystem changes. This ask carries the same risk a noninteractive session poses to `desk:first-run-bootstrap`'s A3: with no human able to answer, stop and report what was found instead of choosing yes or no on the operator's behalf.
+For an absent local workspace only, confirm the remote contains `_meta/desks.md` or `desks/` (what makes a repository a Crew workspace), prove authenticated read access, and ask once whether to clone it to the target path. A remote with neither of those is not a Crew workspace yet: say so and point to `crew:start-crew` instead of cloning it as one. On yes, run the overlay-supplied transport and verify origin; on no, stop without filesystem changes. This ask carries the same risk a noninteractive session poses to `desk:first-run-bootstrap`'s A3: with no human able to answer, stop and report what was found instead of choosing yes or no on the operator's behalf.
 
 ## Step 3: choose the member phase
 

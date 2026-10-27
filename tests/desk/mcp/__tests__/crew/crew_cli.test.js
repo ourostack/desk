@@ -46,9 +46,9 @@ test("main hands each action its options and exits by the result's state", async
   assert.deepEqual(calls.pop(), ["status", { repo: "/work/team", identity: undefined }])
   assert.equal((await run(["join", "--repo", "/r", "--identity", "me", "--alias", "me", "--apply"], engine)).code, 1)
   assert.deepEqual(calls.pop(), ["join", { repo: "/r", identity: "me", alias: "me", apply: true }])
-  await run(["start", "--merge-workflow", ".github/workflows/m.yml", "--founder", "test-founder=placeholder_id", "--tooling-repo", "acme/tools", "--tooling-path", "plugins/t", "--tooling-plugin", "t", "--tooling-ref", "dev", "--tooling-marketplace", "acme"], engine)
+  await run(["start", "--founder", "test-founder=placeholder_id", "--tooling-repo", "acme/tools", "--tooling-path", "plugins/t", "--tooling-plugin", "t", "--tooling-ref", "dev", "--tooling-marketplace", "acme"], engine)
   assert.deepEqual(calls.pop(), ["start", {
-    repo: "/work/team", apply: false, team: undefined, mergeWorkflow: ".github/workflows/m.yml", founder: { alias: "test-founder", identity: "placeholder_id" },
+    repo: "/work/team", apply: false, team: undefined, founder: { alias: "test-founder", identity: "placeholder_id" },
     tooling: { repo: "acme/tools", path: "plugins/t", plugin: "t", ref: "dev", marketplace: "acme" },
   }])
   await run(["start", "--team", "Placeholder", "--founder", "solo", "--apply"], engine)
@@ -57,6 +57,8 @@ test("main hands each action its options and exits by the result's state", async
   assert.deepEqual(start.founder, { alias: "solo", identity: "" })
   assert.deepEqual(start.tooling, { repo: undefined, path: undefined, plugin: undefined, ref: undefined, marketplace: undefined })
   assert.equal(start.apply, true)
+  // Shared writes are merged by the script itself, so there is no merge workflow to name.
+  assert.equal((await run(["start", "--merge-workflow", "x.yml"], engine)).code, 2)
   const usage = await run(["status", "--bogus"], engine)
   assert.equal(usage.code, 2)
   assert.match(usage.result.message, /^status does not take --bogus\. usage: crew\.js/u)
@@ -74,11 +76,12 @@ test("the real engine through main: a team repository that is not a Crew workspa
 
 test("run as a script, it prints the plan and exits 0; a folder that is not a clone exits 1", async () => {
   const repo = await teamRepo(CIT_SHAPED)
-  const planned = spawnSync(process.execPath, [SCRIPT, "start", "--repo", repo.clone, "--tooling-repo", "acme/team-tooling"], { encoding: "utf8" })
+  // A monorepo plan: a dual-repo plan would check the tooling repository on GitHub.
+  const planned = spawnSync(process.execPath, [SCRIPT, "start", "--repo", repo.clone], { encoding: "utf8" })
   assert.equal(planned.status, 0, planned.stderr)
   const plan = JSON.parse(planned.stdout)
   assert.equal(plan.state, "plan")
-  assert.equal(plan.setup, "dual-repo")
+  assert.equal(plan.setup, "monorepo")
   assert.deepEqual(plan.outside, ["context/", "guides/", "team/"])
   const plain = await mkTempRoot("crew-cli-plain-")
   const notGit = spawnSync(process.execPath, [SCRIPT, "status", "--repo", path.join(plain)], { encoding: "utf8" })

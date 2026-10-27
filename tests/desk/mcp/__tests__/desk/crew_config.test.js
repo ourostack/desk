@@ -14,7 +14,6 @@ test("no declaration: a monorepo, nothing declared", () => {
   assert.equal(config.declared, false)
   assert.equal(config.setup, "monorepo")
   assert.equal(config.tooling, null)
-  assert.deepEqual(config.shared_writes, { merge_workflow: null })
   assert.deepEqual(config.problems, [])
   assert.equal(CREW_CONFIG_FILE, path.join("_meta", "crew.json"))
 })
@@ -23,13 +22,17 @@ test("a tooling repository makes the workspace dual-repo", () => {
   const config = parseCrewConfig(JSON.stringify({
     schema_version: 1,
     tooling: { repo: "example-org/team-tooling", path: "plugins/team", plugin: "team", ref: "release", marketplace: "example-org" },
-    shared_writes: { merge_workflow: ".github/workflows/merge.yml" },
   }))
   assert.equal(config.declared, true)
   assert.equal(config.setup, "dual-repo")
   assert.deepEqual(config.tooling, { repo: "example-org/team-tooling", path: "plugins/team", plugin: "team", ref: "release", marketplace: "example-org" })
-  assert.deepEqual(config.shared_writes, { merge_workflow: ".github/workflows/merge.yml" })
   assert.deepEqual(config.problems, [])
+})
+
+test("a declaration written before shared writes stopped naming a merge workflow still reads, with no problem", () => {
+  const config = parseCrewConfig(JSON.stringify({ schema_version: 1, tooling: { repo: "example-org/stub" }, shared_writes: { merge_workflow: ".github/workflows/merge.yml" } }))
+  assert.deepEqual(config.problems, [])
+  assert.equal(config.shared_writes, undefined)
 })
 
 test("a tooling repository with no plugin yet is a stub, still dual-repo", () => {
@@ -54,29 +57,26 @@ test("tooling inside the workspace is a path with no repository: a monorepo", ()
 test("what cannot be honored is reported and never followed", () => {
   const config = parseCrewConfig(JSON.stringify({
     tooling: { repo: "not a repo", path: "../x", plugin: 3, ref: "", marketplace: 4 },
-    shared_writes: { merge_workflow: "../w.yml" },
   }))
   assert.equal(config.tooling, null)
   assert.equal(config.setup, "monorepo")
-  assert.deepEqual(config.shared_writes, { merge_workflow: null })
   assert.deepEqual(config.problems, [
     "tooling.repo: \"not a repo\" is not owner/name",
     "tooling.path: \"../x\" is not a folder inside the tooling repository",
     "tooling.plugin: must be a name",
     "tooling.ref: must be a branch name",
     "tooling.marketplace: must be a name",
-    "shared_writes.merge_workflow: \"../w.yml\" is not a file inside the repository",
   ])
 })
 
 test("paths outside the repository, in any spelling, are refused", () => {
-  for (const raw of ["", "/abs/w.yml", "C:\\w.yml", ".", "./", "a/../../w.yml", 7]) {
-    const config = parseCrewConfig(JSON.stringify({ shared_writes: { merge_workflow: raw } }))
-    assert.equal(config.shared_writes.merge_workflow, null, String(raw))
+  for (const raw of ["/abs/p", "C:\\p", ".", "./", "a/../../p", 7]) {
+    const config = parseCrewConfig(JSON.stringify({ tooling: { repo: "example-org/tools", path: raw } }))
+    assert.equal(config.tooling.path, "", String(raw))
     assert.equal(config.problems.length, 1, String(raw))
   }
-  assert.equal(parseCrewConfig(JSON.stringify({ shared_writes: { merge_workflow: ".github\\workflows\\m.yml" } })).shared_writes.merge_workflow, ".github/workflows/m.yml")
-  assert.deepEqual(parseCrewConfig(JSON.stringify({ shared_writes: { merge_workflow: null } })).problems, [])
+  assert.equal(parseCrewConfig(JSON.stringify({ tooling: { repo: "example-org/tools", path: "plugins\\team" } })).tooling.path, "plugins/team")
+  assert.deepEqual(parseCrewConfig(JSON.stringify({ tooling: { repo: "example-org/tools", path: "" } })).problems, [])
 })
 
 test("a tooling block with neither repo nor path is no tooling", () => {
@@ -91,8 +91,8 @@ test("text that is not a JSON object is a problem, and the workspace reads as a 
     assert.equal(config.setup, "monorepo")
     assert.deepEqual(config.problems, ["_meta/crew.json is not a JSON object"])
   }
-  const blocks = parseCrewConfig(JSON.stringify({ tooling: "x", shared_writes: 2 }))
-  assert.deepEqual(blocks.problems, ["tooling: must be an object", "shared_writes: must be an object"])
+  const blocks = parseCrewConfig(JSON.stringify({ tooling: "x" }))
+  assert.deepEqual(blocks.problems, ["tooling: must be an object"])
 })
 
 test("readCrewConfig reads the file at the root, and a missing or unreadable one is undeclared", async () => {

@@ -33,7 +33,7 @@ async function adopted({ tooling = { repo: "acme/team-tooling" } } = {}) {
   return memberClone(repo)
 }
 
-const join = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, identity: "newbie_example", alias: "newbie", wait: noWait, now: NOW, ...extra })
+const join = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, identity: "newbie_example", alias: "newbie", wait: noWait, now: NOW, ...extra })
 
 test("a new member: the plan names the desk and the roster row and writes nothing", async () => {
   const repo = await adopted()
@@ -83,7 +83,7 @@ test("a new member of a dual-repo workspace whose tooling repository holds a plu
   const repo = await adopted({ tooling: { repo: "acme/team-tooling", path: "plugins/team", plugin: "team" } })
   const result = await joinWorkspace(join(repo, { apply: true, gh: fakeGh(repo.bare).gh }))
   assert.equal(result.state, "joined", result.message)
-  assert.equal(result.tooling.install.copilot, "agency plugin install github:acme/team-tooling:plugins/team@main --engine copilot")
+  assert.equal(result.tooling.install.copilot, "agency plugin install github:acme/team-tooling:plugins/team@main --engine copilot --cache-policy auto --cache-ttl 0")
   assert.match(result.message, /Install the team's tooling, plugin team from acme\/team-tooling\.$/u)
   assert.ok(readCrewRoster(repo.clone).some((row) => row.alias === "newbie"))
 })
@@ -103,7 +103,7 @@ test("a monorepo made before this change, with no _meta/crew.json: join works as
   assert.equal(status.setup, "monorepo")
   const result = await joinWorkspace(join(repo, { apply: true, gh: fakeGh(repo.bare).gh }))
   assert.equal(result.state, "joined", result.message)
-  assert.equal(result.tooling.install.copilot, "agency plugin install github:acme/team:plugins/team@main --engine copilot")
+  assert.equal(result.tooling.install.copilot, "agency plugin install github:acme/team:plugins/team@main --engine copilot --cache-policy auto --cache-ttl 0")
   assert.match(result.message, /Install the team's tooling, plugin team from plugins\/team in this workspace\.$/u)
   assert.deepEqual(readCrewRoster(repo.clone).map((row) => row.alias), ["pat", "newbie"])
   assert.equal(onMain(repo.bare, "desks/newbie/AGENTS.md"), "# newbie\n")

@@ -2,7 +2,7 @@
 // Crew workspace setup, one deterministic step at a time. Prints one JSON result.
 //
 //   node crew.js status --repo <clone> [--identity <login>]
-//   node crew.js start  --repo <clone> [--team <name>] [--founder <alias>=<identity>] [--merge-workflow <file>]
+//   node crew.js start  --repo <clone> [--team <name>] [--founder <alias>=<identity>]
 //                       [--tooling-repo <owner/name> --tooling-path <dir> --tooling-plugin <name>
 //                        --tooling-ref <branch> --tooling-marketplace <name>] [--apply]
 //   node crew.js join   --repo <clone> --identity <login> --alias <alias> [--apply]
@@ -17,10 +17,10 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { crewStatus, joinWorkspace, startWorkspace } from "../src/crew/workspace.js"
 
-const VALUE_FLAGS = new Set(["repo", "identity", "alias", "team", "merge-workflow", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder"])
+const VALUE_FLAGS = new Set(["repo", "identity", "alias", "team", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder"])
 const ALLOWED = {
   status: ["repo", "identity"],
-  start: ["repo", "team", "merge-workflow", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder", "apply"],
+  start: ["repo", "team", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder", "apply"],
   join: ["repo", "identity", "alias", "apply"],
 }
 const USAGE = "usage: crew.js <status|start|join> --repo <clone> [options]; see the comment at the top of crew.js"
@@ -70,7 +70,6 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
       repo,
       apply: options.apply === true,
       team: options.team,
-      mergeWorkflow: options["merge-workflow"],
       founder: founderOf(options.founder),
       tooling: { repo: options["tooling-repo"], path: options["tooling-path"], plugin: options["tooling-plugin"], ref: options["tooling-ref"], marketplace: options["tooling-marketplace"] },
     })
