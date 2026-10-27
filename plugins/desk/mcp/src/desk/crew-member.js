@@ -133,14 +133,17 @@ export async function settleMember(local, { deskRoot, env, gh, timeoutMs = DEFAU
     const repo = originRepository(deskRoot)
     const key = `choose|${deskRoot}|${repo}|${candidates.map((row) => row.identity).join(",")}`
     const answer = repo === null ? { ok: false } : await remembered(key, now, async () => {
+      let unanswered = false
       for (const row of candidates) {
         const push = await canPush(gh, row.identity, repo, timeoutMs)
         if (push === true) return { ok: true, row }
+        unanswered ||= push === null
       }
-      return { ok: false }
+      return { ok: false, unreachable: unanswered }
     })
     if (answer.ok) return { ...fromRows([answer.row], rest.logins), logins: rest.logins }
-    return { ...rest, problem: "several_accounts", candidates: candidates.map((row) => row.identity) }
+    // `unreachable`: GitHub gave no answer for at least one account, so the cause is the network, not the account choice.
+    return { ...rest, problem: "several_accounts", candidates: candidates.map((row) => row.identity), ...(answer.unreachable ? { unreachable: true } : {}) }
   }
   const ambient = (envValue(env, "GH_TOKEN") || envValue(env, "GITHUB_TOKEN") || "").trim()
   const key = `whoami|${ambient === "" ? "gh" : "token"}`
@@ -166,6 +169,9 @@ export function memberMessage(member) {
   if (!member?.crew || member.person !== null || member.problem === null || member.problem === undefined) return null
   const writable = "so Desk keeps this team workspace read-only in this session"
   const after = "then call desk_status, which checks again"
+  if (member.problem === "several_accounts" && member.unreachable === true) {
+    return `Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster (${member.candidates.join(", ")}) is yours, ${writable}. To write to your own desk, check that GitHub can be reached; ${after}. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).`
+  }
   if (member.problem === "several_accounts") {
     return `Several GitHub accounts signed in to gh are on this team workspace's roster (${member.candidates.join(", ")}), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, ${writable}. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; ${after}.`
   }

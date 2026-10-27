@@ -68,6 +68,20 @@ test("a session started in a folder inside a Crew clone binds the clone, up to t
   assert.equal(paths.crewWorkspaceAbove(f.root), null, "a folder above every clone, with no .git, walks to the top and finds none")
 })
 
+test("a session started in a member's own desk folder binds the clone, even once that folder has _archive/", async () => {
+  const f = await fixture()
+  mkdirSync(path.join(f.crew, ".git"), { recursive: true })
+  const own = path.join(f.crew, "desks", "ari")
+  mkdirSync(path.join(own, "_meta"), { recursive: true })
+  mkdirSync(path.join(own, "_archive", "old-track"), { recursive: true })
+  const fromHost = resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, hostProjectRoot: own })
+  const fromHint = resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, cwd: own, projectRootHint: own })
+  assert.deepEqual({ root: fromHost.root, source: fromHost.source }, { root: f.crew, source: "host-project" })
+  assert.equal(fromHint.root, fromHost.root, "the host project folder and the launch folder agree")
+  // A personal desk opened as the project folder still binds itself.
+  assert.equal(resolveDeskRootWithSource({ env: { DESK: f.personal }, homeDir: f.home, hostProjectRoot: f.other }).root, f.other)
+})
+
 test("only a real Crew workspace outranks DESK: _meta/crew.json or a roster, never a personal desk's track named desks", async () => {
   const f = await fixture()
   // A personal desk with a track folder named desks, started in, stays below DESK as before.

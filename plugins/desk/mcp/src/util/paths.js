@@ -7,7 +7,8 @@
 //   3. The project folder the host opened (Claude Code's CLAUDE_PROJECT_DIR,
 //      Copilot's session record), only when it is itself a desk workspace: the
 //      person opened that desk, so it wins over the saved binding on every
-//      host. A folder inside a Crew workspace clone binds the clone (see 3a).
+//      host. A folder inside a Crew workspace clone, including a member's own
+//      `desks/<alias>/`, binds the clone (see 3a).
 //      Any other folder falls through silently.
 //   3a. The launch folder, when no host project folder is known, when it is a
 //      Crew workspace clone (`isCrewWorkspaceFolder`) or a folder inside one,
@@ -143,12 +144,14 @@ export function resolveDeskRootWithSource({
   if (hasText(hostProjectRoot)) {
     const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })
-    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
+    // The enclosing Crew clone first: a member's own `desks/<alias>/` has `_meta/` and, once a track is archived,
+    // `_archive/`, so it looks like a desk of its own, but a session there belongs to the clone and its member check.
     const clone = crewWorkspaceAbove(resolved)
     if (clone !== null) {
-      tried.push({ source: "host-project", path: clone })
+      if (clone !== resolved) tried.push({ source: "host-project", path: clone })
       return { root: clone, source: "host-project", tried }
     }
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
   }
 
   // A launch folder in a Crew workspace clone ranks with the host's project

@@ -114,7 +114,7 @@ test("several roster accounts and no answer: a problem with one message, asked a
   const settled = await settleMember(local, { deskRoot: root, gh: offline, now: () => clock })
   assert.equal(settled.person, null)
   assert.equal(settled.problem, "several_accounts")
-  assert.match(memberMessage(settled), /^Several GitHub accounts signed in to gh are on this team workspace's roster \(ari_microsoft, bob_microsoft\)/u)
+  assert.match(memberMessage(settled), /^Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster \(ari_microsoft, bob_microsoft\) is yours/u)
   const asked = offline.calls.length
   await settleMember(local, { deskRoot: root, gh: offline, now: () => clock })
   assert.equal(offline.calls.length, asked, "a failed answer is kept for a minute")
@@ -217,6 +217,30 @@ test("the active account is not on the roster: one other roster account is the m
   assert.deepEqual({ person: refused.person, problem: refused.problem, pending: refused.pending }, { person: null, problem: "several_accounts", pending: undefined })
   assert.equal(await settleMember(refused, { deskRoot: root, gh: () => assert.fail("no GitHub call") }), refused)
   assert.equal(memberMessage(refused), "Several GitHub accounts signed in to gh are on this team workspace's roster (ari_microsoft, bob_microsoft), and Desk cannot tell which one is yours: gh's active account is not one of them, or GitHub did not say which of them can push to it, so Desk keeps this team workspace read-only in this session. To write to your own desk, switch gh to your own account (gh auth switch --user <your login>), or start this one session with DESK_PERSON set to your alias; then call desk_status, which checks again.")
+})
+
+test("two roster accounts signed in and GitHub unreachable: the refusal leads with the network, not with switching accounts", async () => {
+  forgetMemberAnswers()
+  const root = await crewClone()
+  const local = localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft", "bob_microsoft") })
+  const offline = fakeGh({
+    "auth token --hostname github.com --user ari_microsoft": { code: 0, stdout: "ta\n" },
+    "auth token --hostname github.com --user bob_microsoft": { code: 0, stdout: "tb\n" },
+  })
+  const settled = await settleMember(local, { deskRoot: root, gh: offline })
+  assert.deepEqual({ person: settled.person, problem: settled.problem, unreachable: settled.unreachable }, { person: null, problem: "several_accounts", unreachable: true })
+  assert.equal(memberMessage(settled), "Desk could not reach GitHub to ask which of the GitHub accounts signed in to gh and on this team workspace's roster (ari_microsoft, bob_microsoft) is yours, so Desk keeps this team workspace read-only in this session. To write to your own desk, check that GitHub can be reached; then call desk_status, which checks again. If GitHub answers and Desk still cannot tell, switch gh to your own account (gh auth switch --user <your login>).")
+  // GitHub answered and neither account can push: the account-choice message, as before.
+  forgetMemberAnswers()
+  const neither = fakeGh({
+    "auth token --hostname github.com --user ari_microsoft": { code: 0, stdout: "ta\n" },
+    "api repos/acme/team --jq .permissions.push@ta": { code: 0, stdout: "false\n" },
+    "auth token --hostname github.com --user bob_microsoft": { code: 0, stdout: "tb\n" },
+    "api repos/acme/team --jq .permissions.push@tb": { code: 1, stdout: "", stderr: "HTTP 404: Not Found (HTTP 404)" },
+  })
+  const answered = await settleMember(local, { deskRoot: root, gh: neither })
+  assert.equal(answered.unreachable, undefined)
+  assert.match(memberMessage(answered), /^Several GitHub accounts signed in to gh are on this team workspace's roster/u)
 })
 
 test("one GitHub account on two roster rows is refused, not bound to the first row", async () => {
