@@ -35,7 +35,9 @@ async function started(files = CIT_SHAPED, extra = {}) {
   return repo
 }
 
-const read = (repo, rel) => readFileSync(path.join(repo.clone, ...rel.split("/")), "utf8")
+// The clone's file as Git would store it: on Windows, Git for Windows' core.autocrlf=true shows it with CRLF.
+const readRaw = (repo, rel) => readFileSync(path.join(repo.clone, ...rel.split("/")), "utf8")
+const read = (repo, rel) => readRaw(repo, rel).replace(/\r\n/gu, "\n")
 const write = (repo, rel, text) => {
   mkdirSync(path.dirname(path.join(repo.clone, ...rel.split("/"))), { recursive: true })
   writeFileSync(path.join(repo.clone, ...rel.split("/")), text)
@@ -330,7 +332,7 @@ test("core.autocrlf=true and input: the entry lands with LF on GitHub, and the c
     const origin = await started({ "README.md": "# Team\n" }, { people: CIT_ROSTER, founder: undefined })
     await pushFromElsewhere(origin, { [CIT_ROSTER]: CIT_SHAPED[CIT_ROSTER] })
     const repo = memberClone(origin, `crlf-${autocrlf}`, { "core.autocrlf": autocrlf })
-    const shown = read(repo, CIT_ROSTER)
+    const shown = readRaw(repo, CIT_ROSTER)
     if (autocrlf === "true") assert.match(shown, /\r\n/u)
     // The agent appends an LF row to a file the clone shows with CRLF.
     writeFileSync(path.join(repo.clone, ...CIT_ROSTER.split("/")), `${shown}${citRow("Newbie Example", "newbie")}`)

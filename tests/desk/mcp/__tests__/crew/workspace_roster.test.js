@@ -33,7 +33,9 @@ async function started(config) {
 }
 
 const file = (repo) => path.join(repo.clone, ...STARTER.split("/"))
-const read = (repo) => readFileSync(file(repo), "utf8")
+// The clone's file as Git would store it: on Windows, Git for Windows' core.autocrlf=true shows it with CRLF.
+const readRaw = (repo) => readFileSync(file(repo), "utf8")
+const read = (repo) => readRaw(repo).replace(/\r\n/gu, "\n")
 const edit = (repo) => writeFileSync(file(repo), withContact(read(repo)))
 const roster = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, identity: "founder_example", wait: noWait, now: NOW, ...extra })
 
@@ -164,8 +166,8 @@ test("a clone it cannot write from gets the edit back; an edit that no longer me
 
 test("core.autocrlf=true: an LF contact added to a CRLF file lands with LF on GitHub, and the clone is clean", async () => {
   const repo = await started({ "core.autocrlf": "true" })
-  assert.match(read(repo), /\r\n/u)
-  writeFileSync(file(repo), `${read(repo)}\n${CONTACT.trimEnd()}\n`)
+  assert.match(readRaw(repo), /\r\n/u)
+  writeFileSync(file(repo), `${readRaw(repo)}\n${CONTACT.trimEnd()}\n`)
   const result = await updateRoster(roster(repo, { apply: true }))
   assert.equal(result.state, "updated", result.message)
   assert.equal(onMain(repo.bare, STARTER), withContact(starterRoster()))
