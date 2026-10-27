@@ -41,13 +41,13 @@ function validAlias(alias) {
  * `invalid_alias` or, after settling, `several_accounts`. `readLogins` and `roster` are seams for tests and for callers
  * that already read the roster.
  */
-export function localMember({ deskRoot, person = null, env = process.env, homeDir = env.HOME || os.homedir(), readLogins = ghLogins, workspace } = {}) {
+export function localMember({ deskRoot, person = null, env, homeDir = env.HOME || os.homedir(), readLogins = ghLogins, workspace }) {
   const explicit = hasText(person) ? person.trim() : null
   const { crew, roster } = workspace ?? crewWorkspace(deskRoot)
   if (!crew) return { crew: false, person: explicit, source: explicit === null ? null : "launch-argument", identity: null, problem: null }
   if (explicit !== null) return { crew: true, person: explicit, source: "launch-argument", identity: null, problem: null }
   if (hasText(env.DESK_PERSON)) return { crew: true, person: env.DESK_PERSON.trim(), source: "env:DESK_PERSON", identity: null, problem: null }
-  const rows = (roster ?? []).filter((row) => hasText(row.alias) && hasText(row.identity))
+  const rows = roster.filter((row) => hasText(row.alias) && hasText(row.identity))
   const matching = (logins) => logins.map((login) => rows.find((row) => same(row.identity, login))).filter((row) => row !== undefined)
   if (hasText(env.DESK_IDENTITY)) return fromRows(matching([env.DESK_IDENTITY.trim()]), [env.DESK_IDENTITY.trim()])
   let logins = []
@@ -108,7 +108,7 @@ async function canPush(gh, login, repo, timeoutMs) {
  * (a failed answer again after a minute); with no answer the result is a problem, never a guess. `gh` is a runner with
  * `ghRunner`'s shape; `now` is for tests.
  */
-export async function settleMember(local, { deskRoot, env = process.env, gh, timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now } = {}) {
+export async function settleMember(local, { deskRoot, env, gh, timeoutMs = DEFAULT_TIMEOUT_MS, now = Date.now }) {
   if (local?.pending === undefined) return local
   // Loaded only when GitHub must be asked, so the admission worker's resolve job never loads the factory's GitHub module.
   gh ??= (await import("../factory/flush.js")).ghRunner({ env })
@@ -135,12 +135,12 @@ export async function settleMember(local, { deskRoot, env = process.env, gh, tim
   })
   if (!answer.ok) return { ...rest, problem: "not_on_roster" }
   const { roster } = crewWorkspace(deskRoot)
-  const rows = (roster ?? []).filter((row) => hasText(row.alias) && same(row.identity, answer.login))
+  const rows = roster.filter((row) => hasText(row.alias) && same(row.identity, answer.login))
   return fromRows(rows, [answer.login])
 }
 
 /** `localMember`, then `settleMember`: the person a session in `deskRoot` writes as. */
-export async function resolveMember(options = {}) {
+export async function resolveMember(options) {
   return settleMember(localMember(options), options)
 }
 

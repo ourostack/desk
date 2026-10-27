@@ -71,9 +71,9 @@ test("on Copilot the boot script reads the session record the server reads, wher
 const ok = { code: 0, stdout: "gh version 2.54.0\njq-1.7\n", stderr: "" }
 const runner = async (args) => (args.join(" ").startsWith("auth status") ? { code: 0, stdout: "", stderr: "" } : ok)
 
-function bootIn(cwd, env) {
+function bootIn(cwd, env, extra = {}) {
   return bootOnce({
-    env, cwd, homeDir: env.HOME, gh: runner, jq: runner,
+    env, cwd, homeDir: env.HOME, gh: runner, jq: runner, ...extra,
     migrationsFn: async () => [], repoFn: () => ({ states: [], pending: [] }), prFn: async () => ({ prs: [], pending: [] }),
     syncFn: async () => ({ state: "synced" }),
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
@@ -109,4 +109,12 @@ test("the boot says plainly when the session's account is not on the roster", as
   // A personal desk has no person line.
   assert.equal(personSummary({ crew: false, person: null }), null)
   assert.equal(personSummary(null), null)
+})
+
+test("a member lookup that throws never stops the boot: the Crew clone shows no person line", async () => {
+  const f = await fixture()
+  const env = { HOME: f.home, XDG_STATE_HOME: path.join(f.home, "state"), DESK: f.personal }
+  const result = await bootIn(f.crew, env, { memberFn: async () => { throw new Error("unexpected") } })
+  assert.equal(result.root.path, f.crew)
+  assert.equal(result.person, null)
 })

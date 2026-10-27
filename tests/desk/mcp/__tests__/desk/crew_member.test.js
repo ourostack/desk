@@ -141,6 +141,15 @@ test("gh lists no login: gh api user names the login, with an ambient token when
   assert.equal(stranger.problem, "not_on_roster")
 })
 
+test("a Crew clone with desks/ but no roster file has nobody on its roster", async () => {
+  forgetMemberAnswers()
+  const root = await mkTempRoot("desk-crew-member-noroster-")
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  assert.equal(localMember({ deskRoot: root, env: {}, readLogins: logins("ari_microsoft") }).problem, "not_on_roster")
+  const asked = await resolveMember({ deskRoot: root, env: {}, gh: fakeGh({ "api user --jq .login": { code: 0, stdout: "ari_microsoft\n" } }), readLogins: logins() })
+  assert.equal(asked.problem, "not_on_roster")
+})
+
 test("the origin is read from the clone's Git config in every GitHub spelling", async () => {
   for (const [url, repo] of [
     ["https://github.com/acme/team.git", "acme/team"],

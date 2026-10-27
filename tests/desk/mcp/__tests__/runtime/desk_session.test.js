@@ -2525,3 +2525,24 @@ test("desk_status names the step a running admission attempt is in, and clears i
   assert.equal(phase, null)
   assert.equal(since, null)
 })
+
+test("a session disposed while the member's GitHub question is pending admits no person", async (t) => {
+  let release
+  let asked
+  const gate = new Promise((resolve) => { release = resolve })
+  const question = new Promise((resolve) => { asked = resolve })
+  const runtime = fakeRuntime({
+    settleMember: async () => { asked(); await gate; return { crew: true, person: "ari", source: "crew-roster", identity: "ari_example", problem: null } },
+  })
+  const root = path.join(await mkTempRoot("desk-session-member-"), "desk")
+  mkdirSync(root, { recursive: true })
+  const member = { crew: true, person: null, source: null, identity: null, logins: ["ari_example", "bob_example"], candidates: [{ alias: "ari", identity: "ari_example" }, { alias: "bob", identity: "bob_example" }], pending: "choose", problem: null }
+  const { session } = await makeSession(t, { runtime, resolveInputs: async () => ({ ...inputs({ root }), member }) })
+  const admitting = session.admission.refresh({ force: true })
+  await question
+  await session.dispose()
+  release()
+  await admitting
+  assert.equal(session.context.person, null)
+  assert.equal(session.context.authorityAdmitted, false)
+})

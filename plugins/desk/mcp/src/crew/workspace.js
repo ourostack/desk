@@ -263,12 +263,14 @@ export async function crewStatus({ repo, identity, spawnGit = spawnSync, session
  */
 async function sessionIn(top, { identity, member, env = process.env, memberFn = resolveMember }) {
   let bound
+  let here = false
   try {
     bound = resolveDeskRootWithSource({ env, activationConfigPath: resolveActivationConfigPath({ env }), hostProjectRoot: top, cwd: top, homeDir: env.HOME || os.homedir() })
+    // The resolver returns only a folder that exists, so both resolve to their real paths.
+    here = realpathSync(bound.root) === realpathSync(top)
   } catch {
     bound = { root: null, source: null }
   }
-  const here = bound.root !== null && sameFolder(bound.root, top)
   const found = here ? await memberFn({ deskRoot: top, env }) : null
   const person = found?.person ?? null
   const expected = identity === undefined || identity === null || String(identity).trim() === "" ? undefined : member?.alias ?? null
@@ -290,16 +292,6 @@ async function sessionIn(top, { identity, member, env = process.env, memberFn = 
   }
 }
 
-function sameFolder(a, b) {
-  const real = (folder) => {
-    try {
-      return realpathSync(folder)
-    } catch {
-      return path.resolve(folder)
-    }
-  }
-  return real(a) === real(b)
-}
 
 // ── Content Crew adds ────────────────────────────────────────────────────────────────────────────────────────────
 

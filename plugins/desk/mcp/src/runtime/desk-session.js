@@ -516,7 +516,9 @@ export function createDeskSession(deps) {
     try {
       // Loaded here, not at the top: index.js imports this module, and everything it loads before the handshake must stay loadable on an old Node.
       const { memberMessage, settleMember } = await import("../desk/crew-member.js")
-      member = await settleMember(local, { deskRoot: context.root.root, env })
+      // Tests replace the GitHub question through the runtime, as they do `verifyAuthority`.
+      const settle = context.runtimeServer.settleMember ?? settleMember
+      member = await settle(local, { deskRoot: context.root.root, env })
       message = memberMessage(member)
     } catch (error) {
       return exceptionOutcome(error)
