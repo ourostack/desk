@@ -173,12 +173,12 @@ test("a task that is not done cannot be signed and the message names its status"
   const file = path.join(root, "t", "still-going", "task.md")
   const before = await body(file)
   const finalize = spy()
-  await assert.rejects(sign(root, "still-going", { outcome: "accepted" }, { finalize: finalize.fn }), { message: "task_signoff: only a delivered task can be signed; this one is at processing." })
-  await assert.rejects(sign(root, "still-going", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), { message: "task_signoff: only a delivered task can be signed; this one is at processing." })
+  await assert.rejects(sign(root, "still-going", { outcome: "accepted" }, { finalize: finalize.fn }), { message: "task_signoff: only a delivered task can be signed; this one is at processing. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask \"Accept or send back?\" in that delivery." })
+  await assert.rejects(sign(root, "still-going", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), { message: "task_signoff: only a delivered task can be signed; this one is at processing. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask \"Accept or send back?\" in that delivery." })
   assert.equal(await body(file), before)
   assert.equal(finalize.calls.length, 0)
   await rewrite(file, (data) => { data.status = "bogus" })
-  await assert.rejects(sign(root, "still-going", { outcome: "accepted" }), { message: "task_signoff: only a delivered task can be signed; this one is at no recognised status." })
+  await assert.rejects(sign(root, "still-going", { outcome: "accepted" }), { message: "task_signoff: only a delivered task can be signed; this one is at no recognised status. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask \"Accept or send back?\" in that delivery." })
 })
 
 test("a refusal puts the task back to processing and the answer says it is not done", async () => {

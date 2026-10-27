@@ -45,7 +45,7 @@ function runGit(args, { cwd, spawnGit, token, config = [] }) {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1", GIT_LFS_SKIP_SMUDGE: "1" }
   // Only the network calls get the chosen account's token; hooks and every other Git call never see it.
   if (token !== undefined) env.GH_TOKEN = token
-  const result = spawnGit("git", [...config, "-C", cwd, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, env })
+  const result = spawnGit("git", [...config, "-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, env })
   return { ok: result.status === 0, stdout: String(result.stdout ?? "").trim(), stderr: String(result.stderr ?? "").trim() }
 }
 

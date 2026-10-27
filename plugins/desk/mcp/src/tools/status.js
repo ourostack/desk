@@ -1,5 +1,6 @@
 import * as path from "node:path"
 import { personPrefix } from "../util/paths.js"
+import { memberMessage } from "../desk/crew-member.js"
 import { deskVersion } from "../package-metadata.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatusAsync } from "./factory-context.js"
@@ -94,14 +95,7 @@ export function desk_status(request) {
 }
 
 async function statusCall({ deskRoot, person, statusContext = {}, signal, env = process.env }) {
-  const effectiveRoot = personPrefix(deskRoot, person)
-  const writeScope = effectiveRoot === deskRoot
-    ? { mode: "workspace", person: null, relative_path: "." }
-    : {
-        mode: "person",
-        person: path.basename(effectiveRoot),
-        relative_path: path.posix.join("desks", path.basename(effectiveRoot)),
-      }
+  const writeScope = writeScopeOf(deskRoot, person, statusContext.member ?? null)
   const reader = createStatusInspection(deskRoot, { signal })
   try {
     const root = await reader.inspect("root", statusContext.root)
@@ -127,6 +121,21 @@ async function statusCall({ deskRoot, person, statusContext = {}, signal, env = 
   } finally {
     await reader.close()
   }
+}
+
+// Where this session writes, and who it writes as: `source` says where the person came from (crew-member.js), so a check
+// of "am I set up?" reads the same person and source the boot line printed. A Crew workspace with no person is read-only.
+function writeScopeOf(deskRoot, person, member) {
+  const effectiveRoot = personPrefix(deskRoot, person)
+  if (effectiveRoot === deskRoot) {
+    if (member?.crew === true && member.person === null) {
+      return { mode: "read_only", person: null, relative_path: null, source: null, problem: memberMessage(member) }
+    }
+    return { mode: "workspace", person: null, relative_path: "." }
+  }
+  const alias = path.basename(effectiveRoot)
+  const scope = { mode: "person", person: alias, relative_path: path.posix.join("desks", alias) }
+  return member?.person === alias ? { ...scope, source: member.source, identity: member.identity } : scope
 }
 
 const SEARCH_STARTING = Object.freeze({ state: "starting", message: "Desk search is starting." })

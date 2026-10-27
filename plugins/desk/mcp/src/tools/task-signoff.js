@@ -77,7 +77,8 @@ export async function taskSignoff({
   const card = await readMarkdown(found.file)
   if (card.data.status !== "done") {
     const shown = STATUSES.includes(card.data.status) ? card.data.status : "no recognised status"
-    throw new Error(`task_signoff: only a delivered task can be signed; this one is at ${shown}.`)
+    // A task that is not at done was never delivered, so nobody should have been asked to accept it: say what to do instead.
+    throw new Error(`task_signoff: only a delivered task can be signed; this one is at ${shown}. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask "Accept or send back?" in that delivery.`)
   }
 
   const atMs = now()

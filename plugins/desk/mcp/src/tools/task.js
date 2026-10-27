@@ -513,7 +513,7 @@ function reportStep(step) {
 
 // The short sha of the desk's HEAD after a card commit, or null when git cannot say.
 function headSha(dir, spawnGit) {
-  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 5000 })
+  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 5000 })
   return answer?.status === 0 && typeof answer.stdout === "string" && answer.stdout.trim() !== "" ? answer.stdout.trim() : null
 }
 

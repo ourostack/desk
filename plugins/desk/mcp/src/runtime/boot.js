@@ -64,8 +64,6 @@ import {
   claudeBindingPath,
   DESK_ROOT_NOT_FOUND,
   resolveLocalPath,
-  resolveActivationConfigPath,
-  resolveDeskRootWithSource,
 } from "../util/paths.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
@@ -76,6 +74,7 @@ import { isNoninteractive } from "../factory/session-kind.js"
 import { improvementBootCheck, improvementCountText, improvementLine, improvementNotes } from "../factory/boot-check.js"
 import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
+import { memberMessage, resolveMember } from "../desk/crew-member.js"
 import { personAgentsCap } from "./agents-md.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
@@ -83,7 +82,7 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine, bashHint } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
-import { resolveStartupStateBranch } from "./startup-resolve.js"
+import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
@@ -121,20 +120,10 @@ export function resolveBootRoot({
   readActivationConfig = (file) => readSmallText(file),
 } = {}) {
   const bindingPath = claudeBindingPath(env)
-  const hostProjectRoot = typeof env.CLAUDE_PROJECT_DIR === "string" && env.CLAUDE_PROJECT_DIR.trim().length > 0
-    ? env.CLAUDE_PROJECT_DIR
-    : undefined
   try {
-    const resolved = resolveDeskRootWithSource({
-      activationConfigPath: resolveActivationConfigPath({ env }),
-      env,
-      cwd,
-      homeDir,
-      hostProjectRoot,
-      // A shell-spawned boot's cwd is a weak hint, not a saved desk association.
-      projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
-      readActivationConfig,
-    })
+    // The tool server's own resolver: the Copilot session record, CLAUDE_PROJECT_DIR, then this process's folder (a weak
+    // hint unless it is a Crew workspace clone), so the boot and the server never name different desks.
+    const resolved = resolveStartupDeskRoot({ args: {}, env, cwd, homeDir, readActivationConfig })
     return { status: "ready", path: resolved.root, source: resolved.source, binding_path: bindingPath }
   } catch (error) {
     const status = error.code === DESK_ROOT_NOT_FOUND ? "setup_required" : "degraded"
@@ -144,13 +133,34 @@ export function resolveBootRoot({
       source: error.source ?? null,
       binding_path: bindingPath,
       tried: error.tried ?? [],
-      // Every throw out of `resolveDeskRootWithSource` — including through
+      // Every throw out of the shared resolver (`resolveDeskRootWithSource`) — including through
       // the injectable `readActivationConfig` seam, which `loadActivationConfig`
       // always re-wraps in a `codedError` — sets `.code` (see `util/paths.js`),
       // so this never falls back to a message-only reason.
       reason: error.code,
       message: error.message,
     }
+  }
+}
+
+// ── The session's person ────────────────────────────────────────────────
+
+// How long the boot waits for each GitHub answer about which signed-in account is this session's member.
+const MEMBER_BUDGET_MS = 3000
+
+/**
+ * The person this session writes as in a Crew workspace, as `desk_status` reports it in `write_scope`:
+ * `{ alias, source, identity, write_path, problem }`, or null on a personal desk. `problem` is the one plain message
+ * when no person is known, and then the session is read-only.
+ */
+export function personSummary(member) {
+  if (member?.crew !== true) return null
+  return {
+    alias: member.person,
+    source: member.source,
+    identity: member.identity ?? null,
+    write_path: member.person === null ? null : `desks/${member.person}`,
+    problem: memberMessage(member),
   }
 }
 
@@ -505,7 +515,7 @@ function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs, 
   const found = readRemotes(resolved)
   let url = found === null ? null : found.remotes.origin ?? null
   if (found === null && !fileOnly) {
-    const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
+    const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { windowsHide: true, encoding: "utf8", timeout: timeoutMs })
     if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
     url = result.stdout
   }
@@ -756,14 +766,14 @@ export async function repoStates({ cards, root, spawnGit = spawnSync, homeDir = 
   const states = []
   for (const [index, { repo, label, dir }] of repos.entries()) {
     const fetched = fetches[index]
-    const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
+    const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { windowsHide: true, encoding: "utf8", timeout: 5000 })
     if (!status || status.status !== 0 || typeof status.stdout !== "string") {
       states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
       continue
     }
     const lines = status.stdout.split("\n").filter((line) => line !== "")
     // A clone with no remote at all has nowhere to push: its commits are the delivered work (`done-evidence.js`).
-    const remotes = spawnGit("git", ["-C", dir, "remote"], { encoding: "utf8", timeout: 5000 })
+    const remotes = spawnGit("git", ["-C", dir, "remote"], { windowsHide: true, encoding: "utf8", timeout: 5000 })
     states.push({
       ...label,
       present: true,
@@ -1346,6 +1356,7 @@ export async function bootOnce({
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   personFn = improvementPerson,
+  memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
   releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
@@ -1487,12 +1498,19 @@ export async function bootOnce({
   } catch {
     agentsMd = null
   }
-  // The person the Desk tools resolve, without a network call, worked out once: it picks both the person's own AGENTS.md
-  // and their improvement cards. A bad DESK_PERSON never stops the boot.
+  // The person the Desk tools resolve (crew-member.js, the same resolver as the tool server's admission), worked out once:
+  // it is printed on the status line and picks both the person's own AGENTS.md and their improvement cards. GitHub is
+  // asked only when several signed-in accounts are on the roster, within a short budget. A bad DESK_PERSON never stops the boot.
+  let member = null
+  try {
+    member = await memberFn({ deskRoot: root.path, env, homeDir, gh, timeoutMs: MEMBER_BUDGET_MS })
+  } catch {
+    member = null
+  }
   let who = null
   let whoError = null
   try {
-    who = await personFn({ deskRoot: root.path, env, now: now() })
+    who = await personFn({ deskRoot: root.path, env, now: now(), member })
   } catch (error) {
     whoError = error
   }
@@ -1632,6 +1650,7 @@ export async function bootOnce({
     sync_summary: syncSummaryText,
     agents_md: agentsMd,
     person_agents_md: personAgentsMd,
+    person: personSummary(member),
     active_tasks: tasks,
     card_parser: parserName(nestedCards),
     card_validation: cardValidationResult,

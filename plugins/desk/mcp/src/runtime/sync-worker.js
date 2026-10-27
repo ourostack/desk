@@ -78,7 +78,7 @@ function gitEnv() {
 }
 
 function run(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], {
+  return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: GIT_TIMEOUT_MS,
     env: gitEnv(),

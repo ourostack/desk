@@ -65,7 +65,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 - `task_create`, `task_update`, `task_archive`
 - `track_create`, `track_update` (on a Git desk, each stages the `track.md` it writes; `track_update` skips that when the file already held unstaged changes)
 - `friction_add`, `lesson_add`
-- `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside the resolved `--person` write prefix, or the call is refused
+- `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside this session's write prefix (`desks/<alias>/` in a shared workspace), or the call is refused
 
 **Improvement cards:**
 - `improvement_open` — open an improvement card on the desk, find it already open, or reopen a closed one; Desk builds every title, and the call commits exactly the card file
@@ -211,7 +211,7 @@ Desk validates the committed runtime support matrix before loading production de
 
 Diagnostic responses retain `status: "degraded"`, `mode: "diagnostic"`, the precise reason and runtime context, and a nonempty `remediation` list. The failed activation attempt remains visible as `activation_status: "terminal"` with its phase, code, expected/observed evidence, and `retryable: false`; this does not mean the diagnostic server has stopped. Remediation names the in-session step (call `desk_status` after the fix); only a different Node needs the host to reconnect the Desk MCP server. `automatic_actions` is empty when no further automatic recovery is performed.
 
-Common startup routes writes from the admitted authority, not the raw CLI argument. Workspace authority requires no `--person`; person authority uses the admitted person's identity, including a provider-derived identity when the argument is absent. A conflicting `--person`, missing authority, or unenforceable person identity is refused as `degraded:authority_invalid`: reads stay available and every write is refused. This applies to direct launches as well as host adapters.
+Common startup routes writes from the admitted authority, not the raw CLI argument. In a Crew workspace with no authority provider, the person comes from `--person`, then `DESK_PERSON`, then the roster row whose `identity` is the GitHub login the session acts as (the logins signed in to gh, read from gh's `hosts.yml` with no network call; GitHub is asked once per process only when several of them are on the roster, the same push-access choice `crew.js` makes, or when gh lists none). `desk_status` reports it as `write_scope.person` with `write_scope.source` (`launch-argument`, `env:DESK_PERSON` or `crew-roster`), and the boot script prints the same. With no match the workspace stays readable and every write is refused as `degraded:crew_member_unknown`, with one message that says to join with `crew:join-crew` or sign in to gh as the member's account; `desk_status` checks again. Workspace authority requires no `--person`; person authority uses the admitted person's identity, including a provider-derived identity when the argument is absent. A conflicting `--person`, missing authority, or unenforceable person identity is refused as `degraded:authority_invalid`: reads stay available and every write is refused. This applies to direct launches as well as host adapters.
 
 ### Developer notes
 

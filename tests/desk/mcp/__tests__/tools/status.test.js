@@ -73,11 +73,15 @@ test("desk_status reports the exact normalized person write scope", async () => 
       input: {},
       person: "  ari  ",
     }))
+    // With no member from admission (a direct launch or an authority provider), no source is reported.
     assert.deepEqual(body.write_scope, {
       mode: "person",
       person: "ari",
       relative_path: "desks/ari",
     })
+    const member = { crew: true, person: "ari", source: "crew-roster", identity: "ari_microsoft", problem: null }
+    const fromRoster = parseToolResult(await callTool({ deskRoot: root, name: "desk_status", input: {}, person: "ari", statusContext: { member } }))
+    assert.deepEqual(fromRoster.write_scope, { mode: "person", person: "ari", relative_path: "desks/ari", source: "crew-roster", identity: "ari_microsoft" })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

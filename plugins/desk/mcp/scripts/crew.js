@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Crew workspace setup, one deterministic step at a time. Prints one JSON result.
 //
-//   node crew.js status --repo <clone> [--identity <login>]
+//   node crew.js status --repo <clone> [--identity <login>]      (also reports `session`: what a Desk session started there binds)
 //   node crew.js start  --repo <clone> [--team <name>] [--founder <alias>=<identity>]
 //                       [--tooling-repo <owner/name> --tooling-path <dir> --tooling-plugin <name>
 //                        --tooling-ref <branch> --tooling-marketplace <name>] [--apply]
@@ -63,7 +63,8 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
   const { action, options } = parsed
   const repo = options.repo ?? cwd
   let result
-  if (action === "status") result = await engine.crewStatus({ repo, identity: options.identity })
+  // status also says what a Desk session started in the clone binds (`session`), the check a join runs before it delivers.
+  if (action === "status") result = await engine.crewStatus({ repo, identity: options.identity, session: true })
   else if (action === "join") result = await engine.joinWorkspace({ repo, identity: options.identity, alias: options.alias, apply: options.apply === true })
   else {
     result = await engine.startWorkspace({

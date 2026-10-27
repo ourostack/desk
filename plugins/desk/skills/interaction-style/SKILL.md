@@ -160,7 +160,7 @@ Do not end with offers of more work ("Let me know if you'd like me to...", "Want
 
 ### The sign-off ask is the one closing question
 
-A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording. Ask it only for a task you have just moved to `done`: while anything the task promised is left (a check that has not passed, a step still to run), the reply is a progress report that says what is left, never a delivery. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
 
 ### Ban these specific phrases
 

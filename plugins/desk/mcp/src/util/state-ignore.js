@@ -18,10 +18,10 @@ const handled = new Set()
 export function ensureStateIgnored(root, { spawnGit = spawnSync } = {}) {
   if (handled.has(root)) return false
   try {
-    const exclude = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8", timeout: 5000 })
+    const exclude = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "info/exclude"], { windowsHide: true, encoding: "utf8", timeout: 5000 })
     if (exclude.status !== 0) return false
     handled.add(root)
-    if (spawnGit("git", ["-C", root, "check-ignore", "-q", ".state/desk-index.sqlite"], { timeout: 5000 }).status === 0) return false
+    if (spawnGit("git", ["-C", root, "check-ignore", "-q", ".state/desk-index.sqlite"], { windowsHide: true, timeout: 5000 }).status === 0) return false
     const file = path.resolve(root, exclude.stdout.trim())
     mkdirSync(path.dirname(file), { recursive: true })
     const existing = existsSync(file) ? readFileSync(file, "utf8") : ""

@@ -140,8 +140,12 @@ export function compactStatus(payload) {
     ...(detailPending ? { detail_pending: true } : {}),
     ...(statusError === null ? {} : { status_error: statusError }),
     root: { path: payload.root?.path ?? null, source: payload.root?.source ?? null },
-    // The person a migration or a person-scoped write needs (`--tools-person`); null for a single-person desk.
-    write_scope: { mode: payload.write_scope?.mode ?? null, person: payload.write_scope?.person ?? null },
+    // The person a migration or a person-scoped write needs (`--tools-person`); null for a single-person desk. `source` says where a person came from.
+    write_scope: {
+      mode: payload.write_scope?.mode ?? null,
+      person: payload.write_scope?.person ?? null,
+      ...(typeof payload.write_scope?.source === "string" ? { source: payload.write_scope.source } : {}),
+    },
     sync: syncLine(payload.sync),
     plugin_version: payload.runtime?.plugin?.version ?? null,
     ...(payload.status_detail === undefined ? {} : { status_detail: payload.status_detail }),

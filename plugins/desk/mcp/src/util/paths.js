@@ -8,10 +8,15 @@
 //      Copilot's session record), only when it is itself a desk workspace: the
 //      person opened that desk, so it wins over the saved binding on every
 //      host. Any other folder falls through silently.
+//   3a. The launch folder, when no host project folder is known, only when it
+//      is a Crew workspace clone (`_meta/` and `desks/`): a person who starts a
+//      session inside a team workspace means that workspace, and a `DESK` or a
+//      saved binding set once for the personal desk must not send its writes
+//      elsewhere. Reported as `host-project`, like step 3.
 //   4. Activation config desk.root (the saved binding)
 //   5. $DESK env var
 //   5a. The launch folder, when no host project folder is known, only when it
-//       is itself a desk workspace (weaker than an established association)
+//       is itself a personal desk (weaker than an established association)
 //   6. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
 //      ms-desk overlay is loaded in the same Agency session as this Desk
 //   7. $HOME/desk/
@@ -138,6 +143,18 @@ export function resolveDeskRootWithSource({
     if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
   }
 
+  // A launch folder that is a Crew workspace clone ranks with the host's project
+  // folder (step 3a): the boot script and shell-run scripts on Copilot know only
+  // their working folder, and they must bind the same team workspace the
+  // server binds from Copilot's session record, whatever $DESK says.
+  if (!hasText(hostProjectRoot) && hasText(projectRootHint)) {
+    const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
+    if (isCrewWorkspaceFolder(resolved)) {
+      tried.push({ source: "host-project", path: resolved })
+      return { root: resolved, source: "host-project", tried }
+    }
+  }
+
   // The saved binding is explicit too: a folder that is gone never falls
   // through to $DESK or a home folder, which may be a different desk.
   const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir, read: readActivationConfig })
@@ -245,18 +262,25 @@ function explicitRootProblem(resolved) {
   return null
 }
 
+function isChildDir(dir, child) {
+  try {
+    return statSync(path.join(dir, child)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 // A desk workspace has `_meta/` plus either `_archive/` (a solo desk) or
 // `desks/` (a crew workspace). `_meta/` alone is too common to trust.
 export function isDeskWorkspace(dir) {
   if (!hasText(dir)) return false
-  const isDir = (child) => {
-    try {
-      return statSync(path.join(dir, child)).isDirectory()
-    } catch {
-      return false
-    }
-  }
-  return isDir("_meta") && (isDir("_archive") || isDir("desks"))
+  return isChildDir(dir, "_meta") && (isChildDir(dir, "_archive") || isChildDir(dir, "desks"))
+}
+
+// A Crew workspace clone: `_meta/` plus `desks/`, one folder per person.
+export function isCrewWorkspaceFolder(dir) {
+  if (!hasText(dir)) return false
+  return isChildDir(dir, "_meta") && isChildDir(dir, "desks")
 }
 
 // Where Claude Code keeps this plugin's desk binding. CLAUDE_PLUGIN_DATA

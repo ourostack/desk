@@ -179,7 +179,7 @@ export function gitEnv() {
 
 // `strict`: a call that timed out or was killed by a signal throws `git_deadline` whatever it printed, instead of reading as "nothing found".
 function runGit({ git, deskRoot, timeoutMs, spawn = spawnSync, strict = false }, args) {
-  const result = spawn(git, ["-C", deskRoot, "-c", "core.quotePath=false", "-c", "log.showSignature=false", ...args], {
+  const result = spawn(git, ["-C", deskRoot, "-c", "core.quotePath=false", "-c", "log.showSignature=false", ...args], { windowsHide: true,
     encoding: "utf8",
     env: gitEnv(),
     timeout: timeoutMs,
@@ -1043,7 +1043,7 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   // A folder's `origin`, normalized: `{ origin }` (null when it has no remote), or `{ failed: true }` when Git itself failed.
   // `git config --get` exits 1 when the key is not set, which is a clean "no origin"; any other exit, a signal or a timeout is a failure.
   const originOf = (folder) => {
-    const result = spawnSync(git, ["-C", folder, "-c", "core.quotePath=false", "config", "--get", "remote.origin.url"], { encoding: "utf8", env: gitEnv(), timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"] })
+    const result = spawnSync(git, ["-C", folder, "-c", "core.quotePath=false", "config", "--get", "remote.origin.url"], { windowsHide: true, encoding: "utf8", env: gitEnv(), timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"] })
     if (result.error !== undefined || result.signal !== null || (result.status !== 0 && result.status !== 1)) return { failed: true }
     const remote = result.status === 0 ? result.stdout.trim() : ""
     return { origin: remote === "" ? null : normalizeRemote(remote) }

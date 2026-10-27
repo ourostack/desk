@@ -134,7 +134,7 @@ export function isLiveCardPath(relativePath) {
 }
 
 function git(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  return spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
 }
 
 function real(target) {

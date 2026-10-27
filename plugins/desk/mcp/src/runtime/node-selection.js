@@ -52,7 +52,7 @@ export function probeNodeRuntime({
     "--input-type=module",
     "--eval",
     probeScript,
-  ], {
+  ], { windowsHide: true,
     encoding: "utf8",
     env,
     shell: false,
@@ -144,7 +144,7 @@ export function reexecWithCompatibleNode({
   return new Promise((resolve, reject) => {
     let childClosed = false
     let forwardedSignal = null
-    const child = spawn(executable, [entrypointPath, ...argv], {
+    const child = spawn(executable, [entrypointPath, ...argv], { windowsHide: true,
       env: {
         ...env,
         [REEXEC_ATTEMPT_ENV]: "1",

@@ -22,6 +22,17 @@ test("the real browser check runs on Linux, Windows and macOS", () => {
   assert.ok(jobs["ci-gate"].needs.includes("browser"))
 })
 
+test("the Crew member-binding tests run on Linux, macOS and Windows, Windows with CRLF checkouts, and gate main", () => {
+  const jobs = read("desk-mcp-tests.yml").jobs
+  const job = jobs["crew-member-binding"]
+  assert.deepEqual(job.strategy.matrix.include.map((item) => item.os).sort(), ["macos-latest", "ubuntu-latest", "windows-latest"])
+  assert.ok(job.steps.some((step) => step.if === "runner.os == 'Windows'" && step.run === "git config --global core.autocrlf true"))
+  const run = job.steps.find((step) => step.name === "Run the member-binding tests").run
+  assert.match(run, /runtime\/crew_member_end_to_end\.test\.js/u)
+  assert.match(run, /ci\/windows_hide\.test\.js/u)
+  assert.ok(jobs["ci-gate"].needs.includes("crew-member-binding"))
+})
+
 for (const name of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
   test(`${name} cancels superseded pull-request runs and lets main and dispatched runs finish`, () => {
     const { concurrency } = read(name)

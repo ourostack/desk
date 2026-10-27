@@ -18,7 +18,7 @@ async function noneOpen(files, { platform, run }) {
 /** Runs a command and resolves with its exit status and output, or with the error that kept it from running. */
 export function runCommand(command, args) {
   return new Promise((resolve) => {
-    execFile(command, args, { encoding: "utf8", timeout: 10_000 }, (error, stdout) => {
+    execFile(command, args, { windowsHide: true, encoding: "utf8", timeout: 10_000 }, (error, stdout) => {
       resolve(error === null ? { status: 0, stdout } : typeof error.code === "number" ? { status: error.code, stdout } : { error, stdout })
     })
   })

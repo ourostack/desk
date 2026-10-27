@@ -138,7 +138,7 @@ function gitCommits({ git, root, since, until }) {
   const result = spawnSync(git, [
     "-C", root, "-c", "core.quotepath=off", "-c", "log.showSignature=false",
     "log", `--since=${since}`, `--until=${until}`, "--name-status", "-M", "-z", "--format=%x1e%H%x1f%cI%x1f%s%x1f%(trailers:key=Desk-Tidy,valueonly)",
-  ], { encoding: "utf8", env: gitEnv(), timeout: GIT_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+  ], { windowsHide: true, encoding: "utf8", env: gitEnv(), timeout: GIT_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
   if (result.error || result.status !== 0) return null
   const commits = []
   for (const record of result.stdout.split("\x1e")) {

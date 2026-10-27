@@ -367,7 +367,7 @@ test("one person's other machine joining with the same alias while this one push
   const result = await joinWorkspace(join(repo, { apply: true, spawnGit }))
   assert.equal(result.state, "member", result.message)
   assert.equal(result.alias, "newbie")
-  assert.equal(result.message, "newbie_example is already on the roster as newbie; nothing to add. Desk sessions in this clone find that desk from the roster.")
+  assert.equal(result.message, "newbie_example is already on the roster as newbie; nothing to add. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as newbie_example; crew.js status --identity newbie_example checks it.")
   assert.equal(rows(repo).filter((line) => line.includes("newbie_example")).length, 1)
 })
 

@@ -68,7 +68,7 @@ function sleepSync(ms) {
 }
 
 function run(spawnGit, root, args, extra = {}) {
-  const once = () => spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
+  const once = () => spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
   let result = once()
   if (yieldsGitLock()) return result
   const deadline = Date.now() + LOCK_WAIT_MS
@@ -81,7 +81,7 @@ function run(spawnGit, root, args, extra = {}) {
 
 /** True when another Git process holds `root`'s index lock right now. False when Git cannot say. */
 export function indexLockHeld(root, spawnGit) {
-  const result = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const result = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "index.lock"], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result.status === 0 && existsSync(path.resolve(root, String(result.stdout).trim()))
 }
 
