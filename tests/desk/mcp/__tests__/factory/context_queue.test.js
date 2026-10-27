@@ -998,7 +998,7 @@ test("bounded publication preserves ready progress and resumes beyond its first 
     let elapsed = 0
     const plan = await withFsFault(t, {
       readFile: (original, file, ...args) => {
-        if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 700
+        if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 1200
         return original(file, ...args)
       },
     }, () => queue.planContextPublication(f.env, {
@@ -1037,6 +1037,50 @@ test("invalid publication cursors cannot select or publish task evidence", async
     await assert.rejects(queue.planContextPublication(f.env, { ...f.options, now: 1000 }),
       /context_publication_cursor_invalid/u)
   }
+})
+
+test("first-priority preparation can finish a valid work unit within the whole unchanged turn", async (t) => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, f.options)
+  let elapsed = 0
+  const version = "3.2.0-alpha.2"
+  await withFsFault(t, {
+    readFile: (original, file, ...args) => {
+      if (/[\\/]state\.json$/u.test(String(file))) elapsed += 350
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, pluginVersion: version, now: 1000, deadline: 2000, clock: () => elapsed,
+    readRemote: () => {
+      elapsed += 200
+      return "https://github.com/synthetic/desk.git"
+    },
+    resolveIdentity: ({ track, slug }) => {
+      elapsed += 600
+      return { track, slug }
+    },
+  }), fsNative.promises)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.evaluator.plugin_version, version, "a valid new source must not remain permanently behind a half-turn boundary")
+  assert.equal(work.source.task_card.path, f.card)
+  assert.ok(elapsed <= 2000, "the existing aggregate preparation deadline remains unchanged")
+})
+
+test("first-priority publication can verify a ready input within the whole unchanged turn", async (t) => {
+  const f = await reviewed()
+  await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "publish" } }))
+  let elapsed = 0
+  const plan = await withFsFault(t, {
+    readFile: (original, file, ...args) => {
+      if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 1200
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
+  }), fsNative.promises)
+  assert.equal(plan.ready.length, 1, "an independently reviewed record that fits the turn must become publishable")
+  assert.equal(plan.ready[0].sha, f.item.sha)
+  assert.ok(elapsed <= 2000, "the existing aggregate publication deadline remains unchanged")
 })
 
 test("preparation exhaustion before publication returns no unvalidated records", async (t) => {
@@ -1102,7 +1146,7 @@ test("a freshness check that spends the publication allowance cannot return a la
     },
   }, () => withFsFault(t, {
     lstatSync: (original, file, ...args) => {
-      if (inputRead && String(file) === f.entries[0].logPath) elapsed = 1000
+      if (inputRead && String(file) === f.entries[0].logPath) elapsed = 2000
       return original(file, ...args)
     },
   }, () => queue.planContextPublication(f.env, {

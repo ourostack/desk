@@ -1,0 +1,1 @@
+Task explanation preparation and publication now alternate first use of their existing shared two-second turn. A valid operation that needs more than half that turn can finish instead of being deferred forever. The total deadline, numerical-delivery reserve, independent privacy review, source checks and model limits are unchanged.
