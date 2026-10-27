@@ -167,7 +167,7 @@ test("I4 the hook terminates and reaps its exact worker even when that worker bl
   const marker = await session(ctx)
   const preload = path.join(ctx.base, "block-worker.mjs")
   const receipt = path.join(ctx.base, "blocked-worker.pid")
-  await fs.writeFile(preload, `import fs from "node:fs"; if (process.argv.includes("--factory-worker")) { fs.writeFileSync(${JSON.stringify(receipt)}, String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000); }\n`)
+  await fs.writeFile(preload, `import fs from "node:fs"; if (process.argv.includes("--factory-worker") && !process.argv.includes("--detached")) { fs.writeFileSync(${JSON.stringify(receipt)}, String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000); }\n`)
   const start = performance.now()
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url)), "claude"], {
     env: { ...ctx.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, encoding: "utf8", timeout: 2500,
@@ -175,7 +175,7 @@ test("I4 the hook terminates and reaps its exact worker even when that worker bl
   })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr, "[desk-delivery] unverified: hook_worker_unavailable\n")
+  assert.equal(result.stderr, "[desk-delivery] unverified: hook_worker_unavailable (deadline)\n")
   const pid = Number(await fs.readFile(receipt, "utf8"))
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
   assert.ok(performance.now() - start < 2000)

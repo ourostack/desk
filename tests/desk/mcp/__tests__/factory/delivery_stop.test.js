@@ -542,6 +542,9 @@ test("existing hook command relays one decision while retaining the accounting m
   assert.equal(r.status, 0)
   assert.equal(JSON.parse(r.stdout).decision, "block")
   const { listMarkers } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  // The capture runs detached, so the marker can land just after the hook answers.
+  const deadline = Date.now() + 30000
+  while ((await listMarkers(ctx.env)).length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
   const markers = await listMarkers(ctx.env)
   assert.equal(markers.length, 1)
   assert.ok(!JSON.stringify(markers).includes(PACKET[0]))

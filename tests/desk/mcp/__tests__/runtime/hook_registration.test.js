@@ -48,7 +48,7 @@ test("the Desk hooks the unused-code check lists are the ones hooks.json and cop
 
 // A hook's logic is a module with named exports under lib/, which knip checks export by export. A registered file that exported its own members would be loaded as one whole object again, which knip cannot see through.
 test("the hook files hosts register or start by path are thin entries over lib/, with no exports of their own", () => {
-  for (const name of ["boot-checks.cjs", "factory-end.cjs", "sync-end.cjs"]) {
+  for (const name of ["boot-checks.cjs", "factory-end.cjs", "session-end.cjs"]) {
     const text = read("plugins", "desk", "hooks", name)
     assert.doesNotMatch(text, /module\.exports|exports\./u, `${name} must not export`)
     assert.match(text, new RegExp(`require\\("\\./lib/${name.replace(".", "\\.")}"\\)`, "u"), `${name} must call its module under lib/`)

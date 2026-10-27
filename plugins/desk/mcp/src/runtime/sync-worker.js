@@ -621,7 +621,7 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
 }
 
 // ---------------------------------------------------------------------------
-// SessionEnd/sessionEnd's own safety net (`hooks/sync-end.cjs`).
+// SessionEnd/sessionEnd's own safety net (`hooks/lib/sync-end.cjs`, run by `hooks/session-end.cjs`).
 // ---------------------------------------------------------------------------
 
 /**

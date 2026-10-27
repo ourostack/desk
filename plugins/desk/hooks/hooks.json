@@ -5,16 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/factory-end.cjs\" claude",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/sync-end.cjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end.cjs\" claude",
             "timeout": 5
           }
         ]

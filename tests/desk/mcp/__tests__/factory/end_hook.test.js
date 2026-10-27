@@ -183,8 +183,8 @@ const HOST_TIMEOUT_MS = Math.min(...(() => {
   const claude = JSON.parse(readFileSync(path.join(plugin, "hooks", "hooks.json"), "utf8")).hooks
   const copilot = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const seconds = [
-    ...Object.values(claude).flat().flatMap((group) => group.hooks).filter((entry) => entry.command.includes("factory-end.cjs")).map((entry) => entry.timeout),
-    ...Object.values(copilot).flat().filter((entry) => entry.bash.includes("factory-end.cjs")).map((entry) => entry.timeoutSec),
+    ...Object.values(claude).flat().flatMap((group) => group.hooks).filter((entry) => /(?:factory|session)-end\.cjs/u.test(entry.command)).map((entry) => entry.timeout),
+    ...Object.values(copilot).flat().filter((entry) => /(?:factory|session)-end\.cjs/u.test(entry.bash)).map((entry) => entry.timeoutSec),
   ]
   assert.ok(seconds.length >= 4 && seconds.every((value) => Number.isFinite(value) && value > 0), "every host declares a timeout for the end hook")
   return seconds.map((value) => value * 1000)

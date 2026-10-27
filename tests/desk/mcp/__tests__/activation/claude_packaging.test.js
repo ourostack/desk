@@ -431,11 +431,11 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
   assert.doesNotMatch(JSON.stringify(mcp), /\$\{pluginRoot\}/u)
 })
 
-test("hooks.json registers sync-end.cjs under SessionEnd, not Stop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
+test("hooks.json runs the unpushed check (session-end.cjs) under SessionEnd, not Stop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
   const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
-  const registeredUnder = (event) => hooks.hooks[event].some((entry) => entry.hooks.some((hook) => hook.command.includes("sync-end.cjs")))
-  assert.ok(registeredUnder("SessionEnd"), "hooks.json's SessionEnd array must register sync-end.cjs")
-  assert.ok(!registeredUnder("Stop"), "sync-end.cjs must never bind to Stop, which fires after every turn")
+  const registeredUnder = (event) => hooks.hooks[event].some((entry) => entry.hooks.some((hook) => hook.command.includes("session-end.cjs")))
+  assert.ok(registeredUnder("SessionEnd"), "hooks.json's SessionEnd array must register session-end.cjs")
+  assert.ok(!registeredUnder("Stop"), "session-end.cjs must never bind to Stop, which fires after every turn")
 })
 
 test("Claude SessionStart injects the full Desk foundation once without scanning tasks", () => {

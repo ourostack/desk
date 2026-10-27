@@ -8,7 +8,8 @@ import { Readable } from "node:stream"
 import { scratch } from "./_session_helpers.js"
 
 import { readInput, runHook } from "../../../../../plugins/desk/hooks/lib/sync-end.cjs"
-const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/sync-end.cjs", import.meta.url))
+// Session end runs the unpushed check from the one session-end hook.
+const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/session-end.cjs", import.meta.url))
 
 function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
