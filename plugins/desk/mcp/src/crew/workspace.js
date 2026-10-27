@@ -369,6 +369,13 @@ async function tokenOf(gh, account) {
 
 const NOT_SEEN = /\(HTTP 40[34]\)/u
 
+// The login GitHub says `token` belongs to, for an ambient token that gh lists under a placeholder name; the
+// placeholder when GitHub does not say. Pull requests are listed and matched by this login.
+async function tokenLogin(gh, token) {
+  const me = ghJson(await gh(["api", "user"], { token }))
+  return typeof me.login === "string" && me.login !== "" ? me.login : ENV_TOKEN_ACCOUNT
+}
+
 // Every account signed in to gh, asked about `store` with its own token, the active account first: whether it sees the
 // repository and may push to it. The same choice as Desk's `chooseAccount`, which lesson_add uses, without that
 // function's limit to the owner names Desk's factory records allow: an Enterprise Managed Users login has an underscore.
@@ -376,12 +383,13 @@ async function accountsFor(store, gh) {
   const status = await gh(["auth", "status", "--hostname", "github.com"])
   if (status.code === null) return { why: "gh is not installed or could not start" }
   const accounts = []
-  for (const account of signedInAccounts(`${status.stdout}\n${status.stderr}`)) {
-    const token = await tokenOf(gh, account)
+  for (const listed of signedInAccounts(`${status.stdout}\n${status.stderr}`)) {
+    const token = await tokenOf(gh, listed)
     if (token === null) {
-      accounts.push({ account, why: "its token failed; sign it in again with gh auth login" })
+      accounts.push({ account: listed, why: "its token failed; sign it in again with gh auth login" })
       continue
     }
+    const account = listed === ENV_TOKEN_ACCOUNT ? await tokenLogin(gh, token) : listed
     const answer = await gh(["api", `repos/${store}`], { token })
     if (answer.code !== 0 && !NOT_SEEN.test(String(answer.stderr))) {
       accounts.push({ account, why: `GitHub could not be asked: ${firstLine(answer.stderr) || "no answer"}` })
@@ -553,13 +561,18 @@ async function openPullRequest(hub, origin, { account, base, branch, identity, p
   return found === undefined ? undefined : { url: found.url, branch: found.headRefName }
 }
 
+// The commit origin's branch `name` points at, or "" when origin has no such branch.
+function remoteBranch(git, name) {
+  const seen = git(["ls-remote", "--heads", git.remote, `refs/heads/${name}`], { network: true })
+  if (!seen.ok) throw new Failed("fetch", `could not reach origin: ${firstLine(seen.stderr)}`)
+  return seen.stdout.split(/\s/u)[0]
+}
+
 // A branch name `prefix<stamp>` that no branch on origin has yet, counting the stamp up from `stamp`.
 function freeBranch(git, prefix, stamp) {
   for (let next = stamp; ; next += 1) {
     const name = `${prefix}${next.toString(36)}`
-    const seen = git(["ls-remote", "--heads", git.remote, `refs/heads/${name}`], { network: true })
-    if (!seen.ok) throw new Failed("fetch", `could not reach origin: ${firstLine(seen.stderr)}`)
-    if (seen.stdout === "") return name
+    if (remoteBranch(git, name) === "") return name
   }
 }
 
@@ -630,6 +643,34 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
     unpush()
     delete result.pr
   }
+  // The commit this run pushed for the pull request: what the default branch must hold once it merged.
+  let ours = null
+  // Builds the change again from `write` on the default branch as GitHub has it now and force-pushes it to the pull
+  // request's branch, leased to what that branch holds now, so the pull request carries exactly this run's commit
+  // whatever was pushed onto it before. False when the default branch already has the change: the pull request closes.
+  const rebuild = async () => {
+    fetchBase(git, base)
+    git.must(["reset", "--quiet", "--hard", `origin/${base}`], "reset")
+    let rebuilt
+    try {
+      rebuilt = write()
+    } catch (error) {
+      await abandon(`Closed by Crew's crew.js: ${error.message}.`)
+      throw error
+    }
+    if (rebuilt === null) {
+      await abandon("Closed by Crew's crew.js: the default branch already has this change.")
+      back()
+      return false
+    }
+    paths = rebuilt
+    commitAll(git, paths, message)
+    const lease = remoteBranch(git, name)
+    git.must(["push", "--quiet", `--force-with-lease=refs/heads/${name}:${lease}`, git.remote, `HEAD:refs/heads/${name}`], "push", "the push was refused: ", { network: true })
+    pushed = true
+    ours = git(["rev-parse", "HEAD"]).stdout
+    return true
+  }
   try {
     git.must(["switch", "--quiet", "-c", name], "branch")
     if (reuse === undefined) {
@@ -641,13 +682,16 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
       commitAll(git, paths, message)
       git.must(["push", "--quiet", git.remote, `HEAD:refs/heads/${name}`], "push", "the push was refused: ", { network: true })
       pushed = true
+      ours = git(["rev-parse", "HEAD"]).stdout
       const opened = await hub(["pr", "create", "--repo", origin, "--base", base, "--head", name, "--title", message, "--body", body])
       const url = ghText(opened).split("\n").pop()
       if (opened.code !== 0 || !/^https:\/\/github\.com\//u.test(url)) throw new Failed("pull_request", `could not open the pull request: ${firstLine(opened.stderr)}`)
       result.pr = url
     } else {
+      // An earlier run's own pull request: merged only once it holds this run's write, never as it stands.
       result.pr = reuse.url
       result.reused = true
+      if (!(await rebuild())) return { unchanged: true }
     }
     let state = {}
     let refusal = ""
@@ -666,24 +710,7 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
       }
       if (state.mergeable === "CONFLICTING" || state.mergeStateStatus === "BEHIND") {
         // A teammate changed the default branch first: build the change again on top of theirs, checked again.
-        fetchBase(git, base)
-        git.must(["reset", "--quiet", "--hard", `origin/${base}`], "reset")
-        let rebuilt
-        try {
-          rebuilt = write()
-        } catch (error) {
-          await abandon(`Closed by Crew's crew.js: ${error.message}.`)
-          throw error
-        }
-        if (rebuilt === null) {
-          await abandon("Closed by Crew's crew.js: the default branch already has this change.")
-          back()
-          return { unchanged: true }
-        }
-        paths = rebuilt
-        commitAll(git, paths, message)
-        git.must(["push", "--quiet", "--force", git.remote, `HEAD:refs/heads/${name}`], "push", "the push was refused: ", { network: true })
-        pushed = true
+        if (!(await rebuild())) return { unchanged: true }
       } else if (state.mergeable === "UNKNOWN") await wait(2000)
       else break
     }
@@ -698,7 +725,7 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
     const fetched = git(["fetch", "--quiet", git.remote, `+refs/heads/${base}:refs/remotes/origin/${base}`], { network: true })
     if (!fetched.ok) return { commit, unfetched: firstLine(fetched.stderr) }
     git.must(["merge", "--quiet", "--ff-only", `origin/${base}`], "fetch")
-    return { commit: commit ?? git(["rev-parse", "HEAD"]).stdout }
+    return { commit: commit ?? git(["rev-parse", "HEAD"]).stdout, ours }
   } catch (error) {
     if (pushed && result.pr === undefined) unpush()
     restore(git, base, start, paths, created, currentBranch(git) === base ? undefined : name)
@@ -712,11 +739,13 @@ function failedResult(result, error, extra = "") {
   return { ...result, state: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the shared write stopped at ${error.stage} (${error.message}).${open}${extra}` }
 }
 
-// GitHub reports the pull request merged, yet the default branch, read back, does not hold `missing`.
-const notConfirmed = (result, base, missing) => ({ ...result, state: "failed", stage: "verify", reason: `${base} does not hold ${missing.join(", ")}`, message: `Not confirmed: GitHub reports ${result.pr} merged, but ${base} does not hold ${missing.join(", ")}. Someone may have changed ${base} since. Run crew.js status to see the workspace as it is.` })
+// GitHub reports the pull request merged, yet the default branch, read back, does not hold `missing` (`what`, in plain
+// words); `next` is the person's next step.
+const notConfirmed = (result, base, missing, what, next) => ({ ...result, state: "failed", stage: "verify", reason: `${base} does not hold ${missing.join(", ")}`, message: `Not confirmed: GitHub says the pull request ${result.pr} merged, but the team's ${base} branch does not have ${what}. ${next}` })
 
-// GitHub merged the pull request, and this clone could not fetch the default branch to read it back.
-const unconfirmedResult = (result, landed, base, state, done, next) => ({ ...result, state, confirmed: false, commit: landed.commit, message: `${done}: GitHub merged ${result.pr}, but this clone could not fetch ${base} afterwards to confirm it (${landed.unfetched}). Run git pull, then crew.js status to confirm. ${next}` })
+// GitHub merged the pull request, and this clone could not fetch the default branch to read it back; Git's own words
+// go in `reason`, not in the message a person reads.
+const unconfirmedResult = (result, landed, state, done, next) => ({ ...result, state, confirmed: false, commit: landed.commit, reason: landed.unfetched, message: `${done}: GitHub merged the pull request ${result.pr}, so the change is in effect. This computer could not download it afterwards to double-check, probably a brief network problem. Next: once the network is back, update this copy of the workspace and check its status. ${next}` })
 
 // A pull request left open, with GitHub's reason in plain words and the next step.
 function openResult(result, landed, base, lead) {
@@ -846,14 +875,16 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     writeFiles(top, written, created)
     return Object.keys(written).sort()
   }
-  // What the default branch must hold once the start merged: every file, the settings and the section as written.
-  const notHeld = () =>
+  // What the fetched default branch lacks of this run's commit `ours`: every file the start wrote, compared as Git
+  // stores it (a clone that converts line endings shows other bytes than GitHub holds).
+  const blob = (ref, rel) => git(["rev-parse", "--verify", "--quiet", `${ref}:${rel}`]).stdout
+  const notHeld = (ours, held) =>
     Object.keys(written)
       .sort()
       .flatMap((rel) => {
-        if (!exists(top, rel)) return [rel]
-        const exact = rel === CONFIG || /^agents\.md$/iu.test(rel)
-        return exact && readFileSync(path.join(top, rel), "utf8") !== written[rel] ? [`${rel} as this run wrote it`] : []
+        const there = blob(held, rel)
+        if (there === "") return [rel]
+        return there === blob(ours, rel) ? [] : [`${rel} as this run wrote it`]
       })
   const message = "Crew: start this Crew workspace"
   try {
@@ -882,9 +913,9 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     const landed = await landByPullRequest({ git, base: checkout.base, origin, write, message, body, prefix: "crew/start-", stamp: now(), hub: checkout.hub, wait, result, reuse, created })
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, "Not in effect yet: ")
     const next = "Teammates join it with crew:join-crew."
-    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, checkout.base, "published", "Started", next)
-    const missing = notHeld()
-    if (missing.length > 0) return notConfirmed(result, checkout.base, missing)
+    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "published", "Started", next)
+    const missing = notHeld(landed.ours, `origin/${checkout.base}`)
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing, "what this start wrote", "Someone may have changed it since. Next: check what the workspace holds now before starting it again.")
     return { ...result, state: "published", commit: landed.commit, message: `Started: this repository is now a ${parsed.setup} Crew workspace. The change merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error)
@@ -1003,10 +1034,13 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
     }
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
     const next = `Desk sessions in this clone find that desk from the roster.${toolingNote}`
-    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, checkout.base, "joined", "Joined", next)
+    if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
-    const missing = [...(holders().mine?.alias === alias ? [] : [`the roster row for ${identity} as ${alias}`]), ...(files.every((rel) => exists(top, rel)) ? [] : [`${desk}/`])]
-    if (missing.length > 0) return notConfirmed(result, checkout.base, missing)
+    const missing = [
+      [holders().mine?.alias !== alias, `the roster row for ${identity} as ${alias}`, "roster row"],
+      [!files.every((rel) => exists(top, rel)), `${desk}/`, "desk"],
+    ].filter(([gone]) => gone)
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing.map(([, item]) => item), `${identity}'s ${missing.map(([, , plain]) => plain).join(" and ")}`, "Next: run the same join again; it adds only what is missing.")
     return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; run join again to add the roster row.` : "")

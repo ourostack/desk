@@ -45,7 +45,7 @@ async function writeAll(dir, files) {
  * A team repository on "GitHub" holding `files` on main (none: an empty repository), and a clone of it. Returns the
  * paths and the Git that reaches the bare repository.
  */
-export async function teamRepo(files = {}, { origin = `${ORIGIN}.git` } = {}) {
+export async function teamRepo(files = {}, { origin = `${ORIGIN}.git`, cloneConfig = {} } = {}) {
   const base = await mkTempRoot("crew-workspace-")
   const bare = path.join(base, "origin.git")
   spawnSync("git", ["init", "-q", "--bare", "-b", "main", bare])
@@ -60,7 +60,7 @@ export async function teamRepo(files = {}, { origin = `${ORIGIN}.git` } = {}) {
     git(seed, ["push", "-q", bare, "main"])
   }
   const clone = path.join(base, "clone")
-  spawnSync("git", ["clone", "-q", bare, clone], { encoding: "utf8" })
+  spawnSync("git", ["clone", "-q", ...Object.entries(cloneConfig).flatMap(([key, value]) => ["-c", `${key}=${value}`]), bare, clone], { encoding: "utf8" })
   git(clone, ["config", "user.email", "member@example.com"])
   git(clone, ["config", "user.name", "Member"])
   git(clone, ["remote", "set-url", "origin", origin])
@@ -110,14 +110,15 @@ export const TOOLING_REPOS = Object.freeze({ "acme/team-tooling": { "plugins/tea
  * authored by the account whose token it was given; `pr merge` squash-merges it onto main when the two do not conflict
  * and refuses otherwise (or does what `merge(state)` says); `pr view` reports its state; `pr list` lists the open ones
  * with their author, fork flag, base branch and changed files, filtered by `--author`; `pr close` closes one; `repo view`
- * reports the merge methods `methods` allows (null: the call fails). The signed-in `accounts` (by default one,
+ * reports the merge methods `methods` allows (null: the call fails), and `api user` the login a token belongs to. While
+ * `blocked()` returns a refusal, `pr merge` fails with it, as with a required review. The signed-in `accounts` (by default one,
  * `tester`, whose token is `tok`; another account's token is `tok-<account>`, and `token(account)` returning null makes
  * gh fail to give one) see every repository except those in `hidden` and may push where `canPush(account, repo)` says.
  * It answers the GitHub contents API from `repos`: `{ "owner/name": { "path/in/repo": "text" } }`, by default the
  * tooling repository `acme/team-tooling` holding the plugin `team` in `plugins/team/`. Every call is recorded with the
  * token it was given. A test adds someone else's pull request with `plantPullRequest`.
  */
-export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLING_REPOS, hidden = [], list, accounts = ["tester"], canPush = () => true, token = (account) => (account === "tester" ? "tok" : `tok-${account}`), methods = { squash: true, merge: true, rebase: true } } = {}) {
+export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLING_REPOS, hidden = [], list, accounts = ["tester"], canPush = () => true, token = (account) => (account === "tester" ? "tok" : `tok-${account}`), methods = { squash: true, merge: true, rebase: true }, blocked = () => null } = {}) {
   const calls = []
   const tokens = []
   const state = { head: null, merged: false, merges: 0, closed: false, prs: [], method: null }
@@ -138,6 +139,10 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLIN
     if (a === "auth" && b === "token") {
       const given = token(args[3])
       return given === null ? { code: 1, stdout: "", stderr: "no token" } : { code: 0, stdout: `${given}\n`, stderr: "" }
+    }
+    if (a === "api" && args[args.length - 1] === "user") {
+      if (asking === undefined) return { code: 1, stdout: "{\"message\":\"Bad credentials\"}", stderr: "gh: Bad credentials (HTTP 401)" }
+      return { code: 0, stdout: JSON.stringify({ login: asking }), stderr: "" }
     }
     if (a === "api") {
       const route = args[args.length - 1]
@@ -176,6 +181,8 @@ export function fakeGh(bare, { create = { code: 0 }, merge, view, repos = TOOLIN
       state.merges += 1
       state.method = args[3]
       if (merge !== undefined) return merge(state)
+      const refusal = blocked()
+      if (refusal !== null) return { code: 1, stdout: "", stderr: refusal }
       const pr = prOf(args[2])
       const tree = squashTree(pr.headRefName)
       if (tree === null) return { code: 1, stdout: "", stderr: "Pull request is not mergeable" }

@@ -333,7 +333,7 @@ test("join run again after it left the roster row's pull request open reuses it;
 test("a rebuilt roster row whose push is refused leaves its pull request open for the rerun and says so", async () => {
   const repo = await started()
   const { gh, state } = racing(repo, async () => pushFromElsewhere(repo, { "_meta/desks.md": `${rosterOnMain(repo)}| other | other_example | desks/other | acme/team | crew | desks/other |\n` }))
-  const spawnGit = (cmd, args, options) => (args.includes("push") && args.includes("--force") ? { status: 1, stdout: "", stderr: "remote: Permission denied" } : repo.spawnGit(cmd, args, options))
+  const spawnGit = (cmd, args, options) => (args.includes("push") && args.some((arg) => arg.startsWith("--force-with-lease=")) ? { status: 1, stdout: "", stderr: "remote: Permission denied" } : repo.spawnGit(cmd, args, options))
   const result = await joinWorkspace(join(repo, { apply: true, gh, spawnGit }))
   assert.equal(result.state, "failed")
   assert.equal(result.stage, "push")
