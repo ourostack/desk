@@ -260,7 +260,7 @@ async function prepareContextGroups(env, {
     if (!namespaces.has(key)) namespaces.set(key, [])
     namespaces.get(key).push(group)
   }
-  const save = async (group, taskCard, taskCardStatus = taskCard === null ? "not_associated" : "associated") => {
+  const save = async (group, taskCard, taskCardStatus) => {
     within()
     if (!allowed(group.desk_root, store)) return
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
