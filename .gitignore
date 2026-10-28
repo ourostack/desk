@@ -7,3 +7,4 @@ coverage/
 
 # Repository-level tooling install (knip).
 node_modules/
+windows-archive-race-observations.json
