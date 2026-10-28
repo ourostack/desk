@@ -7,3 +7,6 @@ coverage/
 
 # Repository-level tooling install (knip).
 node_modules/
+.rt/
+.task1-scratch/
+hosted/test/.runtime-socket-test/
