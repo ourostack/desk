@@ -1,6 +1,6 @@
 ---
 name: shared-desk-conventions
-description: The multi-person shared-workspace layout variant -- one git repo, N operators, `desks/<alias>/` = one person's full desk, `_shared/{landscape,decisions}/` = team-neutral facts + agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (`desks/<you>/` = direct push; a shared path = auto pull-`main` → branch → write → PR → merge-now, NO human review). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), or when about to write to a path outside your own `desks/<alias>/` subtree. The multi-person overlay for `desk:directory-structure`.
+description: The multi-person shared-workspace layout variant -- one git repo, N operators, `desks/<alias>/` = one person's full desk, `_shared/{landscape,decisions}/` = team-neutral facts + agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (`desks/<you>/` = direct push; a shared path = auto pull-`main` → branch → write → PR → merge-now, NO human review). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), or when about to write to a path outside your own `desks/<alias>/` subtree, or when two or more members prepare together for a meeting (one shared meeting folder for prep and capture, linked from each desk). The multi-person overlay for `desk:directory-structure`.
 ---
 
 # Shared-desk conventions
@@ -161,6 +161,18 @@ A team lesson binds every teammate's agents, so one person cannot make one up: i
 ## Shared tracks (when several people work one effort)
 
 Shared tracks recur, so handle them lightly: the shared track's coordination card/index lives in `_shared/tracks/<track>/` (a shared path → conflict-safe writes), while **each person's actual work on it stays in their own `desks/<alias>/` subtree and links to the shared card.** Shared card = coordination; the work itself = scoped. The default stays read-across / write-own; only the small coordination surface is shared.
+
+## Preparing for a meeting together
+
+When two or more members prepare for the same meeting, their agents keep that prep in one shared folder for the meeting, never in anyone's desk. Prep split across desks turns into parallel drafts that nobody reconciles, and the meeting's capture then has no obvious home.
+
+1. **Reuse or create the folder.** First search the workspace for a folder for this meeting (same date and subject) and reuse it. Otherwise create it where the workspace already keeps meeting records: the location its root `AGENTS.md` or README names, or an existing meetings collection. If the workspace has neither, use `_shared/meetings/<YYYY-MM-DD>-<slug>/`, dated by the meeting day.
+2. **Give it a README a person can read cold:** when the meeting is, who organizes it, its goal in the organizer's own words with a link to where they said it, the pre-read, a `## Prep` section and a `## Capture` section.
+3. **Keep prep under `prep/`:** agenda, notes, questions and one working draft of each artifact, such as a deck outline. Everyone edits that draft through their agent; nobody starts a parallel copy in their desk or beside it.
+4. **Point each participant's desk at it.** Each participant's agent adds a one-line link to the folder from that person's own task card or desk README instead of copying its content. A participant's own view on the meeting stays in their desk, attributed; outcomes go to `_shared/decisions/` only once agreed.
+5. **Land the capture in the same folder** after the meeting: the transcript, chat and source records, following the workspace's capture procedure, with the meeting added to its collection's index if there is one.
+
+The folder is a shared path, so every write to it uses the conflict-safe write protocol above.
 
 ## Graceful degradation -- plain markdown first
 
