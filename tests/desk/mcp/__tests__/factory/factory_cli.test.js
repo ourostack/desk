@@ -61,6 +61,7 @@ test("the requested context CLI requires one exact store and job", async () => {
   for (const argv of [
     [], ["--store"], ["--store", "test/store"], ["--job", job],
     ["--store", "invalid", "--job", job], ["--store", "test/store", "--job", "invalid"],
+    ["--other", "test/store", "--job", job], ["--store", "test/store", "--other", job],
     ["--store", "test/store", "--job", job, "--approved", "yes"],
     ["--store", "test/store", "--job", job, "--job", job],
   ]) await assert.rejects(runContextRequestCommand({ argv, env, run }), /Usage: factory\.js context-request/u)
