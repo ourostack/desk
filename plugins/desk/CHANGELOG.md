@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.37 — 2026-10-28
+
+Keep independently reviewed session explanations moving when optional task-card lookup is unavailable, with explicit partial coverage and unchanged identity, source and privacy checks.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.36 — 2026-10-27
 
 Task explanation preparation and publication now alternate first use of their existing shared two-second turn. A valid operation that needs more than half that turn can finish instead of being deferred forever. The total deadline, numerical-delivery reserve, independent privacy review, source checks and model limits are unchanged.
