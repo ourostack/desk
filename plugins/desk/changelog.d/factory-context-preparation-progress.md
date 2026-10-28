@@ -1,1 +1,0 @@
-Fix session-context preparation repeatedly spending its bounded turn on early jobs. Protected per-namespace progress now resumes the next unfinished save without increasing deadlines or changing evidence, consent, model attempts or independent privacy checks.
