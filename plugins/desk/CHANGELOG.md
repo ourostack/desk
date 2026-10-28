@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.38 — 2026-10-28
+
+Fix session-context preparation repeatedly spending its bounded turn on early jobs. Protected per-namespace progress now resumes the next unfinished save without increasing deadlines or changing evidence, consent, model attempts or independent privacy checks.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.37 — 2026-10-28
 
 Keep independently reviewed session explanations moving when optional task-card lookup is unavailable, with explicit partial coverage and unchanged identity, source and privacy checks.
