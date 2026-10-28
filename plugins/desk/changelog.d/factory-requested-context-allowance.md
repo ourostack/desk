@@ -1,0 +1,1 @@
+Give explicitly requested session explanations one complete generation/privacy allowance, separate from unattended maintenance's daily ledger. The requested CLI keeps source, consent, billing, retry and publication checks, holds the normal evaluator lock across both phases, and never enables an automatic budget escape.

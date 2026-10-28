@@ -12,3 +12,5 @@ Lean is the starting point for every question about the factory, not a lens appl
 - **Designs and plans.** Every factory design and plan carries a "Lean reading" section that names the governing concept.
 - **Reviews.** Put these questions in every reviewer brief, re-reviews included. Does this add waste? Is the error made impossible, or only discouraged? Does anything need a hand? Can a wrong or missing value read as a right one? Does a loop stop at noticing or filing? Every factory review brief also asks whether the change breaks a Lean principle or the terrarium.
 - **Loops.** A loop is detect, fix the cause, verify, standardize, close. One that stops at noticing or filing is not a loop.
+
+For session explanations the operator explicitly asked you to deliver, follow the [requested context path](../../docs/factory-local-capture.md#explicitly-requested-context). Its allowance is separate from unattended maintenance; the ordinary loop and model children must never promote themselves into it.

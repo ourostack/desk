@@ -96,6 +96,14 @@ They alternate which goes first; that stage may use the remaining whole turn,
 so a valid operation does not stall merely because it needs more than half.
 The total deadline and the separate numerical-delivery reserve are unchanged.
 
+### Explicitly requested context
+
+For work a person explicitly asked an agent to execute, `node mcp/scripts/factory.js context-request --store <owner/repo> --job <public-job-id>` runs generation and separate privacy review for one already prepared, source-bound job. The invocation allocates one slot for each phase before starting; background maintenance cannot consume the review slot. The ordinary loop never selects this lane, and stored task prose, status fields or environment flags cannot enable it. A headless model child cannot request another operation.
+
+Requested work does not borrow from, reset or enlarge the automatic 30-launch ledger or its triage windows. Read-only admission still checks retained witnesses and legacy dates; missing witnesses beside retained state, or an unsettled set, refuse rather than being repaired or treated as a fresh allowance. It holds the ordinary evaluator lock across both phases, drains serialized child bookkeeping before releasing it, retains consent, subscription/billing checks, source qualification, private evidence freshness, per-phase retry limits and model deadlines, and stops on a failed or stale phase. Its fixed phase slots live in the owning process, not in model-writable files. `status.requested_context` records reservations, actual outcomes and reported usage cost separately; missing cost is `null`. A ready result means the private record completed its independent review, not that it was published or proved useful. Publish through the ordinary `flush` path and verify the actual reader. Never invoke requested mode solely because automatic work reached its cap.
+
+### Source and publication checks
+
 Within each desk/person namespace, preparation also keeps a protected next-job cursor in `preparation.json`. It resumes saves in stable job order after completed, unchanged or explicitly held work, so hashing early jobs cannot consume every turn. Discovery and publication keep their separate cursors. If a discovered card cannot be saved this turn, discovery revisits that candidate rather than losing it between cursors; every retry still verifies the actual card. A removed next job wraps to the next existing job; malformed progress refuses rather than selecting evidence. This cursor schedules work only: it changes no job mapping, card authority, evidence, model attempt or publication approval.
 
 Task-card lookup enriches already source-bound session evidence; it does not

@@ -17,6 +17,7 @@ import * as path from "node:path"
 const GUARD_STALE_MS = 30 * 60 * 1000
 // A lock is taken over when its recorded process is gone, or past this age, which covers a recycled process id.
 export const LOCK_OUTER_AGE_MS = 6 * 60 * 60 * 1000
+export const EVALUATOR_LOCK_NAME = "evaluator-step.running"
 const MAX_CHILDREN = 64
 
 /** An existence probe of one process id: signal 0 delivers nothing. A process that may not be signalled exists. */

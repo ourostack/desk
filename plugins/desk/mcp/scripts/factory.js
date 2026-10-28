@@ -6,6 +6,7 @@
 //   node scripts/factory.js consent --store <owner/repo> --mentioned yes
 //     Records that the operator was told Desk can contribute to the store, so no later session start raises it again. It decides nothing.
 //   node scripts/factory.js flush --store <owner/repo>
+//   node scripts/factory.js context-request --store <owner/repo> --job <public job id>
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
 //     Triage data also requires --repo <owner/repo> --pr <number> for trusted API authority.
@@ -56,6 +57,7 @@ import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { kickLoop } from "../src/factory/evaluate-kick.js"
+import { runRequestedTaskContext } from "../src/factory/context-run.js"
 import { orphanPassLine, ownVersion, publishedJobId } from "../src/factory/local-status.js"
 import { factoryStateDir } from "../src/factory/boot-check.js"
 import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
@@ -73,7 +75,7 @@ import { issuesClient } from "../src/factory/store-issues.js"
 import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -608,6 +610,14 @@ export async function runReconcileCommand({ argv, env, git = "git" }) {
 
 const LOOP_USAGE = "Usage: factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]"
 
+/** An explicit operator request owns one existing source-bound job, never a background budget override. */
+export async function runContextRequestCommand({ argv, env, run = runRequestedTaskContext }) {
+  const options = parseOptions(argv)
+  if (options === null || options.size !== 2 || !PATTERNS.prRepo.test(options.get("store") ?? "") ||
+      !JOB.test(options.get("job") ?? "")) throw new Error("Usage: factory.js context-request --store <owner/repo> --job <public job id>")
+  return run(env, { store: options.get("store"), job: options.get("job") })
+}
+
 /** Runs `loop`: one run of the improvement steps for the desk and person given (`src/factory/loop-worker.js`); returns codes and integers only. `impls`, `pluginVersion` and the rest of `extra` are test seams. */
 export async function runLoopCommand({ argv, env, pluginVersion = deskVersion(), ...extra }) {
   const options = parseOptions(argv)
@@ -658,6 +668,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       derive: runDeriveCommand,
       status: runStatusCommand,
       flush: runFlushCommand,
+      "context-request": runContextRequestCommand,
       finalize: runFinalizeCommand,
       "validate-pr": runValidatePrCommand,
       build: runBuildCommand,
@@ -671,7 +682,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)

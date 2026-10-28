@@ -44,6 +44,43 @@ import { osEnv } from "../_os_env.js"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
 
+test("the requested context CLI requires one exact store and job", async () => {
+  const { runContextRequestCommand } = await import("../../../../../plugins/desk/mcp/scripts/factory.js")
+  assert.equal(typeof runContextRequestCommand, "function", "requested context needs an explicit CLI entry")
+  assert.ok(SUPPORTED_COMMANDS.includes("context-request"))
+  const env = { DESK_FACTORY_HEADLESS: "1" }
+  const job = "1".repeat(32)
+  let calls = 0
+  const run = async (actualEnv, options) => {
+    calls += 1
+    assert.equal(actualEnv, env)
+    assert.deepEqual(options, { store: "test/store", job })
+    return { ok: true, result: "context_requested", ready: true }
+  }
+  assert.equal((await runContextRequestCommand({ argv: ["--store", "test/store", "--job", job], env, run })).ready, true)
+  for (const argv of [
+    [], ["--store"], ["--store", "test/store"], ["--job", job],
+    ["--store", "invalid", "--job", job], ["--store", "test/store", "--job", "invalid"],
+    ["--other", "test/store", "--job", job], ["--store", "test/store", "--other", job],
+    ["--store", "test/store", "--job", job, "--approved", "yes"],
+    ["--store", "test/store", "--job", job, "--job", job],
+  ]) await assert.rejects(runContextRequestCommand({ argv, env, run }), /Usage: factory\.js context-request/u)
+  assert.equal(calls, 1)
+})
+
+test("the requested context CLI reports a real headless refusal as failure", async () => {
+  const output = []
+  const errors = []
+  const code = await main({
+    argv: ["context-request", "--store", "test/store", "--job", "1".repeat(32)],
+    env: { DESK_FACTORY_HEADLESS: "1" },
+    write: value => output.push(value), logError: value => errors.push(value),
+  })
+  assert.deepEqual(errors, [])
+  assert.equal(code, 1)
+  assert.equal(JSON.parse(output[0]).result, "headless_session")
+})
+
 async function scratch(run) {
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-cli-"))
   const base = await fs.realpath(rawBase)

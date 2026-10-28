@@ -61,6 +61,8 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 
 ## Tools exposed (24)
 
+For explicitly requested session explanations, the maintained CLI also exposes `node scripts/factory.js context-request --store <owner/repo> --job <public-job-id>`. It allocates one generation and one independent privacy slot for that invocation, separately from unattended maintenance's daily allowance, without changing its ledger. All source, consent, billing, retry and publication guards remain; the ordinary background loop cannot promote itself into requested mode. See [the requested-context contract](../docs/factory-local-capture.md#explicitly-requested-context) before use. Publication still uses ordinary `flush`.
+
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
 - `track_create`, `track_update` (on a Git desk, each stages the `track.md` it writes; `track_update` skips that when the file already held unstaged changes)
