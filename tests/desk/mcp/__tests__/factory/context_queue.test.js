@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { readStatus, serializeTaskContext, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { contextPayloadHash } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
-import { contextFacts, contextRecord, CONTEXT_JOB } from "./_context_fixture.js"
+import { contextFacts, contextRecord, CONTEXT_JOB, replaceContextInput } from "./_context_fixture.js"
 import { osEnv } from "../_os_env.js"
 
 const queue = await import("../../../../../plugins/desk/mcp/src/factory/context-outbox.js").catch((error) => {
@@ -433,6 +433,19 @@ test("completed optional-card search is distinct from unavailable discovery", as
   assert.equal(f.work.source.task_card_status, "not_associated")
 })
 
+test("unknown or inconsistent sealed card status cannot create runnable context", async () => {
+  const f = await prepared()
+  for (const changes of [
+    { task_card_status: "unknown" },
+    { task_card_status: "associated", task_card: null },
+    { task_card_status: "unavailable", task_card: { path: join(f.desk, "unverified.md"), sha256: "f".repeat(64) } },
+  ]) {
+    await replaceContextInput(f.env, STORE, f.work, { ...f.work.source, ...changes })
+    assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+    assert.equal((await acceptedCandidate(f)).result, "source_changed")
+  }
+})
+
 test("a subsequently verified optional card replaces the source-only input", async () => {
   const f = await cardFixture()
   await queue.prepareTaskContexts(f.env, {
@@ -492,6 +505,25 @@ test("unavailable optional context cannot claim complete coverage or skip indepe
   assert.equal(ready.length, 1)
   assert.equal(JSON.parse(ready[0].bytes).coverage.state, "partial")
 })
+
+for (const state of ["withheld", "unavailable"]) {
+  test(`unavailable card context still allows an honest ${state} candidate`, async () => {
+    const f = await cardFixture()
+    await queue.prepareTaskContexts(f.env, {
+      ...f.options, resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+    })
+    const [work] = await queue.listContextWork(f.env, { store: STORE })
+    const value = {
+      ...candidate(f.facts, f.job), state, heading: null, events: [],
+      coverage: { state: "unavailable", reasons: [state === "withheld" ? "withheld" : "not_recorded"], omitted_events: 0 },
+    }
+    assert.equal((await queue.acceptContextCandidate(f.env, {
+      store: STORE, job: f.job, basis: work.basis, bytes: json(value),
+    })).result, "candidate_accepted")
+    assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [],
+      "an honest no-prose candidate still cannot approve itself")
+  })
+}
 
 test("optional card and successful Git discovery share one aggregate preparation deadline", async () => {
   const f = await fixture()
@@ -1289,6 +1321,40 @@ test("a refreshed publication state disappearing before readback cannot publish 
   assert.equal(moved, true)
   assert.deepEqual(plan.ready, [])
 })
+
+for (const code of ["context_preparation_deferred", "EIO"]) {
+  test(`a replacement state readback ${code} never returns stale wording`, async (t) => {
+    const f = await reviewed()
+    await queue.saveContextSent(f.env, STORE, [f.item], 102)
+    await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
+    await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "publish" } }))
+    await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
+    const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
+    let installed = false
+    let faulted = false
+    const run = () => withFsFault(t, {
+      rename: async (original, from, to) => {
+        const value = await original(from, to)
+        if (String(to) === stateFile) installed = true
+        return value
+      },
+      readFile: (original, file, ...args) => {
+        if (String(file) === stateFile && installed && !faulted) {
+          faulted = true
+          throw Object.assign(new Error(code), { code })
+        }
+        return original(file, ...args)
+      },
+    }, () => queue.planContextPublication(f.env, { ...f.options, now: 1000 }), fsNative.promises)
+    if (code === "EIO") await assert.rejects(run(), { code })
+    else {
+      const plan = await run()
+      assert.equal(plan.deferred, true)
+      assert.deepEqual(plan.ready, [])
+    }
+    assert.equal(faulted, true, "the real state write must precede the readback failure")
+  })
+}
 
 test("ordinary stale-record invalidations emit context2 with no public recommendations", async () => {
   const f = await reviewed()

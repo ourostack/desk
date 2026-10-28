@@ -1,5 +1,18 @@
 import { readFileSync } from "node:fs"
+import { createHmac } from "node:crypto"
 import { contextPayloadHash, contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
+import { readMachineSecret, updateTaskContextState, writeTaskContextFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { stableStringify } from "../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
+
+export async function replaceContextInput(env, store, work, input) {
+  const file = `input-${input.basis}.json`
+  const inputSeal = createHmac("sha256", await readMachineSecret(env))
+    .update(stableStringify({ kind: "input", basis: input.basis, value: input })).digest("hex")
+  await writeTaskContextFile(env, store, work.job, file, input)
+  await updateTaskContextState(env, store, work.job, (state) => ({
+    ...state, basis: input.basis, input: file, input_seal: inputSeal,
+  }))
+}
 
 export const CONTEXT_JOB = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
 export const contextFacts = () => {
