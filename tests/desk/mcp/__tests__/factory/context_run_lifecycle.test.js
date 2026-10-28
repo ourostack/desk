@@ -20,7 +20,7 @@ test("context-run fixtures are removed after the file finishes without removing 
   delete env.NODE_TEST_CONTEXT
   const { stdout, stderr } = await execFileAsync(process.execPath, [
     "--import",
-    fileURLToPath(new URL("../_isolated_env.mjs", import.meta.url)),
+    new URL("../_isolated_env.mjs", import.meta.url).href,
     "--test",
     "--test-reporter=tap",
     "--test-name-pattern=^an unreadable producer identity starts no context run$",
