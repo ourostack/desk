@@ -953,6 +953,93 @@ test("requested work keeps same-day phase limits and invalid budget witnesses", 
   assert.deepEqual((await readStatus(invalid.env)).loop.agent_launch_highwater, {})
 })
 
+test("requested work refuses future legacy dates when no witness exists", async () => {
+  const f = await fixture()
+  await updateStatus(f.env, status => ({
+    ...status, evaluator: { headless: { day: "2026-10-22", jobs: 1 } },
+  }))
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+  })
+  assert.equal(result.ready, false)
+  assert.equal(result.result, "legacy_future_dated")
+  assert.deepEqual(f.phases, [])
+})
+
+test("requested work refuses a retained future ledger after the status witness disappears", async () => {
+  const f = await fixture()
+  await reserveAgentLaunch(f.env, {
+    kind: "evaluate", now: NOW + 3600000, legacyEvaluator: (await readStatus(f.env)).evaluator,
+  })
+  const ledgerFile = join(await factoryStateRoot(f.env), "agent-launch-ledger.json")
+  const before = await readFile(ledgerFile, "utf8")
+  await updateStatus(f.env, status => ({ ...status, loop: {} }))
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+  })
+  assert.equal(result.ready, false)
+  assert.equal(result.result, "clock_regressed")
+  assert.equal(await readFile(ledgerFile, "utf8"), before)
+  assert.deepEqual(f.phases, [])
+})
+
+test("requested child bookkeeping drains before releasing the evaluator lock", async (t) => {
+  const f = await fixture()
+  const lockFile = join(await factoryStateRoot(f.env), "locks", EVALUATOR_LOCK_NAME)
+  const statusFile = join(await factoryStateRoot(f.env), "status.json")
+  const originalWrite = fsNative.writeFile.bind(fsNative)
+  const originalRemove = fsNative.rm.bind(fsNative)
+  const originalRename = fsNative.rename.bind(fsNative)
+  let releaseWrite, enteredWrite, sawRelease, reachedReady
+  const blocked = new Promise(resolve => { releaseWrite = resolve })
+  const entered = new Promise(resolve => { enteredWrite = resolve })
+  const releaseAttempt = new Promise(resolve => { sawRelease = resolve })
+  const ready = new Promise(resolve => { reachedReady = resolve })
+  let held = false, writeFinished = false, releasedEarly = false, childUpdate
+  t.mock.method(fsNative, "writeFile", async (file, ...args) => {
+    if (String(file).startsWith(`${lockFile}.`) && String(file).endsWith(".tmp") && !held) {
+      held = true
+      enteredWrite()
+      await blocked
+      const result = await originalWrite(file, ...args)
+      writeFinished = true
+      return result
+    }
+    return originalWrite(file, ...args)
+  })
+  t.mock.method(fsNative, "rm", async (file, ...args) => {
+    if (String(file) === lockFile) {
+      releasedEarly ||= !writeFinished
+      sawRelease()
+    }
+    return originalRemove(file, ...args)
+  })
+  t.mock.method(fsNative, "rename", async (from, to, ...args) => {
+    const result = await originalRename(from, to, ...args)
+    if (String(to) === statusFile && JSON.parse(await readFile(statusFile)).requested_context?.ready === true) reachedReady()
+    return result
+  })
+  const request = runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+    runHeadless: async (options) => {
+      if (options.purpose === "task_context") {
+        childUpdate = options.onChild(12345)
+        await entered
+      }
+      return f.options.runHeadless(options)
+    },
+  })
+  await entered
+  await ready
+  await Promise.race([releaseAttempt, new Promise(resolve => setTimeout(resolve, 100))])
+  releaseWrite()
+  const result = await request
+  await childUpdate
+  assert.equal(result.ready, true)
+  assert.equal(releasedEarly, false, "an old child rewrite must not survive lock release")
+  assert.equal(existsSync(lockFile), false)
+})
+
 test("the shared exhausted launch ledger cannot be bypassed by task context", async () => {
   assert.ok(runner)
   const f = await fixture(1, { spent: 30 })

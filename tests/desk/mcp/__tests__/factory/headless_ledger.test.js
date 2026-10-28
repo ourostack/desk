@@ -15,6 +15,7 @@ import {
   FAULT_POINTS,
   GUARD_FILE,
   LEDGER_FILE,
+  checkRequestedLaunchState,
   consumeEvaluationContinuation,
   createEvaluationContinuation,
   createHeadlessLedger,
@@ -67,6 +68,70 @@ async function reserveMany(env, kind, now, times, extra = {}) {
   for (let index = 0; index < times; index += 1) states.push((await reserve(env, kind, now, extra)).state)
   return states
 }
+
+test("requested admission validates agreeing witnesses without consuming or rewriting the allowance", () => scratch(async (env, root) => {
+  await reserve(env, "evaluate", at(0, 1))
+  const before = await readBytes(root)
+  const witness = await mark(env)
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 2) }), { state: "ok" })
+  assert.deepEqual(await readBytes(root), before)
+  assert.deepEqual(await mark(env), witness)
+  await assert.rejects(checkRequestedLaunchState(env, { now: "invalid" }), /valid time/u)
+}))
+
+test("requested admission distinguishes new state and invalid legacy clock evidence", () => scratch(async (env, root, base) => {
+  const missing = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "missing-state") })
+  assert.deepEqual(await checkRequestedLaunchState(missing), { state: "no_factory_state" })
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 1) }), { state: "ok" })
+  await updateStatus(env, status => ({ ...status, evaluator: { headless: { day: dayText(1), jobs: 1 } } }))
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 1) }), { state: "legacy_future_dated" })
+  await updateStatus(env, status => ({ ...status, evaluator: "invalid" }))
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 1) }), { state: "legacy_unreadable" })
+  await updateStatus(env, status => ({ ...status, evaluator: LEGACY }))
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 1) }), { state: "ok" })
+  await assert.rejects(fs.readFile(path.join(root, LEDGER_FILE)), { code: "ENOENT" })
+}))
+
+test("requested admission refuses retained or incomplete witnesses rather than repairing them", async () => {
+  for (const mode of ["missing_mark", "bad_ledger", "bad_guard", "future_day", "future_guard", "bad_mark", "pending"]) {
+    await scratch(async (env, root) => {
+      await forge(env, root, mode === "future_day" ? { day: dayText(1) } : {},
+        mode === "pending" ? { witness: { phase: "pending", max_acknowledged_revision: 4 } } : {})
+      if (mode === "bad_mark") await updateStatus(env, status => ({ ...status, loop: { agent_launch_highwater: {} } }))
+      else if (mode !== "pending") await updateStatus(env, status => ({ ...status, loop: {} }))
+      if (mode === "bad_ledger") await fs.writeFile(path.join(root, LEDGER_FILE), "{")
+      if (mode === "bad_guard") await fs.writeFile(path.join(root, GUARD_FILE), "{")
+      if (mode === "future_guard") {
+        await forge(env, root, { last_clock_ms: at(0, 3) })
+        await updateStatus(env, status => ({ ...status, loop: {} }))
+        await fs.unlink(path.join(root, LEDGER_FILE))
+      }
+      const read = () => Promise.all([LEDGER_FILE, GUARD_FILE].map(name =>
+        fs.readFile(path.join(root, name), "utf8").catch(error => {
+          assert.equal(error.code, "ENOENT")
+          return null
+        })))
+      const before = await read()
+      const witness = await mark(env)
+      const expected = mode === "missing_mark" ? "witness_missing" : mode.startsWith("bad_") && mode !== "bad_mark"
+        ? "ledger_unreadable" : mode.startsWith("future_") ? "clock_regressed" : mode === "bad_mark" ? "witness_invalid" : "ledger_unsettled"
+      assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 2) }), { state: expected })
+      assert.deepEqual(await read(), before)
+      assert.deepEqual(await mark(env), witness)
+    })
+  }
+})
+
+test("requested admission refuses a reset status and an inconsistent acknowledged pair", () => scratch(async (env, root) => {
+  await forge(env, root, {})
+  const guard = JSON.parse(await fs.readFile(path.join(root, GUARD_FILE), "utf8"))
+  await fs.writeFile(path.join(root, GUARD_FILE), JSON.stringify({ ...guard, ledger_sha256: "f".repeat(64) }))
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 2) }), { state: "inconsistent" })
+  const aside = path.join(root, "status.json.corrupt-json-1")
+  await fs.writeFile(aside, "{}")
+  await fs.utimes(aside, new Date(at(0, 1)), new Date(at(0, 1)))
+  assert.deepEqual(await checkRequestedLaunchState(env, { now: at(0, 2) }), { state: "status_reset" })
+}))
 
 // Writes three agreeing witnesses for `fields` directly, for states no normal run reaches.
 async function forge(env, root, fields, { witness = {}, guard = {} } = {}) {

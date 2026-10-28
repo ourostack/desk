@@ -14,7 +14,7 @@ import {
   HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY, billingVariableBlocks, findAgentCli, probeSignIn, qualifyHeadlessSource, runHeadless,
 } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
-import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
+import { checkRequestedLaunchState, finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
 import { EVALUATOR_LOCK_NAME, releaseLock, takeLock, trackChild } from "./process-lock.js"
 import { PATTERNS } from "./schema.js"
@@ -115,6 +115,12 @@ export async function runRequestedTaskContext(env, options = {}) {
   const slots = new Set(["candidate", "privacy"])
   const phases = []
   const reservations = []
+  let pendingChildren = Promise.resolve()
+  const track = (pid, started, notify) => {
+    pendingChildren = pendingChildren.then(() => trackChild(lock, pid, started))
+    notify?.(pid)
+    return pendingChildren
+  }
   const budget = () => ({ allocated: 2, consumed: 2 - slots.size, remaining: slots.size })
   const cost = () => phases.length > 0 && phases.every(value => Number.isFinite(value.cost_usd) && value.cost_usd >= 0)
     ? phases.reduce((sum, value) => sum + value.cost_usd, 0) : null
@@ -144,8 +150,8 @@ export async function runRequestedTaskContext(env, options = {}) {
       policy.phase = null
       output = await runContextStep(env, {
         ...options, deadline,
-        onChild: async (pid) => { await trackChild(lock, pid, true); await options.onChild?.(pid) },
-        onChildExit: async (pid) => { await trackChild(lock, pid, false); await options.onChildExit?.(pid) },
+        onChild: pid => track(pid, true, options.onChild),
+        onChildExit: pid => track(pid, false, options.onChildExit),
       }, policy)
       phases.push({ phase: policy.phase, ...output })
       ready = policy.phase === "privacy" && output.ok && output.accepted === 1
@@ -161,6 +167,7 @@ export async function runRequestedTaskContext(env, options = {}) {
     await persist("error")
     throw error
   } finally {
+    await pendingChildren
     await releaseLock(lock)
   }
 }
@@ -220,6 +227,10 @@ async function runContextStep(env, options, requestPolicy) {
   }
   if (!await qualify(sourceOptions)) return idle("context_source_unqualified", false)
   if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
+  if (requestPolicy !== null) {
+    const safety = await checkRequestedLaunchState(env, { now })
+    if (safety.state !== "ok") return idle(safety.state, false)
+  }
   const phase = selected[0].phase
   const reservation = requestPolicy === null
     ? await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now, legacyEvaluator: status.evaluator })

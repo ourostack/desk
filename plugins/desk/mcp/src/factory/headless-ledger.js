@@ -590,6 +590,31 @@ async function transact(io, env, { nowMs, legacyEvaluator }, body) {
 
 const DEFAULT_IO = { readStatus, updateStatus, rename: (from, to) => fsp.rename(from, to), fault: async () => {}, platform: process.platform }
 
+/** Validate existing clock/witness evidence without reserving, repairing or rewriting the unattended allowance. */
+export async function checkRequestedLaunchState(env, { now = Date.now() } = {}) {
+  const nowMs = toMs(now, "now")
+  const root = await factoryStateRoot(env, { create: false })
+  if (root === null) return { state: "no_factory_state" }
+  return withNamedLock(env, LEDGER_LOCK, async () => {
+    const read = await readAll(DEFAULT_IO, env, root)
+    if ((statusResetDay(root) ?? "") >= dayOf(nowMs)) return { state: "status_reset" }
+    if (read.witness.state === "missing") {
+      if (read.ledger.state !== "missing" || read.guard.state !== "missing") {
+        const floor = nowMs + CLOCK_SKEW_MS
+        if ([read.ledger, read.guard].some(record => record.state === "ok" &&
+            (record.value.last_clock_ms > floor || record.value.day > dayOf(floor)))) return { state: "clock_regressed" }
+        return { state: read.ledger.state === "invalid" || read.guard.state === "invalid" ? "ledger_unreadable" : "witness_missing" }
+      }
+      const legacy = legacySpent(read.status.evaluator, dayOf(nowMs))
+      if (legacy.state === "future") return { state: "legacy_future_dated" }
+      if (legacy.state === "damaged") return { state: "legacy_unreadable" }
+      return { state: "ok" }
+    }
+    const verdict = assess(read, nowMs)
+    return { state: verdict.kind === "ok" ? "ok" : verdict.kind === "block" ? verdict.state : "ledger_unsettled" }
+  })
+}
+
 /**
  * `createHeadlessLedger(seams) -> { reserveAgentLaunch, peekAgentLaunch, finishAgentLaunch, createEvaluationContinuation,
  * consumeEvaluationContinuation }`: the same five functions over injected `readStatus`, `updateStatus`, `rename`, `platform` and `fault(point)` (called at each of
