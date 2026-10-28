@@ -1287,9 +1287,9 @@ test("a freshness check that spends the publication allowance cannot return a la
   assert.deepEqual(plan.ready, [])
 })
 
-test("a refreshed publication state disappearing before readback cannot publish old wording", async (t) => {
+for (const first of ["prepare", "publish"]) test(`a refreshed publication state disappearing before readback cannot publish old wording when ${first} goes first`, async (t) => {
   const f = await reviewed()
-  await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "prepare" } }))
+  await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: first } }))
   await queue.saveContextSent(f.env, STORE, [f.item], 102)
   await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
   await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
