@@ -581,6 +581,12 @@ test("ordinary Agency declaration (copilot packaging): desk/agency.json declares
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("work-suite")), false)
 })
 
+// Agency treats configured copies that share a pluginId as one plugin, so the Agency marketplace listing and a
+// github: install (directly or as MS Desk's dependency) load one Desk. The marketplace stub carries the same value.
+test("ordinary Agency declaration (copilot packaging): desk/agency.json carries Desk's fixed pluginId", () => {
+  assert.equal(loadJson("plugins", "desk", "agency.json").pluginId, "006b58c2-230c-47b1-831a-a1cc2fd10ef9", "never change or reuse this id")
+})
+
 // The committed bundle is release output, so these tests exercise the writer against a scratch repository
 // root and never let it touch the real artifact — the accident that made this path untested in the first place.
 test("the bundle writer and its CLI entry point produce the artifact in a scratch repository", () => {
