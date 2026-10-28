@@ -1481,7 +1481,7 @@ export async function jobsIndexRebuilt(env, { platform = process.platform, runne
 // Local facts reads, local labels and the waste evaluator's files.
 // ---------------------------------------------------------------------------
 
-const CONTEXT_FILE = /^(?:state|discovery|publication|input-[0-9a-f]{64}|[0-9a-f]{16}\.(?:brief|candidate|privacy))\.json$/u
+const CONTEXT_FILE = /^(?:state|discovery|preparation|publication|input-[0-9a-f]{64}|[0-9a-f]{16}\.(?:brief|candidate|privacy))\.json$/u
 const CONTEXT_FILE_MAX = 16 * 1024 * 1024
 
 export const serializeTaskContext = (value) => `${JSON.stringify(value, null, 2)}\n`

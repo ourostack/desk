@@ -814,6 +814,106 @@ test("a previous association Git timeout cannot starve later prior and renamed c
   assert.equal(work.find((item) => item.job === jobs[2]).source.task_card.path, join(f.desk, "sample", "z-renamed", "task.md"))
 })
 
+test("bounded preparation resumes beyond unchanged early source-only jobs", async (t) => {
+  const f = await fixture()
+  const jobs = Array.from({ length: 5 }, (_, index) => String(index + 1).repeat(32))
+  const entries = jobs.map((job, index) => {
+    const entry = structuredClone(f.entries[0])
+    entry.facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    entry.facts.jobs[0].job = job
+    entry.facts.outcomes[0].job = job
+    entry.localJobs = [{ local: job, published: job }]
+    return entry
+  })
+  const options = { ...f.options, entries, readRemote: () => null }
+  assert.equal((await queue.prepareTaskContexts(f.env, options)).prepared, jobs.length)
+  const states = new Set(await Promise.all(jobs.map((job) => taskContextPath(f.env, STORE, job, "state.json"))))
+  const version = "3.2.0-alpha.2"
+  for (let pass = 0; pass < jobs.length; pass += 1) {
+    let elapsed = 0
+    const charged = new Set()
+    await withFsFault(t, {
+      readFile: (original, file, ...args) => {
+        const name = String(file)
+        if (states.has(name) && !charged.has(name)) {
+          charged.add(name)
+          elapsed += 1100
+        }
+        return original(file, ...args)
+      },
+    }, async () => {
+      try {
+        await queue.prepareTaskContexts(f.env, { ...options, pluginVersion: version, deadline: 2000, clock: () => elapsed })
+      } catch (error) {
+        assert.equal(error.code, "context_preparation_deferred")
+      }
+    }, fsNative.promises)
+  }
+  const work = await queue.listContextWork(f.env, { store: STORE })
+  assert.deepEqual(work.filter((item) => item.source.evaluator.plugin_version === version).map((item) => item.job).sort(), jobs,
+    "later source-bound jobs must get a turn without weakening the two-second budget")
+})
+
+test("preparation resumes safely when a cursor job disappears and entry ordering changes", async (t) => {
+  const f = await fixture()
+  const jobs = ["1".repeat(32), "3".repeat(32)]
+  const entries = jobs.map((job, index) => {
+    const entry = structuredClone(f.entries[0])
+    entry.facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    entry.facts.jobs[0].job = job
+    entry.facts.outcomes[0].job = job
+    entry.localJobs = [{ local: job, published: job }]
+    return entry
+  })
+  const options = { ...f.options, entries, readRemote: () => null }
+  await queue.prepareTaskContexts(f.env, options)
+  await writeTaskContextFile(f.env, STORE, jobs[0], "preparation.json", {
+    schema: "desk.factory.context-preparation/1", next: "f".repeat(32),
+  })
+  const states = new Set(await Promise.all(jobs.map((job) => taskContextPath(f.env, STORE, job, "state.json"))))
+  const version = "3.2.0-alpha.2"
+  for (let pass = 0; pass < 2; pass += 1) {
+    let elapsed = 0
+    const charged = new Set()
+    await withFsFault(t, {
+      readFile: (original, file, ...args) => {
+        const name = String(file)
+        if (states.has(name) && !charged.has(name)) { charged.add(name); elapsed += 1100 }
+        return original(file, ...args)
+      },
+    }, async () => {
+      try {
+        await queue.prepareTaskContexts(f.env, {
+          ...options, entries: pass === 0 ? entries : [...entries].reverse(),
+          pluginVersion: version, deadline: 2000, clock: () => elapsed,
+        })
+      } catch (error) {
+        assert.equal(error.code, "context_preparation_deferred")
+      }
+    }, fsNative.promises)
+  }
+  const work = await queue.listContextWork(f.env, { store: STORE })
+  assert.deepEqual(work.map((item) => item.job).sort(), jobs, "a cursor cannot create work for its absent job")
+  assert.ok(work.every((item) => item.source.evaluator.plugin_version === version))
+})
+
+test("invalid preparation cursors refuse rather than selecting evidence", async () => {
+  for (const bytes of [
+    "{", json(null), json([]),
+    json({ schema: "other", next: CONTEXT_JOB }),
+    json({ schema: "desk.factory.context-preparation/1", next: null }),
+    json({ schema: "desk.factory.context-preparation/1", next: "invalid" }),
+    json({ schema: "desk.factory.context-preparation/1", next: CONTEXT_JOB, path: "PRIVATE" }),
+    " ".repeat(257),
+  ]) {
+    const f = await fixture()
+    const file = await writeTaskContextFile(f.env, STORE, CONTEXT_JOB, "preparation.json", {})
+    await writeFile(file, bytes)
+    await assert.rejects(queue.prepareTaskContexts(f.env, f.options), /context_preparation_cursor_invalid/u)
+    assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+  }
+})
+
 test("invalid discovery progress cannot select evidence or create a runnable context", async () => {
   for (const value of [
     { schema: "desk.factory.context-discovery/1", cursor: -1 },

@@ -144,6 +144,18 @@ async function discoveryCursor(env, store, job) {
   return value.cursor
 }
 
+async function preparationCursor(env, store, job) {
+  const bytes = await readTaskContextFile(env, store, job, "preparation.json")
+  if (bytes === null) return null
+  if (bytes.length > 256) throw new Error("context_preparation_cursor_invalid")
+  let value
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_preparation_cursor_invalid") }
+  if (!isPlainObject(value) || Object.keys(value).sort().join() !== "next,schema" ||
+      value.schema !== "desk.factory.context-preparation/1" || typeof value.next !== "string" || !PATTERNS.jobId.test(value.next))
+    throw new Error("context_preparation_cursor_invalid")
+  return value.next
+}
+
 function* taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock, readRemote, resolveIdentity }) {
   const cards = new Map()
   let next = cursor
@@ -302,7 +314,26 @@ async function prepareContextGroups(env, {
       return true
     })
     if (eligible.length === 0) continue
+    eligible.sort((left, right) => left.job.localeCompare(right.job))
     const progressJob = peers.map((group) => group.job).sort()[0]
+    const savedNext = await preparationCursor(env, store, progressJob)
+    const found = savedNext === null ? 0 : eligible.findIndex((group) => group.job >= savedNext)
+    const start = found < 0 ? 0 : found
+    let next = eligible[start].job
+    let offset = 0
+    const saveAvailable = async (cards, incomplete, finished) => {
+      while (offset < eligible.length) {
+        const index = (start + offset) % eligible.length
+        const group = eligible[index]
+        const card = cards.get(group.local_job)
+        if (card === undefined && !finished) return
+        if (card === undefined && incomplete) counts.deferred.push(group.job)
+        const status = card !== undefined ? "associated" : incomplete ? "unavailable" : "not_associated"
+        await save(group, card ?? null, status)
+        offset += 1
+        next = eligible[(index + 1) % eligible.length].job
+      }
+    }
     let cursor = await discoveryCursor(env, store, progressJob)
     const remember = async (next) => {
       if (next === cursor) return
@@ -311,32 +342,24 @@ async function prepareContextGroups(env, {
       })
       cursor = next
     }
-    const iterator = taskCardIndex(first.desk_root, first.person_prefix, {
-      wanted: new Set(eligible.map((group) => group.local_job)), cursor,
-      deadline: Math.min(clock() + PREPARATION_MS / 2, limit), clock, readRemote, resolveIdentity,
-    })
-    const handled = new Set()
-    let step = iterator.next()
-    while (!step.done) {
-      for (const group of eligible) {
-        if (handled.has(group.job) || !step.value.cards.has(group.local_job)) continue
-        await save(group, step.value.cards.get(group.local_job))
-        handled.add(group.job)
+    try {
+      const iterator = taskCardIndex(first.desk_root, first.person_prefix, {
+        wanted: new Set(eligible.map((group) => group.local_job)), cursor,
+        deadline: Math.min(clock() + PREPARATION_MS / 2, limit), clock, readRemote, resolveIdentity,
+      })
+      let step = iterator.next()
+      while (!step.done) {
+        await saveAvailable(step.value.cards, false, false)
+        await remember(step.value.cursor)
+        step = iterator.next()
       }
-      await remember(step.value.cursor)
-      step = iterator.next()
-    }
-    const index = step.value
-    await remember(index.cursor)
-    for (const group of eligible) {
-      if (handled.has(group.job)) continue
-      if (index.incomplete) {
-        counts.deferred.push(group.job)
-        // Incomplete enrichment never supplies an unverified card or path.
-        await save(group, null, "unavailable")
-      } else {
-        await save(group, null)
-      }
+      const index = step.value
+      await remember(index.cursor)
+      await saveAvailable(index.cards, index.incomplete, true)
+    } finally {
+      if (next !== savedNext) await writeTaskContextFile(env, store, progressJob, "preparation.json", {
+        schema: "desk.factory.context-preparation/1", next,
+      })
     }
   }
   return counts
