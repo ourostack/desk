@@ -15,7 +15,10 @@ test("context-run fixtures are removed after the file finishes without removing 
   const marker = join(parent, sibling, "retained.txt")
   await mkdir(join(parent, sibling))
   await writeFile(marker, "unrelated sibling")
-  const { stdout } = await execFileAsync(process.execPath, [
+  const env = { ...process.env, DESK_TEST_RUN_DIR: parent, TMPDIR: parent, TMP: parent, TEMP: parent }
+  // Start a new runner; Node sets a fresh test context on the selected file.
+  delete env.NODE_TEST_CONTEXT
+  const { stdout, stderr } = await execFileAsync(process.execPath, [
     "--import",
     fileURLToPath(new URL("../_isolated_env.mjs", import.meta.url)),
     "--test",
@@ -23,10 +26,10 @@ test("context-run fixtures are removed after the file finishes without removing 
     "--test-name-pattern=^an unreadable producer identity starts no context run$",
     fileURLToPath(new URL("./context_run.test.js", import.meta.url)),
   ], {
-    env: { ...process.env, TMPDIR: parent, TMP: parent, TEMP: parent },
+    env,
     timeout: 60_000,
   })
-  assert.match(stdout, /# pass 1(?:\r?\n|$)/, "the selected real fixture test must run")
+  assert.match(stdout, /# pass 1(?:\r?\n|$)/, `the selected real fixture test must run: ${stderr}`)
   assert.equal(await readFile(marker, "utf8"), "unrelated sibling")
   assert.deepEqual((await readdir(parent)).filter((name) => name.startsWith("desk-context-run-")), [sibling])
 })
