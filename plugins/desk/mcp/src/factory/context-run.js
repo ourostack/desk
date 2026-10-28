@@ -16,6 +16,8 @@ import {
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
+import { EVALUATOR_LOCK_NAME, releaseLock, takeLock, trackChild } from "./process-lock.js"
+import { PATTERNS } from "./schema.js"
 
 const MAX_BATCH = 8
 const DAY = 24 * 3600 * 1000
@@ -94,6 +96,76 @@ function evidenceOutline(work) {
 
 /** One existing-ledger launch, one phase, at most eight jobs. Labels retain priority in the caller. */
 export async function runTaskContextStep(env, options = {}) {
+  return runContextStep(env, options, null)
+}
+
+/** Explicit requested work owns one generation/review pair; automatic callers never receive this allowance. */
+export async function runRequestedTaskContext(env, options = {}) {
+  const { store, job } = options
+  if (typeof store !== "string" || !PATTERNS.prRepo.test(store) || typeof job !== "string" || !PATTERNS.jobId.test(job))
+    throw new TypeError("runRequestedTaskContext: valid store and job required")
+  if (isHeadlessFactorySession(env)) return idle("headless_session", false)
+  const clock = options.clock ?? Date.now
+  const deadline = options.deadline ?? clock() + 2 * HEADLESS_TIMEOUT_MS + 120000
+  if (!Number.isFinite(new Date(deadline).getTime())) throw new TypeError("runRequestedTaskContext: valid deadline required")
+  const root = await factoryStateRoot(env, { create: false })
+  if (root === null) return idle("no_factory_state", false)
+  const lock = await takeLock(root, { name: EVALUATOR_LOCK_NAME, record: { children: [], requested: { store, job } } })
+  if (lock === null) return idle("busy", false)
+  const slots = new Set(["candidate", "privacy"])
+  const phases = []
+  const reservations = []
+  const budget = () => ({ allocated: 2, consumed: 2 - slots.size, remaining: slots.size })
+  const cost = () => phases.length > 0 && phases.every(value => Number.isFinite(value.cost_usd) && value.cost_usd >= 0)
+    ? phases.reduce((sum, value) => sum + value.cost_usd, 0) : null
+  const persist = async (result, ready = false) => updateStatus(env, current => ({
+    ...current,
+    requested_context: { at: new Date(clock()).toISOString(), store, job, result, ready, budget: budget(), cost_usd: cost(), reservations, phases },
+  }))
+  const policy = {
+    store, job, phase: null,
+    reserve: async (phase) => {
+      if (!slots.delete(phase)) return { state: "request_budget_exhausted" }
+      policy.phase = phase
+      reservations.push({ phase, state: "reserved" })
+      await persist("running")
+      return { state: "reserved", token: phase }
+    },
+    finish: async ({ token, state }) => {
+      reservations.find(value => value.phase === token).state = state
+      await persist("checking_output")
+    },
+  }
+  try {
+    await persist("running")
+    let output = idle("no_context_waiting")
+    let ready = false
+    for (let turn = 0; turn < 2; turn += 1) {
+      policy.phase = null
+      output = await runContextStep(env, {
+        ...options, deadline,
+        onChild: async (pid) => { await trackChild(lock, pid, true); await options.onChild?.(pid) },
+        onChildExit: async (pid) => { await trackChild(lock, pid, false); await options.onChildExit?.(pid) },
+      }, policy)
+      phases.push({ phase: policy.phase, ...output })
+      ready = policy.phase === "privacy" && output.ok && output.accepted === 1
+      await persist(ready ? "context_requested" : output.result, ready)
+      if (ready || !output.ok || output.accepted !== 1 || policy.phase !== "candidate") break
+    }
+    return {
+      ok: ready, result: ready ? "context_requested" : output.result, ready,
+      launched: phases.some(value => value.launched), accepted: phases.reduce((sum, value) => sum + value.accepted, 0),
+      refused: phases.reduce((sum, value) => sum + value.refused, 0), budget: budget(), cost_usd: cost(), phases,
+    }
+  } catch (error) {
+    await persist("error")
+    throw error
+  } finally {
+    await releaseLock(lock)
+  }
+}
+
+async function runContextStep(env, options, requestPolicy) {
   const impl = { runHeadless, probeSignIn, qualifyHeadlessSource, findAgentCli, reserveAgentLaunch, finishAgentLaunch, clock: Date.now, ...options }
   if (isHeadlessFactorySession(env)) return idle("headless_session", false)
   if (env.DESK_FACTORY_HEADLESS_EVALUATOR !== undefined && !ON.has(env.DESK_FACTORY_HEADLESS_EVALUATOR.trim().toLowerCase())) return idle("disabled")
@@ -101,7 +173,8 @@ export async function runTaskContextStep(env, options = {}) {
   const deadline = new Date(options.deadline).getTime()
   if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: valid now and deadline required")
   const status = await readStatus(env)
-  const waiting = await runnableContextWork(env, status, now)
+  const waiting = (await runnableContextWork(env, status, now)).filter(work => requestPolicy === null ||
+    work.store.toLowerCase() === requestPolicy.store.toLowerCase() && work.job === requestPolicy.job)
   if (waiting.length === 0) return idle("no_context_waiting")
   const version = deskVersion(env)
   if (version === null) return idle("context_source_unavailable", false)
@@ -113,7 +186,8 @@ export async function runTaskContextStep(env, options = {}) {
   const selected = jobs.filter((work) => work.phase === jobs[0].phase).slice(0, MAX_BATCH)
   if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
   const quota = witnessedEvaluationQuota(status, now)
-  if (["quota_exhausted", "window_protected", "clock_regressed"].includes(quota)) return idle("budget_exhausted")
+  if (quota === "clock_regressed" || requestPolicy !== null && quota === "witness_invalid" ||
+      requestPolicy === null && ["quota_exhausted", "window_protected"].includes(quota)) return idle("budget_exhausted")
   if (billingVariableBlocks(env)) return idle("disabled_would_bill", false)
   const cli = impl.findAgentCli({ env })
   if (cli === null) return idle("no_agent_cli", false)
@@ -146,9 +220,11 @@ export async function runTaskContextStep(env, options = {}) {
   }
   if (!await qualify(sourceOptions)) return idle("context_source_unqualified", false)
   if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
-  const reservation = await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now, legacyEvaluator: status.evaluator })
-  if (reservation.state !== "reserved") return idle("budget_exhausted")
   const phase = selected[0].phase
+  const reservation = requestPolicy === null
+    ? await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now, legacyEvaluator: status.evaluator })
+    : await requestPolicy.reserve(phase)
+  if (reservation.state !== "reserved") return idle("budget_exhausted")
   const briefs = []
   const logDirs = new Set()
   let run
@@ -198,7 +274,9 @@ export async function runTaskContextStep(env, options = {}) {
       }
     }
   } finally {
-    await impl.finishAgentLaunch(env, { token: reservation.token, state: run?.state === "ran" ? "ran" : !requested ? "not_started" : "failed", now: impl.clock() })
+    const finished = { token: reservation.token, state: run?.state === "ran" ? "ran" : !requested ? "not_started" : "failed", now: impl.clock() }
+    if (requestPolicy === null) await impl.finishAgentLaunch(env, finished)
+    else await requestPolicy.finish(finished)
   }
   let accepted = 0
   let refused = 0
@@ -217,7 +295,8 @@ export async function runTaskContextStep(env, options = {}) {
     result: !sourceQualified ? "context_source_unqualified" : run.state === "ran" ? "context_ran" : run.state,
     launched: requested, accepted, refused,
   }
-  await updateStatus(env, (current) => ({
+  if (requestPolicy !== null) output.cost_usd = Number.isFinite(run.cost_usd) && run.cost_usd >= 0 ? run.cost_usd : null
+  if (requestPolicy === null) await updateStatus(env, (current) => ({
     ...current,
     context_evaluation: {
       at: new Date(impl.clock()).toISOString(), phase, result: output.result, accepted, refused,

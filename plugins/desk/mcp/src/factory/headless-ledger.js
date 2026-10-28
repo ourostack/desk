@@ -1,4 +1,4 @@
-// The shared launch ledger: one crash-safe count of the headless agent launches this machine starts on its own, waste
+// The unattended launch ledger: one crash-safe count of the headless agent launches this machine starts on its own, waste
 // evaluation and improvement triage together, inside the existing ceiling of `MAX_HEADLESS_JOBS_PER_DAY` (30) a UTC day.
 //
 // Quota. Each UTC day has four six-hour windows. Each window holds one triage opportunity that evaluation cannot take

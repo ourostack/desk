@@ -3,7 +3,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, promises as fsNative } from "node:fs"
 import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { osEnv } from "../_os_env.js"
@@ -17,7 +17,8 @@ import { stableStringify } from "../../../../../plugins/desk/mcp/src/factory/pip
 import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
-import { reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
+import { reserveAgentLaunch, witnessedEvaluationQuota } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
+import { EVALUATOR_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
@@ -648,6 +649,308 @@ test("absent store capability, nested headless execution and a disabled evaluato
     assert.equal((await readyTaskContexts(f.env, { store: STORE, entries: f.entries })).length, 0)
     assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
   }
+})
+
+test("requested context reserves generation and privacy without borrowing background allowance", async () => {
+  assert.equal(typeof runner.runRequestedTaskContext, "function", "an explicit requested-work entry is required")
+  const f = await fixture(2, { spent: 30 })
+  assert.equal((await runner.runTaskContextStep(f.env, f.options)).result, "budget_exhausted")
+  const ledgerFile = join(await factoryStateRoot(f.env), "agent-launch-ledger.json")
+  const before = await readFile(ledgerFile, "utf8")
+  const background = structuredClone((await readStatus(f.env)).loop)
+  const job = "2".padStart(32, "0")
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job,
+    reserveAgentLaunch: () => assert.fail("requested work cannot borrow or reset background quota"),
+    finishAgentLaunch: () => assert.fail("requested work cannot finish a background reservation"),
+    runHeadless: async (options) => {
+      assert.equal(options.briefPaths.length, 1)
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      assert.equal(brief.job, job)
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.result, "context_requested")
+  assert.equal(result.ready, true)
+  assert.equal(result.cost_usd, 0.2)
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 2, remaining: 0 })
+  assert.deepEqual(f.phases, ["task_context", "context_privacy"])
+  assert.equal(await readFile(ledgerFile, "utf8"), before)
+  assert.deepEqual((await readStatus(f.env)).loop, background)
+  assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), false)
+  const waiting = await listContextWork(f.env, { store: STORE })
+  assert.deepEqual(waiting.map(work => work.job), ["1".padStart(32, "0")])
+  assert.deepEqual(waiting[0].state.attempts, { candidate: 0, privacy: 0 })
+})
+
+test("requested privacy can finish an accepted candidate without regenerating it", async () => {
+  assert.equal(typeof runner.runRequestedTaskContext, "function")
+  const f = await fixture(1, { spent: 30 })
+  await pendingPrivacy(f)
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+  })
+  assert.equal(result.ready, true)
+  assert.deepEqual(f.phases, ["context_privacy"])
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 1, remaining: 1 })
+})
+
+test("requested context leaves a protected triage opportunity untouched", async () => {
+  const f = await fixture(1, { spent: 29 })
+  assert.equal((await runner.runTaskContextStep(f.env, f.options)).result, "budget_exhausted")
+  const status = await readStatus(f.env)
+  assert.equal(witnessedEvaluationQuota(status, NOW), "window_protected")
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+  })
+  assert.equal(result.ready, true)
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 2, remaining: 0 })
+  assert.deepEqual((await readStatus(f.env)).loop, status.loop)
+  assert.equal(witnessedEvaluationQuota(await readStatus(f.env), NOW), "window_protected")
+})
+
+test("background context cannot promote stored or option metadata into requested capacity", async () => {
+  const f = await fixture(1, { spent: 30 })
+  await updateStatus(f.env, status => ({ ...status, requested_context: { approved: true, allocated: 999 } }))
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, requested: true, approved: true, allocated: 999,
+  })
+  assert.equal(output.result, "budget_exhausted")
+  assert.deepEqual(f.phases, [])
+})
+
+test("requested work keeps source, billing, disabled and headless refusals", async () => {
+  for (const mode of ["source", "billing", "disabled", "headless", "no_cli", "sign_in"]) {
+    const f = await fixture()
+    const env = {
+      ...f.env,
+      ...(mode === "billing" ? { ANTHROPIC_API_KEY: "synthetic" } : {}),
+      ...(mode === "disabled" ? { DESK_FACTORY_HEADLESS_EVALUATOR: "off" } : {}),
+      ...(mode === "headless" ? { DESK_FACTORY_HEADLESS: "1" } : {}),
+    }
+    const result = await runner.runRequestedTaskContext(env, {
+      ...f.options, store: STORE, job: "1".padStart(32, "0"),
+      qualifyHeadlessSource: async () => ({ state: mode === "source" ? "source_unqualified" : "qualified" }),
+      findAgentCli: () => mode === "no_cli" ? null : "/synthetic/claude",
+      probeSignIn: async () => ({ state: mode === "sign_in" ? "no_credentials" : "subscription" }),
+      runHeadless: () => assert.fail("requested work cannot waive a launch prerequisite"),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(result.launched, false)
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "locks", EVALUATOR_LOCK_NAME)), false)
+    const [work] = await listContextWork(f.env, { store: STORE })
+    assert.deepEqual(work.state.attempts, { candidate: 0, privacy: 0 })
+  }
+})
+
+test("requested work preserves attempt and clock guards and rejects malformed scope", async () => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  for (const scope of [{}, { store: STORE }, { store: "bad", job }, { store: STORE, job: "bad" }])
+    await assert.rejects(runner.runRequestedTaskContext(f.env, { ...f.options, ...scope }), /valid store and job/u)
+  await assert.rejects(runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job, deadline: "bad" }), /valid deadline/u)
+  const short = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job, deadline: NOW + 1 })
+  assert.equal(short.result, "no_time_for_a_run")
+  assert.equal(short.ready, false)
+  await updateTaskContextState(f.env, STORE, job, state => ({
+    ...state, attempts: { candidate: 3, privacy: 0 },
+  }))
+  const capped = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job })
+  assert.equal(capped.ready, false)
+  assert.deepEqual(f.phases, [])
+  const later = await fixture()
+  await reserveAgentLaunch(later.env, {
+    kind: "evaluate", now: NOW + 3600000, legacyEvaluator: (await readStatus(later.env)).evaluator,
+  })
+  const clock = await runner.runRequestedTaskContext(later.env, { ...later.options, store: STORE, job })
+  assert.equal(clock.result, "budget_exhausted")
+  assert.equal(clock.ready, false)
+  assert.deepEqual(later.phases, [])
+})
+
+test("a requested generation failure never starts privacy or invents usage cost", async () => {
+  const f = await fixture()
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+    runHeadless: async () => ({ state: "failed", cost_usd: null }),
+  })
+  assert.equal(result.ready, false)
+  assert.equal(result.ok, false)
+  assert.equal(result.result, "failed")
+  assert.equal(result.cost_usd, null)
+  assert.equal(result.phases.length, 1)
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 1, remaining: 1 })
+  const [work] = await listContextWork(f.env, { store: STORE })
+  assert.equal(work.phase, "candidate")
+  assert.equal(work.state.attempts.privacy, 0)
+})
+
+test("requested work keeps invalid usage cost unknown rather than measured zero", async () => {
+  const f = await fixture()
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+    runHeadless: async (options) => ({ ...await f.options.runHeadless(options), cost_usd: -1 }),
+  })
+  assert.equal(result.ready, true)
+  assert.equal(result.cost_usd, null)
+  assert.equal((await readStatus(f.env)).requested_context.cost_usd, null)
+})
+
+test("requested work holds the normal evaluator lock across both phases and tracks only its children", async () => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  const lockFile = join(await factoryStateRoot(f.env), "locks", EVALUATOR_LOCK_NAME)
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job,
+    runHeadless: async (options) => {
+      const competing = await runEvaluatorStep(f.env, {
+        pluginVersion: VERSION, now: NOW, deadline: f.options.deadline,
+        requestFinishedJobs: () => assert.fail("background work must not enter the requested pair"),
+      })
+      assert.equal(competing.result, "busy")
+      const duplicate = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job })
+      assert.equal(duplicate.result, "busy")
+      await options.onChild(12345)
+      assert.deepEqual(JSON.parse(await readFile(lockFile)).children, [12345])
+      await options.onChildExit(12345)
+      assert.deepEqual(JSON.parse(await readFile(lockFile)).children, [])
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(result.ready, true)
+  assert.equal(existsSync(lockFile), false)
+})
+
+test("a private evidence change between requested phases blocks privacy", async (t) => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  const stateFile = await taskContextPath(f.env, STORE, job, "state.json")
+  const original = fsNative.rename.bind(fsNative)
+  let changed = false
+  t.mock.method(fsNative, "rename", async (from, to, ...args) => {
+    const result = await original(from, to, ...args)
+    if (String(to) === stateFile && !changed && JSON.parse(await readFile(stateFile)).phase === "privacy") {
+      changed = true
+      await writeFile(f.entries[0].logPath, "actual newer evidence\n")
+    }
+    return result
+  })
+  const result = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job })
+  assert.equal(changed, true)
+  assert.equal(result.ready, false)
+  assert.deepEqual(f.phases, ["task_context"])
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 1, remaining: 1 })
+  assert.equal(JSON.parse(await readFile(stateFile)).attempts.privacy, 0)
+})
+
+test("model-writable state cannot replenish a requested phase slot", async (t) => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  const stateFile = await taskContextPath(f.env, STORE, job, "state.json")
+  const original = fsNative.rename.bind(fsNative)
+  let changed = false
+  t.mock.method(fsNative, "rename", async (from, to, ...args) => {
+    const result = await original(from, to, ...args)
+    if (String(to) === stateFile && !changed) {
+      const state = JSON.parse(await readFile(stateFile))
+      if (state.phase === "privacy") {
+        changed = true
+        await writeFile(stateFile, json({ ...state, phase: "candidate", attempts: { candidate: 0, privacy: 0 }, last_attempts: {} }))
+      }
+    }
+    return result
+  })
+  const result = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job })
+  assert.equal(changed, true)
+  assert.equal(result.ready, false)
+  assert.equal(result.result, "budget_exhausted")
+  assert.deepEqual(f.phases, ["task_context"])
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 1, remaining: 1 })
+})
+
+test("requested exceptions release only the owned evaluator lock", async () => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  await assert.rejects(runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job, runHeadless: async () => { throw new Error("synthetic execution error") },
+  }), /synthetic execution error/u)
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "locks", EVALUATOR_LOCK_NAME)), false)
+  const status = await readStatus(f.env)
+  assert.equal(status.requested_context.result, "error")
+  assert.equal(status.requested_context.budget.consumed, 1)
+})
+
+test("requested metadata qualification can refuse after allocation without starting a model", async () => {
+  const f = await fixture()
+  let checks = 0
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE, job: "1".padStart(32, "0"),
+    qualifyHeadlessSource: async () => ({ state: ++checks === 1 ? "qualified" : "source_unqualified" }),
+    runHeadless: () => assert.fail("changed source must refuse before inference"),
+  })
+  assert.equal(result.ready, false)
+  assert.equal(result.launched, false)
+  assert.deepEqual(result.budget, { allocated: 2, consumed: 1, remaining: 1 })
+  const status = await readStatus(f.env)
+  assert.equal(status.requested_context.reservations[0].state, "not_started")
+})
+
+test("requested child tracking preserves the caller's lifecycle notifications", async () => {
+  const f = await fixture()
+  const events = []
+  const result = await runner.runRequestedTaskContext(f.env, {
+    ...f.options, store: STORE.toUpperCase(), job: "1".padStart(32, "0"),
+    onChild: pid => events.push(["started", pid]),
+    onChildExit: pid => events.push(["ended", pid]),
+    runHeadless: async (options) => {
+      await options.onChild(12345)
+      await options.onChildExit(12345)
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(result.ready, true)
+  assert.deepEqual(events, [["started", 12345], ["ended", 12345], ["started", 12345], ["ended", 12345]])
+})
+
+test("requested defaults keep missing state, consent and unknown jobs explicit", async () => {
+  const root = await mkTempRoot("desk-requested-context-empty-")
+  const env = osEnv({ HOME: root, XDG_STATE_HOME: join(root, "state") })
+  const job = "1".padStart(32, "0")
+  await assert.rejects(runner.runRequestedTaskContext(env), /valid store and job/u)
+  assert.equal((await runner.runRequestedTaskContext(env, { store: STORE, job })).result, "no_factory_state")
+  assert.equal(await factoryStateRoot(env, { create: false }), null)
+  const f = await fixture()
+  const options = { ...f.options, store: STORE, job }
+  delete options.deadline
+  delete options.now
+  assert.equal((await runner.runRequestedTaskContext(f.env, options)).ready, true)
+  const other = await fixture()
+  const unknown = await runner.runRequestedTaskContext(other.env, { ...other.options, store: STORE, job: "f".repeat(32) })
+  assert.equal(unknown.ok, false)
+  assert.equal(unknown.result, "no_context_waiting")
+  assert.equal((await runner.runRequestedTaskContext(other.env, { ...other.options, store: "other/store", job })).ready, false)
+  await setConsent(other.env, { store: STORE, contribute: false, account: "synthetic" })
+  assert.equal((await runner.runRequestedTaskContext(other.env, { ...other.options, store: STORE, job })).ready, false)
+  assert.deepEqual(other.phases, [])
+})
+
+test("requested work keeps same-day phase limits and invalid budget witnesses", async () => {
+  const f = await fixture()
+  const job = "1".padStart(32, "0")
+  await updateTaskContextState(f.env, STORE, job, state => ({
+    ...state, last_attempts: { candidate: new Date(NOW).toISOString() },
+  }))
+  const deferred = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job })
+  assert.equal(deferred.result, "no_context_waiting")
+  assert.equal(deferred.ready, false)
+  const invalid = await fixture()
+  await updateStatus(invalid.env, status => ({ ...status, loop: { agent_launch_highwater: {} } }))
+  const refused = await runner.runRequestedTaskContext(invalid.env, { ...invalid.options, store: STORE, job })
+  assert.equal(refused.result, "budget_exhausted")
+  assert.equal(refused.ready, false)
+  assert.deepEqual(invalid.phases, [])
+  assert.deepEqual((await readStatus(invalid.env)).loop.agent_launch_highwater, {})
 })
 
 test("the shared exhausted launch ledger cannot be bypassed by task context", async () => {
