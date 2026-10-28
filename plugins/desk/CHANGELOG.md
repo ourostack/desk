@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.39 — 2026-10-28
+
+Give explicitly requested session explanations one complete generation/privacy allowance, separate from unattended maintenance's daily ledger. The requested CLI keeps source, consent, billing, retry and publication checks, holds the normal evaluator lock across both phases, and never enables an automatic budget escape.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.38 — 2026-10-28
 
 Fix session-context preparation repeatedly spending its bounded turn on early jobs. Protected per-namespace progress now resumes the next unfinished save without increasing deadlines or changing evidence, consent, model attempts or independent privacy checks.
