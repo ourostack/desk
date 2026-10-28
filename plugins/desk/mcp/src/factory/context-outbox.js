@@ -10,7 +10,7 @@ import {
 import {
   checkContextAgainstFacts, CONTEXT_MAX_BYTES, RECOMMENDATION_SCHEMA, contextPayloadHash, contextSource, validateContext,
 } from "./context-schema.js"
-import { isPlainObject, PATTERNS } from "./schema.js"
+import { addError, isPlainObject, PATTERNS } from "./schema.js"
 import { stableStringify } from "./pipeline/normalize.js"
 import { declared, isFolder } from "./session-route.js"
 import { validatePublished } from "./published-schema.js"
@@ -73,6 +73,9 @@ async function inputOf(env, store, state, { current = true } = {}) {
   try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_input_invalid") }
   if (!isPlainObject(value) || value.schema !== INPUT || value.job !== state.job || value.basis !== state.basis ||
       !Array.isArray(value.sources) || !Array.isArray(value.private_evidence) || !sameStore(value.store, store)) return null
+  if (value.task_card_status !== undefined &&
+      (!["associated", "not_associated", "unavailable"].includes(value.task_card_status) ||
+       (value.task_card_status === "associated") !== (value.task_card !== null))) return null
   if (state.input_seal !== await seal(env, "input", state.basis, value)) return null
   return !current || inputCurrent(value, store) ? value : null
 }
@@ -245,23 +248,35 @@ async function prepareContextGroups(env, {
     if (!namespaces.has(key)) namespaces.set(key, [])
     namespaces.get(key).push(group)
   }
-  const save = async (group, taskCard) => {
+  const save = async (group, taskCard, taskCardStatus = taskCard === null ? "not_associated" : "associated") => {
     within()
     if (!allowed(group.desk_root, store)) return
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
     const sources = group.entries.map((entry) => entry.facts)
     if (new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; return }
     const privateEvidence = group.entries.map(logEvidence)
-    const basis = sha({ sources: sources.map((facts) => contextSource(facts, group.job)), private_evidence: privateEvidence, task_card: taskCard, plugin_version: pluginVersion })
+    const basisFor = (card, status) => sha({
+      sources: sources.map((facts) => contextSource(facts, group.job)), private_evidence: privateEvidence,
+      task_card: card, ...(status === undefined ? {} : { task_card_status: status }), plugin_version: pluginVersion,
+    })
+    const basis = basisFor(taskCard, taskCardStatus)
     const input = {
       schema: INPUT, basis, job: group.job, local_job: group.local_job, desk_root: group.desk_root,
       person_prefix: group.person_prefix, store,
-      evaluator: { plugin_version: pluginVersion, rubric: "1" }, sources, private_evidence: privateEvidence, task_card: taskCard,
+      evaluator: { plugin_version: pluginVersion, rubric: "1" }, sources, private_evidence: privateEvidence, task_card: taskCard, task_card_status: taskCardStatus,
     }
     if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; return }
     const before = await stateOf(env, store, group.job)
     within()
     if (before?.basis === basis) { counts.unchanged += 1; return }
+    if (taskCardStatus === "unavailable" && before !== null) {
+      const previous = await inputOf(env, store, before)
+      within()
+      if (previous?.task_card && before.basis === basisFor(previous.task_card, previous.task_card_status)) {
+        counts.unchanged += 1
+        return
+      }
+    }
     await writeTaskContextFile(env, store, group.job, `input-${basis}.json`, input)
     const inputSeal = await seal(env, "input", basis, input)
     await updateTaskContextState(env, store, group.job, (current) => ({
@@ -316,8 +331,9 @@ async function prepareContextGroups(env, {
     for (const group of eligible) {
       if (handled.has(group.job)) continue
       if (index.incomplete) {
-        counts.held += 1
         counts.deferred.push(group.job)
+        // Incomplete enrichment never supplies an unverified card or path.
+        await save(group, null, "unavailable")
       } else {
         await save(group, null)
       }
@@ -364,6 +380,12 @@ export async function acceptContextCandidate(env, { store, job, basis, bytes }) 
   if (value.job !== job || stableStringify(value.evaluator) !== stableStringify(current.input.evaluator)) return result("identity_mismatch")
   const checked = checkContextAgainstFacts(value, current.input.sources, { candidate: true })
   if (!checked.ok) return result("invalid_candidate", { errors: checked.errors })
+  if (current.input.task_card_status === "unavailable" && value.state === "published" &&
+      (value.coverage.state !== "partial" || !value.coverage.reasons.includes("not_recorded"))) {
+    const errors = []
+    addError(errors, "incomplete", "coverage")
+    return result("invalid_candidate", { errors })
+  }
   const payloadHash = contextPayloadHash(value)
   const next = await updateTaskContextState(env, store, job, (state) => state.basis !== basis || state.phase !== "candidate" ? state : {
     ...state, phase: "privacy", candidate: value, candidate_hash: payloadHash,

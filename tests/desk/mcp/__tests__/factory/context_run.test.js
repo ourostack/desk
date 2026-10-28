@@ -4,15 +4,16 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
+import { join, sep } from "node:path"
 import { osEnv } from "../_os_env.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { acceptContextCandidate, listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
-import { contextFacts, contextRecord } from "./_context_fixture.js"
+import { contextFacts, contextRecord, replaceContextInput } from "./_context_fixture.js"
 import { contextPayloadHash, contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
+import { stableStringify } from "../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
@@ -101,6 +102,30 @@ async function pendingPrivacy(f) {
     ...state, attempts: { candidate: 1, privacy: 0 }, last_attempts: { candidate: new Date(NOW).toISOString() },
   }))
 }
+
+async function legacyInput(f) {
+  const [work] = await listContextWork(f.env, { store: STORE })
+  const input = structuredClone(work.source)
+  delete input.task_card_status
+  input.basis = createHash("sha256").update(stableStringify({
+    sources: input.sources.map((facts) => contextSource(facts, work.job)),
+    private_evidence: input.private_evidence, task_card: input.task_card, plugin_version: VERSION,
+  })).digest("hex")
+  await replaceContextInput(f.env, STORE, work, input)
+  return input
+}
+
+test("legacy null-card inputs retain their completed-lookup meaning in native briefs", async () => {
+  const f = await fixture()
+  await legacyInput(f)
+  const result = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async (options) => {
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    assert.equal(brief.task_card, null)
+    assert.equal(brief.task_card_status, "not_associated")
+    return f.options.runHeadless(options)
+  } })
+  assert.equal(result.accepted, 1)
+})
 
 for (const phase of ["candidate", "privacy"]) {
   test(`unqualified native ${phase} source is held before any claim or reservation`, async () => {
@@ -518,7 +543,43 @@ test("equal-start evidence is ordered by its actual endpoint in the native outli
   } })
 })
 
-test("the native task-card handoff exposes its verified pointer and only its own directory", async () => {
+test("unavailable optional cards stay explicit in both native briefs without granting task-directory access", async () => {
+  const f = await fixture()
+  const folder = join(f.desk, "sample", "unresolved")
+  await mkdir(folder, { recursive: true })
+  await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nPrivate task context.\n")
+  const logFolder = join(f.root, "logs")
+  await mkdir(logFolder)
+  const log = join(logFolder, "session.jsonl")
+  await rename(f.entries[0].logPath, log)
+  f.entries[0].logPath = log
+  await prepareTaskContexts(f.env, {
+    store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW,
+    readRemote: () => "https://github.com/synthetic/desk.git",
+    resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+  })
+  const phases = []
+  const options = { ...f.options, runHeadless: async (run) => {
+    const brief = JSON.parse(await readFile(run.briefPaths[0], "utf8"))
+    assert.equal(brief.task_card, null)
+    assert.equal(brief.task_card_status, "unavailable")
+    assert.ok(run.logDirs.every((dir) => folder !== dir && !folder.startsWith(`${dir}${sep}`)))
+    assert.ok(run.logDirs.includes(logFolder))
+    const input = JSON.parse(await readFile(brief.input_file, "utf8"))
+    const output = brief.phase === "candidate"
+      ? { ...contextRecord(input.sources[0], brief.job), evaluator: brief.evaluator, privacy: null,
+        coverage: { state: "partial", reasons: ["not_recorded"], omitted_events: 0 } }
+      : { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: brief.payload_sha256, reviewer: brief.evaluator, reason: "safe" }
+    await writeFile(brief.output, json(output))
+    phases.push(brief.phase)
+    return { state: "ran", cost_usd: 0.1 }
+  } }
+  assert.equal((await runner.runTaskContextStep(f.env, options)).accepted, 1)
+  assert.equal((await runner.runTaskContextStep(f.env, options)).accepted, 1)
+  assert.deepEqual(phases, ["candidate", "privacy"])
+})
+
+for (const legacy of [false, true]) test(`the ${legacy ? "legacy" : "current"} native task-card handoff exposes its verified pointer and only its own directory`, async () => {
   const f = await fixture(0)
   const remote = "https://github.com/synthetic/desk.git"
   const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -539,10 +600,20 @@ test("the native task-card handoff exposes its verified pointer and only its own
   facts.outcomes[0].job = job
   const entries = [{ facts, deskRoot: f.desk, personPrefix: "", localJobs: [{ local: job, published: job }], logPath: null, clockOrigin: null }]
   assert.equal((await prepareTaskContexts(f.env, { store: STORE, entries, pluginVersion: VERSION, clock: () => NOW })).prepared, 1)
+  if (legacy) {
+    const before = await legacyInput(f)
+    const counts = await prepareTaskContexts(f.env, {
+      store: STORE, entries, pluginVersion: VERSION, clock: () => NOW,
+      resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+    })
+    assert.equal(counts.unchanged, 1)
+    assert.equal((await listContextWork(f.env, { store: STORE }))[0].basis, before.basis)
+  }
   await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async (options) => {
     assert.equal(options.logDirs.includes(folder), true)
     assert.equal(options.logDirs.includes(f.desk), false)
     const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    assert.equal(brief.task_card_status, "associated")
     assert.deepEqual(brief.task_card, {
       path: join(folder, "task.md"),
       sha256: createHash("sha256").update(card).digest("hex"),
