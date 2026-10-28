@@ -404,6 +404,95 @@ test("preparation is source-current, idempotent and protected without publishing
   assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
 })
 
+test("an unavailable optional card does not hide verified session evidence", async () => {
+  const f = await cardFixture()
+  let elapsed = 0
+  const counts = await queue.prepareTaskContexts(f.env, {
+    ...f.options, deadline: 2000, clock: () => elapsed,
+    resolveIdentity: ({ timeoutMs }) => {
+      assert.equal(timeoutMs, 500)
+      elapsed += 500
+      throw Object.assign(new Error("git_deadline"), { code: "git_deadline" })
+    },
+  })
+  assert.equal(counts.prepared, 1)
+  assert.deepEqual(counts.deferred, [f.job])
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.job, f.job)
+  assert.equal(work.source.task_card, null, "an unverified path must not enter the protected input")
+  assert.equal(work.source.task_card_status, "unavailable")
+  assert.equal(work.source.sources[0].jobs[0].job, f.job)
+  assert.ok(elapsed < 2000)
+  await writeFile(f.entries[0].logPath, '{"synthetic":"new private evidence"}\n')
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [], "source-only inputs still require fresh log fingerprints")
+})
+
+test("completed optional-card search is distinct from unavailable discovery", async () => {
+  const f = await prepared()
+  assert.equal(f.work.source.task_card, null)
+  assert.equal(f.work.source.task_card_status, "not_associated")
+})
+
+test("a subsequently verified optional card replaces the source-only input", async () => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, {
+    ...f.options, resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+  })
+  const [before] = await queue.listContextWork(f.env, { store: STORE })
+  assert.ok(before, "verified session evidence must remain usable while optional discovery defers")
+  assert.equal(before.source.task_card_status, "unavailable")
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [after] = await queue.listContextWork(f.env, { store: STORE })
+  assert.notEqual(after.basis, before.basis)
+  assert.equal(after.source.task_card_status, "associated")
+  assert.equal(after.source.task_card.path, f.card)
+  assert.equal(after.phase, "candidate")
+})
+
+test("incomplete enrichment does not replace an already-current verified card input", async () => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [before] = await queue.listContextWork(f.env, { store: STORE })
+  const counts = await queue.prepareTaskContexts(f.env, {
+    ...f.options, resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+  })
+  const [after] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(after.basis, before.basis)
+  assert.equal(after.source.task_card.path, f.card)
+  assert.equal(after.source.task_card_status, "associated")
+  assert.equal(counts.unchanged, 1)
+  assert.deepEqual(counts.deferred, [f.job])
+})
+
+test("unavailable optional context cannot claim complete coverage or skip independent privacy review", async () => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, {
+    ...f.options, resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+  })
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  for (const coverage of [
+    { state: "measured", reasons: [], omitted_events: 0 },
+    { state: "partial", reasons: ["unplaced"], omitted_events: 0 },
+  ]) {
+    const value = { ...candidate(f.facts, f.job), coverage }
+    assert.equal((await queue.acceptContextCandidate(f.env, {
+      store: STORE, job: f.job, basis: work.basis, bytes: json(value),
+    })).result, "invalid_candidate")
+  }
+  const value = { ...candidate(f.facts, f.job), coverage: { state: "partial", reasons: ["not_recorded"], omitted_events: 0 } }
+  const accepted = await queue.acceptContextCandidate(f.env, {
+    store: STORE, job: f.job, basis: work.basis, bytes: json(value),
+  })
+  assert.equal(accepted.result, "candidate_accepted")
+  assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
+  assert.equal((await queue.acceptContextPrivacy(f.env, {
+    store: STORE, job: f.job, basis: work.basis, bytes: json(review(accepted.payload_sha256)),
+  })).result, "context_accepted")
+  const ready = await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries })
+  assert.equal(ready.length, 1)
+  assert.equal(JSON.parse(ready[0].bytes).coverage.state, "partial")
+})
+
 test("optional card and successful Git discovery share one aggregate preparation deadline", async () => {
   const f = await fixture()
   for (let index = 0; index < 10; index += 1) {
@@ -418,10 +507,13 @@ test("optional card and successful Git discovery share one aggregate preparation
     readRemote: () => { elapsed += 500; return "https://github.com/synthetic/desk.git" },
     resolveIdentity: ({ track, slug }) => { resolutions += 1; elapsed += 500; return { track, slug } },
   })
-  assert.equal(counts.prepared, 0)
+  assert.equal(counts.prepared, 1)
   assert.deepEqual(counts.deferred, [CONTEXT_JOB])
   assert.equal(resolutions, 1, "a slow successful Git response must not start another card")
-  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.task_card, null)
+  assert.equal(work.source.task_card_status, "unavailable")
+  assert.ok(elapsed <= 2000)
 })
 
 test("bounded discovery makes progress on a found task even when other task identities remain unresolved", async () => {
@@ -449,9 +541,12 @@ test("bounded discovery makes progress on a found task even when other task iden
     resolveIdentity: ({ track, slug }) => { elapsed += 400; return { track, slug } },
   }
   const counts = await queue.prepareTaskContexts(f.env, options)
-  assert.equal(counts.prepared, 1)
-  assert.equal(counts.held, 1)
-  assert.deepEqual((await queue.listContextWork(f.env, { store: STORE })).map((work) => work.job), [known])
+  assert.equal(counts.prepared, 2)
+  assert.equal(counts.held, 0)
+  const work = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.find((item) => item.job === known).source.task_card.path, join(f.desk, "sample", "a-known", "task.md"))
+  assert.equal(work.find((item) => item.job === "f".repeat(32)).source.task_card, null)
+  assert.equal(work.find((item) => item.job === "f".repeat(32)).source.task_card_status, "unavailable")
 })
 
 for (const cutoff of ["card cap", "walk deadline"]) {
@@ -507,7 +602,7 @@ test("successive bounded passes reach a renamed candidate beyond one fallback bu
   let prepared = false
   for (let pass = 0; pass < 4; pass += 1) {
     elapsed = 0
-    const counts = await queue.prepareTaskContexts(f.env, {
+    await queue.prepareTaskContexts(f.env, {
       ...f.options, deadline: 2000, clock: () => elapsed, readRemote: () => remote,
       resolveIdentity: ({ track, slug }) => {
         elapsed += 200
@@ -515,8 +610,9 @@ test("successive bounded passes reach a renamed candidate beyond one fallback bu
       },
     })
     assert.ok(elapsed <= 2000, "progress never raises the aggregate preparation allowance")
-    if (counts.prepared === 1) { prepared = true; break }
-    assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [], "unresolved identities are not guessed publishable")
+    const [work] = await queue.listContextWork(f.env, { store: STORE })
+    if (work.source.task_card !== null) { prepared = true; break }
+    assert.equal(work.source.task_card_status, "unavailable", "unfinished lookup cannot invent an associated card")
   }
   assert.equal(prepared, true, "each bounded retry must resume discovery rather than rechecking the same prefix forever")
   const [work] = await queue.listContextWork(f.env, { store: STORE })
@@ -679,7 +775,10 @@ test("a previous association Git timeout cannot starve later prior and renamed c
     assert.ok(elapsed <= 2000)
   }
   const work = await queue.listContextWork(f.env, { store: STORE })
-  assert.deepEqual(work.map((item) => item.job).sort(), jobs.slice(1).sort(), "unvalidated first card stays held while later work progresses")
+  assert.deepEqual(work.map((item) => item.job).sort(), [...jobs].sort())
+  assert.equal(work.find((item) => item.job === jobs[0]).source.task_card, null, "the failed identity never supplies a card")
+  assert.equal(work.find((item) => item.job === jobs[0]).source.task_card_status, "unavailable")
+  assert.equal(work.find((item) => item.job === jobs[1]).source.task_card.path, join(f.desk, "sample", "b-valid", "task.md"))
   assert.equal(work.find((item) => item.job === jobs[2]).source.task_card.path, join(f.desk, "sample", "z-renamed", "task.md"))
 })
 
@@ -1247,11 +1346,11 @@ for (const code of [null, "context_preparation_deferred", "synthetic_source_fail
         const state = await storedState(f)
         assert.notEqual(state.basis, f.work.basis)
         assert.equal(state.phase, "candidate")
-      } else {
-        assert.deepEqual(plan.ready, [])
       }
     }
-    assert.equal(discoveryPasses, 2)
+    if (code !== null) assert.ok(reads >= 2, "the existing read fault must actually be reached")
+    assert.equal(discoveryPasses, code === "context_preparation_deferred" ? 2 : 1,
+      "only the injected state-read deferral still needs the replacement pass")
   })
 }
 

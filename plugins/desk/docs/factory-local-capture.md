@@ -96,6 +96,23 @@ They alternate which goes first; that stage may use the remaining whole turn,
 so a valid operation does not stall merely because it needs more than half.
 The total deadline and the separate numerical-delivery reserve are unchanged.
 
+Task-card lookup enriches already source-bound session evidence; it does not
+establish that evidence's job mapping. Its private input records whether a card
+is `associated`, `not_associated` by a completed lookup, or `unavailable` because
+discovery is incomplete. A completed lookup without an association does not
+prove that no card exists. Incomplete discovery keeps its normal cursor and
+deadline; it never supplies a guessed identity, card path or directory access.
+Already-current verified card inputs remain current under their existing
+fingerprint checks, rather than being replaced merely by an incomplete search.
+
+Verified session evidence can proceed without optional card enrichment. Both
+the candidate and independent privacy reviewer see its unavailable status.
+Such a published explanation must retain partial coverage with `not_recorded`;
+the parent rejects a complete-coverage claim. Insufficient evidence still
+requires an unavailable record. A later verified card creates a new input basis
+and requires fresh generation and independent review. Consent, source freshness,
+Git limits, model qualification, quotas and publication checks are unchanged.
+
 A source change can mechanically replace old wording with a prose-free
 `unavailable` record while a fresh explanation is reviewed. Its privacy verdict
 is `not_required` with a null reviewer, never a fabricated independent approval.

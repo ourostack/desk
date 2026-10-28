@@ -5,7 +5,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { osEnv } from "../_os_env.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { acceptContextCandidate, listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
@@ -516,6 +516,42 @@ test("equal-start evidence is ordered by its actual endpoint in the native outli
     assert.deepEqual(brief.evidence_outline[0].intervals.slice(0, 2).map((entry) => entry.range), [[1000, 2000], [1000, 250000]])
     return { state: "failed", cost_usd: null }
   } })
+})
+
+test("unavailable optional cards stay explicit in both native briefs without granting task-directory access", async () => {
+  const f = await fixture()
+  const folder = join(f.desk, "sample", "unresolved")
+  await mkdir(folder, { recursive: true })
+  await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nPrivate task context.\n")
+  const logFolder = join(f.root, "logs")
+  await mkdir(logFolder)
+  const log = join(logFolder, "session.jsonl")
+  await rename(f.entries[0].logPath, log)
+  f.entries[0].logPath = log
+  await prepareTaskContexts(f.env, {
+    store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW,
+    readRemote: () => "https://github.com/synthetic/desk.git",
+    resolveIdentity: () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) },
+  })
+  const phases = []
+  const options = { ...f.options, runHeadless: async (run) => {
+    const brief = JSON.parse(await readFile(run.briefPaths[0], "utf8"))
+    assert.equal(brief.task_card, null)
+    assert.equal(brief.task_card_status, "unavailable")
+    assert.ok(run.logDirs.every((dir) => folder !== dir && !folder.startsWith(`${dir}${sep}`)))
+    assert.ok(run.logDirs.includes(logFolder))
+    const input = JSON.parse(await readFile(brief.input_file, "utf8"))
+    const output = brief.phase === "candidate"
+      ? { ...contextRecord(input.sources[0], brief.job), evaluator: brief.evaluator, privacy: null,
+        coverage: { state: "partial", reasons: ["not_recorded"], omitted_events: 0 } }
+      : { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: brief.payload_sha256, reviewer: brief.evaluator, reason: "safe" }
+    await writeFile(brief.output, json(output))
+    phases.push(brief.phase)
+    return { state: "ran", cost_usd: 0.1 }
+  } }
+  assert.equal((await runner.runTaskContextStep(f.env, options)).accepted, 1)
+  assert.equal((await runner.runTaskContextStep(f.env, options)).accepted, 1)
+  assert.deepEqual(phases, ["candidate", "privacy"])
 })
 
 test("the native task-card handoff exposes its verified pointer and only its own directory", async () => {
