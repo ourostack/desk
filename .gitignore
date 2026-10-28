@@ -10,3 +10,4 @@ coverage/
 
 # Repository-level tooling install (knip).
 node_modules/
+.superpowers/
