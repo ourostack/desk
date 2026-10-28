@@ -96,7 +96,7 @@ They alternate which goes first; that stage may use the remaining whole turn,
 so a valid operation does not stall merely because it needs more than half.
 The total deadline and the separate numerical-delivery reserve are unchanged.
 
-Within each desk/person namespace, preparation also keeps a protected next-job cursor in `preparation.json`. It resumes saves in stable job order after completed, unchanged or explicitly held work, so hashing early jobs cannot consume every turn. Discovery and publication keep their separate cursors. A removed next job wraps to the next existing job; malformed progress refuses rather than selecting evidence. This cursor schedules work only: it changes no job mapping, card authority, evidence, model attempt or publication approval.
+Within each desk/person namespace, preparation also keeps a protected next-job cursor in `preparation.json`. It resumes saves in stable job order after completed, unchanged or explicitly held work, so hashing early jobs cannot consume every turn. Discovery and publication keep their separate cursors. If a discovered card cannot be saved this turn, discovery revisits that candidate rather than losing it between cursors; every retry still verifies the actual card. A removed next job wraps to the next existing job; malformed progress refuses rather than selecting evidence. This cursor schedules work only: it changes no job mapping, card authority, evidence, model attempt or publication approval.
 
 Task-card lookup enriches already source-bound session evidence; it does not
 establish that evidence's job mapping. Its private input records whether a card

@@ -854,6 +854,48 @@ test("bounded preparation resumes beyond unchanged early source-only jobs", asyn
     "later source-bound jobs must get a turn without weakening the two-second budget")
 })
 
+test("interrupted ordered saves revisit discovered cards before advancing discovery", async (t) => {
+  const f = await cardFixture()
+  await mkdir(join(f.desk, "sample", "zz-unrelated"), { recursive: true })
+  await writeFile(join(f.desk, "sample", "zz-unrelated", "task.md"), "---\nstatus: done\n---\nUnrelated.\n")
+  const other = structuredClone(f.entries[0])
+  other.facts.session.id = "00000001-1234-4abc-8abc-123456789abc"
+  other.facts.jobs[0].job = "0".repeat(32)
+  other.facts.outcomes[0].job = "0".repeat(32)
+  other.localJobs = [{ local: "0".repeat(32), published: "0".repeat(32) }]
+  const entries = [other, ...f.entries]
+  await queue.prepareTaskContexts(f.env, { ...f.options, entries, readRemote: () => null })
+  const states = new Set(await Promise.all(entries.map((entry) => taskContextPath(f.env, STORE, entry.localJobs[0].published, "state.json"))))
+  for (let pass = 0; pass < 6; pass += 1) {
+    let elapsed = 0
+    const charged = new Set()
+    await withFsFault(t, {
+      readFile: (original, file, ...args) => {
+        const name = String(file)
+        if (states.has(name) && !charged.has(name)) { charged.add(name); elapsed += 600 }
+        return original(file, ...args)
+      },
+    }, async () => {
+      try {
+        await queue.prepareTaskContexts(f.env, {
+          ...f.options, entries, deadline: 2000, clock: () => elapsed,
+          readRemote: () => { elapsed += 200; return "https://github.com/synthetic/desk.git" },
+          resolveIdentity: ({ track, slug, timeoutMs }) => {
+            assert.equal(timeoutMs, 500)
+            elapsed += 400
+            return { track, slug }
+          },
+        })
+      } catch (error) {
+        assert.equal(error.code, "context_preparation_deferred")
+      }
+    }, fsNative.promises)
+  }
+  const work = (await queue.listContextWork(f.env, { store: STORE })).find((item) => item.job === f.job)
+  assert.equal(work?.source.task_card?.path, f.card, "a discovered card cannot be lost between the save and discovery cursors")
+  assert.equal(work.source.task_card_status, "associated")
+})
+
 test("preparation resumes safely when a cursor job disappears and entry ordering changes", async (t) => {
   const f = await fixture()
   const jobs = ["1".repeat(32), "3".repeat(32)]

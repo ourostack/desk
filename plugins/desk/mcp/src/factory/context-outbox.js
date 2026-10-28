@@ -321,6 +321,8 @@ async function prepareContextGroups(env, {
     const start = found < 0 ? 0 : found
     let next = eligible[start].job
     let offset = 0
+    const saved = new Set()
+    const pendingCards = new Map()
     const saveAvailable = async (cards, incomplete, finished) => {
       while (offset < eligible.length) {
         const index = (start + offset) % eligible.length
@@ -330,11 +332,19 @@ async function prepareContextGroups(env, {
         if (card === undefined && incomplete) counts.deferred.push(group.job)
         const status = card !== undefined ? "associated" : incomplete ? "unavailable" : "not_associated"
         await save(group, card ?? null, status)
+        saved.add(group.job)
+        pendingCards.delete(group.job)
         offset += 1
         next = eligible[(index + 1) % eligible.length].job
       }
     }
     let cursor = await discoveryCursor(env, store, progressJob)
+    const noteCards = (cards) => {
+      for (const group of eligible) {
+        if (cards.has(group.local_job) && !saved.has(group.job) && !pendingCards.has(group.job))
+          pendingCards.set(group.job, cursor)
+      }
+    }
     const remember = async (next) => {
       if (next === cursor) return
       await writeTaskContextFile(env, store, progressJob, "discovery.json", {
@@ -349,14 +359,17 @@ async function prepareContextGroups(env, {
       })
       let step = iterator.next()
       while (!step.done) {
+        noteCards(step.value.cards)
         await saveAvailable(step.value.cards, false, false)
         await remember(step.value.cursor)
         step = iterator.next()
       }
       const index = step.value
+      noteCards(index.cards)
       await remember(index.cursor)
       await saveAvailable(index.cards, index.incomplete, true)
     } finally {
+      if (pendingCards.size > 0) await remember(pendingCards.values().next().value)
       if (next !== savedNext) await writeTaskContextFile(env, store, progressJob, "preparation.json", {
         schema: "desk.factory.context-preparation/1", next,
       })
