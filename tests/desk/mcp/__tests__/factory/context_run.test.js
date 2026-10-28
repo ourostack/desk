@@ -1,10 +1,10 @@
+import { mkTempRoot } from "../_temp_roots.js"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { osEnv } from "../_os_env.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -34,7 +34,7 @@ async function writePluginVersion(root, version) {
   await writeFile(join(root, ".claude-plugin", "plugin.json"), bytes)
 }
 async function fixture(count = 1, { ready = true, spent = 0, rubricSuffix = "" } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "desk-context-run-")))
+  const root = await mkTempRoot("desk-context-run-")
   const desk = join(root, "desk")
   const pluginRoot = join(root, "plugin source")
   const env = osEnv({ HOME: root, XDG_STATE_HOME: join(root, "state"), DESK_PLUGIN_ROOT: pluginRoot })
