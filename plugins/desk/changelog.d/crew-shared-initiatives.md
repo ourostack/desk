@@ -1,1 +1,0 @@
-Crew startup now introduces existing shared initiatives under `_shared/tracks/` alongside personal tasks, using Crew's shared-initiative skill. Discovery is read-only and does not create assignments or duplicate task state.

@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.43 — 2026-10-29
+
+Crew startup now introduces existing shared initiatives under `_shared/tracks/` alongside personal tasks, using Crew's shared-initiative skill. Discovery is read-only and does not create assignments or duplicate task state.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.42 — 2026-10-29
 
 New [`delightful-decks`](skills/delightful-decks/SKILL.md) skill for making presentation decks that surprise and delight a live audience. It sets an explicit bar for every slide (visual aids, not explainers; only the words that must be there; beautiful art on every slide; room to breathe; soft depth; titles that wrap like speech; the real artifact, unredacted), a process that agrees the spec slide by slide with the presenter before building and then builds art, rendered diagrams, screenshots, research and the deck in parallel, a simulated-audience review panel filtered against the presenter's decisions, and the common failure modes. A builder's "nothing overflows" check proves layout, not quality, and never stands in for the bar.
