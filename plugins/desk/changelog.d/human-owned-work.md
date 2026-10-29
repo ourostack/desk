@@ -1,1 +1,0 @@
-Operator-voice drafts and humanizing guidance now point to Plain Language's shared rule for attributing authorized work to the person. The [collaboration rationale](docs/agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent) explains why agent use is normally implicit; approval and audit boundaries remain unchanged.

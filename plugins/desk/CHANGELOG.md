@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.45 — 2026-10-29
+
+Operator-voice drafts and humanizing guidance now point to Plain Language's shared rule for attributing authorized work to the person. The [collaboration rationale](docs/agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent) explains why agent use is normally implicit; approval and audit boundaries remain unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.44 — 2026-10-29
 
 ### Desk's own commits always reach the remote
