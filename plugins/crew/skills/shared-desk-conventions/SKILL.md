@@ -1,6 +1,6 @@
 ---
 name: shared-desk-conventions
-description: The multi-person shared-workspace layout variant -- one git repo, N operators, `desks/<alias>/` = one person's full desk, `_shared/{landscape,decisions}/` = team-neutral facts + agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (`desks/<you>/` = direct push; a shared path = auto pull-`main` → branch → write → PR → merge-now, NO human review). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), or when about to write to a path outside your own `desks/<alias>/` subtree, or when two or more members prepare together for a meeting (one shared meeting folder for prep and capture, linked from each desk). The multi-person overlay for `desk:directory-structure`.
+description: Shared-workspace layout -- one git repo, N operators, `desks/<alias>/` per person, `_shared/{landscape,decisions}/` for team facts and agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (own desk = direct push; shared path = branch → PR → merge-now, no human review; saved = merged on remote `main`). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), when about to write to a path outside your own `desks/<alias>/` subtree, before saying work is saved, done or ready, or when two or more members prepare together for a meeting (one shared meeting folder for prep and capture, linked from each desk). The multi-person overlay for `desk:directory-structure`.
 ---
 
 # Shared-desk conventions
@@ -137,6 +137,15 @@ There is **NO human review step.** The PR is a serialization primitive, not an a
 | `desks/<someone-else>/...` | attributed contribution only when authorized | conflict-safe contribution path; preserve owner meaning, never bypass protected scope |
 
 > **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → establish authority and use the conflict-safe contribution protocol. Another desk requires an authorized, attributed contribution, not a home-organization veto or silent permission expansion. The agent runs this test silently.
+
+### Saved means on the remote `main`
+
+Work is saved only when the workspace's remote `main` has it. A local commit, a branch in an app worktree or an unmerged pull request is not saved: teammates can't see it, and it disappears with the laptop or the worktree.
+
+1. **Land every durable write on `main` as you go.** Commit and push right after the write, using the protocol above. If the session runs in a worktree or on a branch (a Copilot app "New worktree" session does), push the branch, open a pull request and merge it straight away, even for your own desk.
+2. **Verify the remote has it.** Run `git fetch origin main`, then `git merge-base --is-ancestor <your-commit> origin/main`; success means it is on `main`. Pushed but unmerged is not saved.
+3. **Check before you say "saved", "done" or "ready", and before ending any turn that wrote files.** In the workspace checkout and in this session's worktree, run `git status --short --branch` and `git branch --no-merged origin/main`. An uncommitted change, a commit ahead of the remote, or a branch of yours not merged into `main` means step 1 isn't finished: finish it, then answer.
+4. **If a push or merge fails, say so.** Name the error and the commit, branch or path still at risk. Never call it saved.
 
 ## Team lessons -- a correction taught once reaches every teammate's agents
 
