@@ -481,7 +481,19 @@ function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, pat
  * 0 for, the same as `"busy"` or `"skipped"`. `clock`, `spawnGit`,
  * `fileProblem` and `stderr` are test seams.
  */
-export async function runPushWorker({
+export async function runPushWorker(options) {
+  for (let round = 0; ; round += 1) {
+    // Only the first round waits out the debounce.
+    const result = await pushRound(round === 0 ? options : { ...options, debounceMs: 0 })
+    // A commit made after the holder's last check finds the lock still held and its own worker exits, so the holder
+    // looks once more after releasing the lock and goes round again for anything left.
+    if (result.result !== "ok") return result
+    const left = undeliveredCommits({ root: options.root, spawnGit: options.spawnGit, delivered: deliveredSoFar(options.root, options.env ?? process.env) })
+    if (!(left?.length > 0)) return result
+  }
+}
+
+async function pushRound({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
   stderr = process.stderr,
 }) {

@@ -336,6 +336,25 @@ test("the worker reports an unreadable pending list as nothing to push, and stop
   assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, spawnGit: offline, fileProblem: () => assert.fail("not filed") }), { result: "blocked", reason: "unreachable", unpushed: 0 })
 })
 
+test("a commit made just after the worker's last check, while its own worker found the lock held, is still pushed", async () => {
+  const { origin, desk } = await mkShared()
+  await commit(desk, "tasks/a.md", "a\n", "a")
+  let injected = false
+  const lateCommit = (cmd, args, opts) => {
+    const result = spawnSync(cmd, args, opts)
+    if (!injected && args.includes("--cherry-pick") && result.stdout.trim() === "") {
+      injected = true
+      writeFileSync(path.join(desk, "tasks/late.md"), "late\n")
+      git(desk, ["add", "--", "tasks/late.md"])
+      git(desk, ["commit", "-q", "-m", "late", "--", "tasks/late.md"])
+    }
+    return result
+  }
+  assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, spawnGit: lateCommit }), { result: "ok" })
+  assert.equal(injected, true)
+  assert.equal(bare(origin, ["log", "-1", "--format=%s", "main"]).trim(), "late")
+})
+
 test("a write tool's note says the work is only local, how much and why, while the last push is blocked", async () => {
   const { desk } = await mkShared()
   const note = "Desk committed this card and is pushing it in the background."
