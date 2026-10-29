@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.42 — 2026-10-29
+
+New [`delightful-decks`](skills/delightful-decks/SKILL.md) skill for making presentation decks that surprise and delight a live audience. It sets an explicit bar for every slide (visual aids, not explainers; only the words that must be there; beautiful art on every slide; room to breathe; soft depth; titles that wrap like speech; the real artifact, unredacted), a process that agrees the spec slide by slide with the presenter before building and then builds art, rendered diagrams, screenshots, research and the deck in parallel, a simulated-audience review panel filtered against the presenter's decisions, and the common failure modes. A builder's "nothing overflows" check proves layout, not quality, and never stands in for the bar.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.41 — 2026-10-29
 
 Parallelize and fast-follow is now a default for every operator. Independent streams run at the same time, downstream artifacts are updated right after an upstream change, and usable milestones are pushed early and often so whoever is waiting always finds the latest. [work-orchestration](skills/work-orchestration/SKILL.md) "Parallelize and fast-follow" holds the rule and builds on `superpowers:dispatching-parallel-agents` instead of restating it. [using-desk](skills/using-desk/SKILL.md) names it under waste judgment, and the work-orchestration description makes it the default for any work.
