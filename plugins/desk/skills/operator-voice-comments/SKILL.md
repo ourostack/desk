@@ -9,6 +9,8 @@ This skill owns everything sent or scheduled in the operator's name: the approva
 
 The operator's name rides on every word under their account. The agent's default prose is the opposite of a direct human voice: softer, longer, hedged, padded with retreats and inferred mechanism claims. The rules below correct that drift.
 
+For ownership of authorized work in the operator's voice, apply Plain Language's [Attribute work to the person](../../../plain-language/skills/plain-language/SKILL.md#attribute-work-to-the-person). The approval rule below still governs sending.
+
 ## Approval before anything is sent
 
 Anything sent or scheduled in the operator's name — a chat message, an email, a calendar invitation, a PR comment or description, a work-item comment — needs the operator's approval of the exact audience and content before it goes. A "go" on the work is not approval to send; neither is an earlier approval of different wording or a different audience. Show the final audience and text, wait for a clear yes, and send exactly that. When the operator has seen the final audience and text and says "send it", that is the approval; do not ask again. First-person future phrasing such as "I'll send it" leaves the send with the operator (`interaction-style` §6). An action in the agent's own role that does not speak for the operator, such as a work-item state change or a bot or channel-role update, follows `preflight-actions` instead.
