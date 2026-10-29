@@ -98,15 +98,22 @@ test("desk_status reports sync.blocked true with reason and paths when a push ha
   seedStatus(cloneA, { blocked: true, reason: "push_rejected_after_retry", paths: ["more.md"], at: new Date().toISOString() })
 
   const body = await desk_status({ deskRoot: cloneA, env })
-  assert.deepEqual(body.sync, { blocked: true, reason: "push_rejected_after_retry", paths: ["more.md"] })
+  assert.deepEqual(body.sync, { blocked: true, reason: "push_rejected_after_retry", paths: ["more.md"], unpushed: null })
 })
 
-test("desk_status treats a blocked status with no reason or paths recorded as blocked: true, reason: null, paths: []", async () => {
+test("desk_status reports how many local commits a blocked push left off the remote", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, { blocked: true, reason: "auth_failed", paths: [], unpushed: 4 })
+  const body = await desk_status({ deskRoot: cloneA, env })
+  assert.deepEqual(body.sync, { blocked: true, reason: "auth_failed", paths: [], unpushed: 4 })
+})
+
+test("desk_status treats a blocked status with no reason, paths or count recorded as blocked: true, reason: null, paths: [], unpushed: null", async () => {
   const { cloneA } = await mkOriginWithClone()
   seedStatus(cloneA, { blocked: true })
 
   const body = await desk_status({ deskRoot: cloneA, env })
-  assert.deepEqual(body.sync, { blocked: true, reason: null, paths: [] })
+  assert.deepEqual(body.sync, { blocked: true, reason: null, paths: [], unpushed: null })
 })
 
 test("off-thread DB inspection preserves a recorded failed pull even when local counts are clean", async () => {

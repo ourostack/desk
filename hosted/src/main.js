@@ -306,8 +306,8 @@ export function deskChildEnv({ config, user, author = authorOf(user), socketPath
 }
 
 // Desk's own push: the script Desk's detached push worker runs, with no
-// debounce. It takes Desk's sync lock, pushes, and on a rejection pulls with
-// rebase and pushes once more.
+// debounce. It takes Desk's sync lock and pushes; when origin has moved on, it
+// replays Desk's commits onto origin in a private worktree and pushes those.
 export const deskPushArgs = (config) => [join(config.pluginDir, "mcp", "scripts", "sync-push.js"), "--root", config.cloneDir, "--debounce-ms", "0"];
 
 // The commits in `dir` that origin does not have yet, newest first.

@@ -10,6 +10,7 @@ import * as path from "node:path"
 import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
+import { blockedWords } from "./deliver.js"
 import { unsignedLines } from "../desk/unsigned-deliveries.js"
 import { memberSourceLabel } from "../desk/crew-member.js"
 
@@ -59,19 +60,33 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
   const failed = (why) => `sync failed: ${why}; nothing was pulled or pushed; ${asOf}`
   if (timedOut) return failed("it did not finish within the boot's time budget")
   if (sync === null || sync === undefined) return failed("it did not run")
+  const unpushed = unpushedText(sync.unpushed)
   if (sync.state === "unresolved") {
     const moved = Array.isArray(sync.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
     if (typeof sync.reason === "string" && sync.reason.startsWith("autostash_pop_conflict")) {
       const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}`
+      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}${unpushed}`
     }
-    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}`
+    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}${unpushed}`
   }
-  if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled`
+  if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled${unpushed}`
   if (sync.nothingToSync === "headless") return "headless session; nothing synced"
   if (sync.nothingToSync === "no_remote") return "no remote; nothing to sync"
   if (sync.nothingToSync === "no_upstream") return "no upstream branch; nothing to sync"
-  return "sync ok"
+  return `sync ok${unpushed}`
+}
+
+/**
+ * The clause boot adds when local commits are not on the remote, from `syncWorkspace`'s `unpushed` field: how many,
+ * why when a push failed, and whether Desk is delivering them now or cannot until the remote is usable. Empty otherwise.
+ */
+function unpushedText(unpushed) {
+  if (!(unpushed?.count > 0)) return ""
+  const commits = `${plural(unpushed.count, "local commit")} ${unpushed.count === 1 ? "is" : "are"} not on the remote`
+  const why = unpushed.reason ? ` (the last push failed because ${blockedWords(unpushed.reason, unpushed.paths ?? [])})` : ""
+  return unpushed.delivering
+    ? `; ${commits}${why}; Desk is delivering them from a clean copy in the background`
+    : `; ${commits}${why}; they stay on this machine until a push succeeds`
 }
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
@@ -297,8 +312,9 @@ const PLAIN_TEXT_INSTRUCTIONS = new Map([
 export function syncWords(summary) {
   if (typeof summary !== "string" || summary === "") return null
   if (summary === "sync ok") return "Desk synced with origin"
-  const moved = /^sync ok: moved (.+) first, then pulled$/u.exec(summary)
-  if (moved) return `Desk synced with origin (moved ${moved[1]} first)`
+  if (summary.startsWith("sync ok; ")) return `Desk synced with origin${summary.slice("sync ok".length)}`
+  const moved = /^sync ok: moved (.+?) first, then pulled(.*)$/u.exec(summary)
+  if (moved) return `Desk synced with origin (moved ${moved[1]} first)${moved[2]}`
   const failed = /^sync failed: (.+?); nothing was pulled or pushed; local desk is as of (\S+)(.*)$/u.exec(summary)
   if (failed) return `Desk could not sync: ${failed[1]}; local state shown${failed[2] === "unknown" ? "" : `, as of ${failed[2]}`}${failed[3]}`
   const nothing = /^no (remote|upstream branch); nothing to sync$/u.exec(summary)

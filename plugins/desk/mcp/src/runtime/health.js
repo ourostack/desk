@@ -13,9 +13,12 @@
  * the `last_pull` record `desk_status` reads back), or null when the sync did not fail.
  */
 export function syncDegradation(sync) {
-  if (sync?.state !== "unresolved") return null
+  // Local commits a push could not deliver are degraded even when the pull worked: work the operator thinks is shared is not.
+  const stuck = sync?.unpushed?.count > 0 && (typeof sync.unpushed.reason === "string" || sync.unpushed.delivering === false)
+  const push = stuck ? `push: ${sync.unpushed.count} local commit(s) not on the remote (${sync.unpushed.reason ?? "not delivered"})` : null
+  if (sync?.state !== "unresolved") return push
   const detail = [sync.reason, sync.cause].filter((value) => typeof value === "string" && value !== "")
-  return `sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`
+  return `sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}${push === null ? "" : `; ${push}`}`
 }
 
 /** `degraded` when any line says so, otherwise `ready`. */
