@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.40 — 2026-10-29
+
+Content routing now covers teams that share a Crew workspace. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, a team's own process goes to its own tooling as skills, shared context and evidence stay in the team workspace, and changes to repositories the team doesn't own go through pull requests there with a heads-up to their owner. See [content-routing](skills/content-routing/SKILL.md) "When a team shares a workspace".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.39 — 2026-10-28
 
 Give explicitly requested session explanations one complete generation/privacy allowance, separate from unattended maintenance's daily ledger. The requested CLI keeps source, consent, billing, retry and publication checks, holds the normal evaluator lock across both phases, and never enables an automatic budget escape.
