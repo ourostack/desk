@@ -35,7 +35,7 @@ if (skillManifest !== null) {
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.8");
+  assert.equal(manifest.version, "0.2.9");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);
@@ -46,6 +46,18 @@ assert.match(pluginSkill, /every first mention[\s\S]+reader-facing name/iu);
 assert.match(pluginSkill, /identifier is not needed[\s\S]+omit it/iu);
 assert.match(pluginSkill, /never make the reader decode[\s\S]+identifier/iu);
 assert.match(pluginSkill, /## Report work precisely/u);
+const workAttribution = pluginSkill.split("## Attribute work to the person\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+assert.match(workAttribution, /person the ordinary actor/u);
+assert.match(workAttribution, /Ownership does not claim manual execution/u);
+assert.match(workAttribution, /agent speaks in its own role/u);
+assert.match(workAttribution, /actual acting identity/u);
+assert.match(workAttribution, /say when that identity is unverified/u);
+assert.match(workAttribution, /line-by-line reading/u);
+assert.match(workAttribution, /sending or publication authority/u);
+for (const file of ["SKILL.md", "human-voice.md"]) {
+  const application = fs.readFileSync(path.join(repoRoot, "plugins/desk/skills/operator-voice-comments", file), "utf8");
+  assert.match(application, /plain-language\/SKILL\.md#attribute-work-to-the-person/u);
+}
 assert.match(pluginSkill, /## Preserve meaning/u);
 assert.match(pluginSkill, /## Check before sending/u);
 assert.match(pluginSkill, /The integration test is still running/u);

@@ -58,6 +58,18 @@ These tells survive a tight edit. Cut them:
 - State relationships with words such as `because`, `if`, `before`, `after`, and `therefore` instead of leaving them implicit.
 - Use complete sentences in prose. Fragments belong in headings, labels, table cells, and deliberate status markers.
 
+## Attribute work to the person
+
+When a person speaks about work they authorized, make that person the ordinary actor: "I sent the email", "I finished digging into this", "I found explicit instructions". Computer or agent use is normally implicit, just as using a computer to send email is implicit. Ownership does not claim manual execution. Keep the person as the subject rather than replacing "my agent found" with the actorless "the investigation found".
+
+Apply this to human-readable messages, documents, reports, reviews, commit prose and handoffs. Preserve other people's credit, source provenance and exact quoted or structured records; this is writing guidance, not a reason to rewrite technical documentation wholesale.
+
+- If an agent speaks in its own role, preserve that speaker and role.
+- If the reader asks how work ran or what an agent can do, explain the automation. In access or permission explanations, audit or provenance records, and required disclosures, preserve automation and the actual acting identity; say when that identity is unverified.
+- If the evidence establishes only authorized work, describe that work without inventing personal line-by-line reading, human review, approval, attendance, consent or decisions.
+
+Ownership language grants no sending or publication authority. Existing approval, disclosure and no-AI/coauthor-trailer rules still apply.
+
 ## Translate internal identifiers
 
 Use a reader-facing name before an internal identifier. Every first mention that includes an identifier must attach it to that reader-facing name. If the identifier is not needed for the reader's action or correlation, omit it entirely.
