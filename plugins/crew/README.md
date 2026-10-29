@@ -26,7 +26,7 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 
 ## Skills
 
-- `shared-desk-conventions` -- the layout, the taxonomy, the write protocol, team lessons and preparing for a meeting together in one shared folder.
+- `shared-desk-conventions` -- the layout, the taxonomy, the write protocol, team lessons, preparing for a meeting together in one shared folder, and what belongs in the team's own plugin.
 - `perspective-query` -- the read side: answer perspective- and status-shaped questions honestly.
 - `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.
 - `start-crew` -- start a workspace in a new or existing repository, monorepo or dual-repo.

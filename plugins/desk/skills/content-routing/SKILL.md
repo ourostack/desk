@@ -1,6 +1,6 @@
 ---
 name: content-routing
-description: Decide where durable content belongs (product repo, the operator's desk, a generic plugin or an overlay; foundation or triggered skill) before encoding product behavior, interfaces, installation contracts, defaults, compatibility promises, release rules, a lesson, a preference or a new skill. Not for placement inside a desk.
+description: Decide where durable content belongs (product repo, the operator's desk, a generic plugin, an overlay, or a team's own tooling or shared workspace; foundation or triggered skill) before encoding product behavior, interfaces, installation contracts, defaults, compatibility promises, release rules, a lesson, a preference or a new skill. Not for placement inside a desk.
 ---
 
 # Content routing — where does this belong?
@@ -15,7 +15,7 @@ Durable content fails when it lands in the wrong home. A general principle wedge
   - a **generic substrate plugin** (`desk`) plus the **pinned engineering provider** (`superpowers`) — vendor-neutral. Repo-authored integration belongs in Desk; pristine upstream payload changes require the maintained provenance/update path, not an in-place fork.
   - **overlay plugins** that layer employer- or context-specific behavior on top of the generic substrate — these hold content that's *general to that context* but can't ship in the public generic plugins.
 
-So content lives in exactly one of four homes: the product repository, a workspace, a generic plugin, or an overlay plugin.
+So content lives in exactly one of four homes: the product repository, a workspace, a generic plugin, or an overlay plugin. A team that shares a workspace adds its team workspace and its own team tooling (see "When a team shares a workspace").
 
 ## The routing decision
 
@@ -27,6 +27,16 @@ So content lives in exactly one of four homes: the product repository, a workspa
    - **Within the chosen plugin**, pick the surface by *when it must apply*:
      - **Every turn / unconditionally** → the layer's **always-on foundation** skill, injected once at session start (Desk's is `using-desk`). Keep it to the essence; its procedure still goes in the skill that runs it. Agent bodies carry identity and context only.
      - **At one moment** — a specific operation, a decision point, a surface the agent touches → a **skill** (description-gated; fires when its trigger matches).
+
+## When a team shares a workspace
+
+A team on Crew adds two homes: its **team workspace** and its own **team tooling** (a plugin in its tooling repository, or in the workspace's `plugins/` folder). Route tooling and team content to the lowest layer where it is honest:
+
+- **General agent-work tooling**, useful to any operator anywhere → Desk, or Crew when it is about working in a shared workspace.
+- **Employer-specific but not team-specific** → that employer's overlay. For example, meeting capture that drives the employer's meeting service belongs in the overlay, so every team there inherits it.
+- **One team's own process** → that team's tooling, written as skills, because skills are how agents carry process. It composes the layers below instead of rebuilding them. For example, a team's way of digesting customer meetings lives in its tooling, built on the overlay's meeting capture.
+- **Shared context and evidence** → the team workspace. Tooling repositories never hold team state.
+- **A change to a repository the team doesn't own** → a pull request on that repository, plus a heads-up to its owner. Never copy its content into your own layer to avoid that pull request.
 
 ## The self-check — run before writing into a workspace or plugin
 

@@ -69,6 +69,8 @@ Every Crew workspace has the floor plan above. The two setups differ only in whe
 
 `crew:start-crew` writes `_meta/crew.json`; `node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone>` reports the setup and the install command, and `crew:join-crew` installs the plugin from wherever it lives.
 
+**What goes in the team's plugin.** Only the team's own process, written as skills. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, and shared context and evidence stay in this workspace. A change to another team's or project's repository goes through a pull request there, with a heads-up to its owner. `desk:content-routing` "When a team shares a workspace" owns the full rule.
+
 The key identity: **`desks/<alias>/` is one person's full desk** -- everything `desk:directory-structure` describes (tracks, tasks, iterations, `_planning/`, `_friction/`, `_meta/`, `_archive/`) lives *under* that prefix, unchanged. The `desks/<alias>/` prefix just re-roots the same floor plan one person at a time. A person's agent treats `desks/<alias>/` as its effective `$DESK`.
 
 ## Read-across / write-own
