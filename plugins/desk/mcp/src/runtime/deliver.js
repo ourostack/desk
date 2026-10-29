@@ -335,7 +335,8 @@ function catchUp({ git, upstream, head, target }) {
     const named = [...moved.stderr.matchAll(/^(?:error: )?Entry '(.+)' (?:not uptodate|would be overwritten)/gmu)].map((match) => match[1])
     return { state: "behind", reason: "local_changes", paths: [...new Set([...named, ...namedUntrackedPaths(moved.stderr)])] }
   }
-  if (git(["update-ref", "-m", "desk: catch up with delivered commits", `refs/heads/${upstream.branch}`, target, head]).status === 0) return { state: "caught_up" }
+  // Through HEAD, so the move is in HEAD's reflog as well as the branch's; the old value makes it a compare-and-swap.
+  if (git(["update-ref", "-m", "desk: catch up with delivered commits", "HEAD", target, head]).status === 0) return { state: "caught_up" }
   // Another commit landed in the moment between: put the files back to match the branch as it now is.
   git(["read-tree", "-m", "-u", target, "HEAD"], CHECKOUT_TIMEOUT_MS)
   return { state: "behind", reason: "moved" }
