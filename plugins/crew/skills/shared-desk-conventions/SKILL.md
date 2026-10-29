@@ -5,7 +5,7 @@ description: Shared-workspace layout -- one git repo, N operators, `desks/<alias
 
 # Shared-desk conventions
 
-`desk:directory-structure` is the floor plan of one operator's room -- one operator, one `$DESK/`, synced across that operator's machines, private, the operator owns every write. This skill is the **multi-person overlay** on that floor plan: the same room, but now N operators share one git repo, each with their own desk in it, plus a common area for team-neutral facts and agreed decisions.
+`desk:directory-structure` is the floor plan of one operator's room -- one operator, one `$DESK/`, synced across that operator's machines, private, the operator owns every write. This skill is the **multi-person overlay** on that floor plan: the same room, but now N operators share one git repo, each with their own desk in it, plus a common area for team-neutral facts, agreed decisions and attributed coordination.
 
 Read `desk:directory-structure` first for the single-operator layout (tracks, tasks, iterations, reserved `_` directories, where planning/doing docs go); come here for what changes when the room is shared.
 
@@ -34,14 +34,15 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
   _meta/
     desks.md                            # the desk registry (one row per desk) -- see desk:session-start
     crew.json                           # Crew's settings: where the team's plugin lives (see "Two setups")
-  _shared/                              # the common area -- team-neutral, the contention hotspot
+  _shared/                              # common area; authority depends on content, not location
     landscape/                          # FACTS: externally true, team-neutral (read by everyone)
       <topic>.md
     decisions/                          # DECISIONS: what the team ACTUALLY agreed, attributed
       README.md                         # the discipline note; near-empty until kickoff
       <decision>.md
-    tracks/                             # (optional) shared-track coordination cards -- see below
+    tracks/                             # (optional) shared initiatives -- existing shared tracks
       <track>/
+        README.md                       # new coordination card; retain existing entry names
   desks/                                # one subtree per person -- the unit of ownership AND safety
     _template/                          # clean clonable skeleton a new teammate copies in (read desk:first-run-bootstrap shape)
     <alias>/                            # ONE PERSON'S FULL DESK -- identical shape to a single-operator $DESK
@@ -96,7 +97,7 @@ The core failure mode of a team knowledge base is conflating "one person's opini
 
 Three rules fall out of this:
 
-1. **A fact is not an opinion.** Before a claim goes into `_shared/landscape/`, it must be externally true and team-neutral -- verifiable independent of who holds it. If it carries a stance ("we should…", "the right move is…", "I think…"), it is a **perspective** and belongs in that person's `desks/<alias>/`, attributed. Apply the same provenance discipline `desk:directory-structure` requires for promoted facts: inline source pointer
+1. **A fact is not an opinion.** Before a claim goes into `_shared/landscape/`, it must be externally true and team-neutral -- verifiable independent of who holds it. If it carries a stance ("we should…", "the right move is…", "I think…"), it is a **perspective**: preserve the person's own view in `desks/<alias>/`, attributed. Shared initiative cards may also hold attributed deliberation and links to those views; sharing a location never makes a view a fact or consensus. Apply the same provenance discipline `desk:directory-structure` requires for promoted facts: inline source pointer
    + date at write time (*"verified from Service X code-read, 2026-06-04"*).
 
 2. **Every perspective is attributed.** A perspective in `desks/alex/` is *Alex's* -- never reframe it as team gospel. This is what makes "what would Alex think about X" a clean, honest query (see `perspective-query`): the agent reads `desks/alex/` and answers **as Alex's view, labeled as his**, not as the team's position.
@@ -172,6 +173,8 @@ A team lesson binds every teammate's agents, so one person cannot make one up: i
 ## Shared tracks (when several people work one effort)
 
 Shared tracks recur, so handle them lightly: the shared track's coordination card/index lives in `_shared/tracks/<track>/` (a shared path → conflict-safe writes), while **each person's actual work on it stays in their own `desks/<alias>/` subtree and links to the shared card.** Shared card = coordination; the work itself = scoped. The default stays read-across / write-own; only the small coordination surface is shared.
+
+Call these shared efforts **initiatives**. Use `crew:shared-initiative` to discover, reuse, create, update or query them. New cards use `_shared/tracks/<track>/README.md`; existing entries keep their names and content. The card holds outcome, dated focus, sourced contributions, work links, open questions, attributed proposals, decision links and evidence. Shared deliberation is not consensus, and task discovery assigns nobody work.
 
 ## Preparing for a meeting together
 
