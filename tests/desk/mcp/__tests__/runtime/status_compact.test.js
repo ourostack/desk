@@ -153,8 +153,10 @@ test("the state words match boot's: setup_required, admitting, and a bare payloa
 test("sync and enforcement conditions that matter become short notes", () => {
   assert.equal(compactStatus({ ...ready, sync: "no remote configured" }).sync, "no remote configured")
   assert.equal(compactStatus({ ...ready, sync: null }).sync, null)
-  assert.equal(compactStatus({ ...ready, sync: { blocked: true, reason: "dirty" } }).sync, "blocked (dirty)")
-  assert.equal(compactStatus({ ...ready, sync: { blocked: true } }).sync, "blocked")
+  assert.equal(compactStatus({ ...ready, sync: { blocked: true, reason: "dirty" } }).sync, "push blocked (dirty)")
+  assert.equal(compactStatus({ ...ready, sync: { blocked: true } }).sync, "push blocked")
+  assert.equal(compactStatus({ ...ready, sync: { blocked: true, reason: "conflict", unpushed: 105, last_pull: { state: "unresolved", cause: "conflict" } } }).sync, "push blocked (conflict): 105 local commit(s) not on the remote", "a blocked push is named before a failed pull")
+  assert.match(compactStatus({ ...ready, sync: { blocked: true, reason: "auth_failed", unpushed: 3 } }).notes[0], /Pushing the desk is blocked \(auth_failed\): 3 local commit\(s\) are only on this machine, so do not call them pushed\./u)
   assert.match(compactStatus({ ...ready, sync: { blocked: true, reason: "dirty" } }).notes[0], /Pushing the desk is blocked \(dirty\)/u)
   assert.match(compactStatus({ ...ready, sync: { blocked: true } }).notes[0], /Pushing the desk is blocked\./u)
   assert.equal(compactStatus({ ...ready, sync: { blocked: false, behind: 2, ahead: 0 } }).sync, "2 commit(s) behind origin")

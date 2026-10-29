@@ -24,18 +24,21 @@
 //
 // The push, once the lock is held: sleep `debounceMs` (letting a burst of
 // near-simultaneous commits land before the one push this coalesces them
-// into), then loop while there is anything ahead of the upstream: push; on
-// rejection, one `git pull --rebase --autostash` retry, then one more push
-// (controller ruling 3). A failed rebase, or a still-rejected push after a
-// clean one, always ends with `git rebase --abort` so the desk is never
-// left mid-rebase, records the blocked state for `desk_status` (`tools/
-// status.js`'s `syncStatus`) and queues the detached Desk-problem filer
-// (`mcp/scripts/file-desk-problem.js`, mechanism `desk-sync`) — never
-// `--force`, and filing is queued, never awaited inline, the same shape
-// `boot-checks.cjs`'s detached repair launcher already uses. The loop's
-// own re-check of what is ahead, each time through, is what makes the
-// holder re-check for new commits before it ever releases the lock, so a
-// commit that lands while it is pushing is never left behind.
+// into), then deliver (`runtime/deliver.js`) in a loop until nothing local is
+// left undelivered. Delivery never touches the shared checkout's working tree:
+// a fast-forward is pushed as it is, and anything else is replayed onto the
+// remote in a private worktree, with conflicts on Desk's own cards and logs
+// resolved there, then pushed; the shared checkout follows only the way `git
+// checkout` would, never over another session's uncommitted or untracked
+// file. A push that still cannot happen (refused credentials, an unreachable
+// remote, a conflict Desk cannot resolve) records the blocked state, its
+// reason and the number of commits left local for `desk_status`, the tool
+// replies (`deskPushNote`) and boot, and queues the detached Desk-problem filer
+// (`mcp/scripts/file-desk-problem.js`, mechanism `desk-sync`) for a Desk
+// defect -- never `--force`, and filing is queued, never awaited inline. The
+// loop's own re-check of what is undelivered, each time through, is what
+// makes the holder re-check for new commits before it ever releases the
+// lock, so a commit that lands while it is pushing is never left behind.
 //
 // Every Git call here is bounded by a ~10s timeout and runs with
 // `GIT_TERMINAL_PROMPT=0`, so a hung hook, a held lock or a credential
@@ -58,24 +61,13 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
+import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
 
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
 const FILE_DESK_PROBLEM_SCRIPT = fileURLToPath(new URL("../../scripts/file-desk-problem.js", import.meta.url))
-
-// `GIT_SSH_COMMAND` gets the same treatment `GIT_TERMINAL_PROMPT=0` already
-// gives the HTTPS credential prompt: `-o BatchMode=yes` disables every
-// interactive SSH prompt (a host-key question, a passphrase) so an
-// SSH-remote desk can never hang this worker either. A caller's own
-// `GIT_SSH_COMMAND` (an already-configured SSH wrapper, a custom identity
-// file) is extended, never replaced.
-function gitEnv() {
-  const existing = process.env.GIT_SSH_COMMAND
-  const sshCommand = typeof existing === "string" && existing.trim() !== "" ? `${existing} -o BatchMode=yes` : "ssh -o BatchMode=yes"
-  return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
-}
 
 function run(spawnGit, root, args) {
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
@@ -258,59 +250,6 @@ function canPush(root, spawnGit) {
   return hasRemoteConfigured(root, spawnGit) && aheadBehindCounts({ root, spawnGit }) !== null
 }
 
-function conflictedPaths(root, spawnGit) {
-  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"])
-  if (result.status !== 0 || typeof result.stdout !== "string") return []
-  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
-}
-
-// The number of stash entries `root` currently has — used only to notice a
-// `git stash pop` that silently failed to drop its own entry (below).
-export function stashCount(root, spawnGit) {
-  const result = run(spawnGit, root, ["stash", "list"])
-  if (result.status !== 0 || typeof result.stdout !== "string") return 0
-  return result.stdout.split("\n").filter((line) => line.trim() !== "").length
-}
-
-function abortRebase(root, spawnGit) {
-  // Best-effort safety net: harmless (and ignored) when there is no rebase in progress.
-  run(spawnGit, root, ["rebase", "--abort"])
-}
-
-/**
- * One push attempt with the one allowed retry (controller ruling 3): a
- * rejection gets exactly one `git pull --rebase --autostash`, then one more
- * push. A failed rebase, or a push still rejected after a clean one, always
- * leaves the repo not mid-rebase — never `--force`.
- *
- * A status-0 pull is not proof the tree actually ended up clean (fix round):
- * `git pull --rebase --autostash` can exit 0 even when popping its own
- * autostash conflicts — the rebase step itself finished, but the stash pop
- * leaves UU conflict markers and keeps the stash entry rather than failing
- * the pull's own exit code. `conflictedPaths` catches a pop that left
- * merge-conflict markers; `stashCount` growing catches the other shape (an
- * untracked file colliding with one the stash would restore), which leaves
- * the stash entry behind with no UU marker at all.
- */
-function pushWithRetry(root, spawnGit) {
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
-  const stashBefore = stashCount(root, spawnGit)
-  const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"])
-  if (pulled.status !== 0) {
-    const paths = conflictedPaths(root, spawnGit)
-    abortRebase(root, spawnGit)
-    return { result: "blocked", reason: "pull_rebase_failed", paths }
-  }
-  const stashConflictPaths = conflictedPaths(root, spawnGit)
-  if (stashConflictPaths.length > 0 || stashCount(root, spawnGit) > stashBefore) {
-    abortRebase(root, spawnGit)
-    return { result: "blocked", reason: "autostash_pop_conflict", paths: stashConflictPaths }
-  }
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
-  abortRebase(root, spawnGit)
-  return { result: "blocked", reason: "push_rejected_after_rebase", paths: [] }
-}
-
 // ---------------------------------------------------------------------------
 // Recording the outcome for `desk_status`, and filing a Desk problem.
 // ---------------------------------------------------------------------------
@@ -467,7 +406,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
       "--mechanism", "desk-sync",
       "--reason", safeReason,
       "--host", host,
-      "--fix-attempt", "retried once with git pull --rebase --autostash, then pushed again",
+      "--fix-attempt", "replayed the local commits onto the remote in a private worktree, resolving Desk card and log conflicts, then pushed; retried a rejected push",
     ], { cwd: root, detached: true, stdio: "ignore", windowsHide: true, env })
     child.on("error", () => {})
     child.unref()
@@ -494,13 +433,48 @@ export function hostFromEnv(env) {
 // ---------------------------------------------------------------------------
 
 const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }
+// The local commits delivered as a resolved copy while the shared checkout could not follow yet; older entries are long since on the branch.
+const DELIVERED_CAP = 5000
+// A delivery that reports success while the same commits stay undelivered is a defect, not a reason to spin.
+const MAX_ROUNDS = 10
+
+function deliveredSoFar(root, env) {
+  const recorded = readSyncStatus({ root, env })?.delivered
+  return Array.isArray(recorded) ? recorded : []
+}
+
+function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
+  let pushedAt = null
+  for (let round = 0; round < MAX_ROUNDS; round += 1) {
+    const delivered = deliveredSoFar(root, env)
+    const pending = undeliveredCommits({ root, spawnGit, delivered })
+    if (pending === null || pending.length === 0) {
+      updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+      return { result: "ok" }
+    }
+    const outcome = deliver({ root, env, spawnGit, delivered })
+    const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
+    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null })
+    if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
+    if (outcome.state !== "failed" && outcome.skipped.length === 0) continue
+    return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: outcome.state === "failed" ? outcome.reason : "conflict", paths: outcome.skipped.flatMap((skip) => skip.paths), error: outcome.error ?? null })
+  }
+  return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: "push_incomplete", paths: [], error: null })
+}
+
+function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, paths, error }) {
+  const unpushed = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
+  updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+  if (!NOT_A_DESK_DEFECT.has(reason)) fileProblem({ root, env, reason, host: hostFromEnv(env) })
+  return { result: "blocked", reason, unpushed }
+}
 
 /**
  * Runs the whole worker cycle for `root`: acquire the lock (exit quietly on
  * contention), skip entirely when there is no remote or no upstream (never
- * an error — controller ruling 2), otherwise debounce, then push (with the
- * one retry) in a loop that keeps re-checking what is ahead until nothing
- * is, so the lock holder never releases while a commit is left unpushed.
+ * an error — controller ruling 2), otherwise debounce, then deliver in a loop
+ * that keeps re-checking what is undelivered until nothing is, so the lock
+ * holder never releases while a commit is left unpushed.
  * Never throws — including when the lock is refused under a node:test run
  * (`result: "test_isolation_refused"`, logged to `stderr` rather than left
  * silent), which `runSyncPushCli`/`sync-push.js` still resolve to exit code
@@ -525,27 +499,7 @@ export async function runPushWorker({
   try {
     if (!canPush(root, spawnGit)) return { result: "skipped" }
     await clock.sleep(debounceMs)
-    let pushed = false
-    for (;;) {
-      const counts = aheadBehindCounts({ root, spawnGit })
-      if (counts === null || counts.ahead <= 0) {
-        const patch = { blocked: false, reason: null, paths: [] }
-        if (pushed) {
-          patch.last_push_at = new Date().toISOString()
-          patch.last_pull = null
-        }
-        updateSyncStatus(root, env, patch)
-        return { result: "ok" }
-      }
-      const attempt = pushWithRetry(root, spawnGit)
-      if (attempt.result === "ok") {
-        pushed = true
-        continue
-      }
-      updateSyncStatus(root, env, { blocked: true, reason: attempt.reason, paths: attempt.paths, at: new Date().toISOString() })
-      fileProblem({ root, env, reason: attempt.reason, host: hostFromEnv(env) })
-      return { result: "blocked", reason: attempt.reason }
-    }
+    return deliverUntilDone({ root, env, spawnGit, fileProblem })
   } finally {
     lock.release()
   }
@@ -646,23 +600,51 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
  */
 export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(root, spawnGit)) return { state: "clean" }
-  const counts = aheadBehindCounts({ root, spawnGit })
-  if (counts === null || counts.ahead <= 0) return { state: "clean" }
-
   const existing = readSyncStatus({ root, env })
+  const left = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })
+  if (left === null || left.length === 0) return { state: "clean" }
+
   const reason = existing?.blocked && typeof existing.reason === "string" ? existing.reason : "unpushed_at_session_end"
   if (!existing?.blocked) {
-    updateSyncStatus(root, env, { blocked: true, reason, paths: existing?.paths ?? [], at: new Date().toISOString() })
+    updateSyncStatus(root, env, { blocked: true, reason, paths: existing?.paths ?? [], unpushed: left.length, at: new Date().toISOString() })
   }
 
   const diagnostic = formatDeskProblem({
     mechanism: "desk-sync",
     symptom: "commits still unpushed at session end",
-    broke: `${counts.ahead} commit(s) ahead of the upstream with no successful push recorded (${reason})`,
+    broke: `${left.length} local commit(s) not on the remote with no successful push recorded (${reason})`,
     means: "this desk's latest work is committed locally but has not reached the remote; another session or machine won't see it yet",
-    fix: "not auto-repaired here — the background push worker retries on the next write, or push manually with `git push`",
+    fix: "not auto-repaired here — the background push worker retries on the next Desk write and at the next session start",
     file: "not filed: session end is a safety net, not itself evidence of a defect",
     tell: "Run desk_status and check its sync section before assuming this work is shared elsewhere.",
   })
   return { state: "unpushed", diagnostic }
+}
+
+// ---------------------------------------------------------------------------
+// What a write tool may say about the push it just scheduled.
+// ---------------------------------------------------------------------------
+
+/**
+ * The note a write tool returns after Desk committed for it. `note` (which says Desk is pushing in the background) is
+ * returned as it is unless the last push is recorded as blocked; then the reply says the work is only local, how many
+ * commits are waiting and why, so no agent reports a push that is not happening. `{ desk_note, desk_unpushed?,
+ * desk_push_blocked? }`. Local reads only; never throws.
+ */
+export function deskPushNote({ root, env = process.env, spawnGit = spawnSync, note }) {
+  try {
+    const recorded = readSyncStatus({ root, env })
+    if (recorded?.blocked !== true) return { desk_note: note }
+    const left = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
+    // A stale record with nothing actually left local says nothing: the next push clears it.
+    if (left === 0) return { desk_note: note }
+    const why = blockedWords(recorded.reason, Array.isArray(recorded.paths) ? recorded.paths : [])
+    return {
+      desk_note: `Desk committed this, but it is NOT on the remote yet: the last push failed because ${why}, so ${left} local Desk commit(s) are only on this machine. Desk retries with every write and at session start; until desk_status shows sync not blocked, say this is saved locally, not pushed, and run no git for it.`,
+      desk_unpushed: left,
+      desk_push_blocked: recorded.reason ?? null,
+    }
+  } catch {
+    return { desk_note: note }
+  }
 }

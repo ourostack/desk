@@ -75,8 +75,8 @@ function whyNotReady(payload, syncProblem, ready) {
 function syncLine(sync) {
   if (typeof sync === "string") return sync
   if (sync === null || typeof sync !== "object") return null
+  if (sync.blocked === true) return `push blocked${sync.reason ? ` (${sync.reason})` : ""}${sync.unpushed > 0 ? `: ${sync.unpushed} local commit(s) not on the remote` : ""}`
   if (syncDegradation(sync.last_pull) !== null) return `last pull failed${sync.last_pull.cause ? ` (${sync.last_pull.cause})` : ""}: not known to be in sync`
-  if (sync.blocked === true) return `blocked${sync.reason ? ` (${sync.reason})` : ""}`
   if (sync.behind > 0) return `${sync.behind} commit(s) behind origin`
   if (sync.ahead > 0) return `${sync.ahead} commit(s) ahead of origin, not pushed yet`
   return "in sync"
@@ -86,7 +86,7 @@ function notesFor(payload) {
   const notes = []
   if (typeof payload.search?.old_index_removed === "string") notes.push(payload.search.old_index_removed)
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
-  if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
+  if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}${sync.unpushed > 0 ? `: ${sync.unpushed} local commit(s) are only on this machine, so do not call them pushed` : ""}.`)
   // The latest thing Desk repaired by itself in this session (at its start, the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
   if (typeof payload.repair === "string") notes.push(payload.repair)
   return notes

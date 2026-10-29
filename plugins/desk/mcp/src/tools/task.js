@@ -28,7 +28,7 @@ import {
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
-import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
@@ -1171,7 +1171,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (deskCommit !== null) {
     result.desk_commit = deskCommit
     result.desk_pushed = false
-    result.desk_note = DESK_COMMIT_NOTE
+    Object.assign(result, deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE }))
     result.desk_commit_note = DESK_COMMIT_HASH_NOTE
     if (heldChanges) result.included_uncommitted_changes = INCLUDED_CHANGES_NOTE
   }

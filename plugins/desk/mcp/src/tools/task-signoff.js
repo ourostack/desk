@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process"
 import { readMarkdown, patchMarkdownFrontmatter } from "../util/fm.js"
 import { validateWriteSegment } from "../util/paths.js"
 import { readRecord, toFrontmatter, sign, refuse, STATUSES, REFUSAL_REASONS, RETURN_REASONS } from "../factory/outcome.js"
-import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
 import { task_move } from "./move.js"
@@ -139,5 +139,6 @@ export async function taskSignoff({
   }
   if (deskCommit === null) return result
   // Said outright, and first, so no agent runs git for a card Desk has committed and is pushing.
-  return { status: result.status, desk_note: DESK_COMMIT_NOTE, ...result, desk_commit: deskCommit, desk_pushed: false, desk_commit_note: DESK_COMMIT_HASH_NOTE }
+  const pushNote = deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE })
+  return { status: result.status, desk_note: pushNote.desk_note, ...result, ...pushNote, desk_commit: deskCommit, desk_pushed: false, desk_commit_note: DESK_COMMIT_HASH_NOTE }
 }
