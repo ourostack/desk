@@ -425,6 +425,7 @@ function main() {
     /smallest sufficient change at the nearest layer you own/iu,
     /fold ad-hoc steps into the plan/iu,
     /parallelize independent work/iu,
+    /parallelize independent work, fast-follow/u,
     /redesign/iu,
     /"No waste" never means dropping proof/u,
   ]);
