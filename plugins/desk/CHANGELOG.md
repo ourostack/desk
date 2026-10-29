@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.41 — 2026-10-29
+
+Parallelize and fast-follow is now a default for every operator. Independent streams run at the same time, downstream artifacts are updated right after an upstream change, and usable milestones are pushed early and often so whoever is waiting always finds the latest. [work-orchestration](skills/work-orchestration/SKILL.md) "Parallelize and fast-follow" holds the rule and builds on `superpowers:dispatching-parallel-agents` instead of restating it. [using-desk](skills/using-desk/SKILL.md) names it under waste judgment, and the work-orchestration description makes it the default for any work.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.40 — 2026-10-29
 
 Content routing now covers teams that share a Crew workspace. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, a team's own process goes to its own tooling as skills, shared context and evidence stay in the team workspace, and changes to repositories the team doesn't own go through pull requests there with a heads-up to their owner. See [content-routing](skills/content-routing/SKILL.md) "When a team shares a workspace".
