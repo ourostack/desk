@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Align new work before go by batching every decision that needs the human, with recommendations, then bind authorized engineering work to Superpowers. Also when a material new requirement arrives mid-task.
+description: Align new work before go by batching every decision that needs the human, with recommendations, then bind authorized engineering work to Superpowers. Also when a material new requirement arrives mid-task. Also the default way to run any work, with independent streams in parallel, downstream fast-follow and early milestones.
 ---
 
 # Work orchestration
@@ -71,6 +71,14 @@ A candidate is accepted only after spec/targeted proof and a completed finding d
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
+
+## Parallelize and fast-follow
+
+This is the default for all work, not only multi-step plans. `superpowers:dispatching-parallel-agents` covers fanning independent problems out to agents; Desk adds:
+
+- **Run independent streams at the same time.** Never hold a stream for one it doesn't depend on.
+- **Fast-follow downstream.** When an upstream artifact changes, update what depends on it right away, not in a final sweep.
+- **Ship usable milestones early and often.** Push each one where the people waiting look, so they always find the latest instead of waiting for one big drop.
 
 ## Choosing and briefing agents
 
