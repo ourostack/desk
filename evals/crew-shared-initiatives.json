@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "crew-shared-initiatives",
+  "description": "Shared initiatives extend existing shared tracks without duplicating personal work. Schema validation is not a behavior result.",
+  "sources": [
+    "plugins/crew/skills/shared-initiative/SKILL.md",
+    "plugins/crew/skills/shared-initiative/template.md",
+    "plugins/crew/skills/shared-desk-conventions/SKILL.md",
+    "plugins/crew/skills/perspective-query/SKILL.md",
+    "plugins/crew/skills/join-crew/SKILL.md",
+    "plugins/desk/skills/session-start/details.md"
+  ],
+  "reviewedSourceFingerprint": "0778d8217eb798a7cb49ac550cd7ba8358f185cfbe9d6c286ae308a7659cad98",
+  "requirements": [
+    { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
+    { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
+    { "id": "attribution", "description": "Shared deliberation preserves author and uncertainty without inventing consensus." },
+    { "id": "discovery", "description": "Startup and onboarding introduce existing shared efforts without creating assignments." },
+    { "id": "safe-references", "description": "Queries distinguish verified sources from stale, missing and unsafe references." },
+    { "id": "concurrent-contribution", "description": "A contribution preserves another writer's landed text and conflicting view." }
+  ],
+  "cases": [
+    {
+      "id": "cold-create-discover-update-query",
+      "description": "A fresh subject uses the shipped skills in a neutral disposable Crew fixture.",
+      "prompt": "In an isolated neutral Crew fixture with Alex and Sam registered and one existing task on each desk, create a reliability initiative, introduce it to a new joiner, record Alex's sourced proposal and Sam's sourced disagreement, then answer current focus, where each person's work lives and what is decided. Keep all desk tasks byte-for-byte unchanged. Use the actual Crew sources listed in this suite; create no external resources. Show commands, paths and source reads. A local fixture is not proof of GitHub PR publication or host activation.",
+      "checks": [
+        { "id": "canonical-card", "polarity": "must", "evidenceType": "file", "covers": ["single-home"], "description": "Only _shared/tracks/reliability/README.md holds the new coordination card, using the template's sections." },
+        { "id": "tasks-preserved", "polarity": "must", "evidenceType": "state", "covers": ["preserve-work"], "description": "Before and after hashes prove both original tasks unchanged; card links resolve to those tasks." },
+        { "id": "honest-disagreement", "polarity": "must", "evidenceType": "response", "covers": ["attribution"], "description": "Card and query retain both sourced views, unknown commitments and no recorded decision." },
+        { "id": "joiner-discovers", "polarity": "must", "evidenceType": "tool_call", "covers": ["discovery"], "description": "The subject reads onboarding/startup sources and finds the initiative through the workspace front door, without assigning anyone work." },
+        { "id": "no-new-task-system", "polarity": "must_not", "evidenceType": "state", "covers": ["single-home", "preserve-work"], "description": "No shared task copy, new task registry or _shared/initiatives root is created." }
+      ]
+    },
+    {
+      "id": "legacy-and-concurrent-writer",
+      "description": "An existing non-README entry is reused even when another contribution lands first.",
+      "prompt": "The neutral workspace already links _shared/tracks/reliability/track.md. Another writer's latest-main update adds an attributed view that conflicts with your pending proposal. Find the existing initiative, re-read the changed card and contribute without renaming it, adding a README duplicate, replacing the other view or treating it as consensus. Verify only the intended shared paths changed. Exercise actual Git conflict/reconciliation in a local fixture; report GitHub publication separately.",
+      "checks": [
+        { "id": "legacy-reused", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "preserve-work"], "description": "The existing track.md remains the sole coordination entry and personal tasks are unchanged." },
+        { "id": "landed-view-preserved", "polarity": "must", "evidenceType": "git", "covers": ["concurrent-contribution", "attribution"], "description": "The contribution is rebuilt on updated main and both attributed views survive, with their disagreement open." },
+        { "id": "no-replacement-or-consensus", "polarity": "must_not", "evidenceType": "file", "covers": ["single-home", "concurrent-contribution", "attribution"], "description": "The update does not add a competing README, overwrite the landed view or promote either proposal to a team decision." }
+      ]
+    },
+    {
+      "id": "empty-and-unsafe-read-only",
+      "description": "Absence and bad links produce explicit unknowns rather than invented evidence.",
+      "prompt": "Query a neutral Crew first with no _shared/tracks directory, then an empty directory, then a card with a missing task, a malformed reference, a local ../ escape, a symlink outside the repository and a dated task snapshot whose live card differs. No writes are authorized during these queries. Report what is recorded, what is verified and what is unknown. Do not follow unsafe targets or infer membership, completion or a team decision.",
+      "checks": [
+        { "id": "empty-not-created", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "discovery"], "description": "Absent/empty shared tracks are reported honestly, with no created files or invented setup requirement." },
+        { "id": "bad-links-explicit", "polarity": "must", "evidenceType": "response", "covers": ["safe-references", "attribution"], "description": "Each invalid reference is identified, unsafe targets are not read and stale recorded state is distinguished from the live check." },
+        { "id": "queries-do-not-write", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["preserve-work"], "description": "Queries do not mutate tasks, repair links, bypass protected scope or create decisions." }
+      ]
+    }
+  ]
+}
