@@ -8,13 +8,13 @@
     "plugins/desk/skills/operator-voice-comments/human-voice.md",
     "plugins/desk/docs/agentic-engineering-v2-rfc.md"
   ],
-  "reviewedSourceFingerprint": "b9e931d1cd7d641d8445e6f3fddb8327431fea0e6e50518565f3cd08cea9f1eb",
+  "reviewedSourceFingerprint": "18dd69311b01105d5388aacfef7e1efb3e24b58038d80587ea422e5c7ab14df1",
   "requirements": [
     { "id": "human-actor", "description": "A person speaking about authorized work is the ordinary actor; tool use is normally implicit." },
     { "id": "no-invented-participation", "description": "Ownership does not invent manual execution, personal reading, human review, approval, attendance, consent or decisions." },
     { "id": "prose-inheritance", "description": "The same attribution applies to messages, docs, reports, reviews, commit prose and handoffs." },
     { "id": "real-agent-speaker", "description": "An agent speaking in its own role remains the speaker." },
-    { "id": "relay-as-self", "description": "An agent relaying a person's views writes as itself, frames them as its own reading with attribution and any source link, and sends the reader to the person for anything unclear." },
+    { "id": "relay-as-self", "description": "An agent relaying a person's views to another person writes as itself, frames its paraphrase as its own reading with attribution and any source link, and sends the reader to the person for anything unclear." },
     { "id": "execution-identity", "description": "Execution and capability questions, material permissions or audit identity, and required disclosures get explicit automation and acting-account facts." },
     { "id": "credit-and-records", "description": "Other people's credit, source provenance and exact quoted or structured records remain intact." },
     { "id": "authority-unchanged", "description": "Ownership wording grants no sending or publication authority and leaves no-AI/coauthor-trailer rules intact." }

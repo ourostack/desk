@@ -54,7 +54,7 @@ assert.match(workAttribution, /actual acting identity/u);
 assert.match(workAttribution, /say when that identity is unverified/u);
 assert.match(workAttribution, /line-by-line reading/u);
 assert.match(workAttribution, /sending or publication authority/u);
-assert.match(workAttribution, /relays a person's views, feedback or decisions[\s\S]+writes as itself[\s\S]+its own reading/u);
+assert.match(workAttribution, /relays a person's views, feedback or decisions to another person[\s\S]+writes as itself[\s\S]+paraphrase as its own reading/u);
 assert.match(workAttribution, /link the source where one exists[\s\S]+send the reader to the person/u);
 assert.match(workAttribution, /Never write a relay as if the person wrote it[\s\S]+marked, attributed quotation/u);
 assert.match(workAttribution, /use a person's voice only for messages they send themselves or approve for sending in their name/iu);

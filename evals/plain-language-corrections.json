@@ -6,11 +6,11 @@
     "plugins/plain-language/skills/plain-language/SKILL.md",
     "plugins/desk/skills/operator-voice-comments/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "3660ee9d39a450c3a985bebe57e736ebcca54fef3aeefc92efc86aa2c20858d6",
+  "reviewedSourceFingerprint": "e83e309272ddd38d76a9bc470ea4d838c613a57dc58ba97f901b389ed1048f77",
   "requirements": [
     {
       "id": "no-chat-shorthand",
-      "description": "Agent-written prose spells out chat shorthand such as wdyt, lmk or imo and asks or says the actual thing."
+      "description": "Prose in the agent's own voice spells out chat shorthand such as wdyt, lmk or imo and asks or says the actual thing."
     },
     {
       "id": "layout-sets-line-width",
