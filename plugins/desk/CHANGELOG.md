@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.46 — 2026-10-30
+
+`lesson_add` no longer refuses a personal lesson once AGENTS.md outgrows what session start prints ([#554](https://github.com/ourostack/desk/issues/554)). In a Crew workspace the team's AGENTS.md and a person's share 16 KB, so a busy desk could stop learning until someone trimmed the file by hand. Now the newest lessons stay in AGENTS.md and the oldest move to a `LESSONS.md` shelf beside it, first any lesson already past the cut, which nothing loaded before. If the rest of AGENTS.md leaves no room at all, the new lesson goes on the shelf itself. No lesson is dropped: session start lists every shelved topic, [`task_focus`](mcp/src/tools/task-focus.js) and `task_create` with `focus` return the shelved lessons closest to the task first, `desk_search` indexes the shelf, and recording a lesson again under its topic brings it back to AGENTS.md. The reply's new `tier` says where the lesson landed, and `shelved` names every lesson that moved. AGENTS.md and the shelf are committed together. Team lessons, which reach a shared repository through a pull request, keep their 16 KB refusal.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.45 — 2026-10-29
 
 Operator-voice drafts and humanizing guidance now point to Plain Language's shared rule for attributing authorized work to the person. The [collaboration rationale](docs/agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent) explains why agent use is normally implicit; approval and audit boundaries remain unchanged.
