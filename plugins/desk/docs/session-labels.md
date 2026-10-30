@@ -107,6 +107,32 @@ and runtime errors remain explicit unavailable diagnostics. An unacknowledged
 write stops this consumer rather than issuing another write that the unknown
 operation could overtake. Tool results and task execution are unchanged.
 
+### Diagnostics
+
+The entry logs each state as `Desk automatic session label: <state>/<code>`.
+A failed native read is reported as `unavailable/native_<stage>_<cause>`:
+
+| Stage | Native read |
+| --- | --- |
+| `snapshot` | The session identity check when the consumer attaches. |
+| `recheck` | The identity recheck just before an automatic write. No write was issued. |
+| `readback` | The name read after the native setter acknowledged the write. The write may have taken effect; the label is not reported as applied. |
+
+| Cause | Meaning |
+| --- | --- |
+| `timeout` | The consumer's own bounded wait (two seconds by default) expired. |
+| `invalid_params` | The host answered with JSON-RPC error `-32602`. |
+| `internal_error` | The host answered with JSON-RPC error `-32603`. |
+| `rpc_error` | The host answered with another reserved JSON-RPC error code (`-32768` to `-32000`). |
+| `failed` | Anything else, including errors without a readable code. This does not claim a transport fault. |
+
+A missing method (`-32601`) at any stage stays `unsupported_runtime`. A failed
+or timed-out setter stays `native_apply_uncertain` and stops automatic naming,
+whatever the error, because the write may still complete. Codes come from this
+fixed vocabulary only: no error message, data, stack, identity or label text is
+logged. They locate the failing call; they do not identify why the host failed
+it.
+
 This source entry alone does not establish ordinary installed discovery or
 native validation. Those require the normal installation owner's source and
 consuming-host proof. Claude additionally requires a supported automatic
