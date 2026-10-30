@@ -31,11 +31,14 @@ export function stagingAllowed(filePath, spawnGit) {
  * under `commit` only on failure. Undefined on success.
  */
 export function stageAndCommitFile(filePath, message, spawnGit) {
-  const dir = path.dirname(filePath)
-  const basename = path.basename(filePath)
-  const staged = stagePaths(dir, [basename], spawnGit)
+  return stageAndCommitFiles(path.dirname(filePath), [path.basename(filePath)], message, spawnGit)
+}
+
+/** `stageAndCommitFile` for several files in one folder (`names` relative to `dir`), in one commit. */
+export function stageAndCommitFiles(dir, names, message, spawnGit) {
+  const staged = stagePaths(dir, names, spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
-  const committed = commitPaths(dir, [basename], message, spawnGit)
+  const committed = commitPaths(dir, names, message, spawnGit)
   return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 

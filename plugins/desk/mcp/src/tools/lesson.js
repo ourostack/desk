@@ -3,8 +3,11 @@
 // A lesson is one rule on one line. `scope` says whose behaviour it changes:
 //   - personal: one person's preference. It becomes a line in the `## Lessons` section of that person's AGENTS.md
 //     (the desk root's, or `desks/<alias>/AGENTS.md` in a shared workspace), which session start prints. The reply says
-//     it is in effect only when it is committed and session start resolves the same person; a line that would push the
-//     AGENTS.md files session start prints past their shared size limit is refused, because nothing would load it.
+//     it is in effect only when it is committed and session start resolves the same person. When the line would fall
+//     past what session start prints of the AGENTS.md files (a size limit they share), the oldest lessons move to the
+//     LESSONS.md shelf beside it until the new one fits, and if the rest of the file leaves no room the new lesson goes
+//     on the shelf itself (runtime/lessons-shelf.js). Session start lists every shelved topic and task_focus returns the
+//     shelved lessons, so none is dropped, and the reply names every lesson that moved.
 //   - desk: how Desk's tools and installed plugins' skills behave. It is recorded as system friction against the `owner`
 //     that carries the behaviour, which opens an improvement card; the lesson is in effect only once that card's change
 //     ships. A desk lesson without an owner is refused.
@@ -19,19 +22,20 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { today, slugify, pathExists } from "../util/fm.js"
 import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
-import { isGitRepository } from "../util/git-stage.js"
+import { hasUnstagedWork, isGitRepository } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { TOOL_NAMES } from "../tool-names.js"
-import { stagingAllowed, stageAndCommitFile } from "./_card-commit.js"
+import { stagingAllowed, stageAndCommitFiles } from "./_card-commit.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { installedPlugins } from "./lesson-owners.js"
 import { addTeamLesson } from "./lesson-team.js"
-import { lead, oneLine, topicOf, withLesson } from "./lesson-lines.js"
-import { AGENTS_MD_CAP_BYTES, personAgentsCap, printedPart, readAgentsMd } from "../runtime/agents-md.js"
+import { lead, oneLine, topicOf } from "./lesson-lines.js"
+import { AGENTS_MD_CAP_BYTES, personAgentsCap, readAgentsMd } from "../runtime/agents-md.js"
+import { SHELF_FILE, shelve, topicList } from "../runtime/lessons-shelf.js"
 
 // Every field lesson_add reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
@@ -43,6 +47,8 @@ const SCOPES = new Set(["personal", "desk", "team"])
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/u
 // An empty folder, so Git never sees it; it serialises writes to one AGENTS.md across sessions.
 const LOCK_NAME = ".agents-md.lock"
+// The reply names the shelved topics up to this many characters; `shelved.topics` has them all.
+const MESSAGE_TOPIC_CHARS = 500
 
 /**
  * `ownerOf(owner) -> { owner, plugin, frictionClass }`: where a desk lesson takes effect. `skill:<plugin>:<skill>` is a
@@ -87,46 +93,58 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     throw new Error("lesson_add: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; call desk_status to see why there is no person, or use scope team")
   }
   const file = await resolveWriteTarget({ deskRoot, person, segments: ["AGENTS.md"] })
+  const shelfFile = await resolveWriteTarget({ deskRoot, person, segments: [SHELF_FILE] })
   const where = deskRelativePath(deskRoot, file)
+  const shelfWhere = deskRelativePath(deskRoot, shelfFile)
   const prefix = deskRelativePath(deskRoot, path.dirname(file))
   // Session start prints the desk's AGENTS.md and then the person's, from one shared budget; the lesson must be in the
-  // part it prints, judged by the same cut session start makes.
+  // part it prints, judged by the same cut session start makes, or on the shelf beside it.
   const cap = prefix === "" ? AGENTS_MD_CAP_BYTES : personAgentsCap(readAgentsMd(deskRoot))
   // The lock lives beside the file, so its folder must exist first.
   await fs.mkdir(path.dirname(file), { recursive: true })
   const written = await holdLock(path.join(path.dirname(file), LOCK_NAME), { lockWaitMs }, async () => {
     const current = await readIfPresent(file)
+    const currentShelf = await readIfPresent(shelfFile)
     const line = `${lead(topic)} ${body} (${today()})`
-    const { text, replaced } = withLesson(current, line, topic)
-    if (!printedPart(text, cap).includes(line)) {
-      throw new Error(`lesson_add: session start prints only the first ${cap} bytes of ${where}${prefix === "" ? "" : " (what the desk's AGENTS.md leaves of the 16 KB both share)"}, and this lesson would fall after them, so nothing would load it; shorten that file first`)
-    }
-    // Checked before this call's own write, so an AGENTS.md another session left dirty is never committed as this call's.
+    const next = shelve({ agents: current, shelf: currentShelf, line, topic, cap })
+    const changes = [[file, current, next.agents], [shelfFile, currentShelf, next.shelf]].filter(([, before, after]) => before !== after)
+    const outcome = { replaced: next.replaced, tier: next.tier, moved: next.moved }
+    // Checked before this call's own write, so a file another session left dirty is never committed as this call's.
     const git = isGitRepository(path.dirname(file), spawnGit)
-    const stage = git && stagingAllowed(file, spawnGit)
-    // The same lesson again (same words, same day) changes nothing: it is as committed as the file already is.
-    if (text === current) return { replaced, git, committed: stage, commit: undefined }
-    await fs.writeFile(file, text, "utf8")
-    const commit = stage ? stageAndCommitFile(file, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
-    return { replaced, git, committed: stage && commit === undefined, commit, changed: true }
+    const names = changes.map(([changed]) => path.basename(changed))
+    const stage = git && names.length > 0 && !hasUnstagedWork(path.dirname(file), names, spawnGit)
+    // The same lesson again (same words, same day) changes nothing: it is as committed as the files already are.
+    if (changes.length === 0) return { ...outcome, git, committed: git && stagingAllowed(next.tier === "shelf" ? shelfFile : file, spawnGit), commit: undefined }
+    for (const [changed, , after] of changes) await fs.writeFile(changed, after, "utf8")
+    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
+    return { ...outcome, git, committed: stage && commit === undefined, commit, changed: changes.map(([changed]) => deskRelativePath(deskRoot, changed)) }
   })
   if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
-  if (written.committed && written.changed) schedulePush({ root: deskRoot })
-  if (written.changed) search?.noteChange(where)
+  const changed = written.changed ?? []
+  if (written.committed && changed.length > 0) schedulePush({ root: deskRoot })
+  for (const each of changed) search?.noteChange(each)
   const unloaded = notLoaded(await personOf({ deskRoot, env, now: now ?? Date.now() }), prefix)
+  const home = written.tier === "shelf" ? shelfWhere : where
   const uncommitted = written.git && !written.committed
-    ? `it is not committed (${written.commit === undefined ? `${where} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
+    ? `it is not committed (${written.commit === undefined ? `${changed.length > 0 ? changed.join(" or ") : home} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
     : null
   const problems = [uncommitted, unloaded].filter((problem) => problem !== null)
+  const topics = written.moved.map((moved) => moved.topic)
+  const loads = written.tier === "shelf"
+    ? `${home}, the lesson shelf: ${where} has no room left in what session start prints once its other rules are in, so session start lists this topic and task_focus returns the lesson for the task you focus`
+    : `${home}, which session start prints for you on this desk`
+  const shelvedNote = topics.length > 0 ? ` To make room, ${topics.length} older ${topics.length === 1 ? "lesson" : "lessons"} moved to ${shelfWhere}, where session start lists ${topics.length === 1 ? "its topic" : "their topics"} and task_focus returns ${topics.length === 1 ? "it" : "them"}: ${topicList(topics, MESSAGE_TOPIC_CHARS)}.` : ""
   const result = {
-    status: !written.changed ? "unchanged" : written.replaced ? "updated" : "added",
+    status: changed.length === 0 ? "unchanged" : written.replaced ? "updated" : "added",
     scope: "personal",
-    path: where,
+    path: home,
+    tier: written.tier,
     in_effect: problems.length === 0,
     message: problems.length === 0
-      ? `In effect: the lesson is in ${where}, which session start prints for you on this desk.`
-      : `Written to ${where}, but not in effect: ${problems.join("; and ")}.`,
+      ? `In effect: the lesson is in ${loads}.${shelvedNote}`
+      : `Written to ${home}, but not in effect: ${problems.join("; and ")}.${shelvedNote}`,
   }
+  if (topics.length > 0) result.shelved = { path: shelfWhere, topics }
   if (written.commit !== undefined) result.commit = written.commit
   return result
 }
@@ -175,13 +193,15 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
  * required for a team lesson, and `repo` names the team's clone when the desk is not itself the shared workspace.
  *
  * Returns, by scope:
- *   personal: { status: "added" | "updated", scope, path, in_effect, message, commit? }
+ *   personal: { status: "added" | "updated" | "unchanged", scope, path, tier: "session_start" | "shelf", in_effect, message,
+ *               shelved?: { path, topics }, commit? }
  *   desk:     { status: "routed", scope, owner, path, improvement, in_effect: false, message, improvement_key?, improvement_path?, commit?,
  *               improvement_commit? }
  *   team:     { status: "merged" | "pr_open" | "failed", scope, repo, path, section, line, in_effect, message, pr?,
  *               commit?, account?, replaces?, stage?, reason?, claude_code_loads? }
  *
- * A personal write on a Git desk is committed by itself when AGENTS.md held no unstaged changes before it; a commit
+ * A personal write on a Git desk is committed by itself, AGENTS.md and LESSONS.md in one commit, when the files it changes
+ * held no unstaged changes before it; a commit
  * failure never loses the write and comes back as `commit: { status: "failed", reason }`. A personal lesson is in effect
  * only when it is committed (on a Git desk) and session start resolves the same person the write used.
  */

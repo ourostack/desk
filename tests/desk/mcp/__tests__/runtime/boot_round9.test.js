@@ -98,6 +98,24 @@ test("boot also carries the person's own AGENTS.md in a shared workspace, where 
   assert.equal(unresolved.person_agents_md, null)
 })
 
+test("boot carries the shelf of lessons beside the person's AGENTS.md, or the desk's own on a solo desk", async () => {
+  const root = await desk()
+  const shelf = "# Shelved lessons\n\n## Lessons\n\n- **Old rule.** Kept. (2026-01-01)\n- **Other.** Kept too. (2026-01-02)\n"
+  await fs.writeFile(path.join(root, "LESSONS.md"), shelf)
+  const solo = await boot(root)
+  assert.deepEqual(solo.lessons_shelf, { path: path.join(root, "LESSONS.md"), count: 2, topics: ["Old rule", "Other"] })
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "LESSONS.md"), shelf.replace("Other", "Mine"))
+  const crew = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.deepEqual(crew.lessons_shelf.topics, ["Old rule", "Mine"])
+  const unresolved = await boot(root, { personFn: async () => ({ status: "unresolved", reason: "login_not_cached" }) })
+  assert.equal(unresolved.lessons_shelf, null)
+  const throwing = await boot(root, { shelfFn: () => { throw new Error("EACCES") } })
+  assert.equal(throwing.lessons_shelf, null)
+  await fs.rm(path.join(root, "LESSONS.md"))
+  assert.equal((await boot(root)).lessons_shelf, null)
+})
+
 test("boot gives the desk's and the person's AGENTS.md one shared size budget, the desk's file first", async () => {
   const root = await desk()
   await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
@@ -365,6 +383,16 @@ test("formatBootText prints the person's AGENTS.md after the desk's, with the sa
   const mine = text.indexOf("## Your own AGENTS.md (/work/desk/desks/ari/AGENTS.md); its rules bind this session\n\nMine.\n\n[Cut after 5 of 30000 bytes: read the rest at /work/desk/desks/ari/AGENTS.md]")
   assert.ok(team !== -1 && mine > team)
   assert.match(text.split("\n")[1], /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(5 of 30000 bytes shown\)/u)
+})
+
+test("formatBootText names every shelved lesson's topic after the AGENTS.md files, within a bound that counts the rest", () => {
+  const text = formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 2, topics: ["Old rule", "Other"] } }))
+  assert.match(text, /\n## The desk's AGENTS\.md[^]*\n## Your shelved lessons \(\/work\/desk\/LESSONS\.md\)\n\n2 lessons are shelved here because AGENTS\.md outgrew what session start prints\. Call task_focus to load the ones for your task, or read this file before work on any of these topics: Old rule; Other\.\n$/u)
+  const many = Array.from({ length: 400 }, (_, index) => `Topic number ${index}`)
+  const long = formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 400, topics: many } }))
+  assert.match(long, /; and \d+ more\.\n$/u)
+  assert.ok(long.length <= BOOT_TEXT_MAX_CHARS)
+  assert.equal(formatBootText(sampleResult({ lessons_shelf: null })).includes("shelved"), false)
 })
 
 test("formatBootText shortens a long task list, not the AGENTS.md files, to keep the output under what a host shows in full", () => {

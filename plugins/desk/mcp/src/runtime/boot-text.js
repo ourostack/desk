@@ -8,6 +8,7 @@
 
 import * as path from "node:path"
 import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
+import { topicList } from "./lessons-shelf.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
 import { blockedWords } from "./deliver.js"
@@ -442,8 +443,13 @@ export function formatBootText(result) {
   // Each file's heading, blank lines and cut marker, which names its path again.
   const frame = (md, name) => name.length + 2 * md.path.length + 100
   const notes = []
-  // Room for the AGENTS.md files before anything else, so the shortening falls on the task list.
-  let room = BOOT_TEXT_MAX_CHARS - size(lines) - size(tail) - BOOT_NOTE_CHARS
+  // The shelved lessons are not printed, but every topic is named (up to a bound that says how many more), so none is dropped silently.
+  const shelf = result.lessons_shelf
+  const shelfLines = shelf && shelf.count > 0
+    ? ["", `## Your shelved lessons (${shelf.path})`, "", `${shelf.count} ${shelf.count === 1 ? "lesson is" : "lessons are"} shelved here because AGENTS.md outgrew what session start prints. Call task_focus to load the ones for your task, or read this file before work on any of these topics: ${topicList(shelf.topics)}.`]
+    : []
+  // Room for the AGENTS.md files and the shelf before anything else, so the shortening falls on the task list.
+  let room = BOOT_TEXT_MAX_CHARS - size(lines) - size(tail) - size(shelfLines) - BOOT_NOTE_CHARS
   for (const [md, name] of files) room -= md.text.length + frame(md, name)
   let shown = middle
   if (size(middle) > Math.max(room, 0)) {
@@ -456,7 +462,7 @@ export function formatBootText(result) {
   }
   lines.push(...shown, ...tail)
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
-  let left = BOOT_TEXT_MAX_CHARS - size(lines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
+  let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
   const cuts = []
   for (const [md, name] of files) {
     let text = md.text.replace(/\n+$/u, "")
@@ -475,6 +481,7 @@ export function formatBootText(result) {
       cuts.push(`${md.path} (${bytes} of ${md.bytes} bytes shown)`)
     }
   }
+  lines.push(...shelfLines)
   if (cuts.length > 0) notes.push(`cut ${cuts.join(" and ")}`)
   if (notes.length > 0) lines.splice(1, 0, `Session start ${notes.join(" and ")}, to stay within ${AGENTS_MD_CAP_BYTES / 1024} KB of AGENTS.md and ${BOOT_TEXT_MAX_CHARS} characters of output.${cuts.length > 0 ? " Read the rest of each file before relying on its rules." : ""}`)
   return `${lines.join("\n")}\n`

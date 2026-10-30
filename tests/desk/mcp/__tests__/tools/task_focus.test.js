@@ -50,6 +50,20 @@ test("context observation reflects only an actual planning-complete card flag, n
   }
 })
 
+test("focus, and task_create with focus, hand back the shelved lessons closest to the task first; with no shelf there is none", async () => {
+  const root = await mkTempDeskRoot()
+  await card(root, "tr", "plain-work")
+  assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "plain-work" } })).shelved_lessons, undefined)
+  await fs.writeFile(path.join(root, "LESSONS.md"), "# Shelved lessons\n\n## Lessons\n\n- **Newest.** Unrelated rule. (2026-03-01)\n- **Valves.** Bleed the flash valves before a restart. (2026-01-01)\n- **Older.** Another rule. (2026-02-01)\n")
+  const focused = await taskFocus({ deskRoot: root, input: { track: "tr", slug: "plain-work" } })
+  assert.deepEqual(focused.shelved_lessons, { path: "LESSONS.md", lessons: ["- **Newest.** Unrelated rule. (2026-03-01)", "- **Older.** Another rule. (2026-02-01)", "- **Valves.** Bleed the flash valves before a restart. (2026-01-01)"], not_shown: 0 })
+  const { statusContext } = ctx()
+  const created = await task_create({ deskRoot: root, statusContext, input: { track: "tr", slug: "flash-valves", title: "Restart the flash valves", status: "processing", focus: true } })
+  assert.equal(created.shelved_lessons.lessons[0], "- **Valves.** Bleed the flash valves before a restart. (2026-01-01)")
+  const parked = await task_create({ deskRoot: root, input: { track: "tr", slug: "parked-work", title: "T", status: "processing" } })
+  assert.equal(parked.shelved_lessons, undefined)
+})
+
 test("focus then status returns focused, with status and recent progress", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
