@@ -33,8 +33,9 @@
 // whole call.
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
-// instructions, root, host, prereqs, sync, sync_summary, agents_md, active_tasks,
-// card_validation, push_accounts, factory }`. The CLI prints it as readable
+// instructions, root, host, prereqs, sync, sync_summary, agents_md, notes, active_tasks,
+// card_validation, push_accounts, factory }` (among others); `notes` is the open notes teammates left in this
+// person's `_inbox/` (`inbox.js`), or null. The CLI prints it as readable
 // text (`boot-text.js`) unless `--json` asks for this structure. `status` is one of "ready", "degraded" or
 // "setup_required" — never two words, and `degraded` always lists why.
 // `instructions` is the one list of next steps an agent acts on, each naming
@@ -77,6 +78,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { memberMessage, resolveMember } from "../desk/crew-member.js"
 import { personAgentsCap } from "./agents-md.js"
 import { shelfIndex } from "./lessons-shelf.js"
+import { openNotes } from "./inbox.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -85,7 +87,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
+import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, notesInstruction, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
@@ -990,6 +992,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     agents_md: null,
     person_agents_md: null,
     lessons_shelf: null,
+    notes: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -1238,6 +1241,7 @@ function buildInstructionItems(ctx) {
     `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
     `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
   )
+  if (ctx.notes) add(notesInstruction(ctx.notes))
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.soft === true || check.reason.endsWith("_timeout")) continue
     add(`Prerequisite unavailable: ${prereqAction(name, check)} Only operations depending on ${name} are affected. Do not use an unverified identity, bypass a real access denial or protected write, or claim this check passed. Continue independent authorized work through available trusted tools; preserve the diagnostic without starting unsolicited maintenance.`)
@@ -1358,6 +1362,7 @@ export async function bootOnce({
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   shelfFn = shelfIndex,
+  notesFn = openNotes,
   personFn = improvementPerson,
   memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
@@ -1533,6 +1538,13 @@ export async function bootOnce({
   } catch {
     lessonsShelf = null
   }
+  // The notes teammates left in this person's inbox (note_leave), in a shared workspace only: the open ones, oldest first.
+  let notes = null
+  try {
+    if (who?.status === "ok" && who.personPrefix !== "") notes = notesFn(root.path, who.personPrefix)
+  } catch {
+    notes = null
+  }
 
   let tasks = null
   try {
@@ -1652,7 +1664,7 @@ export async function bootOnce({
   const status = healthWord(degraded)
   // Whether an agent on this machine already told the operator about the undecided store: then no session raises it again.
   const consentWasMentioned = consentUndecided(factory, isNoninteractive(env)) && consentMentionedFn(resolveDeskStateDir({ env, homeDir }), factory.store)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned, notes }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1670,6 +1682,7 @@ export async function bootOnce({
     agents_md: agentsMd,
     person_agents_md: personAgentsMd,
     lessons_shelf: lessonsShelf,
+    notes,
     person: personSummary(member),
     active_tasks: tasks,
     card_parser: parserName(nestedCards),

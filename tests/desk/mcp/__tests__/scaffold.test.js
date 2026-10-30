@@ -28,6 +28,9 @@ const EXPECTED_TOOLS = [
   "friction_add",
   "lesson_add",
   "desk_save",
+  // Teammate notes (Crew)
+  "note_leave",
+  "note_ack",
   // Search (Units 4-6)
   "desk_search",
   "desk_recall",

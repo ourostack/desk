@@ -47,6 +47,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
     _template/                          # clean clonable skeleton a new teammate copies in (read desk:first-run-bootstrap shape)
     <alias>/                            # ONE PERSON'S FULL DESK -- identical shape to a single-operator $DESK
       AGENTS.md                         # this person's preferences and lessons; session start prints it for them
+      _inbox/                           # notes teammates left this person (note_leave); session start lists the open ones
       _meta/
         friction.md
         featured.md                     # this person's pins (per-person, not repo-wide)
@@ -170,6 +171,10 @@ A team lesson binds every teammate's agents, so one person cannot make one up: i
 
 `lesson_add` does the routing and the writing. `scope: "personal"` writes the person's own `AGENTS.md` directly, because it is inside their desk. `scope: "team"` takes `repo` (the local clone; this workspace by default) and `source`, and runs the shared-path protocol above itself: it fetches the default branch, writes the line in a temporary worktree, pushes a branch, opens the pull request and merges it, rebuilding on top of a teammate's change when the merge conflicts. Its reply says `merged` (with the pull request and merge commit), `pr_open` (and why it could not merge) or `failed` (and the step it stopped at), and whether Claude Code loads the file. `scope: "desk"` opens the improvement card. Tell the person what the reply says; a team lesson is in effect only when it is merged.
 
+## Notes for a teammate
+
+To tell one teammate something they should see at their next session, leave them a note with `note_leave` (`crew:leave-note`). It is the one write into another person's desk that needs no further authority: it adds a single new, attributed file to their `desks/<alias>/_inbox/` through the shared-path protocol above, and never touches anything else there. The note relays your understanding in your own voice, never in anyone else's, and the whole workspace can read it. Their session start lists it until they call `note_ack`, which marks it acknowledged in their own desk.
+
 ## Shared tracks (when several people work one effort)
 
 Shared tracks recur, so handle them lightly: the shared track's coordination card/index lives in `_shared/tracks/<track>/` (a shared path → conflict-safe writes), while **each person's actual work on it stays in their own `desks/<alias>/` subtree and links to the shared card.** Shared card = coordination; the work itself = scoped. The default stays read-across / write-own; only the small coordination surface is shared.
@@ -198,5 +203,6 @@ The shared repo must be useful as **plain markdown** to a teammate who never run
 - `perspective-query` -- operationalizes this taxonomy: "what would `<person>` think / what's `<person>` doing / what's agreed vs just fact," with the attribution discipline this skill defines.
 - `desk:session-start` -- reads `_meta/desks.md` and surfaces the desk-set + "which desk am I."
 - `crew:start-crew` -- gives a new or existing repository this floor plan, monorepo or dual-repo.
+- `crew:leave-note` -- leaving a teammate a note, and acknowledging the ones left for you.
 - `desk:git-hygiene` -- the underlying push / branch / merge mechanics the write protocol drives.
 - Your overlay's identity skill -- the identity your writes push under. The generic crew layer is identity-neutral; a corporate overlay supplies the concrete account model.

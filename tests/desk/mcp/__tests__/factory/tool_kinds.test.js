@@ -12,7 +12,7 @@ const CLAUDE_CASES = [
   ["WebFetch", "web"], ["WebSearch", "web"],
   ["mcp__Claude_Browser__navigate", "web"], ["mcp__claude-in-chrome__computer", "web"],
   ["Agent", "agent"], ["Task", "agent"], ["SendMessage", "agent"],
-  // All 5 verbs the desk regex recognizes (task|track|friction|lesson|desk), one per test.
+  // All 6 verbs the desk regex recognizes (task|track|friction|lesson|desk|note), one per test.
   ["mcp__plugin_desk_desk__task_create", "desk"],
   ["mcp__plugin_desk_desk__task_focus", "desk"],
   ["mcp__plugin_desk_desk__task_signoff", "desk"],
@@ -20,8 +20,9 @@ const CLAUDE_CASES = [
   ["mcp__plugin_desk_desk__track_update", "desk"],
   ["mcp__plugin_desk_desk__friction_add", "desk"],
   ["mcp__plugin_desk_desk__lesson_add", "desk"],
+  ["mcp__plugin_desk_desk__note_leave", "desk"],
   ["mcp__plugin_desk_desk__desk_status", "desk"],
-  // A desk-named MCP server tool that isn't one of those 5 verbs stays a generic mcp tool.
+  // A desk-named MCP server tool that isn't one of those 6 verbs stays a generic mcp tool.
   ["mcp__plugin_desk_desk__search", "mcp"],
   ["Skill", "skill"],
   ["TodoWrite", "plan"], ["ExitPlanMode", "plan"],
@@ -48,6 +49,7 @@ const COPILOT_CASES = [
   ["desk-friction_add", "desk"], ["desk-lesson_add", "desk"],
   ["desk-desk_status", "desk"], ["desk-desk_search", "desk"], ["desk-desk_recall", "desk"],
   ["desk-task_focus", "desk"], ["desk-task_signoff", "desk"], ["desk-desk_save", "desk"], ["desk-task_move", "desk"],
+  ["desk-note_leave", "desk"], ["desk-note_ack", "desk"],
   ["skill", "skill"],
   ["some-server-tool", "mcp"],
   ["randomtool", "other"],

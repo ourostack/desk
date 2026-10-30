@@ -373,9 +373,22 @@ function cleanupLines(result) {
   return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`), ...(cleanup.more > 0 ? [`- and ${cleanup.more} more finished ${cleanup.more === 1 ? "card" : "cards"}`] : [])]
 }
 
+/** The one instruction about the open notes teammates left (`result.notes`, from runtime/inbox.js). */
+export function notesInstruction(notes) {
+  const one = notes.count === 1
+  return `${notes.count} open ${one ? "note from a teammate is" : "notes from teammates are"} waiting in ${notes.path}/ (listed under "Notes from teammates", oldest first). Tell the operator about ${one ? "it" : "them"} early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note_ack with its path; until then every session start lists it.`
+}
+
+// The open notes, one line each, before the task list: bounded by NOTES_SHOWN_CAP, so they are never shortened away.
+function notesLines(notes) {
+  if (!notes) return []
+  const more = notes.more > 0 ? [`- and ${notes.more} more in ${notes.path}/`] : []
+  return ["", `Notes from teammates (${notes.count} open, oldest first):`, ...notes.notes.map((note) => `- ${note.created.slice(0, 10)} from ${note.from}: ${note.subject} (${note.path})`), ...more]
+}
+
 /**
  * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
- * the stale-Desk line and the release-alert and open-Desk-problems lines when there are any, the active tasks grouped by state with each task's push route, the open pull
+ * the stale-Desk line and the release-alert and open-Desk-problems lines when there are any, the open notes teammates left, the active tasks grouped by state with each task's push route, the open pull
  * requests and repos, then only the instructions that apply to this boot, and the desk's AGENTS.md. Every section is
  * omitted when it has nothing to say, so a healthy boot stays short. `result.text_instructions`, when the boot made
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
@@ -427,6 +440,7 @@ export function formatBootText(result) {
   const { rest: pendingRest, summaries: pendingSummaries } = collapsePending(result.pending ?? [])
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
+  lines.push(...notesLines(result.notes))
   // The task list, deliveries, pull requests and repos can run long; they are what gets shortened when the output would
   // pass its limit. The status, the instructions and the AGENTS.md files (the rules that bind the session) never are.
   const middle = [...namedTaskLines(result.task)]

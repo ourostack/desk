@@ -259,6 +259,15 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     repo: text("For scope \"team\": the path of your local clone of the team's repository. Defaults to the desk when the desk is a shared workspace."),
     source: text("Required when scope is \"team\": where the lesson comes from, on one line. In a repository with _shared/decisions/, the path of the decision record; elsewhere who said it, where and when, with the date as YYYY-MM-DD."),
   }, ["scope", "topic", "body"]),
+  note_leave: schema({
+    to: text("The alias of the member the note is for, as in the workspace roster (_meta/desks.md)."),
+    subject: text("What the note is about, on one line of at most 120 characters."),
+    body: text("The note: your own explanation, in your own voice, at most 8000 characters. Relay someone else's thinking as your understanding of it, never in their words or voice. Everyone in the workspace can read it."),
+    related: list("Up to 10 links the note is about: https URLs, or paths in the workspace relative to its root."),
+  }, ["to", "subject", "body"]),
+  note_ack: schema({
+    note: text("The note's path as session start listed it (desks/<you>/_inbox/<file>.md), or its file name."),
+  }, ["note"]),
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
     files: {

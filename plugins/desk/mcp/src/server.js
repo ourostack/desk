@@ -4,6 +4,7 @@
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
+//   - Crew teammate notes: note_leave, note_ack
 //   - M4-2 (cheap moves): task_move, track_rename
 //   - M4-6 Part 2: desk_save (commits hand-written files the same way every
 //     other write tool commits its own)
@@ -41,6 +42,7 @@ import { friction_add } from "./tools/friction.js"
 import { improvement_open, improvement_next, improvement_update } from "./tools/improvement.js"
 import { lesson_add } from "./tools/lesson.js"
 import { desk_save } from "./tools/desk-save.js"
+import { note_ack, note_leave } from "./tools/note.js"
 import {
   desk_search,
   desk_recall,
@@ -73,6 +75,8 @@ export const TOOL_IMPLS = {
   friction_add,
   lesson_add,
   desk_save,
+  note_leave,
+  note_ack,
   desk_search,
   desk_recall,
   desk_similar,
