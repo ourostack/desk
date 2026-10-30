@@ -391,7 +391,214 @@ test("failed readback after an acknowledged write is unavailable, not a claim th
   f.session.rpc.name.get = async () => { throw Object.assign(Error("readback disconnected"), { code: "ECONNRESET" }) }
   await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   assert.equal(f.name(), "Workflow promotion review")
-  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_api_failed" })
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_readback_failed" })
+})
+
+const readStages = ["snapshot", "recheck", "readback"]
+const readCauses = ["timeout", "invalid_params", "internal_error", "rpc_error", "failed"]
+const diagnosticCodes = new Set([
+  "awaiting_task_observation", "owner_unknown", "unsupported_runtime", "provider_binding_unavailable",
+  "native_ordering_unavailable", "missing_current_safe_proposal", "native_apply_uncertain",
+  "native_owner_refused", "native_readback_verified", "native_readback_mismatch",
+  ...readStages.flatMap((stage) => readCauses.map((cause) => `native_${stage}_${cause}`)),
+])
+const privateValue = "FAKE-PRIVATE-VALUE /Users/someone/private/path"
+const privateError = (code) => Object.assign(Error(privateValue), { code, data: { prompt: privateValue }, stack: privateValue })
+const settle = async () => { for (let i = 0; i < 5; i++) await tick() }
+const never = () => new Promise(() => {})
+const rejectionCases = [
+  [-32602, "invalid_params"], [-32603, "internal_error"], [-32000, "rpc_error"],
+  ["ECONNRESET", "failed"], [7, "failed"], [undefined, "failed"],
+]
+
+function assertSafeStates(states) {
+  assert.ok(states.length > 0)
+  for (const state of states) {
+    assert.deepEqual(Object.keys(state).sort(), ["code", "state"])
+    assert.ok(diagnosticCodes.has(state.code), `unexpected diagnostic ${state.code}`)
+  }
+  const text = JSON.stringify(states)
+  for (const value of ["FAKE-PRIVATE-VALUE", "/Users/", "Workflow promotion review", expectedSessionId]) {
+    assert.equal(text.includes(value), false)
+  }
+}
+
+async function correlate(f, id = "call-a", identity = task, label = "Workflow promotion review") {
+  await admit(f, start(id, { args: { ...identity, display_label: label } }))
+  f.emit(complete(id, { identity, label }))
+  await settle()
+}
+
+test("an initial metadata snapshot timeout names its stage only once the real default budget expires", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const states = []
+  const fake = runtime()
+  fake.session.rpc.metadata.snapshot = never
+  let consumer
+  const attaching = attachCopilotSessionLabels({ session: fake.session, expectedSessionId, onState: (state) => states.push(state) })
+    .then((value) => { consumer = value })
+  t.mock.timers.tick(1999)
+  await settle()
+  assert.equal(consumer, undefined)
+  assert.deepEqual(states, [])
+  t.mock.timers.tick(1)
+  await attaching
+  assert.deepEqual(consumer.getState(), { state: "unavailable", code: "native_snapshot_timeout" })
+  assertSafeStates(states)
+  assert.deepEqual(fake.writes, [])
+})
+
+for (const [code, cause] of rejectionCases) {
+  test(`an initial metadata snapshot rejection with ${code ?? "no"} code is native_snapshot_${cause} without its payload`, async () => {
+    const states = []
+    const fake = runtime()
+    fake.session.rpc.metadata.snapshot = async () => { throw privateError(code) }
+    const f = await attach(fake, { onState: (state) => states.push(state) })
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: `native_snapshot_${cause}` })
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    assert.deepEqual(f.writes, [])
+    assertSafeStates(states)
+  })
+}
+
+test("a pre-write identity recheck timeout names the recheck stage and issues no write", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const states = []
+  const f = await attach(runtime(), { onState: (state) => states.push(state) })
+  f.session.rpc.metadata.snapshot = never
+  await correlate(f)
+  t.mock.timers.tick(1999)
+  await settle()
+  assert.deepEqual(states, [])
+  t.mock.timers.tick(1)
+  await f.consumer.waitForIdle()
+  assert.deepEqual(f.writes, [])
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_recheck_timeout" })
+  assertSafeStates(states)
+})
+
+for (const [code, cause] of rejectionCases) {
+  test(`a pre-write identity recheck rejection with ${code ?? "no"} code is native_recheck_${cause} and issues no write`, async () => {
+    const states = []
+    const f = await attach(runtime(), { onState: (state) => states.push(state) })
+    f.session.rpc.metadata.snapshot = async () => { throw privateError(code) }
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    assert.deepEqual(f.writes, [])
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: `native_recheck_${cause}` })
+    assertSafeStates(states)
+  })
+}
+
+test("a readback timeout after an acknowledged write names the readback stage, not a failed write or an applied label", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const states = []
+  const f = await attach(runtime(), { onState: (state) => states.push(state) })
+  f.session.rpc.name.get = never
+  await correlate(f)
+  t.mock.timers.tick(1999)
+  await settle()
+  assert.deepEqual(states, [])
+  t.mock.timers.tick(1)
+  await f.consumer.waitForIdle()
+  assert.deepEqual(f.writes, ["Workflow promotion review"])
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_readback_timeout" })
+  assertSafeStates(states)
+})
+
+for (const [code, cause] of rejectionCases) {
+  test(`a readback rejection with ${code ?? "no"} code is native_readback_${cause}, never applied`, async () => {
+    const states = []
+    const f = await attach(runtime(), { onState: (state) => states.push(state) })
+    f.session.rpc.name.get = async () => { throw privateError(code) }
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    assert.deepEqual(f.writes, ["Workflow promotion review"])
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: `native_readback_${cause}` })
+    assertSafeStates(states)
+  })
+}
+
+test("a readback missing-method rejection remains unsupported_runtime", async () => {
+  const f = await attach()
+  f.session.rpc.name.get = async () => { throw privateError(-32601) }
+  await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "unsupported_runtime" })
+})
+
+test("a setter timeout at the real default budget stays uncertain and fences every later automatic write", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const states = []
+  const f = await attach(runtime(), { onState: (state) => states.push(state) })
+  const gate = deferred()
+  const calls = []
+  f.session.rpc.name.setAuto = ({ summary }) => { calls.push(summary); return gate.promise }
+  await correlate(f)
+  t.mock.timers.tick(2000)
+  await f.consumer.waitForIdle()
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_apply_uncertain" })
+  await correlate(f, "call-b", other, "Browser boundary qualification")
+  await f.consumer.waitForIdle()
+  gate.resolve({ applied: true })
+  await settle()
+  assert.deepEqual(calls, ["Workflow promotion review"])
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_apply_uncertain" })
+  assertSafeStates(states)
+})
+
+for (const code of [-32602, -32603, "ECONNRESET"]) {
+  test(`a setter rejection with ${code} code stays uncertain rather than becoming a stage-classified read failure`, async () => {
+    const states = []
+    const f = await attach(runtime(), { onState: (state) => states.push(state) })
+    let calls = 0
+    f.session.rpc.name.setAuto = async () => { calls++; throw privateError(code) }
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    await observe(f, start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }),
+      complete("call-b", { identity: other, label: "Browser boundary qualification" }))
+    assert.equal(calls, 1)
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_apply_uncertain" })
+    assertSafeStates(states)
+  })
+}
+
+const hostileErrors = {
+  "throwing code getter": () => Object.defineProperty(Error(privateValue), "code", { get() { throw Error(privateValue) } }),
+  "trap-throwing proxy": () => new Proxy({}, new Proxy({}, { get: () => () => { throw Error(privateValue) } })),
+  "null": () => null,
+  "bare string": () => privateValue,
+}
+for (const [kind, make] of Object.entries(hostileErrors)) {
+  test(`a ${kind} readback failure is classified safely without escaping the naming queue`, async () => {
+    const states = []
+    const f = await attach(runtime(), { onState: (state) => states.push(state) })
+    f.session.rpc.name.get = async () => { throw make() }
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_readback_failed" })
+    assertSafeStates(states)
+  })
+
+  test(`a ${kind} setter failure still stops naming and blocks a later write`, async () => {
+    const states = []
+    const f = await attach(runtime(), { onState: (state) => states.push(state) })
+    let calls = 0
+    f.session.rpc.name.setAuto = async () => { calls++; throw make() }
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    await observe(f, start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }),
+      complete("call-b", { identity: other, label: "Browser boundary qualification" }))
+    assert.equal(calls, 1)
+    assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_apply_uncertain" })
+    assertSafeStates(states)
+  })
+}
+
+test("a throwing diagnostic observer cannot change attachment, task continuity or the classified state", async () => {
+  const fake = runtime()
+  fake.session.rpc.metadata.snapshot = async () => { throw privateError(-32603) }
+  const f = await attach(fake, { onState: () => { throw Error(privateValue) } })
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_snapshot_internal_error" })
+  const result = await f.consumer.beforeMcpToolCall({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus", toolCallId: "next", arguments: task,
+  }, { sessionId: expectedSessionId })
+  assert.equal(result, undefined)
+  assert.deepEqual(f.writes, [])
 })
 
 for (const source of ["user", undefined]) {
