@@ -49,3 +49,19 @@ test("content routing sends product contracts to the product repository", () => 
     assert.doesNotMatch(readFileSync(workerPath, "utf8"), /content-routing/u)
   }
 })
+
+test("content routing places team tooling, team context and other repositories' changes", () => {
+  const skill = readFileSync(skillPath, "utf8")
+  const section = skill.split("## When a team shares a workspace")[1]?.split("\n## ")[0] ?? ""
+  assert.match(section, /General agent-work tooling[\s\S]+Desk, or Crew/u)
+  assert.match(section, /Employer-specific but not team-specific[\s\S]+overlay/u)
+  assert.match(section, /One team's own process[\s\S]+written as skills/u)
+  assert.match(section, /Shared context and evidence[\s\S]+team workspace[\s\S]+never hold team state/u)
+  assert.match(section, /repository the team doesn't own[\s\S]+pull request[\s\S]+heads-up to its owner/u)
+
+  const crew = readFileSync(
+    path.join(repoRoot, "plugins", "crew", "skills", "shared-desk-conventions", "SKILL.md"),
+    "utf8",
+  )
+  assert.match(crew, /`desk:content-routing` "When a team shares a workspace"/u)
+})

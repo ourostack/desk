@@ -1,5 +1,60 @@
 # desk plugin — changelog
 
+## 3.2.46 — 2026-10-30
+
+`lesson_add` no longer refuses a personal lesson once AGENTS.md outgrows what session start prints ([#554](https://github.com/ourostack/desk/issues/554)). In a Crew workspace the team's AGENTS.md and a person's share 16 KB, so a busy desk could stop learning until someone trimmed the file by hand. Now the newest lessons stay in AGENTS.md and the oldest move to a `LESSONS.md` shelf beside it, first any lesson already past the cut, which nothing loaded before. If the rest of AGENTS.md leaves no room at all, the new lesson goes on the shelf itself. No lesson is dropped: session start lists every shelved topic, [`task_focus`](mcp/src/tools/task-focus.js) and `task_create` with `focus` return the shelved lessons closest to the task first, `desk_search` indexes the shelf, and recording a lesson again under its topic brings it back to AGENTS.md. The reply's new `tier` says where the lesson landed, and `shelved` names every lesson that moved. AGENTS.md and the shelf are committed together. Team lessons, which reach a shared repository through a pull request, keep their 16 KB refusal.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.45 — 2026-10-29
+
+Operator-voice drafts and humanizing guidance now point to Plain Language's shared rule for attributing authorized work to the person. The [collaboration rationale](docs/agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent) explains why agent use is normally implicit; approval and audit boundaries remain unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.44 — 2026-10-29
+
+### Desk's own commits always reach the remote
+
+The background push no longer rebases the shared checkout to make room for its push, so nothing else in that checkout can hold Desk's commits back ([#396](https://github.com/ourostack/desk/issues/396)). Before, an untracked file matching an incoming tracked one, or a conflict on a task card while other sessions had files open, stopped every later push, and Desk commits piled up locally while each tool reply still said they were being pushed.
+
+- **Delivery uses a private copy.** A fast-forward is pushed as it is. Anything else is replayed onto the remote in a temporary worktree under Desk's state folder and pushed from there (`mcp/src/runtime/deliver.js`). The shared checkout then follows only the way `git checkout` would: a file another session changed, or an untracked file in the way, stops the move instead of being overwritten. An untracked file whose content is exactly what is coming in is replaced by itself. Desk never stashes, rebases or force-pushes for this.
+- **Card conflicts resolve themselves.** A conflict on a Markdown file or line log in the desk's own folder keeps both sides' lines and merges frontmatter key by key, the newer side (by its `updated` time) winning a key both sides changed. A commit with a conflict Desk cannot merge (a shared file, a JSON file, a binary file) stays local and is named, and every other commit still lands.
+- **Boot delivers too.** When the session-start pull fails for any reason other than an unreachable remote or refused credentials, boot starts the delivery in the background and says how many local commits are not on the remote yet.
+- **Replies never claim a push that is not happening.** While the last push is blocked, `task_update`, `task_signoff` and `desk_save` say the commit is only local, how many commits are waiting and why (`desk_unpushed`, `desk_push_blocked`), instead of "pushing it in the background". Boot's sync line adds the same count and reason and is degraded while a push is blocked, and `desk_status` reports `sync.unpushed` and names a blocked push before a failed pull.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.43 — 2026-10-29
+
+Crew startup now introduces existing shared initiatives under `_shared/tracks/` alongside personal tasks, using Crew's shared-initiative skill. Discovery is read-only and does not create assignments or duplicate task state.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.42 — 2026-10-29
+
+New [`delightful-decks`](skills/delightful-decks/SKILL.md) skill for making presentation decks that surprise and delight a live audience. It sets an explicit bar for every slide (visual aids, not explainers; only the words that must be there; beautiful art on every slide; room to breathe; soft depth; titles that wrap like speech; the real artifact, unredacted), a process that agrees the spec slide by slide with the presenter before building and then builds art, rendered diagrams, screenshots, research and the deck in parallel, a simulated-audience review panel filtered against the presenter's decisions, and the common failure modes. A builder's "nothing overflows" check proves layout, not quality, and never stands in for the bar.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.41 — 2026-10-29
+
+Parallelize and fast-follow is now a default for every operator. Independent streams run at the same time, downstream artifacts are updated right after an upstream change, and usable milestones are pushed early and often so whoever is waiting always finds the latest. [work-orchestration](skills/work-orchestration/SKILL.md) "Parallelize and fast-follow" holds the rule and builds on `superpowers:dispatching-parallel-agents` instead of restating it. [using-desk](skills/using-desk/SKILL.md) names it under waste judgment, and the work-orchestration description makes it the default for any work.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.40 — 2026-10-29
+
+Content routing now covers teams that share a Crew workspace. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, a team's own process goes to its own tooling as skills, shared context and evidence stay in the team workspace, and changes to repositories the team doesn't own go through pull requests there with a heads-up to their owner. See [content-routing](skills/content-routing/SKILL.md) "When a team shares a workspace".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.39 — 2026-10-28
+
+Give explicitly requested session explanations one complete generation/privacy allowance, separate from unattended maintenance's daily ledger. The requested CLI keeps source, consent, billing, retry and publication checks, holds the normal evaluator lock across both phases, and never enables an automatic budget escape.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.38 — 2026-10-28
 
 Fix session-context preparation repeatedly spending its bounded turn on early jobs. Protected per-namespace progress now resumes the next unfinished save without increasing deadlines or changing evidence, consent, model attempts or independent privacy checks.

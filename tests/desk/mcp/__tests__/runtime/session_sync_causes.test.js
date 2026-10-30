@@ -8,6 +8,10 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { classifyPullFailure, syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 
+// These tests are about the pull; the detached delivery a pull may start is covered in sync_deliver.test.js.
+const noDelivery = () => {}
+
+
 function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
@@ -47,7 +51,7 @@ test("an unreachable origin is reported as unreachable with its URL and git's ow
   git(root, ["remote", "set-url", "origin", gone])
   await fs.writeFile(path.join(root, "stray.txt"), "local only\n")
 
-  const result = await syncWorkspace({ root, env, fileProblem })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem })
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.cause, "unreachable")
@@ -74,7 +78,7 @@ test("a genuine conflict keeps the conflict cause, the conflicted paths and the 
   await fs.writeFile(path.join(root, "seed.md"), "seed\nfrom local\n")
   git(root, ["commit", "-q", "-am", "local edit"])
 
-  const result = await syncWorkspace({ root, env, fileProblem })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem })
 
   assert.equal(result.cause, "conflict")
   assert.deepEqual(result.conflicted, ["seed.md"])
@@ -98,7 +102,7 @@ for (const [name, failure, cause, tell] of [
   test(`a pull that fails with ${name} is classified ${cause}, and the URL shown never carries credentials`, async () => {
     const { root } = await mkOriginWithClone()
     git(root, ["remote", "set-url", "origin", "https://user:secret-token@github.com/o/r.git"])
-    const result = await syncWorkspace({ root, env, fileProblem, spawnGit: failingPull(failure) })
+    const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, spawnGit: failingPull(failure) })
     assert.equal(result.state, "unresolved")
     assert.equal(result.cause, cause)
     assert.equal(result.remote, "https://github.com/o/r.git")
@@ -115,23 +119,23 @@ test("the error line is empty when git said nothing, and the remote is null when
     if (args[2] === "remote" && args[3] === "get-url") return { status: 1, stdout: "", stderr: "" }
     return spawnSync(command, args, options)
   }
-  const result = await syncWorkspace({ root, env, fileProblem, spawnGit: scripted })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, spawnGit: scripted })
   assert.equal(result.error, "")
   assert.equal(result.remote, null)
   const blank = (command, args, options) => (args[2] === "remote" && args[3] === "get-url" ? { status: 0, stdout: "  \n", stderr: "" } : scripted(command, args, options))
-  assert.equal((await syncWorkspace({ root, env, fileProblem, spawnGit: blank })).remote, null)
+  assert.equal((await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, spawnGit: blank })).remote, null)
 })
 
 test("a pull that fails with a conflict message but no conflicted paths still classifies as a conflict", async () => {
   const { root } = await mkOriginWithClone()
-  const result = await syncWorkspace({ root, env, fileProblem, spawnGit: failingPull({ status: 1, stderr: "error: could not apply abc123... local edit\n" }) })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, spawnGit: failingPull({ status: 1, stderr: "error: could not apply abc123... local edit\n" }) })
   assert.equal(result.cause, "conflict")
 })
 
 test("an exhausted budget is reported as a deadline, not as a conflict", async () => {
   const { root } = await mkOriginWithClone()
   let tick = 0
-  const result = await syncWorkspace({ root, env, fileProblem, now: () => (tick += 60_000) })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, now: () => (tick += 60_000) })
   assert.equal(result.state, "unresolved")
   assert.equal(result.cause, "deadline")
   assert.match(result.diagnostic, /ran out of time/u)
@@ -156,7 +160,7 @@ for (const [name, failure, cause, files] of [
   test(`${name} ${files ? "files" : "does not file"} a Desk problem and still surfaces as ${cause}`, async () => {
     const { root } = await mkOriginWithClone()
     let filed = null
-    const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull(failure) })
+    const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull(failure) })
     assert.equal(result.state, "unresolved")
     assert.equal(result.cause, cause)
     assert.match(result.diagnostic, /Desk problem: session-sync/u)
@@ -175,7 +179,7 @@ test("a pull that still fails after quarantine files a reason that names its cau
     { status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" },
   ]
   const spawnGit = (command, args, options) => (args[2] === "pull" ? { stdout: "", ...answers.shift() } : spawnSync(command, args, options))
-  const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem: (args) => { filed = args }, spawnGit })
   assert.equal(result.state, "unresolved")
   assert.deepEqual(result.quarantinedPaths.map((moved) => path.basename(moved)), ["stray.txt"])
   assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:diverged")
@@ -184,7 +188,7 @@ test("a pull that still fails after quarantine files a reason that names its cau
 test("a diverged pull moves no untracked file aside", async () => {
   const { root } = await mkOriginWithClone()
   await fs.writeFile(path.join(root, "stray.txt"), "local only\n")
-  const result = await syncWorkspace({ root, env, fileProblem, spawnGit: failingPull({ status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }) })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem, spawnGit: failingPull({ status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }) })
   assert.equal(result.state, "unresolved")
   assert.equal(result.cause, "diverged")
   assert.equal(result.quarantinedPaths, undefined)

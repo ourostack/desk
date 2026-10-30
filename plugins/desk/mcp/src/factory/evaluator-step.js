@@ -102,7 +102,7 @@ import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
 import { recordStep } from "./loop-status.js"
 import { factoryStateRoot, readStatus, updateStatus } from "./outbox.js"
-import { processAlive, releaseLock, takeLock } from "./process-lock.js"
+import { EVALUATOR_LOCK_NAME, processAlive, releaseLock, takeLock } from "./process-lock.js"
 
 const MAX_ATTEMPTS = 3
 // The step starts no run that could end after this long since it took the lock, plus the facts scan its caller
@@ -110,7 +110,6 @@ const MAX_ATTEMPTS = 3
 // 6-hour outer age.
 const STEP_LIMIT_MS = 25 * 60 * 1000
 const SWITCH_ON = new Set(["1", "true", "on", "yes"])
-const LOCK_FILE = "evaluator-step.running"
 const COST_ROUNDING = 1e6
 
 // The runner's machine-level blocked states: the step stops, and the step itself did not do its work.
@@ -205,7 +204,7 @@ export async function runEvaluatorStep(env, options = {}) {
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return { ok: true, result: "no_factory_state" }
-  const lock = await takeLock(root, { name: LOCK_FILE, alive: impl.processAlive })
+  const lock = await takeLock(root, { name: EVALUATOR_LOCK_NAME, alive: impl.processAlive })
   if (lock === null) return { ok: true, result: "busy" }
   const limitMs = Math.min(deadlineMs, impl.clock() + STEP_LIMIT_MS)
   let outcome

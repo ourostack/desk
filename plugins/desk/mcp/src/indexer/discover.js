@@ -5,7 +5,8 @@
 //             (cross-cutting at _meta/friction.md + track-local under
 //             _friction/*.md), lesson notes at _meta/tips/*.md, and the
 //             AGENTS.md session start prints (the desk's and a person's
-//             desks/<alias>/AGENTS.md), where lesson_add records lessons. Docs under
+//             desks/<alias>/AGENTS.md), where lesson_add records lessons, and the
+//             LESSONS.md shelf beside each, where it moves older ones. Docs under
 //             any _archive/ ancestor ARE indexed too, but flagged
 //             `is_archived: true` so search tools can scope them in or out.
 //   Skipped: node_modules/, .state/, .git/, and .bak files.
@@ -50,6 +51,8 @@ const TASK_DOC_BASENAMES = new Set([
 
 /** The desk's own instructions, at its root or at a person's `desks/<alias>/`. */
 const AGENTS_MD = "AGENTS.md"
+// The lessons shelf beside it, where lesson_add moves the lessons AGENTS.md has no room for.
+const LESSONS_MD = "LESSONS.md"
 
 /** Directory names that short-circuit recursion (we never descend in). */
 const SKIP_DIRS = new Set([
@@ -238,7 +241,7 @@ export function isIndexable(relPath) {
   if (TASK_DOC_BASENAMES.has(base)) return true
 
   // The AGENTS.md session start prints: lesson_add writes lessons there, so search must find them.
-  if (segments.length === 1 && base === AGENTS_MD) return true
+  if (segments.length === 1 && (base === AGENTS_MD || base === LESSONS_MD)) return true
 
   // 1.1: any .md file under an _archive/ ancestor counts. Archived = preserved
   // for future recall, the whole point is searchability.
@@ -307,6 +310,7 @@ export function classify(relPath) {
   }
 
   if (segments.length === 1 && base === AGENTS_MD) return { kind: "instructions", track: null, task_slug: null }
+  if (segments.length === 1 && base === LESSONS_MD) return { kind: "lesson", track: null, task_slug: null }
 
   // 1.1: archived legacy filenames. Infer kind from the basename pattern
   // (`<date>-planning-<topic>.md`, `<date>-doing-<topic>.md`); fall back to

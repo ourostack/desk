@@ -9,7 +9,7 @@ A shared crew workspace is a **map of whose-view-is-what** (see `shared-desk-con
 
 The whole value of the substrate over a pile of docs is that these questions get **clean, attributed, honest** answers. This skill is where that promise is kept or broken. The cardinal sin is **false consensus** -- letting one person's opinion read as the team's. Every step here exists to prevent that.
 
-## The three buckets these queries read
+## The source buckets these queries read
 
 From `shared-desk-conventions` -- re-stated because the query routing depends on getting the bucket right:
 
@@ -17,6 +17,7 @@ From `shared-desk-conventions` -- re-stated because the query routing depends on
 |--------|------|-------|------------------------------|
 | **Facts** | `_shared/landscape/` | externally true, team-neutral | "this is a team fact" (cite the source pointer in the doc) |
 | **Perspectives** | `desks/<alias>/` | what a person thinks / is doing / decided | **"this is `<person>`'s view"** -- never "the team's" |
+| **Initiative deliberation** | `_shared/tracks/<track>/` | attributed proposals, questions and synthesis beside links to personal work | Attribute each view; location alone establishes no agreement. |
 | **Decisions** | `_shared/decisions/` | what the team **actually agreed** | "the team agreed this on `<date>`" -- or **"no team decision yet"** if empty |
 
 Routing a query to the wrong bucket is how false consensus happens: reading a perspective and reporting it as a fact, or reporting an unmade decision as settled. Always identify the bucket *before* you answer.
@@ -25,9 +26,9 @@ Routing a query to the wrong bucket is how false consensus happens: reading a pe
 
 **Read** `desks/<alias>/` for that person. **Answer as their view, labeled as theirs.** Never reframe it as team gospel.
 
-1. Scan `desks/<alias>/` for material bearing on X -- their tracks, planning docs, takes, attributed perspectives. (Read-across is allowed and is the point; you read their desk, you don't write it.)
+1. Scan `desks/<alias>/` for material bearing on X -- their tracks, planning docs, takes, attributed perspectives. Also read related shared initiative cards for explicitly attributed contributions. Follow their source links; do not infer a view from an unlabeled contribution or index entry. Read-across is allowed; this query writes nothing.
 2. Synthesize **their** stance, with **their** reasoning, and **label it as theirs** from the first word: *"Alex's posture is frontier-or-bust -- his reasoning is …"* -- not *"the posture is …"*.
-3. If their desk says nothing about X, say so honestly: *"Alex's desk doesn't record a view on X."* Do **not** infer a stance from a fact in `_shared/landscape/` and attribute it to them -- a fact is team-neutral; it is not their opinion.
+3. If neither their desk nor attributed initiative deliberation records a view on X, say so honestly: *"The workspace doesn't record Alex's view on X."* Do **not** infer a stance from a fact in `_shared/landscape/` and attribute it to them -- a fact is team-neutral; it is not their opinion.
 4. If two people's desks hold **conflicting** views on X, report both, attributed to each -- *"Alex thinks A; Sam thinks B"* -- never average them into a fake "the team thinks."
 
 > The honest failure answer is *"`<person>`'s desk doesn't say"* -- always preferable to manufacturing a plausible-sounding opinion they never recorded.
@@ -45,20 +46,21 @@ Routing a query to the wrong bucket is how false consensus happens: reading a pe
 
 This is the query the taxonomy exists for. Keep **decisions** and **facts** rigorously separate, and treat **perspectives** as neither.
 
-1. **"What's agreed / decided?"** → read `_shared/decisions/`. If it holds a matching decision, report it **attributed to the meeting/date** that agreed it: *"the team decided X on 2026-06-12 at kickoff."* If it's **empty or has nothing on the topic**, the honest answer is *"no team decision on this yet"* -- **say exactly that.** An empty decisions dir is the correct, expected pre-kickoff state, not a gap to paper over.
+1. **"What's agreed / decided?"** → read `_shared/decisions/` and follow any related initiative's links to the workspace's decision-of-record. Report an actual decision **attributed to its authority and date**. Without such evidence, say *"no team decision recorded on this yet."* An empty decisions directory is not a gap to paper over; shared proposals are not decisions.
 2. **"What's just fact?"** → read `_shared/landscape/`. Report it as a team-neutral fact and cite the inline source pointer the doc carries (*"verified from Service X code-read, 2026-06-04"*).
 3. **The discriminator to surface explicitly when asked "is X agreed?":**
    - X is in `_shared/decisions/` → **agreed** (attributed to the meeting/date).
    - X is in `_shared/landscape/` → **a fact**, not a decision (nobody had to "agree" it; it's externally true).
    - X is only in some `desks/<alias>/` → **one person's perspective**, not agreed and not a team fact. Say so: *"that's Alex's take, not a team decision."*
+   - X is proposed in `_shared/tracks/` → **attributed deliberation**, not agreed unless its decision source establishes agreement. Use `crew:shared-initiative` for initiative-wide status and task-link checks.
 
 > Never promote a perspective into a decision because it sounds authoritative or because only one person has weighed in. *"Only Alex has a view; the team hasn't decided"* is the correct, honest answer -- and it's exactly the answer that invites the kickoff conversation instead of pre-empting it.
 
-## Attribution discipline (applies to all three shapes)
+## Attribution discipline (applies to all query shapes)
 
 - **Label the source bucket in the answer.** The reader should always be able to tell whether they're hearing a team fact, a named person's view, or a team decision. *"That's a fact / that's Alex's view / the team agreed that on …"*.
 - **Default to the more-attributed, less-authoritative read** when a piece of content is ambiguous: a stance-carrying claim is a **perspective** (attributed to whoever's desk it's on), not a fact; an un-recorded agreement is **not yet decided**, not "effectively decided."
-- **Read-only.** This skill never writes. Answering a perspective query reads across `desks/*/` and `_shared/`; it changes nothing. (Writes follow the `shared-desk-conventions` write protocol -- and writing someone else's `desks/<alias>/` is never allowed regardless.)
+- **Read-only.** This skill never writes. Answering a perspective query reads across `desks/*/` and `_shared/`; it changes nothing. A separate authorized contribution follows `shared-desk-conventions`; reading grants no write authority.
 - **Don't invent the holder.** If a take has no attribution in the repo, report it as unattributed -- *"the repo records this view but not whose it is"* -- not as the team's and not as a guessed person's.
 
 ## Cross-references

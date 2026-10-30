@@ -849,6 +849,11 @@ requires(
   "content-routing persists callable-back artifacts when drafted",
   /## Callable-back artifacts land when drafted[\s\S]+grep[\s\S]+no-write/iu,
 );
+requires(
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+  "work-orchestration makes parallel streams, fast-follow and early milestones the default without restating Superpowers",
+  /## Parallelize and fast-follow[\s\S]+`superpowers:dispatching-parallel-agents`[\s\S]+independent streams at the same time[\s\S]+Fast-follow downstream[\s\S]+usable milestones early and often/u,
+);
 contract("content-routing routes always-on rules to a foundation, not principles or bodies", () => {
   const skill = text("plugins/desk/skills/content-routing/SKILL.md");
   assert.match(skill, /always-on foundation/u);

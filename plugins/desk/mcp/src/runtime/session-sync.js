@@ -31,7 +31,8 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { formatDeskProblem } from "./index-drift.js"
-import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, recordPullOutcome } from "./sync-worker.js"
+import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
+import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 
@@ -136,25 +137,8 @@ function untrackedPaths(root, spawnGit, timeoutMs) {
   return result.stdout.split("\0").filter((line) => line !== "")
 }
 
-const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree files would be overwritten by (?:merge|checkout):\s*$/u
-const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would be overwritten by (?:merge|checkout)\.?\s*$/u
-
-/**
- * The untracked files a failed pull named as in its way, from git's own error text: the tab-indented list under "The
- * following untracked working tree files would be overwritten by merge:" (or "...by checkout:"), or the older one-file
- * form. Nothing else in the text counts. A path that is absolute, climbs out with `..`, or sits in the `_cache/` folder
- * the moved files go to is dropped, so a quarantine can never reach outside the desk or into itself.
- */
 export function overwrittenUntrackedPaths(stderr) {
-  const found = []
-  const lines = String(stderr ?? "").split(/\r?\n/u)
-  for (let index = 0; index < lines.length; index += 1) {
-    const one = OVERWRITTEN_ONE.exec(lines[index])
-    if (one !== null) found.push(one[1])
-    if (!OVERWRITTEN_LIST.test(lines[index])) continue
-    while (index + 1 < lines.length && lines[index + 1].startsWith("\t")) found.push(lines[(index += 1)].slice(1))
-  }
-  const safe = found.filter((relative) => relative !== "" && !path.isAbsolute(relative) && !relative.split(/[\\/]/u).includes("..") &&
+  const safe = namedUntrackedPaths(stderr).filter((relative) => relative !== "" && !path.isAbsolute(relative) && !relative.split(/[\\/]/u).includes("..") &&
     relative !== QUARANTINE_FOLDER && !relative.startsWith(`${QUARANTINE_FOLDER}/`))
   return [...new Set(safe)]
 }
@@ -260,22 +244,9 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
   return { file: "filing in background" }
 }
 
-// Why a failed pull failed, from what git said: a real conflict, a diverged history, credentials the
-// remote refused, a remote that could not be reached, or something else. Session start used to call
-// every failure a conflict, so an unreachable origin sent agents to a `git status` that read clean.
-const CONFLICT_TEXT = /CONFLICT|could not apply|Cannot rebase|would be overwritten|overwritten by/iu
-const AUTH_TEXT = /Authentication failed|could not read Username|could not read Password|Permission denied \(publickey|Invalid username or password|Host key verification failed|Repository not found|returned error: 40[13]|HTTP 40[13]|terminal prompts disabled/iu
-const UNREACHABLE_TEXT = /Could not resolve host|unable to access '(?:https?|git|ssh):\/\/|Could not read from remote|Connection (?:refused|timed out|reset)|Network is unreachable|No route to host|Failed to connect|unable to connect|Operation timed out|timed out|Temporary failure in name resolution|ssh: connect to host/iu
-const DIVERGED_TEXT = /diverg|not possible to fast-forward|Need to specify how to reconcile/iu
-
-export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = false, deadline = false } = {}) {
-  if (deadline || timedOut) return "deadline"
-  if (conflicted.length > 0 || CONFLICT_TEXT.test(stderr)) return "conflict"
-  if (AUTH_TEXT.test(stderr)) return "auth_failed"
-  if (UNREACHABLE_TEXT.test(stderr)) return "unreachable"
-  if (DIVERGED_TEXT.test(stderr)) return "diverged"
-  return "other"
-}
+// Why a failed pull failed (a real conflict, a diverged history, refused credentials, an unreachable remote, or
+// something else) is decided by `classifyPullFailure`, shared with delivery (runtime/deliver.js).
+export { classifyPullFailure }
 
 // The first meaningful line of git's own complaint, without any credentials a remote URL carried.
 function firstErrorLine(stderr) {
@@ -289,7 +260,9 @@ function originUrl(root, spawnGit, timeoutMs) {
   return url === "" ? null : url.replace(/\/\/[^/@\s]+@/u, "//")
 }
 
-const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline"])
+
+// Causes that stop delivery too: no push is started for them.
+const OFFLINE = new Set(["unreachable", "auth_failed"])
 
 const TELL = {
   unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
@@ -315,7 +288,9 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     symptom: "session-start pull did not resolve",
     broke: `git pull --rebase --autostash failed (${reason})${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`,
     means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
-    fix: "not repaired automatically: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once -- inspect the conflict and resolve it, or ask the operator",
+    fix: OFFLINE.has(cause)
+      ? "not repaired automatically: the remote cannot be used from this machine right now, so nothing was pulled or pushed; Desk delivers its local commits once it can"
+      : "the checkout itself is not rebased: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once. Desk's own local commits are still delivered to the remote from a clean copy in the background, and the checkout follows once nothing local is in the way -- never stash, rebase or reset the shared checkout for this",
     file: filing?.file ?? "filing in background",
     tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
@@ -342,12 +317,29 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * Running out of budget before either pull attempt ends the sequence as
  * `unresolved` (reason `sync_deadline_exceeded`) rather than pushing ahead
  * with an unbounded or zero-timeout git call.
+ *
+ * A pull that fails never holds back the desk's own commits (#396): whenever local commits are not on the remote,
+ * and the remote is not known to be unreachable or refusing this machine, the detached push worker is started to
+ * deliver them from a clean copy (runtime/deliver.js), and the result says so in `unpushed: { count, delivering,
+ * reason, paths }`, `reason` being the last recorded push failure, if any. `scheduleDelivery` is a test seam.
  */
 export async function syncWorkspace(options) {
   const result = await runSync(options)
   // `desk_status` reads this back, so its health word carries a failed sync the way boot's does.
   recordPullOutcome({ root: options.root, env: options.env, result })
-  return result
+  return withDelivery(options, result)
+}
+
+function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = schedulePush }, result) {
+  if (result.nothingToSync !== undefined) return result
+  const recorded = readSyncStatus({ root, env })
+  const left = undeliveredCommits({ root, spawnGit, delivered: Array.isArray(recorded?.delivered) ? recorded.delivered : [] })
+  if (left === null || left.length === 0) return result
+  const offline = result.state === "unresolved" && OFFLINE.has(result.cause)
+  if (!offline) scheduleDelivery({ root, env, debounceMs: 0 })
+  const reason = recorded?.blocked === true ? recorded.reason ?? null : offline ? result.cause : null
+  const paths = recorded?.blocked === true && Array.isArray(recorded.paths) ? recorded.paths : []
+  return { ...result, unpushed: { count: left.length, delivering: !offline, reason, paths } }
 }
 
 async function runSync({
