@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "plain-language-corrections",
+  "description": "Writing corrections operators made by hand: spelled-out chat shorthand and layout-set line width.",
+  "sources": [
+    "plugins/plain-language/skills/plain-language/SKILL.md",
+    "plugins/desk/skills/operator-voice-comments/SKILL.md"
+  ],
+  "reviewedSourceFingerprint": "0e657b6d0ed3af2acb18c8ba950c93e43889fcea3c5ea0994abca3d78f1feb91",
+  "requirements": [
+    {
+      "id": "no-chat-shorthand",
+      "description": "Agent-written prose spells out chat shorthand such as wdyt, lmk or imo and asks or says the actual thing."
+    },
+    {
+      "id": "layout-sets-line-width",
+      "description": "Rendered text takes its line width from the layout, not a fixed character or rem measure."
+    }
+  ],
+  "cases": [
+    {
+      "id": "spell-out-shorthand",
+      "description": "An agent asking the operator for a decision does not reach for chat shorthand.",
+      "prompt": "You finished a draft design for the retry policy and need the operator to choose between a fixed three retries and exponential backoff. Write the one- or two-sentence message asking for that choice.",
+      "checks": [
+        {
+          "id": "asks-the-actual-question",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "no-chat-shorthand"
+          ],
+          "description": "The message asks in full words which option the operator prefers."
+        },
+        {
+          "id": "no-shorthand-tokens",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-chat-shorthand"
+          ],
+          "description": "The message does not contain wdyt, lmk, imo or similar chat shorthand."
+        }
+      ]
+    },
+    {
+      "id": "layout-owned-line-width",
+      "description": "Styling an article page leaves line width to the layout.",
+      "prompt": "Write the CSS for a two-column documentation page: a 16rem navigation sidebar and a main article column that holds headings and paragraphs. Keep the article text comfortable to read.",
+      "checks": [
+        {
+          "id": "layout-sets-width",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "layout-sets-line-width"
+          ],
+          "description": "The article's line width comes from the grid or flex column and the window."
+        },
+        {
+          "id": "no-fixed-measure",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "layout-sets-line-width"
+          ],
+          "description": "No max-width or width in ch, em or rem caps paragraphs, the article text or its container."
+        }
+      ]
+    }
+  ]
+}

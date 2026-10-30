@@ -57,6 +57,7 @@ These tells survive a tight edit. Cut them:
 - Keep the subject and action close together.
 - State relationships with words such as `because`, `if`, `before`, `after`, and `therefore` instead of leaving them implicit.
 - Use complete sentences in prose. Fragments belong in headings, labels, table cells, and deliberate status markers.
+- Spell out chat shorthand such as `wdyt`, `lmk` or `imo`: ask the actual question or say the actual thing in words. Keep shorthand only in a person's own voice when they use it themselves.
 
 ## Attribute work to the person
 
@@ -65,6 +66,7 @@ When a person speaks about work they authorized, make that person the ordinary a
 Apply this to human-readable messages, documents, reports, reviews, commit prose and handoffs. Preserve other people's credit, source provenance and exact quoted or structured records; this is writing guidance, not a reason to rewrite technical documentation wholesale.
 
 - If an agent speaks in its own role, preserve that speaker and role.
+- If an agent relays a person's views, feedback or decisions to someone else, it writes as itself and presents them as its own reading: "Here's generally what Casey was thinking, as I understood it; ask Casey if you have questions." Attribute them, link the source where one exists, and send the reader to the person for anything unclear. Never write a relay in the person's words or voice; a person's voice is only for messages they send themselves.
 - If the reader asks how work ran or what an agent can do, explain the automation. In access or permission explanations, audit or provenance records, and required disclosures, preserve automation and the actual acting identity; say when that identity is unverified.
 - If the evidence establishes only authorized work, describe that work without inventing personal line-by-line reading, human review, approval, attendance, consent or decisions.
 
@@ -107,6 +109,8 @@ In agent handoffs, preserve owners, evidence, authority, blocked state, and next
 Match the voice, level of detail, and structure of the destination: a file, a pull request thread, and a commit log each have their own. Improve clarity without flattening the speaker's style, changing the requested format, or weakening a more specific requirement.
 
 Never hard-wrap authored prose. Keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and pull request body paragraph on one physical line, and let the renderer or editor wrap it. Use a newline only for genuine structure: a new paragraph, list item, heading, table row, code line, or a semantic break preserved from the source. Before finishing, join any line breaks created only by column width in the prose changed in the current task; leave quoted, generated, historical, or other source-preserved text as it is.
+
+Let the layout set line width in rendered text too. In a site, app or rendered document, never cap text width with a fixed character or rem measure, such as `max-width: 36rem` or `65ch` on paragraphs; let the grid column, panel or window decide.
 
 ## Check before sending
 
