@@ -6,7 +6,7 @@
     "plugins/plain-language/skills/plain-language/SKILL.md",
     "plugins/desk/skills/operator-voice-comments/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "952548a0a403ca645535448cdd7f91b13c46f013457c8a8e025a8d1ba8315f18",
+  "reviewedSourceFingerprint": "3660ee9d39a450c3a985bebe57e736ebcca54fef3aeefc92efc86aa2c20858d6",
   "requirements": [
     {
       "id": "no-chat-shorthand",
@@ -64,7 +64,7 @@
           "covers": [
             "layout-sets-line-width"
           ],
-          "description": "No max-width or width in ch, em or rem caps paragraphs, the article text or its container."
+          "description": "No max-width or width in a fixed unit such as ch, em, rem or px caps paragraphs, the article text or its container."
         }
       ]
     }

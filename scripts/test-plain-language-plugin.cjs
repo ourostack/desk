@@ -56,7 +56,8 @@ assert.match(workAttribution, /line-by-line reading/u);
 assert.match(workAttribution, /sending or publication authority/u);
 assert.match(workAttribution, /relays a person's views, feedback or decisions[\s\S]+writes as itself[\s\S]+its own reading/u);
 assert.match(workAttribution, /link the source where one exists[\s\S]+send the reader to the person/u);
-assert.match(workAttribution, /Never write a relay in the person's words or voice; use a person's voice only for messages they send themselves or approve for sending in their name/u);
+assert.match(workAttribution, /Never write a relay as if the person wrote it[\s\S]+marked, attributed quotation/u);
+assert.match(workAttribution, /use a person's voice only for messages they send themselves or approve for sending in their name/iu);
 const understand = pluginSkill.split("## Make the answer easy to understand\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
 assert.match(understand, /Spell out chat shorthand such as `wdyt`, `lmk` or `imo`/u);
 assert.doesNotMatch(fs.readFileSync(path.join(repoRoot, "plugins/desk/skills/operator-voice-comments/SKILL.md"), "utf8"), /Soften recommendations[^\n]*wdyt/u);
@@ -74,7 +75,7 @@ assert.match(voiceAndFormat, /one physical line/u);
 assert.match(voiceAndFormat, /genuine structure/u);
 assert.match(voiceAndFormat, /changed in the current task/u);
 assert.match(voiceAndFormat, /source-preserved/u);
-assert.match(voiceAndFormat, /Let the layout set line width in rendered text[\s\S]+never cap text width with a fixed character or rem measure/u);
+assert.match(voiceAndFormat, /Let the layout set line width in rendered text[\s\S]+covers the styles you write[\s\S]+never cap text width with a fixed measure/u);
 assert.doesNotMatch(pluginSkill, /vendor|upstream-sources|conformance/iu);
 
 // Copilot injects the plugin's own hook (root plugin.json points at
