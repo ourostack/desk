@@ -1,5 +1,6 @@
 {
   "name": "desk",
+  "pluginId": "006b58c2-230c-47b1-831a-a1cc2fd10ef9",
   "version": "3.2.46",
   "engines": [
     "copilot"
