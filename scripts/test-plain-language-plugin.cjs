@@ -56,7 +56,7 @@ assert.match(workAttribution, /line-by-line reading/u);
 assert.match(workAttribution, /sending or publication authority/u);
 assert.match(workAttribution, /relays a person's views, feedback or decisions[\s\S]+writes as itself[\s\S]+its own reading/u);
 assert.match(workAttribution, /link the source where one exists[\s\S]+send the reader to the person/u);
-assert.match(workAttribution, /Never write a relay in the person's words or voice/u);
+assert.match(workAttribution, /Never write a relay in the person's words or voice; use a person's voice only for messages they send themselves or approve for sending in their name/u);
 const understand = pluginSkill.split("## Make the answer easy to understand\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
 assert.match(understand, /Spell out chat shorthand such as `wdyt`, `lmk` or `imo`/u);
 assert.doesNotMatch(fs.readFileSync(path.join(repoRoot, "plugins/desk/skills/operator-voice-comments/SKILL.md"), "utf8"), /Soften recommendations[^\n]*wdyt/u);

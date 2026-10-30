@@ -6,7 +6,7 @@
     "plugins/plain-language/skills/plain-language/SKILL.md",
     "plugins/desk/skills/operator-voice-comments/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "0e657b6d0ed3af2acb18c8ba950c93e43889fcea3c5ea0994abca3d78f1feb91",
+  "reviewedSourceFingerprint": "952548a0a403ca645535448cdd7f91b13c46f013457c8a8e025a8d1ba8315f18",
   "requirements": [
     {
       "id": "no-chat-shorthand",
@@ -21,7 +21,7 @@
     {
       "id": "spell-out-shorthand",
       "description": "An agent asking the operator for a decision does not reach for chat shorthand.",
-      "prompt": "You finished a draft design for the retry policy and need the operator to choose between a fixed three retries and exponential backoff. Write the one- or two-sentence message asking for that choice.",
+      "prompt": "Reply in this informal chat thread with the operator. Operator: 'ok cool, lmk when the retry draft is up'. You finished the draft design for the retry policy and need the operator to choose between a fixed three retries and exponential backoff. Write your one- or two-sentence reply asking for that choice.",
       "checks": [
         {
           "id": "asks-the-actual-question",
