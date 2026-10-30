@@ -75,7 +75,7 @@ assert.match(voiceAndFormat, /one physical line/u);
 assert.match(voiceAndFormat, /genuine structure/u);
 assert.match(voiceAndFormat, /changed in the current task/u);
 assert.match(voiceAndFormat, /source-preserved/u);
-assert.match(voiceAndFormat, /Let the layout set line width in rendered text[\s\S]+covers the styles you write[\s\S]+never cap text width with a fixed measure/u);
+assert.match(voiceAndFormat, /Let the layout set line width in rendered text[\s\S]+covers the styles you write[\s\S]+never cap text width with a fixed measure[\s\S]+design system the project already follows/u);
 assert.doesNotMatch(pluginSkill, /vendor|upstream-sources|conformance/iu);
 
 // Copilot injects the plugin's own hook (root plugin.json points at

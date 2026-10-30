@@ -110,7 +110,7 @@ Match the voice, level of detail, and structure of the destination: a file, a pu
 
 Never hard-wrap authored prose. Keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and pull request body paragraph on one physical line, and let the renderer or editor wrap it. Use a newline only for genuine structure: a new paragraph, list item, heading, table row, code line, or a semantic break preserved from the source. Before finishing, join any line breaks created only by column width in the prose changed in the current task; leave quoted, generated, historical, or other source-preserved text as it is.
 
-Let the layout set line width in rendered text too; this rule also covers the styles you write for it. In a site, app or rendered document, never cap text width with a fixed measure such as `max-width: 36rem`, `65ch` or `640px` on paragraphs; let the grid column, panel or window decide.
+Let the layout set line width in rendered text too; this rule also covers the styles you write for it. In a site, app or rendered document, never cap text width with a fixed measure such as `max-width: 36rem`, `65ch` or `640px` on paragraphs; let the grid column, panel or window decide, unless the request or a design system the project already follows sets a measure.
 
 ## Check before sending
 
