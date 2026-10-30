@@ -107,7 +107,8 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     const currentShelf = await readIfPresent(shelfFile)
     const line = `${lead(topic)} ${body} (${today()})`
     const next = shelve({ agents: current, shelf: currentShelf, line, topic, cap })
-    const changes = [[file, current, next.agents], [shelfFile, currentShelf, next.shelf]].filter(([, before, after]) => before !== after)
+    // The shelf is written first: a failure between the two writes can then leave a lesson in both files, never in neither.
+    const changes = [[shelfFile, currentShelf, next.shelf], [file, current, next.agents]].filter(([, before, after]) => before !== after)
     const outcome = { replaced: next.replaced, tier: next.tier, moved: next.moved }
     // Checked before this call's own write, so a file another session left dirty is never committed as this call's.
     const git = isGitRepository(path.dirname(file), spawnGit)

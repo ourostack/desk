@@ -14,9 +14,10 @@ export function lessonLine(text, topic) {
  * `withLesson(text, line, topic) -> { text, replaced }`: the AGENTS.md text with `line` in its `## Lessons` section. A
  * line for the same topic is replaced in place; otherwise the line goes after the section's last line, before the next
  * heading of the same or a higher level, and a file with no section gets one at the end. The file keeps its own line
- * ending: a file checked out on Windows with CRLF stays CRLF, and its section is still found.
+ * ending: a file checked out on Windows with CRLF stays CRLF, and its section is still found. With `append: true` no line
+ * is replaced: `line` goes at the end unless the section already holds that exact line.
  */
-export function withLesson(text, line, topic) {
+export function withLesson(text, line, topic, { append = false } = {}) {
   const eol = /\r\n/u.test(text) ? "\r\n" : "\n"
   const lines = text === "" ? [] : text.replace(/(?:\r?\n)+$/u, "").split(/\r?\n/u)
   const join = (list) => `${list.join(eol)}${eol}`
@@ -27,7 +28,7 @@ export function withLesson(text, line, topic) {
   }
   const { start, end } = section
   const prefix = `${lead(topic)} `
-  const same = lines.findIndex((entry, index) => index > start && index < end && entry.startsWith(prefix))
+  const same = lines.findIndex((entry, index) => index > start && index < end && (append ? entry === line : entry.startsWith(prefix)))
   if (same !== -1) {
     lines[same] = line
     return { text: join(lines), replaced: true }

@@ -204,6 +204,20 @@ test("lesson_add personal brings a shelved topic back to AGENTS.md when recorded
   assert.deepEqual(lessonEntries(await fs.readFile(path.join(full, "LESSONS.md"), "utf8")).map((entry) => entry.topic), ["Rule", "Other"])
 })
 
+test("lesson_add personal writes the shelf before AGENTS.md, so a failed write leaves a moved lesson in both files, never in neither", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const root = await mkTempDeskRoot()
+  const old = Array.from({ length: 5 }, (_, index) => `- **Old ${index}.** ${"w".repeat(60)} (2026-01-0${index + 1})`)
+  const before = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 300)}\n\n## Lessons\n\n${old.join("\n")}\n`
+  await fs.writeFile(path.join(root, "AGENTS.md"), before, "utf8")
+  await fs.chmod(path.join(root, "AGENTS.md"), 0o444)
+  await assert.rejects(() => lesson_add({ deskRoot: root, input: personal("Rule", "Do it.") }), /EACCES|EPERM/u)
+  await fs.chmod(path.join(root, "AGENTS.md"), 0o644)
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), before)
+  const shelf = await fs.readFile(path.join(root, "LESSONS.md"), "utf8")
+  assert.ok(lessonEntries(shelf).length > 0)
+  for (const entry of lessonEntries(shelf)) assert.ok(before.includes(entry.line), "every shelved line is still in AGENTS.md too")
+})
+
 test("lesson_add personal commits AGENTS.md and the shelf together, in one commit", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

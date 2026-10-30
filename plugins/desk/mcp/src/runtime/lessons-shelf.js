@@ -27,7 +27,8 @@ export const SHELF_HEADER = [
   "",
 ].join("\n")
 
-const printedLines = (text, cap) => new Set(printedPart(text, cap).split(/\r?\n/u))
+// A CRLF file cut at a line break leaves its last printed line ending in "\r", which is still that line.
+const printedLines = (text, cap) => new Set(printedPart(text, cap).split(/\r?\n/u).map((entry) => entry.replace(/\r$/u, "")))
 const oldestFirst = (a, b) => a.date.localeCompare(b.date) || a.order - b.order
 
 // `text` with every lesson other than `keep` that falls past the printed part taken out, each pushed onto `moved`.
@@ -81,9 +82,11 @@ export function shelve({ agents, shelf, line, topic, cap }) {
     }
   }
   let shelfText = shelved === undefined || tier === "shelf" ? shelf : withoutLesson(shelf, shelved.line)
-  const going = tier === "shelf" ? [...moved, { line, topic }] : moved
-  if (going.length > 0 && shelfText.trim() === "") shelfText = SHELF_HEADER
-  for (const entry of going) shelfText = withLesson(shelfText, entry.line, entry.topic).text
+  if ((moved.length > 0 || tier === "shelf") && shelfText.trim() === "") shelfText = SHELF_HEADER
+  // A moved lesson never replaces a shelved line that shares its topic (a hand edit or a merge can leave two); only the
+  // lesson being recorded replaces its topic.
+  for (const entry of moved) shelfText = withLesson(shelfText, entry.line, entry.topic, { append: true }).text
+  if (tier === "shelf") shelfText = withLesson(shelfText, line, topic).text
   return { agents: text, shelf: shelfText, tier, moved: moved.map((entry) => ({ line: entry.line, topic: entry.topic })), replaced: added.replaced || shelved !== undefined }
 }
 

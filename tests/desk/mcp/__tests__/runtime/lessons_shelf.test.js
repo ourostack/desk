@@ -79,3 +79,21 @@ test("shelfForTask puts the lessons sharing words with the task first, then the 
   assert.deepEqual(shelfForTask(entries, "", one), { shown: [entries[1].line], not_shown: 2 })
   assert.deepEqual(shelfForTask(entries, "with that this every", 1_000_000).shown[0], entries[1].line, "common words do not count as shared")
 })
+
+test("shelve never lets a moved lesson overwrite a shelved line that shares its topic", () => {
+  const shelf = `${SHELF_HEADER}\n## Lessons\n\n${entry("Deploys", "2026-09-01", "Newer rule B.")}\n`
+  const agents = `## Lessons\n\n${entry("Deploys", "2026-01-01", "Old rule A.")}\n${entry("Tests", "2026-01-02", "Run X.")}\n${entry("Tests", "2026-01-03", "Never Y.")}\n`
+  const line = entry("New", "2026-10-29")
+  const result = shelve({ agents, shelf, line, topic: "New", cap: Buffer.byteLength(`## Lessons\n\n${line}\n`) })
+  assert.equal(result.tier, "session_start")
+  const shelved = lessonEntries(result.shelf).map((kept) => kept.line)
+  for (const kept of [entry("Deploys", "2026-09-01", "Newer rule B."), entry("Deploys", "2026-01-01", "Old rule A."), entry("Tests", "2026-01-02", "Run X."), entry("Tests", "2026-01-03", "Never Y.")]) assert.ok(shelved.includes(kept), kept)
+  assert.equal(result.moved.length, 3)
+})
+
+test("shelve reads a CRLF file's last printed line as printed, so it shelves the lesson that was actually cut", () => {
+  const agents = `## Lessons\r\n\r\n${entry("Seen", "2026-01-01")}\r\n${entry("Cut", "2026-01-02")}\r\n`
+  const cap = Buffer.byteLength(`## Lessons\r\n\r\n${entry("Seen", "2026-01-01")}\r\n`) + 5
+  const result = shelve({ agents, shelf: "", line: entry("Seen", "2026-01-01"), topic: "Seen", cap })
+  assert.deepEqual(result.moved.map((moved) => moved.topic), ["Cut"])
+})
