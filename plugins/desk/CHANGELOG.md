@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.47 — 2026-10-30
+
+### Desk has a fixed Agency plugin ID
+
+[`agency.json`](agency.json) now carries `pluginId` `006b58c2-230c-47b1-831a-a1cc2fd10ef9`. Agency treats installs that share a plugin ID as one plugin, so Desk from the coming Agency marketplace listing and Desk from `github:ourostack/desk:plugins/desk@main` (installed directly, or as a dependency of MS Desk or cit) load as one Desk instead of two.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.46 — 2026-10-30
 
 `lesson_add` no longer refuses a personal lesson once AGENTS.md outgrows what session start prints ([#554](https://github.com/ourostack/desk/issues/554)). In a Crew workspace the team's AGENTS.md and a person's share 16 KB, so a busy desk could stop learning until someone trimmed the file by hand. Now the newest lessons stay in AGENTS.md and the oldest move to a `LESSONS.md` shelf beside it, first any lesson already past the cut, which nothing loaded before. If the rest of AGENTS.md leaves no room at all, the new lesson goes on the shelf itself. No lesson is dropped: session start lists every shelved topic, [`task_focus`](mcp/src/tools/task-focus.js) and `task_create` with `focus` return the shelved lessons closest to the task first, `desk_search` indexes the shelf, and recording a lesson again under its topic brings it back to AGENTS.md. The reply's new `tier` says where the lesson landed, and `shelved` names every lesson that moved. AGENTS.md and the shelf are committed together. Team lessons, which reach a shared repository through a pull request, keep their 16 KB refusal.
