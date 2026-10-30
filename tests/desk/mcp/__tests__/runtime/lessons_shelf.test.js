@@ -41,6 +41,14 @@ test("shelve rotates the oldest by date, not by place, and only as many as the n
   assert.deepEqual(lessonEntries(result.agents).map((kept) => kept.topic), ["Mid", "Newer", "New"])
 })
 
+test("shelve rotates lessons of the same date in the order they stand", () => {
+  // Equal lengths, so taking out either older lesson makes exactly enough room.
+  const agents = `## Lessons\n\n${entry("Aaaa", "2026-01-01")}\n${entry("Bbbb", "2026-01-01")}\n`
+  const result = shelve({ agents, shelf: "", line: entry("Cccc", "2026-10-29"), topic: "Cccc", cap: Buffer.byteLength(agents) })
+  assert.equal(result.tier, "session_start")
+  assert.deepEqual(result.moved.map((moved) => moved.topic), ["Aaaa"])
+})
+
 test("shelve leaves the printed lessons alone, and adds no empty section, when the new lesson cannot fit anyway", () => {
   const agents = `${"x".repeat(50)}\n`
   const result = shelve({ agents, shelf: "", line: entry("New", "2026-10-29"), topic: "New", cap: 40 })

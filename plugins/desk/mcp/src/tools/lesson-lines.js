@@ -4,7 +4,7 @@
 
 import { slugify } from "../util/fm.js"
 
-export { SECTION, lead, lessonEntries, lessonLine, withLesson, withoutLesson } from "../runtime/lesson-section.js"
+export { SECTION, lead, lessonLine, withLesson } from "../runtime/lesson-section.js"
 
 export function oneLine(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`lesson_add: \`${name}\` is required (string)`)

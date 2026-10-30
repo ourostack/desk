@@ -393,6 +393,7 @@ test("formatBootText names every shelved lesson's topic after the AGENTS.md file
   assert.match(long, /; and \d+ more\.\n$/u)
   assert.ok(long.length <= BOOT_TEXT_MAX_CHARS)
   assert.equal(formatBootText(sampleResult({ lessons_shelf: null })).includes("shelved"), false)
+  assert.match(formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 1, topics: ["Only"] } })), /\n1 lesson is shelved here because/u)
 })
 
 test("formatBootText shortens a long task list, not the AGENTS.md files, to keep the output under what a host shows in full", () => {

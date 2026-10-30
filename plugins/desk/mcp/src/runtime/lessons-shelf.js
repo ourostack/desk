@@ -14,9 +14,9 @@ import { lessonEntries, withLesson, withoutLesson } from "./lesson-section.js"
 
 export const SHELF_FILE = "LESSONS.md"
 /** How many bytes of shelved lessons a focus answer carries. */
-export const SHELF_FOCUS_BYTES = 8 * 1024
+const SHELF_FOCUS_BYTES = 8 * 1024
 /** How many characters of shelved topics session start lists before it says how many more there are. */
-export const SHELF_INDEX_CHARS = 1500
+const SHELF_INDEX_CHARS = 1500
 // A shelf is one line per lesson; a file past this is read only this far.
 const SHELF_READ_BYTES = 1024 * 1024
 
@@ -123,7 +123,7 @@ export function topicList(topics, max = SHELF_INDEX_CHARS) {
 }
 
 const STOP = new Set(["about", "after", "agent", "before", "desk", "every", "from", "have", "into", "lesson", "lessons", "never", "only", "that", "their", "them", "then", "they", "this", "what", "when", "where", "which", "with", "work", "your"])
-const words = (text) => new Set((String(text ?? "").toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []).filter((word) => !STOP.has(word)))
+const words = (text) => new Set((String(text).toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []).filter((word) => !STOP.has(word)))
 
 /**
  * `shelfForTask(entries, task, cap) -> { shown, not_shown }`: the shelved lesson lines to hand a session focusing `task`

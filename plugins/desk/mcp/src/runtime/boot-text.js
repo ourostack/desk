@@ -445,7 +445,7 @@ export function formatBootText(result) {
   const notes = []
   // The shelved lessons are not printed, but every topic is named (up to a bound that says how many more), so none is dropped silently.
   const shelf = result.lessons_shelf
-  const shelfLines = shelf && shelf.count > 0
+  const shelfLines = shelf
     ? ["", `## Your shelved lessons (${shelf.path})`, "", `${shelf.count} ${shelf.count === 1 ? "lesson is" : "lessons are"} shelved here because AGENTS.md outgrew what session start prints. Call task_focus to load the ones for your task, or read this file before work on any of these topics: ${topicList(shelf.topics)}.`]
     : []
   // Room for the AGENTS.md files and the shelf before anything else, so the shortening falls on the task list.
