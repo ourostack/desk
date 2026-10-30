@@ -251,7 +251,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     scope: {
       type: "string",
       enum: ["personal", "desk", "team"],
-      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, added to their AGENTS.md, which session start prints. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner` and opens an improvement card against it. \"team\": every teammate's agents in a repository the team shares; Desk writes it into that repository's AGENTS.md through a pull request it merges.",
+      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, added to their AGENTS.md, which session start prints, or to the LESSONS.md shelf beside it once AGENTS.md is full. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner` and opens an improvement card against it. \"team\": every teammate's agents in a repository the team shares; Desk writes it into that repository's AGENTS.md through a pull request it merges.",
     },
     topic: text("The rule's short name, on one line; a later lesson with the same topic replaces it."),
     body: text("The rule, on one line."),

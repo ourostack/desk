@@ -76,6 +76,7 @@ import { AUTHORITY } from "../desk/improvement-authority.js"
 import { improvementPerson } from "../desk/improvement-person.js"
 import { memberMessage, resolveMember } from "../desk/crew-member.js"
 import { personAgentsCap } from "./agents-md.js"
+import { shelfIndex } from "./lessons-shelf.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -988,6 +989,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     needs_operator: null,
     agents_md: null,
     person_agents_md: null,
+    lessons_shelf: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -1355,6 +1357,7 @@ export async function bootOnce({
   lastSyncFn = lastSyncedAt,
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
+  shelfFn = shelfIndex,
   personFn = improvementPerson,
   memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
@@ -1522,6 +1525,14 @@ export async function bootOnce({
   } catch {
     personAgentsMd = null
   }
+  // The lessons lesson_add moved to the shelf beside this person's AGENTS.md (the desk's own on a solo desk) once it
+  // outgrew that budget: session start lists their topics, and task_focus returns their text.
+  let lessonsShelf = null
+  try {
+    if (who?.status === "ok") lessonsShelf = shelfFn(path.join(root.path, who.personPrefix))
+  } catch {
+    lessonsShelf = null
+  }
 
   let tasks = null
   try {
@@ -1658,6 +1669,7 @@ export async function bootOnce({
     sync_summary: syncSummaryText,
     agents_md: agentsMd,
     person_agents_md: personAgentsMd,
+    lessons_shelf: lessonsShelf,
     person: personSummary(member),
     active_tasks: tasks,
     card_parser: parserName(nestedCards),

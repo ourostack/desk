@@ -1,9 +1,10 @@
-// The text side of lesson_add: one-line checks and the `## Lessons` section edit, shared by the personal write in
-// lesson.js and the team write in lesson-team.js.
+// The text side of lesson_add: one-line checks, and (from runtime/lesson-section.js, which session start can load without
+// the runtime dependencies) the `## Lessons` section edit, shared by the personal write in lesson.js and the team write in
+// lesson-team.js.
 
 import { slugify } from "../util/fm.js"
 
-export const SECTION = "## Lessons"
+export { SECTION, lead, lessonLine, withLesson } from "../runtime/lesson-section.js"
 
 export function oneLine(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`lesson_add: \`${name}\` is required (string)`)
@@ -19,45 +20,3 @@ export function topicOf(value) {
   return topic
 }
 
-export const lead = (topic) => `- **${topic}.**`
-
-/** The line in `text` that holds the lesson for `topic`, or undefined. */
-export function lessonLine(text, topic) {
-  return text.split(/\r?\n/u).find((entry) => entry.startsWith(`${lead(topic)} `))
-}
-
-/**
- * `withLesson(text, line, topic) -> { text, replaced }`: the AGENTS.md text with `line` in its `## Lessons` section. A
- * line for the same topic is replaced in place; otherwise the line goes after the section's last line, before the next
- * heading of the same or a higher level, and a file with no section gets one at the end. The file keeps its own line
- * ending: a file checked out on Windows with CRLF stays CRLF, and its section is still found.
- */
-export function withLesson(text, line, topic) {
-  const eol = /\r\n/u.test(text) ? "\r\n" : "\n"
-  const lines = text === "" ? [] : text.replace(/(?:\r?\n)+$/u, "").split(/\r?\n/u)
-  const join = (list) => `${list.join(eol)}${eol}`
-  const start = lines.findIndex((entry) => entry.trimEnd() === SECTION)
-  if (start === -1) {
-    const head = lines.length === 0 ? [] : [...lines, ""]
-    return { text: join([...head, SECTION, "", line]), replaced: false }
-  }
-  let end = lines.length
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (/^#{1,2} /u.test(lines[index])) {
-      end = index
-      break
-    }
-  }
-  const prefix = `${lead(topic)} `
-  const same = lines.findIndex((entry, index) => index > start && index < end && entry.startsWith(prefix))
-  if (same !== -1) {
-    lines[same] = line
-    return { text: join(lines), replaced: true }
-  }
-  let last = end - 1
-  while (last > start && lines[last].trim() === "") last -= 1
-  const insert = last === start ? [lines.slice(0, start + 1), [""], [line]] : [lines.slice(0, last + 1), [line]]
-  const rest = lines.slice(last + 1)
-  const after = rest.length > 0 && rest[0].trim() !== "" ? ["", ...rest] : rest
-  return { text: join([...insert.flat(), ...after]), replaced: false }
-}

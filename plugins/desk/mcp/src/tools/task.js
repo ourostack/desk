@@ -46,7 +46,7 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
-import { focusNote } from "./task-focus.js"
+import { focusNote, shelvedLessons } from "./task-focus.js"
 import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
 import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
@@ -800,7 +800,13 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   if (values.focus === true && statusContext.focus) {
     statusContext.focus.set({ track, slug })
     result.focused = true
-  } else if (values.focus !== true) {
+  }
+  // Focusing a new task loads the person's shelved lessons, as task_focus does.
+  if (values.focus === true) {
+    const lessons = await shelvedLessons({ deskRoot, person, task: [track, slug, data.title, values.body].join(" ") })
+    if (lessons !== undefined) result.shelved_lessons = lessons
+  }
+  if (values.focus !== true) {
     const note = focusNote(statusContext)
     if (note !== undefined) result.focus_note = note
   }
