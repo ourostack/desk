@@ -45,6 +45,7 @@ import { TRACK_CREATE_FIELDS, TRACK_UPDATE_FIELDS } from "../../../../plugins/de
 import { IMPROVEMENT_OPEN_FIELDS, IMPROVEMENT_NEXT_FIELDS, IMPROVEMENT_UPDATE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/improvement.js"
 import { FRICTION_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/friction.js"
 import { LESSON_ADD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/lesson.js"
+import { NOTE_ACK_FIELDS, NOTE_LEAVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/note.js"
 import { DESK_SAVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import {
   DESK_SEARCH_FIELDS,
@@ -72,6 +73,8 @@ const HANDLER_FIELDS = {
   friction_add: FRICTION_ADD_FIELDS,
   lesson_add: LESSON_ADD_FIELDS,
   desk_save: DESK_SAVE_FIELDS,
+  note_leave: NOTE_LEAVE_FIELDS,
+  note_ack: NOTE_ACK_FIELDS,
   desk_search: DESK_SEARCH_FIELDS,
   desk_recall: DESK_RECALL_FIELDS,
   desk_similar: DESK_SIMILAR_FIELDS,
