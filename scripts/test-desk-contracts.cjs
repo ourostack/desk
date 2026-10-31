@@ -1632,7 +1632,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["interaction-style", /Unless recorded standing authority \(above\) names it, an irreversible action affecting shared systems[^\n]+\n- A live shared-state\/configuration mutation that the operator did not ask for/u],
     ["interaction-style", /Treat the operator's ideas as thinking out loud, not settled specs[\s\S]+name what they are missing/u],
     ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+A security prompt or other genuine safety signal[\s\S]+is a safeguard, not discomfort: never click through it or route around it on your own judgment[\s\S]+Use another route only when it removes the risk the signal flags/u],
-    ["interaction-style", /The operator delegates outcomes, not steps: after go, when an approach fails, step back and try a different one/u],
+    ["interaction-style", /The operator delegates outcomes, not steps: after go, when an approach fails, step back and try a different one[\s\S]+a replacement that reverses a decision agreed at go or changes architecture or scope is a stop/u],
     ["work-orchestration", /\*\*Keep the root for coordination\.\*\*/u],
     ["work-orchestration", /recorded a model preference for a kind of work/u],
     ["work-orchestration", /Supervise every lane\. At each milestone, check every running child's live status[\s\S]+a child whose release can't be shown is not replaced on that write set/u],

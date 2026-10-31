@@ -12,7 +12,7 @@ An eleven-phase review of a PR by someone other than the operator: scaffold, rea
 1. **Never read or cite test files.** Fetch the production diff only, and never anchor a comment to a test. The recipient cares about the production change, and test names pull the review into the wrong layer.
 2. **At least one non-`direct-work` lens must be real.** An honest career, cross-team or pattern lens beats an overclaimed `direct-work` one.
 3. **No verdict before the walkthrough.** Walk to explore, not to validate a conclusion.
-4. **Every comment follows `operator-voice-comments`**, including its approval rule: nothing posts until the operator approves the exact text and destination or a standing grant names that kind of send, and no vote is cast without the operator's approval.
+4. **Every comment follows `operator-voice-comments`**, including its approval rule: nothing posts until the operator approves the exact text and destination or a standing grant names that kind of send, and no vote is cast without the operator's approval or a standing grant that names votes.
 5. **Below 90% confidence, verify, soften or cut** before posting. The bar: "this is right because [evidence], and pushback would be answered by [source]".
 6. **Anchor comments to method names, not line numbers** (`pr-surface-hygiene` PSH-002); line numbers drift.
 7. **Empty `promotions:` at archive is a smell** (phase 10).
