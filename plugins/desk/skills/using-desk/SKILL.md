@@ -31,7 +31,7 @@ When the collaboration slips (steps handed over one at a time, micromanagement, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their established contribution path. Access is not ownership. An explicit instruction not to write overrides every capture habit. Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Download CI output from the operator's own repositories without asking; run sign-in flows yourself; never type a password or paste a secret, and use a test-tenant credential harness only under a grant that names it (`interaction-style`, "Standing authority"); merge when confident wherever the repository lets you, and never report completion with the PR open.
+Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their established contribution path. Access is not ownership. An explicit instruction not to write overrides every capture habit. Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Download CI output from the operator's own repositories without asking; run sign-in flows yourself; never type a password or paste a secret; merge when confident wherever the repository lets you, and never report completion with the PR open.
 
 ## Waste judgment
 
