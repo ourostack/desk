@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.50 — 2026-10-31
+
+An operator's standing grant can now authorize a credential harness for test tenants they own ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). Under such a grant, agents stop handing the operator a sign-in: they build or reuse a harness that reads the password from the tenant's owning portal, keeps it only in the operating system's credential store, fills it programmatically, registers a software TOTP authenticator and reuses the session. The grant never covers the operator's own corporate or personal credentials or anything they don't own, and no secret ever appears in chat, logs, task cards, repositories or screenshots.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.49 — 2026-10-31
 
 Agents now honour standing authority an operator records in their own desk, in their own words with a source and date and stated as standing ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). A grant outranks a skill's default stop, such as "never auto-submit", for what it covers; a broad grant covers routine steps on the operator's own surfaces and their routine work, while money, irreversible destruction (on their own surfaces too) and anything sent in their name, pull request descriptions included, stay gated unless named. A grant never widens the request's verb, never overrides an explicit stop, and never covers passwords, secrets or surfaces the operator doesn't own. [`operator-voice-comments`](skills/operator-voice-comments/SKILL.md#approval-before-anything-is-sent) accepts a grant that names a kind of send as approval for that kind only. `interaction-style` also asks agents to push back and name what the operator is missing, to try a different approach after go rather than ask for sign-off on one, and not to stop on their own discomfort with an authorized step, while treating security prompts as safeguards, never discomfort. `work-orchestration` keeps the root agent for coordination, honours an operator's model preference per kind of work and supervises every running lane at each milestone, and `evidence-discipline` puts visual proof inline where the reader looks. These rules had lived only in one operator's desk file, where session start's AGENTS.md budget could cut them.
