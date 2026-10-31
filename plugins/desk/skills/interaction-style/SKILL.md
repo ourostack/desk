@@ -1,6 +1,6 @@
 ---
 name: interaction-style
-description: Always-on rules for how the agent talks to the operator. Invoke when new input arrives mid-work, before returning control or stopping short of scope, before a blocking wait while the operator is present, when presenting several decisions, when creating, moving or renaming a track or task or tidying the desk, when the human is about to step away, or when the host nudges about its own task list or memory.
+description: Always-on rules for how the agent talks to the operator. Invoke when new input arrives mid-work, before returning control or stopping short of scope, before a blocking wait while the operator is present, when presenting several decisions, when creating, moving or renaming a track or task or tidying the desk, when the human is about to step away, when the host nudges about its own task list or memory, or before acting on recorded standing authority.
 ---
 
 # Interaction style
