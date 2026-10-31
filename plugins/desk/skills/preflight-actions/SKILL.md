@@ -33,7 +33,7 @@ This holds even when the action is reversible, approval gates would follow, you 
 
 ## Access is not ownership
 
-An action mandate plus technical access does not authorize changing live state another team operates when no established delegation, SOP or contribution path covers the change. Opening a PR, reviewing, commenting on a work item and posting through an authorized channel role are contribution paths, not ownership holds. The ownership axis never waives send approval: anything that speaks in the operator's name (a PR comment or description, a work-item comment, a chat message, an email, a calendar invitation) still needs the operator's approval of the exact content under `operator-voice-comments`, and a "go" on the work is not that approval.
+An action mandate plus technical access does not authorize changing live state another team operates when no established delegation, SOP or contribution path covers the change. Opening a PR, reviewing, commenting on a work item and posting through an authorized channel role are contribution paths, not ownership holds. The ownership axis never waives send approval: anything that speaks in the operator's name (a PR comment or description, a work-item comment, a chat message, an email, a calendar invitation) still needs the operator's approval of the exact content under `operator-voice-comments`, and a "go" on the work is not that approval; that skill says when a recorded standing grant is.
 
 1. Name the owning surface and the proposed action.
 2. Find the established delegation, SOP or contribution path.
