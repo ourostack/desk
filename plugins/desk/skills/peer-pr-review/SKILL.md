@@ -76,7 +76,7 @@ Show the operator the final comments and destinations and post only what they ap
 
 ## Phase 9: Vote
 
-Recommend a vote and cast it only with the operator's approval:
+Recommend a vote and cast it only with the operator's approval or a standing grant that names votes:
 
 | Backlog | Vote |
 |---|---|
