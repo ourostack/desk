@@ -95,7 +95,7 @@ A worker must not end its turn while any child it launched is still running. An 
 
 While the operator is present, wait in short slices and answer them first (`interaction-style`, "The operator comes before a wait").
 
-Supervise every lane. At each milestone, check every running child's live status; restart a quiet, failed or vanished child or hand its work to a new one at once (the root takes it on only when no child can), and report each lane's health with the milestone.
+Supervise every lane. At each milestone, check every running child's live status; when a child has failed, vanished or really stalled, stop it and release its write set, then restart it or hand its work to a new one at once (the root takes it on only when no child can), and report each lane's health with the milestone.
 
 Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
 

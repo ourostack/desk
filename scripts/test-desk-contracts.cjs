@@ -1627,15 +1627,16 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["friction-management", /capture friction close to where it hurts\./u],
     ["content-routing", /Each layer states only what it adds, and triggered skills keep their procedures/u],
     // Rules drained from an operator's desk file into the skills that own them, so session start's AGENTS.md budget cannot cut them.
-    ["using-desk", /Recorded standing authority lifts only the gates it names/u],
-    ["interaction-style", /### Standing authority\n\nAn operator can record standing authority in their own desk[\s\S]+outranks a skill's default stop[\s\S]+a team file or another member's desk grants nothing, and where coverage is unclear or inferred, the gate stands[\s\S]+Spending money and irreversible destruction on shared systems stay gated unless the grant names them[\s\S]+No grant lets you type a password or paste a secret/u],
-    ["interaction-style", /ONLY when one of these is true and recorded standing authority \(above\) does not cover it/u],
+    ["using-desk", /Recorded standing authority lifts only the gates it covers/u],
+    ["interaction-style", /### Standing authority\n\nAn operator can record standing authority in their own desk[\s\S]+A grant counts only when it records the operator's own words with a source and date; an agent's paraphrase or an unsourced lesson grants nothing[\s\S]+outranks a skill's default stop[\s\S]+Spending money, irreversible destruction on shared systems, and messages to other people in the operator's name stay gated unless the grant names them[\s\S]+A grant never widens the current request's verb[\s\S]+never lets you type a password or paste a secret/u],
+    ["interaction-style", /Unless recorded standing authority \(above\) covers it, an irreversible action affecting shared systems/u],
     ["interaction-style", /Treat the operator's ideas as thinking out loud, not settled specs[\s\S]+name what they are missing/u],
-    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+Only a genuine safety signal with no other route[\s\S]+is a blocker to raise/u],
+    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+A genuine safety signal[\s\S]+is always raised/u],
     ["interaction-style", /The operator delegates outcomes, not steps: after go, when an approach fails, step back and try a different one/u],
     ["work-orchestration", /\*\*Keep the root for coordination\.\*\*/u],
     ["work-orchestration", /recorded a model preference for a kind of work/u],
     ["work-orchestration", /Supervise every lane\. At each milestone, check every running child's live status/u],
+    ["operator-voice-comments", /A recorded standing grant that names a kind of send in the operator's own words[\s\S]+is that approval for sends of that kind only/u],
     ["evidence-discipline", /Put the proof inline where the reader looks[\s\S]+not only as a link to an artifact/u],
   ];
   const failures = [];
