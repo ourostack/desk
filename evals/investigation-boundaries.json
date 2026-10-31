@@ -8,7 +8,7 @@
     "plugins/desk/skills/preflight-actions/SKILL.md",
     "plugins/desk/skills/interaction-style/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "e8cceac1c0b511c42b98ac4149cbc1e61ffc19f8c010783a1d36807e08dfca04",
+  "reviewedSourceFingerprint": "9ec07910f20c8dd6a79c0e593550672f986f5e81fdb7f5dd63fa3cae5249b7ba",
   "requirements": [
     {
       "id": "governing-question-fidelity",
