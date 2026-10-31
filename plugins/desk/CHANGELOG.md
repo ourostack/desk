@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.48 — 2026-10-31
+
+Crew members can now leave each other notes. In a shared workspace, `note_leave` puts a dated, attributed note in a teammate's `desks/<alias>/_inbox/`: Desk records the session's person as the sender (never a value the caller passes), refuses anyone not on the roster in `_meta/desks.md` (checked in the clone and again on the default branch) and refuses an exact duplicate of a note already there. It writes that one new file through a pull request it merges at once, the same shared-write path as a team lesson, now shared in [`shared-write.js`](mcp/src/tools/shared-write.js), and replies `merged`, `pr_open`, `duplicate` or `failed`. The recipient's session start lists their open notes under "Notes from teammates" (`notes` with `--json`), oldest first and at most five, with one instruction: tell the operator early without letting the notes displace the requested work, read a note before acting on related work, and call `note_ack` once the operator has seen it. `note_ack` marks the note acknowledged on the recipient's own desk and keeps the file. Crew 0.2.15 adds the `leave-note` skill: when a note is the right path, relaying someone's thinking as your understanding rather than in their voice, and that the whole workspace can read every note.
+
+Desk now ships Plain Language 0.2.10, which adds three general writing rules: an agent relaying someone's views writes as itself and points the reader back to that person, chat shorthand such as "wdyt" gets spelled out, and rendered text takes its line width from the layout rather than a fixed measure. The [operator-voice drafting rules](skills/operator-voice-comments/SKILL.md#no-padding) no longer suggest "wdyt" as a way to soften a recommendation.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.47 — 2026-10-30
 
 ### Desk has a fixed Agency plugin ID
