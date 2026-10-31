@@ -1626,6 +1626,17 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["task-lifecycle", /## State-change protocol\n\nKeep task state current as work moves\./u],
     ["friction-management", /capture friction close to where it hurts\./u],
     ["content-routing", /Each layer states only what it adds, and triggered skills keep their procedures/u],
+    // Rules drained from an operator's desk file into the skills that own them, so session start's AGENTS.md budget cannot cut them.
+    ["using-desk", /Recorded standing authority lifts the gates it covers/u],
+    ["interaction-style", /### Standing authority\n\nAn operator can record standing authority in their desk[\s\S]+outranks a skill's default stop[\s\S]+never type a password or paste a secret, never change settings, permissions or policy on a surface the operator doesn't own/u],
+    ["interaction-style", /ONLY when one of these is true and recorded standing authority \(above\) does not cover it/u],
+    ["interaction-style", /Treat the operator's ideas as thinking out loud, not settled specs[\s\S]+name what they are missing/u],
+    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn/u],
+    ["interaction-style", /The operator delegates outcomes, not steps: when an approach fails, step back and try a different one/u],
+    ["work-orchestration", /\*\*Keep the root for coordination\.\*\*/u],
+    ["work-orchestration", /recorded a model preference for a kind of work/u],
+    ["work-orchestration", /Supervise every lane\. At each milestone, check every running child's live status/u],
+    ["evidence-discipline", /Put the proof inline where the reader looks[\s\S]+not only as a link to an artifact/u],
   ];
   const failures = [];
   for (const [name, pattern, heading] of rules) {

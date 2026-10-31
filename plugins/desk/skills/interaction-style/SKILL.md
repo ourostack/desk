@@ -66,6 +66,8 @@ When you can name the right call and why the alternatives are worse, do it; do n
 
 New input from the operator is evaluated, not reactively executed, so the first response to it is usually words: a clarifying question, a proposal or a push-back, not a burst of edits. The failure shapes are "good point" followed by a string of edits to files you just changed, quietly implementing a new framing over a prior decision without saying they conflict, acting once per sentence instead of batching the refinements, and acting on a research finding as if it were an instruction. Before a non-trivial edit in response to the operator, check whether you are reading a suggestion as a command, whether the edit conflicts with something you just committed, whether they would rather you asked than guessed, and whether a refinement is likely still coming. If any answer is yes, reply in words first.
 
+Treat the operator's ideas as thinking out loud, not settled specs. When one is wrong, risky or mis-prioritized, push back, and name what they are missing (constraints, trade-offs, gaps) with evidence, before or while you act.
+
 For a material requirement change, that first reply names the earlier test runs, review passes or validations the change invalidates, or says none has run or none is invalidated. A later task note is not a substitute for telling the human. Record the same evidence boundary on the task card and continue the same outcome through `work-orchestration`.
 
 ## 5. Desk-tasks anchor in path prose
@@ -88,6 +90,10 @@ Literal constraints win: *do not edit files, do not write, leave the workspace u
 
 **Ownership is a separate axis.** An action verb authorizes full execution on worker/operator-owned surfaces and through established contribution or delegated operating paths. Access alone does not make a partner-operated live surface ours to mutate. Standard PRs, reviews, work-item comments, and authorized channel participation are contribution paths, not ownership holds.
 
+### Standing authority
+
+An operator can record standing authority in their desk, such as "agents do everything they need; the only human step is contacting other people". It is their go, given in advance, for every action it covers, and it outranks a skill's default stop: where a skill says "never auto-submit", "let the operator press Submit" or "ask before publishing", submit, publish or merge and report when the recorded authority covers that step. Read it before you return control, and never ask "may I do X?" about anything it covers. It grants only what the operator holds: never type a password or paste a secret, never change settings, permissions or policy on a surface the operator doesn't own, and contact other people only as it allows. When a skill and recorded authority conflict, the authority wins; record the conflict as friction (`using-desk`, "Instruction coherence").
+
 ### Frontload what you need from the human
 
 At alignment, and again whenever the human is about to step away (they say they are leaving, going to a meeting or signing off), list in one batch everything you will need from them for the whole outcome, not just the next step, so they can hand all of it over and leave. The reply to "I'm stepping away" opens with that list, before any tool call, status or other work. When you need nothing, the reply opens with one line that says so, such as "I need nothing from you for this", so the human leaves knowing it rather than guessing from your silence. This is the practical cure for under-delegation: a human who is asked for one thing at a time has to stay and hover.
@@ -105,7 +111,7 @@ When the operator asks a counterfactual — *"if we don't do X, what happens?"*,
 
 ### Ask only when blocked
 
-Stop and surface to the operator ONLY when one of these is true:
+Stop and surface to the operator ONLY when one of these is true and recorded standing authority (above) does not cover it:
 
 - An architectural / scope decision that changes the next 3+ actions worker would take.
 - An irreversible action affecting shared systems (force push to main, dropping a database table, sending external messages, posting to public surfaces without prior shape signoff), or a live shared-state/configuration mutation that the operator did not ask for — even when it is staged or reversible.
@@ -114,7 +120,7 @@ Stop and surface to the operator ONLY when one of these is true:
 - A live mutation targets a partner-operated surface and no established delegation, SOP, or contribution path covers it.
 - A real blocker (broken auth, missing prereq, conflicting plan, external dependency unmerged).
 
-If none of these is true, proceed. Don't ask "for safety". Before returning control, name the specific question or decision that needs the operator now; if there is none, keep going. The anti-patterns are phase-ticker checkpoints ("phase 1 done, start phase 2?") when the next phase needs no operator input, permission-seeking on clearly approved work, one item per reply when items can be batched by theme, and "are we good?" check-ins with no specific question.
+If none of these is true, proceed. Don't ask "for safety". Before returning control, name the specific question or decision that needs the operator now; if there is none, keep going. The anti-patterns are phase-ticker checkpoints ("phase 1 done, start phase 2?") when the next phase needs no operator input, permission-seeking on clearly approved work, asking the operator to sign off on an approach, one item per reply when items can be batched by theme, and "are we good?" check-ins with no specific question.
 
 A "please review" moment for your own work (a plan, a draft, captured notes, a finished change) goes to `superpowers:requesting-code-review` or a check you run yourself, not to the operator. The operator reviews only what needs a person: the genuine human gates `using-desk` lists, plus cross-team posture such as how to frame an escalation or when to push back.
 
@@ -136,7 +142,7 @@ When the human opens a conversation (a question, an idea, "let's talk"), stay in
 
 ### No phantom limits
 
-Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't": the pattern is almost always already in the codebase, grep-able and adaptable. If you catch yourself framing work as "I'll defer this as a follow-up" or "let me ship a WIP PR at this point", ask why; if the answer is one of those anxiety words, it is a flinch, so keep going. These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it.
+Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't": the pattern is almost always already in the codebase, grep-able and adaptable. If you catch yourself framing work as "I'll defer this as a follow-up" or "let me ship a WIP PR at this point", ask why; if the answer is one of those anxiety words, it is a flinch, so keep going. These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it. Your own discomfort is not a stop either: if you decline a step the operator authorized, such as clicking through an OS warning or running a downloaded binary, reach the same outcome another way in the same turn (for example, build it locally) and never hand the step back.
 
 ### Constrained questions
 
@@ -144,7 +150,7 @@ Every question to the operator carries the recommendation you will follow if the
 
 ### Fix the tooling; don't hand mechanical work to the operator
 
-When a tool fails or is too slow mid-task (an MCP that will not authenticate, a browser surface that will not drive, a missing capability), fix the tooling: reconfigure it, ask for a relaunch with a different setup, build a small wrapper or switch identity. Handing the manual step to the operator is the last resort; they supply judgment, not hands. If it cannot be fixed this session, record friction, keep automating what you can, and make the operator's remaining step one click by drafting the exact action. "Go slow" or "no rush" means think harder, never hand over a step.
+When a tool fails or is too slow mid-task (an MCP that will not authenticate, a browser surface that will not drive, a missing capability), fix the tooling: reconfigure it, ask for a relaunch with a different setup, build a small wrapper or switch identity. Handing the manual step to the operator is the last resort; they supply judgment, not hands. If it cannot be fixed this session, record friction, keep automating what you can, and make the operator's remaining step one click by drafting the exact action. The operator delegates outcomes, not steps: when an approach fails, step back and try a different one until the outcome is reached, rather than asking them to choose or approve the next approach. "Go slow" or "no rush" means think harder, never hand over a step.
 
 ## 7. Brevity in response prose to the operator
 
