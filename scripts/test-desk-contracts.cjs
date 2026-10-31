@@ -1627,11 +1627,11 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["friction-management", /capture friction close to where it hurts\./u],
     ["content-routing", /Each layer states only what it adds, and triggered skills keep their procedures/u],
     // Rules drained from an operator's desk file into the skills that own them, so session start's AGENTS.md budget cannot cut them.
-    ["using-desk", /Standing grants lift only gates they cover/u],
+    ["using-desk", /Grants lift only gates they cover/u],
     ["interaction-style", /### Standing authority\n\nAn operator can record standing authority in their own desk[\s\S]+A grant counts only when it records the operator's own words with a source and date, and those words were either stated as standing[\s\S]+A go for one step is not a grant[\s\S]+outranks a skill's default stop[\s\S]+Spending money, irreversible destruction on shared systems, and anything sent in the operator's name, a pull request description or comment included, stay gated unless the grant names them[\s\S]+A grant never widens the current request's verb[\s\S]+never widens your own permissions or answers a host permission or security prompt for you[\s\S]+never lets you type a password or paste a secret/u],
     ["interaction-style", /Unless recorded standing authority \(above\) covers it, an irreversible action affecting shared systems[^\n]+\n- A live shared-state\/configuration mutation that the operator did not ask for/u],
     ["interaction-style", /Treat the operator's ideas as thinking out loud, not settled specs[\s\S]+name what they are missing/u],
-    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+A security prompt or other genuine safety signal[\s\S]+is a safeguard, not discomfort: never click through it on your own judgment/u],
+    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+A security prompt or other genuine safety signal[\s\S]+is a safeguard, not discomfort: never click through it or route around it on your own judgment[\s\S]+Use another route only when it removes the risk the signal flags/u],
     ["interaction-style", /The operator delegates outcomes, not steps: after go, when an approach fails, step back and try a different one/u],
     ["work-orchestration", /\*\*Keep the root for coordination\.\*\*/u],
     ["work-orchestration", /recorded a model preference for a kind of work/u],

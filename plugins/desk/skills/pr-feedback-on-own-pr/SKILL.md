@@ -75,11 +75,11 @@ Each thread gets one category:
 | Category | Signal | Action |
 |---|---|---|
 | Code change requested | A directive about the diff | Plan it; it lands in phase 7; the phase 9 reply names it. |
-| Question about code | "Why X?", "what does this do?" | Write `DRAFT REPLY:` for the operator. Never post it yourself; they may post it, rewrite it or change the code instead. |
+| Question about code | "Why X?", "what does this do?" | Write `DRAFT REPLY:` for the operator. Don't post it yourself unless a standing grant covers this kind of reply (`operator-voice-comments`); they may post it, rewrite it or change the code instead. |
 | Needs human decision | Scope, architecture, product or an ambiguity the diff cannot settle | Write `NEEDS HUMAN: <author> on <file:line> — <summary>` and do nothing else. |
 | Nit or style | Trivial formatting or naming | Apply if clearly better; otherwise ask. |
 
-Each confirmed thread also gets an `action` tag, which phase 9 obeys. Every reply below is posted only after the operator approves its exact text (`operator-voice-comments` owns that rule):
+Each confirmed thread also gets an `action` tag, which phase 9 obeys. Every reply below is posted only after the operator approves its exact text, or under a standing grant that covers that kind of reply (`operator-voice-comments` owns that rule):
 
 - `post-and-resolve`: an explanation, or a `resolved-by-shape` change. Post the approved reply, then resolve.
 - `post-and-stay-active-until-{unit}`: a code change scheduled in a unit. Post the approved "Addressing by doing X" and leave the thread active; after the unit lands, post the approved follow-up with the commit on the same thread, then resolve. Resolving on the promise lies about the state and breaks the reviewer's filter on active threads.
