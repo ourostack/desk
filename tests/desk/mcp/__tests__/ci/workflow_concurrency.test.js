@@ -16,6 +16,16 @@ test("the runtime packs are built for every platform", () => {
   assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.platform).sort(), ["darwin", "linux", "win32"])
 })
 
+test("the Darwin runtime pack selects a supported standard Apple-silicon image", () => {
+  const entries = read("desk-mcp-tests.yml").jobs["desk-runtime-packs"].strategy.matrix.include
+  const darwin = entries.find(item => item.platform === "darwin")
+  assert.ok(["macos-latest", "macos-15", "macos-26"].includes(darwin.runner), `${darwin.runner} must be a supported standard ARM64 image`)
+  assert.equal(darwin.target, "darwin-arm64-node-127")
+  assert.equal(darwin.arch, "arm64")
+  assert.equal(darwin.node, "22.23.2")
+  assert.equal(darwin.node_abi, "127")
+})
+
 test("the real browser check runs on Linux, Windows and macOS", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   assert.deepEqual([...jobs.browser.strategy.matrix.os].sort(), ["macos-latest", "ubuntu-latest", "windows-latest"])
