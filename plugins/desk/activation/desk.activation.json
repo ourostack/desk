@@ -38,7 +38,7 @@
         "package": "ourostack/plain-language"
       },
       "lock": {
-        "version": "0.2.9",
+        "version": "0.2.10",
         "integrity": "sha256-plain-language-activation-manifest-v1"
       }
     }
@@ -194,7 +194,7 @@
         },
         "plain-language": {
           "path": "../plain-language",
-          "version": "0.2.9",
+          "version": "0.2.10",
           "resolution": "native"
         }
       },
