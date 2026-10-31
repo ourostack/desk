@@ -8,7 +8,7 @@
     "plugins/desk/skills/operator-voice-comments/human-voice.md",
     "plugins/desk/docs/agentic-engineering-v2-rfc.md"
   ],
-  "reviewedSourceFingerprint": "583f0ade12ca68450192f7ccebc81bb6ca04980f7aec20bb07de0ada39c1e583",
+  "reviewedSourceFingerprint": "4a3967081eed0e4b681d9a3ddadca86c7649ecc5cdee247b3d3aa53987337a26",
   "requirements": [
     { "id": "human-actor", "description": "A person speaking about authorized work is the ordinary actor; tool use is normally implicit." },
     { "id": "no-invented-participation", "description": "Ownership does not invent manual execution, personal reading, human review, approval, attendance, consent or decisions." },
