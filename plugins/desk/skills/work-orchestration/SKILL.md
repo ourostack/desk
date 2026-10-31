@@ -78,7 +78,7 @@ This is the default for all work, not only multi-step plans. `superpowers:dispat
 
 - **Run independent streams at the same time.** Never hold a stream for one it doesn't depend on.
 - **Fast-follow downstream.** When an upstream artifact changes, update what depends on it right away, not in a final sweep.
-- **Keep the root for coordination.** The root agent coordinates and talks with the human; it hands doable work (builds, research, site updates, status reconciliation) to children rather than doing it inline, so the conversation never waits on the work.
+- **Keep the root for coordination.** When a subagent tool is available and the human has not chosen inline execution, the root agent coordinates and talks with the human; it hands doable work (builds, research, site updates, status reconciliation) to children rather than doing it inline, so the conversation never waits on the work.
 - **Ship usable milestones early and often.** Push each one where the people waiting look, so they always find the latest instead of waiting for one big drop.
 
 ## Choosing and briefing agents
@@ -95,7 +95,7 @@ A worker must not end its turn while any child it launched is still running. An 
 
 While the operator is present, wait in short slices and answer them first (`interaction-style`, "The operator comes before a wait").
 
-Supervise every lane. At each milestone, check every running child's live status; when a child has failed, vanished or really stalled, stop it and release its write set, then restart it or hand its work to a new one at once (the root takes it on only when no child can), and report each lane's health with the milestone.
+Supervise every lane. At each milestone, check every running child's live status; when a child has failed, vanished or really stalled, stop it and, once its writer is verified released (`session-resumption`), restart it or hand its work to a new one (the root takes it on only when no child can); a child whose release can't be shown is not replaced on that write set. Do this at once, and report each lane's health with the milestone.
 
 Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
 
