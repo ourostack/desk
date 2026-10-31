@@ -63,7 +63,7 @@ On material change, first reply names invalidated checks or says no affected che
 
 ## Visual proof
 
-Capture bounded visual proof as you go of anything a person sees, and any claimed rendered, installed, merged or rollout state, not a terminal success line; never private content (`evidence-discipline`).
+Capture bounded visual proof as you go of anything a person sees, and any claimed rendered, installed, merged or rollout state, not a terminal success line; never secrets (`evidence-discipline`).
 
 ## Instruction coherence
 

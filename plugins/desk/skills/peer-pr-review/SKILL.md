@@ -12,7 +12,7 @@ An eleven-phase review of a PR by someone other than the operator: scaffold, rea
 1. **Never read or cite test files.** Fetch the production diff only, and never anchor a comment to a test. The recipient cares about the production change, and test names pull the review into the wrong layer.
 2. **At least one non-`direct-work` lens must be real.** An honest career, cross-team or pattern lens beats an overclaimed `direct-work` one.
 3. **No verdict before the walkthrough.** Walk to explore, not to validate a conclusion.
-4. **Every comment follows `operator-voice-comments`**, including its approval rule: nothing posts, and no vote is cast, until the operator approves the exact text and destination, or a standing grant covers that kind of send.
+4. **Every comment follows `operator-voice-comments`**, including its approval rule: nothing posts until the operator approves the exact text and destination or a standing grant names that kind of send, and no vote is cast without the operator's approval.
 5. **Below 90% confidence, verify, soften or cut** before posting. The bar: "this is right because [evidence], and pushback would be answered by [source]".
 6. **Anchor comments to method names, not line numbers** (`pr-surface-hygiene` PSH-002); line numbers drift.
 7. **Empty `promotions:` at archive is a smell** (phase 10).
@@ -45,7 +45,7 @@ Walk the diff with the operator: name what changed, raise questions, and let the
 
 **Reality gate.** Before presenting a finding you found on your own, try to disprove it: state the strongest benign explanation; trace every alternate, legacy, cached and fallback path to its user-visible or persisted outcome; verify any outside SDK, API or host contract independently (the PR, its design doc and its comments are subjects, not proof); for flags or version skew, trace each relevant state combination; and write the concrete failing input and outcome. The finding either has a verified mechanism or is cut.
 
-**Teaching mode.** When the operator is new to the repo or asks to learn it, start at the runtime entry point, not the changed helper: map the request from the service boundary through the workflow entry, the dispatcher, the handler or tool and downstream dependencies, one slice at a time in the signed-in browser, defining local vocabulary first. Only then layer the diff on: what changed, what is inherited, and which routes bypass the change. Keep your own findings in `notes.md` until the operator reaches that code and forms a view; leading with a finding teaches the finding, not the system. When they state a judgment, draft the narrow comment, invoke `operator-voice-comments`, verify every claim and run the phase 7 checks; post mid-walkthrough only with their approval of the exact text and destination, and record the thread ID.
+**Teaching mode.** When the operator is new to the repo or asks to learn it, start at the runtime entry point, not the changed helper: map the request from the service boundary through the workflow entry, the dispatcher, the handler or tool and downstream dependencies, one slice at a time in the signed-in browser, defining local vocabulary first. Only then layer the diff on: what changed, what is inherited, and which routes bypass the change. Keep your own findings in `notes.md` until the operator reaches that code and forms a view; leading with a finding teaches the finding, not the system. When they state a judgment, draft the narrow comment, invoke `operator-voice-comments`, verify every claim and run the phase 7 checks; post mid-walkthrough only with their approval of the exact text and destination, or under a standing grant that names that kind of send, and record the thread ID.
 
 For a question about a design premise ("is this abstraction needed?", "where did this type come from?"), use `pr-review-interrogation`; the PR's own docs and description are not the answer.
 
@@ -72,7 +72,7 @@ Then cut a comment that is true but not worth posting: one an automated check (c
 
 ## Phase 8: Post
 
-Show the operator the final comments and destinations and post only what they approve (skip any already posted in teaching mode). File-thread comments anchor to the file and name the method in the body; an optional short top-level comment frames the review ("couple of small things, otherwise looks good") and carries no per-item asks. Record each thread ID in `notes.md`. If a draft changed after phase 6, re-run both tests on the new text. Reference other PRs and issues with the host's auto-link (`#1234` on GitHub, `!<id>` for merge requests on some hosts), not raw URLs or "PR 1234".
+Show the operator the final comments and destinations and post only what they approve, or what a standing grant names (skip any already posted in teaching mode). File-thread comments anchor to the file and name the method in the body; an optional short top-level comment frames the review ("couple of small things, otherwise looks good") and carries no per-item asks. Record each thread ID in `notes.md`. If a draft changed after phase 6, re-run both tests on the new text. Reference other PRs and issues with the host's auto-link (`#1234` on GitHub, `!<id>` for merge requests on some hosts), not raw URLs or "PR 1234".
 
 ## Phase 9: Vote
 
