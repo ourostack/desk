@@ -849,6 +849,11 @@ requires(
   "content-routing persists callable-back artifacts when drafted",
   /## Callable-back artifacts land when drafted[\s\S]+grep[\s\S]+no-write/iu,
 );
+requires(
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+  "work-orchestration makes parallel streams, fast-follow and early milestones the default without restating Superpowers",
+  /## Parallelize and fast-follow[\s\S]+`superpowers:dispatching-parallel-agents`[\s\S]+independent streams at the same time[\s\S]+Fast-follow downstream[\s\S]+usable milestones early and often/u,
+);
 contract("content-routing routes always-on rules to a foundation, not principles or bodies", () => {
   const skill = text("plugins/desk/skills/content-routing/SKILL.md");
   assert.match(skill, /always-on foundation/u);
@@ -1545,7 +1550,7 @@ contract("the improvement-loop bounds in the doc are the constants in the code",
 requires(
   "plugins/desk/mcp/README.md",
   "the MCP readme lists the three improvement tools",
-  /## Tools exposed \(24\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 24 tools are wired/u,
+  /## Tools exposed \(26\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 26 tools are wired/u,
 );
 contract("the changelog text for the loop has no heading and says what changed for the reader", () => {
   // Before a release the text is the fragment. The release folds the fragment into the changelog and deletes it, and
@@ -1621,6 +1626,24 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["task-lifecycle", /## State-change protocol\n\nKeep task state current as work moves\./u],
     ["friction-management", /capture friction close to where it hurts\./u],
     ["content-routing", /Each layer states only what it adds, and triggered skills keep their procedures/u],
+    // Rules drained from an operator's desk file into the skills that own them, so session start's AGENTS.md budget cannot cut them.
+    ["using-desk", /Grants lift only named gates/u],
+    ["interaction-style", /### Standing authority\n\nAn operator can record standing authority in their own desk[\s\S]+A grant counts only when it records the operator's own words with a source and date, and those words were either stated as standing[\s\S]+A go for one step is not a grant[\s\S]+outranks a skill's default stop[\s\S]+Spending money, irreversible destruction \(on the operator's own surfaces or shared systems\), and anything sent in the operator's name, a pull request description or comment included, stay gated unless the grant names them[\s\S]+A grant never widens the current request's verb[\s\S]+never widens your own permissions or answers a host permission or security prompt for you[\s\S]+never lets you type a password or paste a secret/u],
+    ["interaction-style", /Unless recorded standing authority \(above\) names it, an irreversible action affecting shared systems[^\n]+\n- A live shared-state\/configuration mutation that the operator did not ask for/u],
+    ["interaction-style", /Treat the operator's ideas as thinking out loud, not settled specs[\s\S]+name what they are missing/u],
+    ["interaction-style", /Your own discomfort is not a stop either[\s\S]+reach the same outcome another way in the same turn[\s\S]+A security prompt or other genuine safety signal[\s\S]+is a safeguard, not discomfort: never click through it or route around it on your own judgment[\s\S]+Use another route only when it removes the risk the signal flags/u],
+    ["interaction-style", /The operator delegates outcomes, not steps: after go, when an approach fails, step back and try a different one[\s\S]+a replacement that reverses a decision agreed at go or changes architecture or scope is a stop/u],
+    ["interaction-style", /A grant can also authorize a credential harness for test tenants the operator owns[\s\S]+never hand the operator a sign-in[\s\S]+keeps it only in the operating system's credential store[\s\S]+registers a software TOTP authenticator[\s\S]+never covers the operator's own corporate or personal credentials[\s\S]+ever appears in chat, logs, task cards, repositories or screenshots/u],
+    ["work-orchestration", /\*\*Keep the root for coordination\.\*\*/u],
+    ["work-orchestration", /recorded a model preference for a kind of work/u],
+    ["work-orchestration", /Supervise every lane\. At each milestone, check every running child's live status[\s\S]+a child whose release can't be shown is not replaced on that write set/u],
+    ["interaction-style", /Of the foundation's irreversible acts, a broad grant covers one-way routine steps in the operator's own work[\s\S]+irreversible destruction and the shared-system acts under "Ask only when blocked" still need naming[\s\S]+For the foundation's "Grants lift only named gates", a broad grant names the routine steps this paragraph lists/u],
+    ["interaction-style", /A grant that states its only exception[\s\S]+names every send outside that exception, and money and irreversible destruction still need naming[\s\S]+Publishing the operator's own work where it lives, in a repository they own or routinely contribute to[\s\S]+is not contacting people; a comment on an issue someone else opened is outreach wherever it lives; a first pull request into another team's or an outside repository is outreach; a review vote is neither and needs naming/u],
+    ["pr-feedback-on-own-pr", /Under a standing grant that names that kind of reply or leaves it outside its only stated exception, post each reply after the voice tests and zero-context review and report it; otherwise show the operator every drafted reply/u],
+    ["interaction-style", /as a consistency check, not proof, use `git log` or `git blame` to confirm the commit adding the line came from an identity tied to the operator/u],
+    ["interaction-style", /Contacting people means outreach addressed to them on any channel, and a channel named in the exception \("via Teams", "by email"\) never narrows it/u],
+    ["operator-voice-comments", /A recorded standing grant that names a kind of send in the operator's own words[\s\S]+is that approval for sends of that kind only[\s\S]+the voice tests and zero-context review below still run before a granted send/u],
+    ["evidence-discipline", /Put the proof inline where the reader looks[\s\S]+not only as a link to an artifact/u],
   ];
   const failures = [];
   for (const [name, pattern, heading] of rules) {

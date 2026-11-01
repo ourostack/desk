@@ -98,6 +98,24 @@ test("boot also carries the person's own AGENTS.md in a shared workspace, where 
   assert.equal(unresolved.person_agents_md, null)
 })
 
+test("boot carries the shelf of lessons beside the person's AGENTS.md, or the desk's own on a solo desk", async () => {
+  const root = await desk()
+  const shelf = "# Shelved lessons\n\n## Lessons\n\n- **Old rule.** Kept. (2026-01-01)\n- **Other.** Kept too. (2026-01-02)\n"
+  await fs.writeFile(path.join(root, "LESSONS.md"), shelf)
+  const solo = await boot(root)
+  assert.deepEqual(solo.lessons_shelf, { path: path.join(root, "LESSONS.md"), count: 2, topics: ["Old rule", "Other"] })
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "LESSONS.md"), shelf.replace("Other", "Mine"))
+  const crew = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.deepEqual(crew.lessons_shelf.topics, ["Old rule", "Mine"])
+  const unresolved = await boot(root, { personFn: async () => ({ status: "unresolved", reason: "login_not_cached" }) })
+  assert.equal(unresolved.lessons_shelf, null)
+  const throwing = await boot(root, { shelfFn: () => { throw new Error("EACCES") } })
+  assert.equal(throwing.lessons_shelf, null)
+  await fs.rm(path.join(root, "LESSONS.md"))
+  assert.equal((await boot(root)).lessons_shelf, null)
+})
+
 test("boot gives the desk's and the person's AGENTS.md one shared size budget, the desk's file first", async () => {
   const root = await desk()
   await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
@@ -175,6 +193,21 @@ test("syncSummary tells a pop conflict (the pull worked) from a failed pull, and
   assert.doesNotMatch(pop, /sync failed|nothing was pulled/u)
   assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict_after_quarantine", conflicted: [], quarantinedPaths: ["_cache/stray-d/x"] }, root: "/d" }), /^sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in; nothing was pushed; resolve them before changing the desk \(1 stray untracked path had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
   assert.match(syncSummary({ sync: { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", quarantinedPaths: ["_cache/stray-d/x", "_cache/stray-d/y"] }, root: "/d" }), /^sync failed: the pull hit a conflict; nothing was pulled or pushed; local desk is as of unknown \(2 stray untracked paths had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+})
+
+test("syncSummary says how many local commits are not on the remote, why, and whether Desk is delivering them", () => {
+  const conflict = syncSummary({ sync: { state: "unresolved", cause: "conflict", unpushed: { count: 105, delivering: true, reason: null } }, lastSyncAt: "2026-10-29T14:58:00.000Z" })
+  assert.equal(conflict, "sync failed: the pull hit a conflict; nothing was pulled or pushed; local desk is as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
+  assert.equal(syncWords(conflict), "Desk could not sync: the pull hit a conflict; local state shown, as of 2026-10-29T14:58:00.000Z; 105 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
+  const offline = syncSummary({ sync: { state: "unresolved", cause: "auth_failed", unpushed: { count: 1, delivering: false, reason: "auth_failed" } } })
+  assert.match(offline, /; 1 local commit is not on the remote \(the last push failed because the remote refused this machine's credentials\); they stay on this machine until a push succeeds$/u)
+  const retried = syncSummary({ sync: { state: "synced", unpushed: { count: 2, delivering: true, reason: "conflict", paths: ["state.json"] } } })
+  assert.equal(retried, "sync ok; 2 local commits are not on the remote (the last push failed because a conflict Desk could not resolve on its own: state.json); Desk is delivering them from a clean copy in the background")
+  assert.equal(syncWords(retried), `Desk synced with origin${retried.slice("sync ok".length)}`)
+  const moved = syncSummary({ sync: { state: "quarantined", quarantinedPaths: ["_cache/stray-d/x"], unpushed: { count: 3, delivering: true } } })
+  assert.equal(syncWords(moved), "Desk synced with origin (moved 1 stray untracked path to _cache/stray-d/ first); 3 local commits are not on the remote; Desk is delivering them from a clean copy in the background")
+  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict", unpushed: { count: 1, delivering: true } } }), /resolve them before changing the desk; 1 local commit is not on the remote; Desk is delivering/u)
+  assert.equal(syncSummary({ sync: { state: "synced", unpushed: { count: 0, delivering: true } } }), "sync ok")
 })
 
 test("boot reports the sync summary for a failed sync, a timed-out one and one whose last-fetch lookup throws", async () => {
@@ -350,6 +383,17 @@ test("formatBootText prints the person's AGENTS.md after the desk's, with the sa
   const mine = text.indexOf("## Your own AGENTS.md (/work/desk/desks/ari/AGENTS.md); its rules bind this session\n\nMine.\n\n[Cut after 5 of 30000 bytes: read the rest at /work/desk/desks/ari/AGENTS.md]")
   assert.ok(team !== -1 && mine > team)
   assert.match(text.split("\n")[1], /^Session start cut \/work\/desk\/desks\/ari\/AGENTS\.md \(5 of 30000 bytes shown\)/u)
+})
+
+test("formatBootText names every shelved lesson's topic after the AGENTS.md files, within a bound that counts the rest", () => {
+  const text = formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 2, topics: ["Old rule", "Other"] } }))
+  assert.match(text, /\n## The desk's AGENTS\.md[^]*\n## Your shelved lessons \(\/work\/desk\/LESSONS\.md\)\n\n2 lessons are shelved here because AGENTS\.md outgrew what session start prints\. Call task_focus to load the ones for your task, or read this file before work on any of these topics: Old rule; Other\.\n$/u)
+  const many = Array.from({ length: 400 }, (_, index) => `Topic number ${index}`)
+  const long = formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 400, topics: many } }))
+  assert.match(long, /; and \d+ more\.\n$/u)
+  assert.ok(long.length <= BOOT_TEXT_MAX_CHARS)
+  assert.equal(formatBootText(sampleResult({ lessons_shelf: null })).includes("shelved"), false)
+  assert.match(formatBootText(sampleResult({ lessons_shelf: { path: "/work/desk/LESSONS.md", count: 1, topics: ["Only"] } })), /\n1 lesson is shelved here because/u)
 })
 
 test("formatBootText shortens a long task list, not the AGENTS.md files, to keep the output under what a host shows in full", () => {

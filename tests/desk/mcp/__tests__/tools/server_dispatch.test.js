@@ -415,7 +415,10 @@ test("the live server advertises neither retired private tool", async () => {
 
     assert.equal(listed.tools.some((tool) => tool.name === "desk_feedback"), false)
     assert.equal(listed.tools.some((tool) => tool.name === "desk_work_ledger"), false)
-    const expected = [...SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => !RETIRED_PRIVATE_TOOLS.includes(name)), "desk_skill", "improvement_open", "improvement_next", "improvement_update"]
+    const kept = SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => !RETIRED_PRIVATE_TOOLS.includes(name))
+    // The teammate-note tools sit with the other writes, after desk_save.
+    const afterSave = kept.indexOf("desk_save") + 1
+    const expected = [...kept.slice(0, afterSave), "note_leave", "note_ack", ...kept.slice(afterSave), "desk_skill", "improvement_open", "improvement_next", "improvement_update"]
     assert.equal(
       listed.tools.length,
       expected.length,

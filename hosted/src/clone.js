@@ -32,7 +32,7 @@ async function configure(dir, git) {
 
 // Clones https://github.com/<repo>.git into `dir` when `dir` is absent or
 // empty. The clone is partial (no blobs until Git needs them), which keeps the
-// first start short; Desk's push, with its pull-rebase retry, works the same
+// first start short; Desk's push, with its replay onto origin, works the same
 // on it, and Git fetches any missing blob through the credential helper.
 // An existing clone is left as it is (Desk's own boot syncs it); only
 // its credential settings are written again, so they follow this gateway's

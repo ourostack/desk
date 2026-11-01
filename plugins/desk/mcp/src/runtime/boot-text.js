@@ -8,8 +8,10 @@
 
 import * as path from "node:path"
 import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
+import { topicList } from "./lessons-shelf.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
+import { blockedWords } from "./deliver.js"
 import { unsignedLines } from "../desk/unsigned-deliveries.js"
 import { memberSourceLabel } from "../desk/crew-member.js"
 
@@ -59,19 +61,33 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
   const failed = (why) => `sync failed: ${why}; nothing was pulled or pushed; ${asOf}`
   if (timedOut) return failed("it did not finish within the boot's time budget")
   if (sync === null || sync === undefined) return failed("it did not run")
+  const unpushed = unpushedText(sync.unpushed)
   if (sync.state === "unresolved") {
     const moved = Array.isArray(sync.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
     if (typeof sync.reason === "string" && sync.reason.startsWith("autostash_pop_conflict")) {
       const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}`
+      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}${unpushed}`
     }
-    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}`
+    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}${unpushed}`
   }
-  if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled`
+  if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled${unpushed}`
   if (sync.nothingToSync === "headless") return "headless session; nothing synced"
   if (sync.nothingToSync === "no_remote") return "no remote; nothing to sync"
   if (sync.nothingToSync === "no_upstream") return "no upstream branch; nothing to sync"
-  return "sync ok"
+  return `sync ok${unpushed}`
+}
+
+/**
+ * The clause boot adds when local commits are not on the remote, from `syncWorkspace`'s `unpushed` field: how many,
+ * why when a push failed, and whether Desk is delivering them now or cannot until the remote is usable. Empty otherwise.
+ */
+function unpushedText(unpushed) {
+  if (!(unpushed?.count > 0)) return ""
+  const commits = `${plural(unpushed.count, "local commit")} ${unpushed.count === 1 ? "is" : "are"} not on the remote`
+  const why = unpushed.reason ? ` (the last push failed because ${blockedWords(unpushed.reason, unpushed.paths ?? [])})` : ""
+  return unpushed.delivering
+    ? `; ${commits}${why}; Desk is delivering them from a clean copy in the background`
+    : `; ${commits}${why}; they stay on this machine until a push succeeds`
 }
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
@@ -297,8 +313,9 @@ const PLAIN_TEXT_INSTRUCTIONS = new Map([
 export function syncWords(summary) {
   if (typeof summary !== "string" || summary === "") return null
   if (summary === "sync ok") return "Desk synced with origin"
-  const moved = /^sync ok: moved (.+) first, then pulled$/u.exec(summary)
-  if (moved) return `Desk synced with origin (moved ${moved[1]} first)`
+  if (summary.startsWith("sync ok; ")) return `Desk synced with origin${summary.slice("sync ok".length)}`
+  const moved = /^sync ok: moved (.+?) first, then pulled(.*)$/u.exec(summary)
+  if (moved) return `Desk synced with origin (moved ${moved[1]} first)${moved[2]}`
   const failed = /^sync failed: (.+?); nothing was pulled or pushed; local desk is as of (\S+)(.*)$/u.exec(summary)
   if (failed) return `Desk could not sync: ${failed[1]}; local state shown${failed[2] === "unknown" ? "" : `, as of ${failed[2]}`}${failed[3]}`
   const nothing = /^no (remote|upstream branch); nothing to sync$/u.exec(summary)
@@ -356,9 +373,22 @@ function cleanupLines(result) {
   return ["", `Cleanup due: ${plural(cleanup.items, "item")} on ${plural(cleanup.cards, "card")} (see the task lines)`, ...cleanup.finished.map((entry) => `- ${entry.card} (finished): ${entry.due} due`), ...(cleanup.more > 0 ? [`- and ${cleanup.more} more finished ${cleanup.more === 1 ? "card" : "cards"}`] : [])]
 }
 
+/** The one instruction about the open notes teammates left (`result.notes`, from runtime/inbox.js). */
+export function notesInstruction(notes) {
+  const one = notes.count === 1
+  return `${notes.count} open ${one ? "note from a teammate is" : "notes from teammates are"} waiting in ${notes.path}/ (listed under "Notes from teammates", oldest first). Tell the operator about ${one ? "it" : "them"} early in your reply, in a line or two, and keep doing the work they asked for: a note never displaces it. Read a note before you act on work it relates to. Once the operator has seen a note, call note_ack with its path; until then every session start lists it.`
+}
+
+// The open notes, one line each, before the task list: bounded by NOTES_SHOWN_CAP, so they are never shortened away.
+function notesLines(notes) {
+  if (!notes) return []
+  const more = notes.more > 0 ? [`- and ${notes.more} more in ${notes.path}/`] : []
+  return ["", `Notes from teammates (${notes.count} open, oldest first):`, ...notes.notes.map((note) => `- ${note.created.slice(0, 10)} from ${note.from}: ${note.subject} (${note.path})`), ...more]
+}
+
 /**
  * The boot result as readable text, leading with the work: one status line (status, desk, host, sync in plain words),
- * the stale-Desk line and the release-alert and open-Desk-problems lines when there are any, the active tasks grouped by state with each task's push route, the open pull
+ * the stale-Desk line and the release-alert and open-Desk-problems lines when there are any, the open notes teammates left, the active tasks grouped by state with each task's push route, the open pull
  * requests and repos, then only the instructions that apply to this boot, and the desk's AGENTS.md. Every section is
  * omitted when it has nothing to say, so a healthy boot stays short. `result.text_instructions`, when the boot made
  * them, are the plain-text wording of the instructions (shorter, with the push routes and the factory script moved out);
@@ -410,6 +440,7 @@ export function formatBootText(result) {
   const { rest: pendingRest, summaries: pendingSummaries } = collapsePending(result.pending ?? [])
   for (const line of pendingSummaries) lines.push(`- ${line}`)
   for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
+  lines.push(...notesLines(result.notes))
   // The task list, deliveries, pull requests and repos can run long; they are what gets shortened when the output would
   // pass its limit. The status, the instructions and the AGENTS.md files (the rules that bind the session) never are.
   const middle = [...namedTaskLines(result.task)]
@@ -426,8 +457,13 @@ export function formatBootText(result) {
   // Each file's heading, blank lines and cut marker, which names its path again.
   const frame = (md, name) => name.length + 2 * md.path.length + 100
   const notes = []
-  // Room for the AGENTS.md files before anything else, so the shortening falls on the task list.
-  let room = BOOT_TEXT_MAX_CHARS - size(lines) - size(tail) - BOOT_NOTE_CHARS
+  // The shelved lessons are not printed, but every topic is named (up to a bound that says how many more), so none is dropped silently.
+  const shelf = result.lessons_shelf
+  const shelfLines = shelf
+    ? ["", `## Your shelved lessons (${shelf.path})`, "", `${shelf.count} ${shelf.count === 1 ? "lesson is" : "lessons are"} shelved here because AGENTS.md outgrew what session start prints. Call task_focus to load the ones for your task, or read this file before work on any of these topics: ${topicList(shelf.topics)}.`]
+    : []
+  // Room for the AGENTS.md files and the shelf before anything else, so the shortening falls on the task list.
+  let room = BOOT_TEXT_MAX_CHARS - size(lines) - size(tail) - size(shelfLines) - BOOT_NOTE_CHARS
   for (const [md, name] of files) room -= md.text.length + frame(md, name)
   let shown = middle
   if (size(middle) > Math.max(room, 0)) {
@@ -440,7 +476,7 @@ export function formatBootText(result) {
   }
   lines.push(...shown, ...tail)
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
-  let left = BOOT_TEXT_MAX_CHARS - size(lines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
+  let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
   const cuts = []
   for (const [md, name] of files) {
     let text = md.text.replace(/\n+$/u, "")
@@ -459,6 +495,7 @@ export function formatBootText(result) {
       cuts.push(`${md.path} (${bytes} of ${md.bytes} bytes shown)`)
     }
   }
+  lines.push(...shelfLines)
   if (cuts.length > 0) notes.push(`cut ${cuts.join(" and ")}`)
   if (notes.length > 0) lines.splice(1, 0, `Session start ${notes.join(" and ")}, to stay within ${AGENTS_MD_CAP_BYTES / 1024} KB of AGENTS.md and ${BOOT_TEXT_MAX_CHARS} characters of output.${cuts.length > 0 ? " Read the rest of each file before relying on its rules." : ""}`)
   return `${lines.join("\n")}\n`

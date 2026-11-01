@@ -4,6 +4,8 @@ Use this when the person asks to humanize text, make it sound less AI-written, w
 
 ## What reads as machine-written
 
+When humanizing attribution of authorized work, apply Plain Language's [Attribute work to the person](../../../plain-language/skills/plain-language/SKILL.md#attribute-work-to-the-person).
+
 Detectors and readers react to the same signals: predictable word choice, uniform sentence length, hedges, lists for everything, generic claims with no anchors, and the polite "helpful assistant" voice. Move every signal in the human direction, not just one.
 
 ## Rewrite rules

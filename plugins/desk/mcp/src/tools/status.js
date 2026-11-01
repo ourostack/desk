@@ -36,7 +36,7 @@ async function syncStatus({ deskRoot, env, signal }) {
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null, ...lastPull }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
