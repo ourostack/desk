@@ -621,7 +621,7 @@ async function readyContext(env, store, state, group, verifiedInput) {
   const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
   return {
     name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
-    source_files: group.entries.map((entry) => ({
+    source_files: group.entries.filter(entry => record.sources.some(source => source.session === entry.facts.session.id)).map((entry) => ({
       name: entry.name ?? `${entry.facts.session.host}-${entry.facts.session.id}.json`,
       published: `${entry.facts.session.host}-${entry.facts.session.id}.json`,
       sha: gitBlobSha(`${JSON.stringify(entry.facts)}\n`),

@@ -14,12 +14,14 @@ import { validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { contextRecord } from "./_context_fixture.js"
+import { contextPayloadHash } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
+import { DatabaseSync } from "node:sqlite"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const T0 = Date.parse("2026-10-21T00:00:00.000Z")
 const json = (value) => `${JSON.stringify(value)}\n`
-async function world(w, { prose = true, contextJson = '{"task_context":1}', push = true, card = false, deskVisibility = "private" } = {}) {
+async function world(w, { prose = true, contextJson = '{"task_context":1}', push = true, card = false, deskVisibility = "private", indexed = false } = {}) {
   const git = (...args) => execFileSync("git", args, { cwd: w.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
   git("init", "-qb", "main")
   git("remote", "add", "origin", "https://github.com/synthetic/context-desk.git")
@@ -28,6 +30,20 @@ async function world(w, { prose = true, contextJson = '{"task_context":1}', push
   await setConsent(w.env, { store: STORE, contribute: true, account: "synthetic" })
   const local = JSON.parse(await fs.readFile(new URL("./fixtures/local-golden.json", import.meta.url), "utf8"))
   local.jobs = [local.jobs[0]]
+  if (indexed) {
+    local.session.host = "copilot-cli"
+    local.jobs[0].agents = [0]
+    local.jobs[0].segments = [{ start_ms: 0, end_ms: Date.parse(local.session.derived_through) - Date.parse(local.session.started_at) }]
+    await fs.mkdir(w.env.COPILOT_HOME, { recursive: true })
+    const db = new DatabaseSync(path.join(w.env.COPILOT_HOME, "session-store.db"))
+    try {
+      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT); CREATE TABLE turns (session_id TEXT, turn_index INTEGER, timestamp TEXT, user_message TEXT, assistant_response TEXT)")
+      db.prepare("INSERT INTO sessions VALUES (?, ?)").run(local.session.id, w.desk)
+      db.prepare("INSERT INTO turns VALUES (?, 0, ?, 'Explain the recorded work', 'The result remained pending')").run(local.session.id, local.session.started_at)
+    } finally { db.close() }
+    await fs.writeFile(path.join(w.desk, "_meta", "factory-indexed-context.json"),
+      json({ schema_version: 1, stores: { [STORE]: { [local.jobs[0].job]: [local.session.id] } } }))
+  }
   let cardFile = null
   if (card) {
     git("config", "user.email", "16390116+arimendelow@users.noreply.github.com")
@@ -125,6 +141,54 @@ test("settled unchanged context neither reopens its intake nor rewrites its acce
   assert.equal((await w.run()).result, "nothing_pending")
   assert.equal(w.hub.pulls.length, pulls)
   assert.deepEqual(await readTaskContextFile(w.env, STORE, work.job, "state.json"), before)
+}))
+
+test("selected-session context reaches final flush while an excluded sibling waits outside the batch", () => scratch(async base => {
+  const w = await world(base, { indexed: true })
+  await w.run()
+  w.hub.mergeOpenPr()
+  await w.run()
+  const [work] = await listContextWork(w.env, { store: STORE })
+  const value = { ...contextRecord(work.source.sources[0], work.job), schema: "desk.factory.context/2",
+    recommendations: [], evaluator: work.source.evaluator, privacy: null,
+    coverage: { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 } }
+  value.events[0].evidence[0].anchor = "start"
+  value.events[0].evidence[0].range = null
+  const accepted = await acceptContextCandidate(w.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(value) })
+  assert.equal(accepted.result, "candidate_accepted")
+  assert.equal((await acceptContextPrivacy(w.env, { store: STORE, job: work.job, basis: work.basis,
+    bytes: json({ schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: contextPayloadHash(value),
+      reviewer: work.source.evaluator, reason: "safe" }) })).result, "context_accepted")
+  const sibling = structuredClone(w.local)
+  sibling.session.id = "87654321-1234-4123-8123-123456789abc"
+  sibling.refs.commits = Array.from({ length: 30 }, (_, index) => ({ repo: "ourostack/desk", sha: index.toString(16).padStart(40, "0") }))
+  const first = structuredClone(w.local)
+  first.session.id = "00000000-1234-4123-8123-123456789abc"
+  first.jobs[0].job = "2".repeat(32)
+  first.models = []
+  first.agents = [first.agents[0]]
+  first.intervals = []
+  first.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
+  const firstWritten = await writeLocalFacts(w.env, STORE, first)
+  assert.equal(firstWritten.written, true, JSON.stringify(firstWritten))
+  const written = await writeLocalFacts(w.env, STORE, sibling)
+  assert.equal(written.written, true, JSON.stringify(written))
+  await updateStatus(w.env, status => ({ ...status, derivations: { ...status.derivations,
+    [written.name]: { store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk" },
+    [firstWritten.name]: { store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk" } } }))
+  const reviewed = JSON.parse((await readTaskContextFile(w.env, STORE, work.job, "state.json")).toString("utf8")).record
+  const plans = []
+  const result = await w.run({ maxBytes: Buffer.byteLength(json(reviewed)) + 2000,
+    planContexts: async (env, options) => {
+      const plan = await planContextPublication(env, { ...options, readRemote: () => null })
+      plans.push({ supplied: options.entries.map(entry => entry.facts.session.id),
+        ready: plan.ready.map(item => ({ path: item.path, sources: item.source_files })), states: plan.states })
+      return plan
+    } })
+  assert.equal(result.result, "delivered_pr_open")
+  const files = await w.files()
+  assert.ok(files.has(`context/${work.job}.json`), JSON.stringify({ result, plans, main: [...w.hub.headFiles(STORE, "main")], staged: [...files] }))
+  assert.ok(!files.has(`facts/copilot-cli-${sibling.session.id}.json`))
 }))
 
 test("a public desk's private source mapping uses the same keyed job identity as its numerical publication", () => scratch(async (base) => {

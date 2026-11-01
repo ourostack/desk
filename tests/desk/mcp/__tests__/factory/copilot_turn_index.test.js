@@ -1,6 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { DatabaseSync } from "node:sqlite"
+import * as fsNative from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import { mkdtemp, mkdir, rename, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -184,4 +186,66 @@ test("GivenNativeIdentityFromAnotherDesk_WhenRead_RefusesItsConversation", async
   f.db.prepare("UPDATE sessions SET cwd = ? WHERE id = ?").run(tmpdir(), SESSION)
   assert.equal(f.read().status, "not_eligible")
   assert.deepEqual(f.read().turns, [])
+})
+
+test("GivenSourceMetadataFaults_WhenRead_ReportsPermissionsAndPropagatesUnexpectedErrors", async t => {
+  const f = await fixture()
+  t.after(() => f.db.close())
+  for (const code of ["EACCES", "EPERM", "EIO"]) {
+    t.mock.method(fsNative.default, "lstatSync", () => { throw Object.assign(new Error(code), { code }) })
+    syncBuiltinESMExports()
+    try {
+      if (code === "EIO") assert.throws(f.read, { code })
+      else assert.equal(f.read().reason, "source_permission")
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports() }
+  }
+})
+
+test("GivenMissingOrMalformedDeskIdentity_WhenRead_RefusesWithoutUsingOtherConversation", async t => {
+  const f = await fixture()
+  t.after(() => f.db.close())
+  f.insert(0)
+  for (const cwd of [null, "relative-desk", join(f.root, "missing")]) {
+    f.db.prepare("UPDATE sessions SET cwd = ? WHERE id = ?").run(cwd, SESSION)
+    assert.equal(f.read().reason, "desk_identity_unavailable")
+  }
+  f.db.prepare("UPDATE sessions SET cwd = ? WHERE id = ?").run(f.root, SESSION)
+  for (const code of ["EACCES", "EIO"]) {
+    t.mock.method(fsNative.default, "realpathSync", () => { throw Object.assign(new Error(code), { code }) })
+    syncBuiltinESMExports()
+    try {
+      if (code === "EIO") assert.throws(f.read, { code })
+      else assert.equal(f.read().reason, "desk_identity_unavailable")
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports() }
+  }
+})
+
+test("GivenDriverOpenFaults_WhenRead_DistinguishesSQLiteErrorsFromUnexpectedFaults", async t => {
+  const f = await fixture()
+  t.after(() => f.db.close())
+  const args = { env: f.env, sessionId: SESSION, recordedUntil: UNTIL, expectedDesk: f.root }
+  for (const code of ["ERR_SQLITE_ERROR", "EIO"]) {
+    const read = () => api.readCopilotConversation({ ...args, load: () => ({
+      DatabaseSync: class { constructor() { throw Object.assign(new Error(code), { code }) } },
+    }) })
+    if (code === "EIO") assert.throws(read, { code })
+    else assert.equal(read().reason, "source_query_failed")
+  }
+})
+
+test("GivenInconsistentDriverRows_WhenRead_RefusesTheUnverifiedProjection", async t => {
+  const f = await fixture()
+  t.after(() => f.db.close())
+  f.insert(0)
+  const result = api.readCopilotConversation({ env: f.env, sessionId: SESSION, recordedUntil: UNTIL, expectedDesk: f.root,
+    load: () => ({ DatabaseSync: class extends DatabaseSync {
+      prepare(sql) {
+        const statement = super.prepare(sql)
+        if (sql.startsWith("SELECT turn_index")) statement.all = () => []
+        return statement
+      }
+    } }),
+  })
+  assert.equal(result.reason, "invalid_rows")
+  assert.deepEqual(result.turns, [])
 })

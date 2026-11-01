@@ -40,6 +40,7 @@ async function fixture({ prose = true, contribute = true } = {}) {
 }
 async function prepared() {
   const f = await fixture()
+  f.options.readRemote = () => null
   await queue.prepareTaskContexts(f.env, f.options)
   const [work] = await queue.listContextWork(f.env, { store: STORE })
   return { ...f, work }
@@ -94,6 +95,25 @@ test("indexed conversation has a small direct source file instead of hiding text
   assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
 })
 
+test("GivenChangedIndexedProjection_WhenPrepared_RefusesToOverwriteRetainedEvidence", async t => {
+  const f = await indexedFixture(t)
+  const descriptor = f.work.source.private_evidence[0].conversation
+  const file = await taskContextPath(f.env, STORE, f.work.job, descriptor.file)
+  const changed = `${await readFile(file, "utf8")} `
+  await writeFile(file, changed)
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_projection_changed" })
+  assert.equal(await readFile(file, "utf8"), changed)
+})
+
+test("GivenUnreadableIndexedSource_WhenPrepared_DefersWithoutReplacingItsSealedInput", async t => {
+  const f = await indexedFixture(t)
+  const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
+  const before = await readFile(stateFile, "utf8")
+  f.db.exec("DROP TABLE turns")
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_preparation_deferred" })
+  assert.equal(await readFile(stateFile, "utf8"), before)
+})
+
 test("indexed projection preserves long source messages without native Read line truncation", async t => {
   const f = await indexedFixture(t)
   const message = `Long retained source ${"\\\"\n".repeat(1500)} end`
@@ -105,6 +125,80 @@ test("indexed projection preserves long source messages without native Read line
   assert.ok(bytes.split("\n").every(line => line.length < 500))
   const projection = JSON.parse(bytes)
   assert.equal(projection.turns[0].user_message_parts.join(""), message)
+})
+
+test("GivenNullIndexedMessages_WhenPrepared_PreservesNullInsteadOfInventingText", async t => {
+  const f = await indexedFixture(t)
+  f.db.prepare("UPDATE turns SET assistant_response = NULL").run()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const file = await taskContextPath(f.env, STORE, work.job, work.source.private_evidence[0].conversation.file)
+  assert.equal(JSON.parse(await readFile(file, "utf8")).turns[0].assistant_response_parts, null)
+})
+
+test("GivenFormattedProjectionOverLimit_WhenPrepared_ReportsTooLargeWithoutRetainingPrefix", async t => {
+  const f = await indexedFixture(t)
+  f.db.prepare("UPDATE turns SET user_message = ?, assistant_response = NULL").run("a\n".repeat(85000))
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.reason, "projection_too_large")
+  assert.equal(work.source.private_evidence[0].conversation.file, null)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 1)
+})
+
+test("GivenNoIndexedText_WhenPrepared_ReportsNoAttributableTurns", async t => {
+  const f = await indexedFixture(t)
+  f.db.exec("UPDATE turns SET user_message = NULL, assistant_response = NULL")
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.status, "no_attributable_turns")
+  assert.equal(work.source.private_evidence[0].conversation.file, null)
+})
+
+test("GivenMissingProjection_WhenRead_DoesNotTreatItsSealAsReadableEvidence", async t => {
+  const f = await indexedFixture(t)
+  const file = await taskContextPath(f.env, STORE, f.work.job, f.work.source.private_evidence[0].conversation.file)
+  await rename(file, `${file}.retained`)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+})
+
+test("GivenInvalidIndexedPolicy_WhenPrepared_RefusesRatherThanReadingTheDatabase", async t => {
+  const f = await indexedFixture(t)
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"), "{}")
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_preparation_deferred" })
+})
+
+test("GivenMissingRawPath_WhenPrepared_UsesOnlyTheCanonicalNativeSessionPath", async t => {
+  const f = await indexedFixture(t)
+  f.entries[0].logPath = null
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.native_session, f.native)
+  assert.equal(work.source.private_evidence[0].native_context.raw_log_path,
+    join(f.env.COPILOT_HOME, "session-state", f.native, "events.jsonl"))
+})
+
+test("GivenSealedInputWithoutItsEvidenceSource_WhenRead_RefusesTheMismatch", async () => {
+  const f = await prepared()
+  const input = structuredClone(f.work.source)
+  input.private_evidence[0].session = "12345678-1234-4123-8123-123456789abc"
+  await replaceContextInput(f.env, STORE, f.work, input)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+})
+
+test("GivenOrdinarySourceWithSelectedSessionClaim_WhenAccepted_RefusesUnsupportedScope", async () => {
+  const f = await prepared()
+  const value = { ...candidate(f.facts), schema: "desk.factory.context/2", recommendations: [],
+    coverage: { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 } }
+  assert.equal((await queue.acceptContextCandidate(f.env, { store: STORE, job: f.work.job,
+    basis: f.work.basis, bytes: json(value) })).result, "invalid_candidate")
+})
+
+test("GivenEmptyTaskWalk_WhenPrepared_CompletesWithoutGuessingACard", async () => {
+  const f = await fixture()
+  await queue.prepareTaskContexts(f.env, { ...f.options, readRemote: () => "https://github.com/synthetic/desk.git" })
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.task_card_status, "not_associated")
 })
 
 test("indexed source edits invalidate accepted evidence while other sessions do not", async t => {
@@ -277,6 +371,26 @@ test("indexed permissions are closed, session-specific and cannot grant ordinary
   assert.equal(queue.indexedContextPermission("relative", STORE, CONTEXT_JOB, native), "policy_invalid")
 })
 
+test("GivenUnsafeIndexedPolicyMetadata_WhenChecked_RefusesTheDeclaration", async t => {
+  const f = await fixture()
+  const native = "12345678-1234-4123-8123-123456789abc"
+  const meta = join(f.desk, "_meta")
+  const file = join(meta, "factory-indexed-context.json")
+  await writeFile(file, json({ schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: [native] } } }))
+  const permission = () => queue.indexedContextPermission(f.desk, STORE, CONTEXT_JOB, native)
+  const original = fsNative.lstatSync
+  for (const target of [meta, file]) {
+    t.mock.method(fsNative, "lstatSync", (name, ...args) => {
+      const stat = original(name, ...args)
+      return String(name) === target ? { ...stat, isDirectory: () => false, isFile: () => false, isSymbolicLink: () => false } : stat
+    })
+    syncBuiltinESMExports()
+    try { assert.equal(permission(), "policy_invalid") }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports() }
+  }
+  await rename(meta, `${meta}.retained`)
+  assert.equal(permission(), "not_opted_in")
+})
 test("indexed source publisher refuses an otherwise sealed reviewed record with timed evidence", async t => {
   const f = await indexedFixture(t)
   const record = contextRecord(f.facts)

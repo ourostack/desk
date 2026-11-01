@@ -105,7 +105,7 @@ async function pendingPrivacy(f) {
   }))
 }
 
-test("indexed conversation briefs expose provenance without timed intervals or database access", async t => {
+async function indexedRunFixture(t) {
   const f = await fixture()
   f.env.COPILOT_HOME = join(f.root, "copilot")
   await mkdir(f.env.COPILOT_HOME)
@@ -123,6 +123,13 @@ test("indexed conversation briefs expose provenance without timed intervals or d
   await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
     json({ schema_version: 1, stores: { [STORE]: { [entry.localJobs[0].local]: [entry.nativeContext.session] } } }))
   await rename(entry.logPath, `${entry.logPath}.retained`)
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null })
+  return { ...f, entry, db }
+}
+
+test("indexed conversation briefs expose provenance without timed intervals or database access", async t => {
+  const f = await indexedRunFixture(t)
+  const { entry, db } = f
   const revokedId = "12345678-1234-4123-8123-123456789abc"
   const sibling = structuredClone(entry)
   sibling.facts.session.id = revokedId
@@ -167,6 +174,85 @@ test("indexed conversation briefs expose provenance without timed intervals or d
   assert.equal(result.accepted, 2)
 })
 
+for (const fault of ["missing", "changed"]) {
+  test(`Given${fault}ProjectionAfterAdmission_WhenStaged_RefusesBeforeModelLaunch`, async t => {
+    const f = await indexedRunFixture(t)
+    const [work] = await listContextWork(f.env, { store: STORE })
+    const file = await taskContextPath(f.env, STORE, work.job, work.source.private_evidence[0].conversation.file)
+    let checks = 0
+    await assert.rejects(runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job: work.job,
+      qualifyHeadlessSource: async () => {
+        if (++checks === 1) {
+          if (fault === "missing") await rename(file, `${file}.retained`)
+          else await writeFile(file, `${await readFile(file, "utf8")} `)
+        }
+        return { state: "qualified" }
+      },
+      runHeadless: () => assert.fail("changed evidence reached a model"),
+    }), /context_projection_changed/)
+    assert.equal(checks, 1)
+  })
+}
+
+for (const fault of ["missing", "changed"]) {
+  test(`Given${fault}CardAfterAdmission_WhenStaged_RefusesBeforeModelLaunch`, async () => {
+    const f = await fixture()
+    const [work] = await listContextWork(f.env, { store: STORE })
+    const file = join(f.root, "verified-card.md")
+    const bytes = "---\nstatus: done\n---\nSynthetic source card.\n"
+    await writeFile(file, bytes)
+    const input = structuredClone(work.source)
+    input.task_card = { path: file, sha256: createHash("sha256").update(bytes).digest("hex") }
+    input.task_card_status = "associated"
+    await replaceContextInput(f.env, STORE, work, input)
+    let checks = 0
+    await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options,
+      qualifyHeadlessSource: async () => {
+        if (++checks === 1) {
+          if (fault === "missing") await rename(file, `${file}.retained`)
+          else await writeFile(file, `${bytes} `)
+        }
+        return { state: "qualified" }
+      },
+      runHeadless: () => assert.fail("changed card reached a model"),
+    }), /context_card_changed/)
+    assert.equal(checks, 1)
+  })
+}
+
+test("GivenRevokedConsentDuringFinalQualification_WhenLaunching_RefusesBeforeModel", async () => {
+  const f = await fixture()
+  let checks = 0
+  const result = await runner.runTaskContextStep(f.env, { ...f.options,
+    qualifyHeadlessSource: async () => {
+      if (++checks === 2) await writeFile(join(f.desk, "_meta", "factory-context.json"),
+        json({ schema_version: 1, stores: { [STORE]: false } }))
+      return { state: "qualified" }
+    },
+    runHeadless: () => assert.fail("revoked consent reached a model"),
+  })
+  assert.equal(result.result, "context_source_changed")
+  assert.equal(result.launched, false)
+  assert.equal(result.accepted, 0)
+})
+
+test("GivenIndexedMetadataWithoutText_WhenBriefed_DoesNotInventAConversationFile", async t => {
+  const f = await indexedRunFixture(t)
+  f.db.exec("UPDATE turns SET user_message = NULL, assistant_response = NULL")
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null })
+  let seen = false
+  await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job: f.entry.localJobs[0].published,
+    runHeadless: async options => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      seen = true
+      assert.equal(brief.evidence_outline[0].conversation_file, null)
+      assert.equal(brief.evidence_outline[0].conversation_status, "no_attributable_turns")
+      return { state: "failed", cost_usd: null }
+    },
+  })
+  assert.equal(seen, true)
+})
+
 async function legacyInput(f) {
   const [work] = await listContextWork(f.env, { store: STORE })
   const input = structuredClone(work.source)
@@ -192,6 +278,61 @@ test("a model cannot alter its staged source copy and still have its output acce
   assert.equal(result.launched, true)
   assert.equal(result.accepted, 0)
 })
+
+test("GivenRemovedStagedInput_WhenModelReturns_RefusesItsOutput", async () => {
+  const f = await fixture()
+  const result = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async options => {
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    const output = await f.options.runHeadless(options)
+    await rename(brief.input_file, `${brief.input_file}.displaced`)
+    return output
+  } })
+  assert.equal(result.result, "context_source_changed")
+  assert.equal(result.accepted, 0)
+})
+
+for (const fault of ["directory", "symlink", "linked", "oversized", "permission", "inode"]) {
+  test(`Given${fault}Output_WhenModelReturns_RejectsUnsafeRead`, async t => {
+    const f = await fixture()
+    let reached = false
+    const run = () => runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async options => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      const output = await f.options.runHeadless(options)
+      const lstat = fsNative.lstat
+      const open = fsNative.open
+      if (fault === "inode") t.mock.method(fsNative, "open", async (file, ...args) => {
+        const handle = await open(file, ...args)
+        if (String(file) !== brief.output) return handle
+        reached = true
+        return {
+          stat: async () => ({ ...await handle.stat(), ino: -1 }),
+          readFile: (...readArgs) => handle.readFile(...readArgs),
+          close: () => handle.close(),
+        }
+      })
+      else t.mock.method(fsNative, "lstat", async (file, ...args) => {
+        const stat = await lstat(file, ...args)
+        if (String(file) !== brief.output) return stat
+        reached = true
+        if (fault === "permission") throw Object.assign(new Error("denied"), { code: "EACCES" })
+        return {
+          ...stat,
+          isFile: () => fault !== "directory",
+          isSymbolicLink: () => fault === "symlink",
+          nlink: fault === "linked" ? 2 : 1,
+          size: fault === "oversized" ? 128 * 1024 + 1 : stat.size,
+        }
+      })
+      return output
+    } })
+    try {
+      await assert.rejects(run(), fault === "permission" ? { code: "EACCES" } :
+        new RegExp(fault === "inode" ? "context_run_file_changed" : "context_run_file_unsafe"))
+      assert.equal(reached, true)
+      assert.equal((await listContextWork(f.env, { store: STORE }))[0].phase, "candidate")
+    } finally { t.mock.restoreAll() }
+  })
+}
 
 test("legacy null-card inputs retain their completed-lookup meaning in native briefs", async () => {
   const f = await fixture()
