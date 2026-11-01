@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.51 — 2026-11-01
+
+Let source-bound context use a bounded, read-only Copilot conversation index when a raw log is gone and both native and public facts explicitly bind the whole session to one job. Match the native desk identity, seal the small readable projection and its source digest, preserve independent privacy, and refuse unsupported time placement. Indexed replies remain partial evidence, not verified execution or a recreated event log.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.50 — 2026-10-31
 
 An operator's standing grant can now authorize a credential harness for test tenants they own ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). Under such a grant, agents stop handing the operator a sign-in: they build or reuse a harness that reads the password from the tenant's owning portal, keeps it only in the operating system's credential store, fills it programmatically, registers a software TOTP authenticator and reuses the session. The grant never covers the operator's own corporate or personal credentials or anything they don't own, and no secret ever appears in chat, logs, task cards, repositories or screenshots.
