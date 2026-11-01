@@ -44,16 +44,17 @@ async function world(w, { prose = true, contextJson = '{"task_context":1}', push
   assert.equal(written.written, true)
   await writeStatus(w.env, { derivations: { [written.name]: { store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk" } } })
   const hub = fakeGitHub({ store: STORE, account: "synthetic", push, contextJson, visibility: { "synthetic/context-desk": deskVisibility, "ourostack/desk": "public" } })
-  const run = (extra = {}) => flush(w.env, { store: STORE, runner: hub.runner, anonymousLookup: hub.anonymousLookup, now: () => T0, ...extra })
+  const run = (extra = {}) => flush(w.env, { store: STORE, runner: hub.runner, anonymousLookup: hub.anonymousLookup, now: () => T0,
+    planContexts: (env, options) => planContextPublication(env, { ...options, ...(card ? {} : { readRemote: () => null }) }), ...extra })
   const files = async () => hub.headFiles(STORE, `intake/${(await readConsent(w.env)).stores[STORE].intake_id}`)
   return { ...w, hub, local, name: written.name, job: local.jobs[0].job, cardFile, run, files }
 }
 async function approve(w) {
   const [work] = await listContextWork(w.env, { store: STORE })
   assert.ok(work, "the ordinary flush must prepare the context input")
-  const candidate = { ...contextRecord(work.source.sources[0], work.job), evaluator: work.source.evaluator, privacy: null }
+  const candidate = { ...contextRecord(work.source.sources[0], work.job, work.source.task_card_status), evaluator: work.source.evaluator, privacy: null }
   const accepted = await acceptContextCandidate(w.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(candidate) })
-  assert.equal(accepted.result, "candidate_accepted")
+  assert.equal(accepted.result, "candidate_accepted", JSON.stringify({ errors: accepted.errors, card_status: work.source.task_card_status }))
   const review = { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: accepted.payload_sha256, reviewer: work.source.evaluator, reason: "safe" }
   assert.equal((await acceptContextPrivacy(w.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(review) })).result, "context_accepted")
   return work
@@ -78,7 +79,7 @@ async function reviewedBatch(base) {
   const work = await listContextWork(w.env, { store: STORE })
   assert.equal(work.length, 9)
   for (const item of work) {
-    const candidate = { ...contextRecord(item.source.sources[0], item.job), evaluator: item.source.evaluator, privacy: null }
+    const candidate = { ...contextRecord(item.source.sources[0], item.job, item.source.task_card_status), evaluator: item.source.evaluator, privacy: null }
     const accepted = await acceptContextCandidate(w.env, { store: STORE, job: item.job, basis: item.basis, bytes: json(candidate) })
     assert.equal(accepted.result, "candidate_accepted")
     assert.equal((await acceptContextPrivacy(w.env, {

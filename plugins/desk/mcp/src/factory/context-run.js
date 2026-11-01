@@ -33,14 +33,15 @@ function due(work, now) {
     (last === undefined || (typeof last === "string" && isoDay(Date.parse(last)) < isoDay(now)))
 }
 
-async function runnableContextWork(env, status, now) {
+async function runnableContextWork(env, status, now, requested = false) {
   const stores = Object.entries((await readConsent(env)).stores).filter(([, value]) => value.contribute === true).map(([store]) => store).sort()
   const jobs = []
   for (const store of stores) {
     const readiness = status.context_publication?.[store]
     const checked = Date.parse(readiness?.checked_at)
     if (readiness?.ready !== true || !Number.isFinite(checked) || checked - now > 300000 || now - checked > 3 * DAY) continue
-    for (const work of await listContextWork(env, { store })) if (due(work, now)) jobs.push({ ...work, store })
+    for (const work of await listContextWork(env, { store })) if (due(work, now) &&
+      (requested || work.source.private_evidence.every(entry => entry.conversation === undefined))) jobs.push({ ...work, store })
   }
   return jobs
 }
@@ -72,8 +73,8 @@ function template(work) {
   }
 }
 
-function evidenceOutline(work) {
-  return work.source.sources.map((facts) => {
+async function evidenceOutline(env, work) {
+  return Promise.all(work.source.sources.map(async (facts) => {
     const share = contextShare(facts, work.job)
     const eligible = facts.intervals.filter((interval) => share.some((span) => interval.start_ms >= span.start_ms && interval.end_ms <= span.end_ms))
       .sort((left, right) => left.start_ms - right.start_ms || left.end_ms - right.end_ms)
@@ -82,16 +83,20 @@ function evidenceOutline(work) {
     const intervals = eligible.filter((interval) => selected.has(interval))
     const shares = share.length <= 8 ? share : [...share.slice(0, 4), ...share.slice(-4)]
     const evidence = work.source.private_evidence.find((entry) => entry.session === facts.session.id)
+    const indexed = evidence.conversation !== undefined
     return {
       session: facts.session.id, source: contextSource(facts, work.job).sha256,
       session_offset_ms: facts.jobs.find((entry) => entry.job === work.job).session_offset_ms,
       duration_ms: facts.session.duration_ms, ended: facts.session.ended,
       clock_origin: evidence.clock_origin, log_path: evidence.log_path,
+      ...(indexed ? { evidence_kind: "native_copilot_turn_index", conversation_status: evidence.conversation.status,
+        conversation_file: evidence.conversation.file === null ? null : await taskContextPath(env, work.store, work.job, evidence.conversation.file),
+        indexed_turns: evidence.conversation.turns_count, excluded_turns: evidence.conversation.excluded_rows } : {}),
       shares: shares.map((span) => [span.start_ms, span.end_ms]), omitted_shares: share.length - shares.length,
-      intervals: intervals.map((interval) => ({ kind: interval.kind, range: [interval.start_ms, interval.end_ms] })),
-      omitted_intervals: eligible.length - intervals.length,
+      intervals: indexed ? [] : intervals.map((interval) => ({ kind: interval.kind, range: [interval.start_ms, interval.end_ms] })),
+      omitted_intervals: eligible.length - (indexed ? 0 : intervals.length),
     }
-  })
+  }))
 }
 
 /** One existing-ledger launch, one phase, at most eight jobs. Labels retain priority in the caller. */
@@ -180,7 +185,7 @@ async function runContextStep(env, options, requestPolicy) {
   const deadline = new Date(options.deadline).getTime()
   if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: valid now and deadline required")
   const status = await readStatus(env)
-  const waiting = (await runnableContextWork(env, status, now)).filter(work => requestPolicy === null ||
+  const waiting = (await runnableContextWork(env, status, now, requestPolicy !== null)).filter(work => requestPolicy === null ||
     work.store.toLowerCase() === requestPolicy.store.toLowerCase() && work.job === requestPolicy.job)
   if (waiting.length === 0) return idle("no_context_waiting")
   const version = deskVersion(env)
@@ -258,7 +263,7 @@ async function runContextStep(env, options, requestPolicy) {
         input_file: work.input, task_card: work.source.task_card,
         task_card_status: work.source.task_card_status ?? (work.source.task_card === null ? "not_associated" : "associated"),
         output: await taskContextPath(env, work.store, work.job, outputName),
-        instructions, template: template(work), evidence_outline: evidenceOutline(work),
+        instructions, template: template(work), evidence_outline: await evidenceOutline(env, work),
         ...(phase === "privacy" ? { candidate: work.state.candidate, payload_sha256: work.state.candidate_hash } : {}),
       }
       const file = await writeTaskContextFile(env, work.store, work.job, `${token}.brief.json`, brief)

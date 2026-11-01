@@ -20,6 +20,7 @@ import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-sta
 import { reserveAgentLaunch, witnessedEvaluationQuota } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 import { EVALUATOR_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { DatabaseSync } from "node:sqlite"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
   if (error.code === "ERR_MODULE_NOT_FOUND") return null
@@ -77,7 +78,7 @@ async function fixture(count = 1, { ready = true, spent = 0, rubricSuffix = "" }
         "native authors need the successful state enum, not just withheld/unavailable instructions")
       const input = JSON.parse(await readFile(brief.input_file, "utf8"))
       const output = brief.phase === "candidate"
-        ? { ...contextRecord(input.sources[0], brief.job), evaluator: brief.evaluator, privacy: null }
+        ? { ...contextRecord(input.sources[0], brief.job, brief.task_card_status), evaluator: brief.evaluator, privacy: null }
         : { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: brief.payload_sha256, reviewer: brief.evaluator, reason: "safe" }
       await writeFile(brief.output, json(output))
     }
@@ -103,6 +104,48 @@ async function pendingPrivacy(f) {
     ...state, attempts: { candidate: 1, privacy: 0 }, last_attempts: { candidate: new Date(NOW).toISOString() },
   }))
 }
+
+test("indexed conversation briefs expose provenance without timed intervals or database access", async t => {
+  const f = await fixture()
+  f.env.COPILOT_HOME = join(f.root, "copilot")
+  await mkdir(f.env.COPILOT_HOME)
+  const db = new DatabaseSync(join(f.env.COPILOT_HOME, "session-store.db"))
+  t.after(() => db.close())
+  db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT); CREATE TABLE turns (session_id TEXT, turn_index INTEGER, timestamp TEXT, user_message TEXT, assistant_response TEXT)")
+  const entry = f.entries[0]
+  db.prepare("INSERT INTO sessions VALUES (?, ?)").run(entry.facts.session.id, f.desk)
+  db.prepare("INSERT INTO turns VALUES (?, 0, '2026-10-01 00:00:01', 'Describe the work', 'Not delivered')").run(entry.facts.session.id)
+  entry.facts.session.host = "copilot-cli"
+  entry.facts.jobs[0].agents = [0]
+  entry.facts.jobs[0].segments = [{ start_ms: 0, end_ms: entry.facts.session.duration_ms }]
+  entry.nativeContext = { session: entry.facts.session.id, job: entry.localJobs[0].local,
+    started_at: entry.clockOrigin, duration_ms: entry.facts.session.duration_ms, full_share: true }
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
+    json({ schema_version: 1, stores: { [STORE]: { [entry.localJobs[0].local]: [entry.nativeContext.session] } } }))
+  await rename(entry.logPath, `${entry.logPath}.retained`)
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null })
+  const automatic = await runner.runTaskContextStep(f.env, f.options)
+  assert.equal(automatic.launched, false, "automatic callers cannot select indexed conversation work")
+  assert.equal(automatic.result, "no_context_waiting")
+  let seen = false
+  const result = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job: entry.localJobs[0].published, runHeadless: async options => {
+    seen = true
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    assert.equal(brief.evidence_outline[0].evidence_kind, "native_copilot_turn_index")
+    assert.equal(brief.evidence_outline[0].clock_origin, null)
+    assert.deepEqual(brief.evidence_outline[0].intervals, [])
+    const projection = JSON.parse(await readFile(brief.evidence_outline[0].conversation_file, "utf8"))
+    assert.equal(projection.turns[0].user_message_parts.join(""), "Describe the work")
+    assert.ok(options.logDirs.every(dir => dir !== f.env.COPILOT_HOME && !dir.startsWith(`${f.env.COPILOT_HOME}${sep}`)))
+    await writeFile(brief.output, json(brief.phase === "candidate" ? brief.template : {
+      schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: brief.payload_sha256,
+      reviewer: brief.evaluator, reason: "safe",
+    }))
+    return { state: "ran", cost_usd: 0.1 }
+  } })
+  assert.equal(seen, true)
+  assert.equal(result.accepted, 2)
+})
 
 async function legacyInput(f) {
   const [work] = await listContextWork(f.env, { store: STORE })

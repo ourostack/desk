@@ -8,18 +8,22 @@ import {
   serializeTaskContext, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
-  checkContextAgainstFacts, CONTEXT_MAX_BYTES, RECOMMENDATION_SCHEMA, contextPayloadHash, contextSource, validateContext,
+  checkContextAgainstFacts, CONTEXT_MAX_BYTES, RECOMMENDATION_SCHEMA, contextPayloadHash, contextShare, contextSource, validateContext,
 } from "./context-schema.js"
 import { addError, isPlainObject, PATTERNS } from "./schema.js"
 import { stableStringify } from "./pipeline/normalize.js"
 import { declared, isFolder } from "./session-route.js"
-import { validatePublished } from "./published-schema.js"
+import { SESSION_ID_V4, validatePublished } from "./published-schema.js"
 import { walkTasks } from "./boot-check.js"
 import { isTaskSegment, jobId } from "./binding.js"
 import { readDeskRemote, resolveJobIdentity } from "./desk-repo.js"
 import { storeAcceptsContext } from "./context-capability.js"
+import { readCopilotConversation } from "./copilot-turn-index.js"
+import { localRecordsPath } from "./copilot-usage.js"
+import { normalizeTimestamp } from "./time.js"
 
 const STATE = "desk.factory.context-state/1"
+const INDEXED_STATE = "desk.factory.context-state/2"
 const INPUT = "desk.factory.context-input/1"
 const PREPARATION_MS = 2000
 const CARD_LIMIT = 1000
@@ -55,12 +59,37 @@ const allowed = (desk, store) => {
   return contextPermission(desk, store) === "allowed" && route.kind === "store" && sameStore(route.store, store)
 }
 
+/** Reading and retaining indexed text is an additional, job-specific declaration, never inferred from prose. */
+export function indexedContextPermission(deskRoot, store, localJob, nativeSession) {
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot) || !PATTERNS.prRepo.test(store) || !PATTERNS.jobId.test(localJob) ||
+      typeof nativeSession !== "string" || !SESSION_ID_V4.test(nativeSession)) return "policy_invalid"
+  try {
+    const meta = path.join(deskRoot, "_meta")
+    const metaStat = lstatSync(meta)
+    if (!metaStat.isDirectory() || metaStat.isSymbolicLink()) return "policy_invalid"
+    const file = path.join(meta, "factory-indexed-context.json")
+    const stat = lstatSync(file, { throwIfNoEntry: false })
+    if (!stat) return "not_opted_in"
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) return "policy_invalid"
+    const value = JSON.parse(readFileSync(file, { encoding: "utf8", flag: constants.O_RDONLY | constants.O_NOFOLLOW }))
+    if (!isPlainObject(value) || Object.keys(value).sort().join() !== "schema_version,stores" || value.schema_version !== 1 ||
+        !isPlainObject(value.stores) || Object.entries(value.stores).some(([key, jobs]) => !PATTERNS.prRepo.test(key) ||
+          !isPlainObject(jobs) || Object.keys(jobs).length > 256 || Object.entries(jobs).some(([job, sessions]) =>
+            !PATTERNS.jobId.test(job) || !Array.isArray(sessions) || sessions.length > 256 || new Set(sessions).size !== sessions.length ||
+            sessions.some(session => typeof session !== "string" || !SESSION_ID_V4.test(session))))) return "policy_invalid"
+    const matches = Object.entries(value.stores).filter(([key]) => sameStore(key, store))
+    return matches.length > 0 && matches.every(([, jobs]) => jobs[localJob]?.includes(nativeSession)) ? "allowed" : "not_opted_in"
+  } catch (error) {
+    return error.code === "ENOENT" ? "not_opted_in" : "policy_invalid"
+  }
+}
+
 async function stateOf(env, store, job) {
   const bytes = await readTaskContextFile(env, store, job, "state.json")
   if (bytes === null) return null
   let value
   try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_state_invalid") }
-  if (!isPlainObject(value) || value.schema !== STATE || value.job !== job ||
+  if (!isPlainObject(value) || ![STATE, INDEXED_STATE].includes(value.schema) || value.job !== job ||
       !/^[0-9a-f]{64}$/u.test(value.basis) || !["candidate", "privacy", "ready", "refused"].includes(value.phase) ||
       value.input !== `input-${value.basis}.json`) throw new Error("context_state_invalid")
   return value
@@ -74,17 +103,27 @@ async function inputOf(env, store, state, { current = true } = {}) {
   if (!isPlainObject(value) || value.schema !== INPUT || value.job !== state.job || value.basis !== state.basis ||
       !Array.isArray(value.sources) || !Array.isArray(value.private_evidence) || !sameStore(value.store, store)) return null
   if (value.task_card_status !== undefined &&
-      (!["associated", "not_associated", "unavailable"].includes(value.task_card_status) ||
+      (!["associated", "not_associated", "unavailable", "scoped_out"].includes(value.task_card_status) ||
        (value.task_card_status === "associated") !== (value.task_card !== null))) return null
   if (state.input_seal !== await seal(env, "input", state.basis, value)) return null
-  return !current || inputCurrent(value, store) ? value : null
+  return !current || await inputCurrent(value, store, env) ? value : null
 }
 
-function inputCurrent(value, store) {
+async function inputCurrent(value, store, env) {
   if (!allowed(value.desk_root, store)) return false
   for (const evidence of value.private_evidence) {
     const source = value.sources.find((facts) => facts.session.id === evidence.session)
-    if (!source || logEvidence({ facts: source, logPath: evidence.log_path, clockOrigin: evidence.clock_origin }).fingerprint !== evidence.fingerprint) return false
+    if (!source) return false
+    if (evidence.native_context !== undefined) {
+      const native = evidence.native_context
+      const current = describeEvidence(logEvidence({ facts: source, store, deskRoot: value.desk_root, logPath: native.raw_log_path, clockOrigin: native.started_at,
+        nativeContext: native, localJobs: [{ local: value.local_job, published: value.job }] }, env))
+      if (current.conversation?.status === "unreadable" || sha(current) !== sha(evidence)) return false
+      if (current.conversation?.file !== null && current.conversation?.file !== undefined) {
+        const bytes = await readTaskContextFile(env, store, value.job, current.conversation.file)
+        if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== current.conversation.projection_sha256) return false
+      }
+    } else if (logEvidence({ facts: source, logPath: evidence.log_path, clockOrigin: evidence.clock_origin }, env).fingerprint !== evidence.fingerprint) return false
   }
   if (value.task_card !== null) {
     try {
@@ -99,21 +138,79 @@ function inputCurrent(value, store) {
   return true
 }
 
-function logEvidence(entry) {
+function nativeEligible(entry) {
+  const native = entry.nativeContext
+  const jobs = entry.facts.jobs
+  const maps = entry.localJobs
+  const spans = jobs.length === 1 ? contextShare(entry.facts, jobs[0].job) : []
+  return native?.full_share === true && entry.facts.session.host === "copilot-cli" &&
+    typeof native.session === "string" && SESSION_ID_V4.test(native.session) &&
+    native.duration_ms === entry.facts.session.duration_ms && normalizeTimestamp(native.started_at) !== null &&
+    maps?.length === 1 && maps[0].local === native.job && jobs.length === 1 && maps[0].published === jobs[0].job &&
+    jobs[0].segments?.length === 1 &&
+    spans.length === 1 && spans[0].start_ms === 0 && spans[0].end_ms === native.duration_ms
+}
+
+function logEvidence(entry, env) {
+  const native = nativeEligible(entry) ? entry.nativeContext : null
+  const candidate = entry.logPath ?? (native === null ? null : path.join(path.dirname(localRecordsPath(env)), "session-state", native.session, "events.jsonl"))
   let log = null
-  if (typeof entry.logPath === "string" && path.isAbsolute(entry.logPath)) {
+  let missing = false
+  let rawProblem = "raw_source_invalid"
+  if (typeof candidate === "string" && path.isAbsolute(candidate)) {
     try {
-      const stat = lstatSync(entry.logPath)
-      if (stat.isFile() && !stat.isSymbolicLink()) log = { path: entry.logPath, size: stat.size, mtime_ms: stat.mtimeMs }
+      const stat = lstatSync(candidate)
+      if (stat.isFile() && !stat.isSymbolicLink()) log = { path: candidate, size: stat.size, mtime_ms: stat.mtimeMs }
+      else rawProblem = "raw_source_unsafe"
     } catch (error) {
       if (!["ENOENT", "EACCES", "EPERM"].includes(error.code)) throw error
+      missing = error.code === "ENOENT"
+      rawProblem = "raw_source_permission"
     }
   }
-  return {
+  const permission = log === null && native !== null ? indexedContextPermission(entry.deskRoot, entry.store, native.job, native.session) : "not_opted_in"
+  const indexed = log === null && native !== null && permission !== "not_opted_in"
+  const evidence = {
     session: entry.facts.session.id, log_path: log?.path ?? null,
-    clock_origin: typeof entry.clockOrigin === "string" && PATTERNS.timestamp.test(entry.clockOrigin) ? entry.clockOrigin : null,
+    clock_origin: !indexed && typeof entry.clockOrigin === "string" && PATTERNS.timestamp.test(entry.clockOrigin) ? entry.clockOrigin : null,
     fingerprint: log === null ? null : sha(log),
   }
+  if (indexed) {
+    const until = new Date(Date.parse(normalizeTimestamp(native.started_at)) + native.duration_ms).toISOString()
+    evidence.native_context = { ...native, raw_log_path: candidate }
+    evidence.conversation = { kind: "native_copilot_turn_index", native_session: native.session,
+      ...(permission === "policy_invalid" ? { status: "unreadable", reason: "indexed_policy_invalid", digest: null, turns: [], excluded_rows: 0 }
+        : missing ? readCopilotConversation({ env, sessionId: native.session, recordedUntil: until, expectedDesk: entry.deskRoot })
+        : { status: "unreadable", reason: rawProblem, digest: null, turns: [], excluded_rows: 0 }) }
+  }
+  return evidence
+}
+
+function conversationProjection(evidence) {
+  const parts = text => {
+    if (text === null) return null
+    const points = [...text]
+    const chunks = []
+    // Keep the existing 500-character readability bound even with six-character JSON escapes.
+    for (let at = 0; at < points.length; at += 64) chunks.push(points.slice(at, at + 64).join(""))
+    return chunks
+  }
+  return { schema: "desk.factory.conversation-index/1", session: evidence.session,
+    kind: "native_copilot_turn_index", source_digest: evidence.conversation.digest,
+    excluded_rows: evidence.conversation.excluded_rows, unavailable: ["tool_payloads", "action_clock", "verification"],
+    turns: evidence.conversation.turns.map(row => ({ turn_index: row.turn_index,
+      user_message_parts: parts(row.user_message), assistant_response_parts: parts(row.assistant_response) })) }
+}
+
+function describeEvidence(evidence) {
+  if (evidence.conversation === undefined) return evidence
+  const { turns, ...metadata } = evidence.conversation
+  if (metadata.status !== "available") return { ...evidence, conversation: { ...metadata, file: null, projection_sha256: null, turns_count: 0 } }
+  const bytes = serializeTaskContext(conversationProjection(evidence))
+  if (Buffer.byteLength(bytes) > 256 * 1024) return { ...evidence,
+    conversation: { ...metadata, status: "too_large", reason: "projection_too_large", file: null, projection_sha256: null, turns_count: 0 } }
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  return { ...evidence, conversation: { ...metadata, file: `conversation-${digest}.json`, projection_sha256: digest, turns_count: turns.length } }
 }
 
 function groupsOf(entries, store) {
@@ -264,9 +361,17 @@ async function prepareContextGroups(env, {
     within()
     if (!allowed(group.desk_root, store)) return
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
-    const sources = group.entries.map((entry) => entry.facts)
-    if (new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; return }
-    const privateEvidence = group.entries.map(logEvidence)
+    const allSources = group.entries.map((entry) => entry.facts)
+    if (new Set(allSources.map((entry) => entry.session.id)).size !== allSources.length) { counts.held += 1; return }
+    const allEvidence = group.entries.map(entry => { within(); return logEvidence({ ...entry, store }, env) })
+    if (allEvidence.some(evidence => evidence.conversation?.status === "unreadable")) throw deferred()
+    const indexed = allEvidence.map((evidence, index) => evidence.conversation === undefined ? -1 : index).filter(index => index >= 0)
+    const selected = indexed.length > 0 ? indexed : allEvidence.map((_, index) => index)
+    const sources = selected.map(index => allSources[index])
+    const observedEvidence = selected.map(index => allEvidence[index])
+    const privateEvidence = observedEvidence.map(describeEvidence)
+    if (indexed.length > 0) { taskCard = null; taskCardStatus = "scoped_out" }
+    within()
     const basisFor = (card, status) => sha({
       sources: sources.map((facts) => contextSource(facts, group.job)), private_evidence: privateEvidence,
       task_card: card, ...(status === undefined ? {} : { task_card_status: status }), plugin_version: pluginVersion,
@@ -276,8 +381,17 @@ async function prepareContextGroups(env, {
       schema: INPUT, basis, job: group.job, local_job: group.local_job, desk_root: group.desk_root,
       person_prefix: group.person_prefix, store,
       evaluator: { plugin_version: pluginVersion, rubric: "1" }, sources, private_evidence: privateEvidence, task_card: taskCard, task_card_status: taskCardStatus,
+      ...(indexed.length > 0 ? { source_selection: "indexed_conversation" } : {}),
     }
     if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; return }
+    for (const [index, evidence] of privateEvidence.entries()) {
+      if (!evidence.conversation?.file) continue
+      within()
+      const bytes = await readTaskContextFile(env, store, group.job, evidence.conversation.file)
+      if (bytes === null) await writeTaskContextFile(env, store, group.job, evidence.conversation.file, conversationProjection(observedEvidence[index]))
+      else if (createHash("sha256").update(bytes).digest("hex") !== evidence.conversation.projection_sha256)
+        throw Object.assign(new Error("context_projection_changed"), { code: "context_projection_changed" })
+    }
     const before = await stateOf(env, store, group.job)
     within()
     if (before?.basis === basis) { counts.unchanged += 1; return }
@@ -292,7 +406,7 @@ async function prepareContextGroups(env, {
     await writeTaskContextFile(env, store, group.job, `input-${basis}.json`, input)
     const inputSeal = await seal(env, "input", basis, input)
     await updateTaskContextState(env, store, group.job, (current) => ({
-      schema: STATE, job: group.job, basis, input: `input-${basis}.json`, phase: "candidate",
+      schema: indexed.length > 0 ? INDEXED_STATE : STATE, job: group.job, basis, input: `input-${basis}.json`, phase: "candidate",
       input_seal: inputSeal, review_seal: null,
       candidate: null, candidate_hash: null, record: null, attempts: { candidate: 0, privacy: 0 }, last_attempts: current?.last_attempts ?? {},
       published_sha: current?.published_sha ?? null, pr: current?.pr ?? null,
@@ -406,6 +520,14 @@ async function freshState(env, store, job, basis) {
   return input === null ? null : { state, input }
 }
 
+function indexedContextSafe(value, input) {
+  const indexed = new Set(input.private_evidence.filter(entry => entry.conversation !== undefined).map(entry => entry.session))
+  if (indexed.size === 0 || value.state !== "published") return true
+  if (value.coverage.state !== "partial" || !["not_recorded", "unplaced"].every(reason => value.coverage.reasons.includes(reason))) return false
+  return value.events.every(event => event.evidence.every(ref => !indexed.has(ref.session) ||
+    event.kind !== "waiting" && ["start", "share_start", "share_end"].includes(ref.anchor)))
+}
+
 export async function acceptContextCandidate(env, { store, job, basis, bytes }) {
   const current = await freshState(env, store, job, basis)
   if (current === null) return result("source_changed")
@@ -416,6 +538,7 @@ export async function acceptContextCandidate(env, { store, job, basis, bytes }) 
   if (value.job !== job || stableStringify(value.evaluator) !== stableStringify(current.input.evaluator)) return result("identity_mismatch")
   const checked = checkContextAgainstFacts(value, current.input.sources, { candidate: true })
   if (!checked.ok) return result("invalid_candidate", { errors: checked.errors })
+  if (!indexedContextSafe(value, current.input)) return result("invalid_candidate", { errors: [{ code: "indexed_clock", path: "events" }] })
   if (current.input.task_card_status === "unavailable" && value.state === "published" &&
       (value.coverage.state !== "partial" || !value.coverage.reasons.includes("not_recorded"))) {
     const errors = []
@@ -439,6 +562,7 @@ export async function acceptContextPrivacy(env, { store, job, basis, bytes }) {
       !["safe", "sensitive", "unsupported", "uncertain"].includes(review.reason) ||
       stableStringify(review.reviewer) !== stableStringify(current.input.evaluator)) return result("invalid_review")
   if (review.payload_sha256 !== current.state.candidate_hash || contextPayloadHash(current.state.candidate) !== current.state.candidate_hash) return result("review_mismatch")
+  if (!indexedContextSafe(current.state.candidate, current.input)) return result("invalid_review")
   if (review.verdict !== "approved" || review.reason !== "safe") {
     await updateTaskContextState(env, store, job, (state) => state.basis !== basis ? state : { ...state, phase: "refused", candidate: null })
     return result("context_withheld")
@@ -474,7 +598,7 @@ async function readyContext(env, store, state, group, verifiedInput) {
   if (invalidation && state.published_sha === null) return null
   const input = verifiedInput === undefined
     ? await inputOf(env, store, state)
-    : inputCurrent(verifiedInput, store) ? verifiedInput : null
+    : await inputCurrent(verifiedInput, store, env) ? verifiedInput : null
   if (input === null) return null
   let record = state.record
   if (invalidation) {
@@ -486,7 +610,8 @@ async function readyContext(env, store, state, group, verifiedInput) {
     }
     record.privacy = { verdict: "not_required", payload_sha256: contextPayloadHash(record), reviewer: null }
   } else if (state.review_seal !== await seal(env, "review", state.basis, record)) return null
-  if (!validateContext(record).ok || !checkContextAgainstFacts(record, group.entries.map((entry) => entry.facts)).ok) return null
+  if (!validateContext(record).ok || !checkContextAgainstFacts(record, group.entries.map((entry) => entry.facts)).ok ||
+      !indexedContextSafe(record, input)) return null
   const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
   return {
     name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
