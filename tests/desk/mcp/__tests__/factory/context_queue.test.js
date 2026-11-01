@@ -118,13 +118,15 @@ test("indexed source edits invalidate accepted evidence while other sessions do 
 test("indexed source requires partial unplaced coverage and refuses timed or waiting references", async t => {
   const f = await indexedFixture(t)
   const value = candidate(f.facts)
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
   const accept = () => queue.acceptContextCandidate(f.env, { store: STORE, job: f.work.job, basis: f.work.basis, bytes: json(value) })
   assert.equal((await accept()).result, "invalid_candidate")
   value.coverage = { state: "partial", reasons: ["not_recorded"], omitted_events: 0 }
   assert.equal((await accept()).result, "invalid_candidate")
   value.coverage = { state: "partial", reasons: ["unplaced"], omitted_events: 0 }
   assert.equal((await accept()).result, "invalid_candidate")
-  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced"], omitted_events: 0 }
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
   assert.equal((await accept()).result, "invalid_candidate")
   value.events[0].evidence[0].anchor = "start"
   value.events[0].evidence[0].range = null
@@ -151,7 +153,9 @@ test("indexed source is not read for ambiguous native job ownership and raw log 
 test("indexed source privacy rechecks a valid candidate that acquired unsupported timed evidence", async t => {
   const f = await indexedFixture(t)
   const value = candidate(f.facts)
-  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced"], omitted_events: 0 }
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
   await updateTaskContextState(f.env, STORE, f.work.job, state => ({
     ...state, phase: "privacy", candidate: value, candidate_hash: contextPayloadHash(value),
   }))
@@ -222,6 +226,31 @@ test("indexed source state cannot be downgraded by the previously released reade
   assert.equal(await readFile(stateFile, "utf8"), before)
 })
 
+test("indexed selected-session scope reaches publication with an excluded sibling still present", async t => {
+  const f = await indexedFixture(t)
+  const peer = structuredClone(f.entries[0])
+  peer.facts.session.id = "87654321-1234-4123-8123-123456789abc"
+  peer.nativeContext = null
+  peer.logPath = join(f.root, "excluded-sibling.jsonl")
+  await writeFile(peer.logPath, '{"synthetic":"excluded sibling"}\n')
+  f.entries.push(peer)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const value = candidate(f.facts)
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
+  value.events[0].evidence[0].anchor = "start"
+  value.events[0].evidence[0].range = null
+  const accepted = await queue.acceptContextCandidate(f.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(value) })
+  assert.equal(accepted.result, "candidate_accepted")
+  assert.equal((await queue.acceptContextPrivacy(f.env, { store: STORE, job: work.job, basis: work.basis,
+    bytes: json(review(accepted.payload_sha256)) })).result, "context_accepted")
+  const ready = await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries })
+  assert.equal(ready.length, 1)
+  assert.deepEqual(JSON.parse(ready[0].bytes).sources, value.sources)
+})
+
 test("indexed permissions are closed, session-specific and cannot grant ordinary context consent", async () => {
   const f = await fixture({ prose: false })
   const native = "12345678-1234-4123-8123-123456789abc"
@@ -251,7 +280,9 @@ test("indexed permissions are closed, session-specific and cannot grant ordinary
 test("indexed source publisher refuses an otherwise sealed reviewed record with timed evidence", async t => {
   const f = await indexedFixture(t)
   const record = contextRecord(f.facts)
-  record.coverage = { state: "partial", reasons: ["not_recorded", "unplaced"], omitted_events: 0 }
+  record.schema = "desk.factory.context/2"
+  record.recommendations = []
+  record.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
   record.privacy.payload_sha256 = contextPayloadHash(record)
   const reviewSeal = createHmac("sha256", await readMachineSecret(f.env))
     .update(stableStringify({ kind: "review", basis: f.work.basis, value: record })).digest("hex")

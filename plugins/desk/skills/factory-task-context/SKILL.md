@@ -39,6 +39,8 @@ Indexed user messages establish only requests recorded in that conversation; for
 
 If the conversation supports safe observations and a concrete proposal, use partial coverage with both `not_recorded` and `unplaced`. Do not calculate durations or cite an interval from indexed text.
 
+When `source_selection` is `indexed_conversation`, also include `selected_sessions` in partial coverage. This declares that only the listed sessions support the explanation; changing unselected siblings do not. Never use this reason for an ordinary full-source brief.
+
 References to that source may use only `start`, `share_start` or `share_end`, as source-scope references, not action times. Never make a waiting event from indexed evidence. Unknown timing remains unplaced in the reader.
 
 Establish the actual request, work, dependency, resumption and result separately. A card title is not proof of the original request. A tool kind does not establish a production stage or business result. Do not imply delivery or acceptance that the lifecycle evidence does not record.

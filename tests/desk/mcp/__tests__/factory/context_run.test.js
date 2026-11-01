@@ -123,6 +123,22 @@ test("indexed conversation briefs expose provenance without timed intervals or d
   await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
     json({ schema_version: 1, stores: { [STORE]: { [entry.localJobs[0].local]: [entry.nativeContext.session] } } }))
   await rename(entry.logPath, `${entry.logPath}.retained`)
+  const revokedId = "12345678-1234-4123-8123-123456789abc"
+  const sibling = structuredClone(entry)
+  sibling.facts.session.id = revokedId
+  sibling.nativeContext.session = revokedId
+  sibling.logPath = join(f.root, "revoked-log.jsonl")
+  f.entries.push(sibling)
+  db.prepare("INSERT INTO sessions VALUES (?, ?)").run(revokedId, f.desk)
+  db.prepare("INSERT INTO turns VALUES (?, 0, '2026-10-01 00:00:01', 'REVOKED SOURCE', 'Not approved now')").run(revokedId)
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
+    json({ schema_version: 1, stores: { [STORE]: { [entry.localJobs[0].local]: [entry.nativeContext.session, revokedId] } } }))
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null })
+  const [beforeRevocation] = await listContextWork(f.env, { store: STORE })
+  const revokedFile = await taskContextPath(f.env, STORE, entry.localJobs[0].local,
+    beforeRevocation.source.private_evidence.find(e => e.session === revokedId).conversation.file)
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
+    json({ schema_version: 1, stores: { [STORE]: { [entry.localJobs[0].local]: [entry.nativeContext.session] } } }))
   await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null })
   const automatic = await runner.runTaskContextStep(f.env, f.options)
   assert.equal(automatic.launched, false, "automatic callers cannot select indexed conversation work")
@@ -131,6 +147,10 @@ test("indexed conversation briefs expose provenance without timed intervals or d
   const result = await runner.runRequestedTaskContext(f.env, { ...f.options, store: STORE, job: entry.localJobs[0].published, runHeadless: async options => {
     seen = true
     const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    assert.ok(!options.logDirs.some(dir => revokedFile === dir || revokedFile.startsWith(`${dir}${sep}`)),
+      "retained revoked text must be outside every model grant")
+    assert.ok(brief.input_file.startsWith(`${options.workDir}${sep}`))
+    assert.ok(brief.output.startsWith(`${options.workDir}${sep}`))
     assert.equal(brief.evidence_outline[0].evidence_kind, "native_copilot_turn_index")
     assert.equal(brief.evidence_outline[0].clock_origin, null)
     assert.deepEqual(brief.evidence_outline[0].intervals, [])
@@ -158,6 +178,20 @@ async function legacyInput(f) {
   await replaceContextInput(f.env, STORE, work, input)
   return input
 }
+
+test("a model cannot alter its staged source copy and still have its output accepted", async () => {
+  const f = await fixture()
+  const result = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async options => {
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    const output = await f.options.runHeadless(options)
+    const bytes = await readFile(brief.input_file, "utf8")
+    await writeFile(brief.input_file, `${bytes} `)
+    return output
+  } })
+  assert.equal(result.result, "context_source_changed")
+  assert.equal(result.launched, true)
+  assert.equal(result.accepted, 0)
+})
 
 test("legacy null-card inputs retain their completed-lookup meaning in native briefs", async () => {
   const f = await fixture()
@@ -623,7 +657,7 @@ test("unavailable optional cards stay explicit in both native briefs without gra
   assert.deepEqual(phases, ["candidate", "privacy"])
 })
 
-for (const legacy of [false, true]) test(`the ${legacy ? "legacy" : "current"} native task-card handoff exposes its verified pointer and only its own directory`, async () => {
+for (const legacy of [false, true]) test(`the ${legacy ? "legacy" : "current"} native task-card handoff exposes only its staged verified copy`, async () => {
   const f = await fixture(0)
   const remote = "https://github.com/synthetic/desk.git"
   const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -654,14 +688,12 @@ for (const legacy of [false, true]) test(`the ${legacy ? "legacy" : "current"} n
     assert.equal((await listContextWork(f.env, { store: STORE }))[0].basis, before.basis)
   }
   await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async (options) => {
-    assert.equal(options.logDirs.includes(folder), true)
+    assert.equal(options.logDirs.includes(folder), false)
     assert.equal(options.logDirs.includes(f.desk), false)
     const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
     assert.equal(brief.task_card_status, "associated")
-    assert.deepEqual(brief.task_card, {
-      path: join(folder, "task.md"),
-      sha256: createHash("sha256").update(card).digest("hex"),
-    })
+    assert.ok(brief.task_card.path.startsWith(`${options.workDir}${sep}`))
+    assert.equal(brief.task_card.sha256, createHash("sha256").update(card).digest("hex"))
     assert.equal(await readFile(brief.task_card.path, "utf8"), card)
     return { state: "failed", cost_usd: null }
   } })

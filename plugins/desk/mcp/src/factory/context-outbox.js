@@ -520,10 +520,16 @@ async function freshState(env, store, job, basis) {
   return input === null ? null : { state, input }
 }
 
+export async function contextEvidenceCurrent(env, { store, job, basis, phase }) {
+  const current = await freshState(env, store, job, basis)
+  return current !== null && current.state.phase === phase
+}
+
 function indexedContextSafe(value, input) {
   const indexed = new Set(input.private_evidence.filter(entry => entry.conversation !== undefined).map(entry => entry.session))
+  if (value.coverage.reasons.includes("selected_sessions") && input.source_selection !== "indexed_conversation") return false
   if (indexed.size === 0 || value.state !== "published") return true
-  if (value.coverage.state !== "partial" || !["not_recorded", "unplaced"].every(reason => value.coverage.reasons.includes(reason))) return false
+  if (value.coverage.state !== "partial" || !["not_recorded", "unplaced", "selected_sessions"].every(reason => value.coverage.reasons.includes(reason))) return false
   return value.events.every(event => event.evidence.every(ref => !indexed.has(ref.session) ||
     event.kind !== "waiting" && ["start", "share_start", "share_end"].includes(ref.anchor)))
 }
