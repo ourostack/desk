@@ -303,7 +303,7 @@ test("work-orchestration invokes only pristine, pinned Superpowers skills for di
     const file = source.files.find((entry) => entry.sourcePath === sourcePath)
     assert.ok(file, `the lock must pin ${sourcePath}`)
     assert.equal(
-      createHash("sha256").update(readFileSync(new URL(file.generatedPath, repoRoot))).digest("hex"),
+      createHash("sha256").update(readFileSync(new URL(file.upstreamPath ?? file.generatedPath, repoRoot))).digest("hex"),
       file.sha256,
       file.generatedPath,
     )

@@ -27,7 +27,7 @@ test("Superpowers provider is pinned, licensed, and byte-bound through the exist
   assert.ok(source.files.some((file) => file.sourcePath === "LICENSE"))
   for (const file of source.files) {
     assert.equal(
-      createHash("sha256").update(readFileSync(path.join(repoRoot, file.generatedPath))).digest("hex"),
+      createHash("sha256").update(readFileSync(path.join(repoRoot, file.upstreamPath ?? file.generatedPath))).digest("hex"),
       file.sha256,
       file.generatedPath,
     )
@@ -73,6 +73,9 @@ test("shipped Superpowers root manifest binds existing skills and the authored C
     },
   })
   assert.equal(statSync(path.join(pluginRoot, "hooks/run-hook.cmd")).isFile(), true)
+  for (const file of ["run-hook.cmd", "run-hook-unix", "run-hook-compat.provenance.json"]) {
+    assert.equal(statSync(path.join(pluginRoot, "hooks", file)).isFile(), true)
+  }
   assert.equal(statSync(path.join(pluginRoot, "hooks/session-start")).isFile(), true)
   const source = readJson("upstream-sources.lock.json").sources.find((entry) => entry.repository === "obra/superpowers")
   assert.ok(source)

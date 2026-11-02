@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.2.50",
+  "version": "3.2.51",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/desk"
@@ -38,7 +38,7 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.4.4",
+          "version": "6.4.5",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         },

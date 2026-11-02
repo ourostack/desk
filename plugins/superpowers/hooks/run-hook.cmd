@@ -1,4 +1,4 @@
-: << 'CMDBLOCK'
+:; d="${0%[/\\]*}"; if [ "$d" = "$0" ]; then d=.; fi; exec "${BASH:-bash}" "$d/run-hook-unix" "$@"; exit $?
 @echo off
 REM Cross-platform polyglot wrapper for hook scripts.
 REM On Windows: cmd.exe runs the batch portion, which finds and calls bash.
@@ -37,10 +37,3 @@ if %ERRORLEVEL% equ 0 (
 REM No bash found - exit silently rather than error
 REM (plugin still works, just without SessionStart context injection)
 exit /b 0
-CMDBLOCK
-
-# Unix: run the named script directly
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT_NAME="$1"
-shift
-exec bash "${SCRIPT_DIR}/${SCRIPT_NAME}" "$@"
