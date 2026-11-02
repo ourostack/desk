@@ -55,7 +55,9 @@ test("Superpowers wrapper reaches an owned hook without hanging in the batch pre
 test("Superpowers wrapper preserves spaced, empty and literal shell arguments", (t) => {
   const owned = fixture(t)
   writeFileSync(path.join(owned.hooks, "probe"), 'printf "<%s>\\n" "$@"\n')
-  const result = run(bash, [owned.wrapper, "probe", "space value", "", "it's literal", "$HOME", "*", ";", "7", "8", "9", "10"])
+  // Build literal argv inside Bash so MSYS startup globbing cannot expand native "*" arguments first.
+  const result = run(bash, ["-c", `exec "$BASH" "$1" probe 'space value' '' "it's literal" '$HOME' '*' ';' 7 8 9 10`,
+    "owned-argument-probe", owned.wrapper])
   assert.equal(result.status, 0)
   assert.equal(result.stdout, "<space value>\n<>\n<it's literal>\n<$HOME>\n<*>\n<;>\n<7>\n<8>\n<9>\n<10>\n")
   assert.equal(result.stderr, "")
@@ -139,8 +141,8 @@ test("Superpowers wrapper dispatches an owned hook through native cmd.exe", { sk
   writeFileSync(path.join(owned.hooks, "probe"), 'printf "<%s>\\n" "$@"\n')
   const result = run(process.env.ComSpec || "cmd.exe", [
     "/d", "/s", "/c", `""${owned.wrapper}" probe "space value" "" tail"`,
-  ], { cwd: owned.root })
-  assert.equal(result.status, 0)
+  ], { cwd: owned.root, windowsVerbatimArguments: true })
+  assert.equal(result.status, 0, `native cmd dispatch failed: ${result.stderr}`)
   assert.equal(result.stdout.replaceAll("\r\n", "\n"), "<space value>\n<>\n<tail>\n")
   assert.equal(result.stderr, "")
 })

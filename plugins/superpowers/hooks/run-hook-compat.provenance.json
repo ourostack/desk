@@ -10,7 +10,7 @@
   "transform": {
     "id": "split-batch-unix-v1",
     "generator": "scripts/superpowers-hook-compat.cjs",
-    "sha256": "07c7d7f95c2ed791bcddb2c194689e9080cc347c958e760d5868745ec2a1de75"
+    "sha256": "075b6c4a1b1ba2148f913be49100359f8a51b41bdeb4a85fd36ffce5411a8c5c"
   },
   "outputs": [
     {

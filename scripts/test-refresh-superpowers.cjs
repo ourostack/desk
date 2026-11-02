@@ -650,7 +650,9 @@ for (const changedPath of [
     assert.equal(injected, true);
     assert.equal(readFixture(root, changedPath), "foreign no-change consumer content\n");
     for (const [file, bytes] of Object.entries(before)) {
-      if (file !== changedPath) assert.equal(readFixture(root, file), bytes, "refusal leaves every other consumer file unchanged");
+      if (path.normalize(file) !== path.normalize(changedPath)) {
+        assert.equal(readFixture(root, file), bytes, "refusal leaves every other consumer file unchanged");
+      }
     }
   } finally {
     removeFixture(tempRoot);

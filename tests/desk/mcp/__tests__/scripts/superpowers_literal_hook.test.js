@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { createRequire } from "node:module"
-import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
@@ -77,6 +77,10 @@ test("upstream refresh writes only the explicit evidence path, retaining downstr
   assert.equal(updated.upstreamPath, rawPath)
   assert.equal(updated.sha256, hash("new upstream\n"))
   assert.equal(updateSource({ lockPath, sourceId: "fixture", upstream: upstream("new upstream\n") }).changed, false)
+  assert.throws(() => updateSource({ lockPath, sourceId: "fixture", upstream: upstream("new upstream\n"), fsOps: {} }), /explicit filesystem admission/)
+  unlinkSync(path.join(root, rawPath))
+  assert.equal(updateSource({ lockPath, sourceId: "fixture", upstream: upstream("new upstream\n") }).changed, true)
+  assert.equal(readFileSync(path.join(root, rawPath), "utf8"), "new upstream\n")
   for (const invalid of ["../outside", "/absolute", "plugins/provider/../outside", actualPath]) {
     lock.sources[0].files[0].upstreamPath = invalid
     writeFileSync(lockPath, JSON.stringify(lock))

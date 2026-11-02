@@ -105,7 +105,7 @@ function admitJournalStat(stat, expected) {
 
 function readOwnedJournal(file, expected, io = fs) {
   admitJournalStat(io.lstatSync(file), expected);
-  const fd = io.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  const fd = io.openSync(file, io.constants.O_RDONLY | (io.constants.O_NOFOLLOW ?? 0));
   try {
     const identity = admitJournalStat(io.fstatSync(fd), expected);
     const content = io.readFileSync(fd);
@@ -121,8 +121,8 @@ function writeOwnedJournal(file, expected, previous, next, initial, io = fs) {
   if (!initial) {
     if (!expected || !readOwnedJournal(file, expected, io).content.equals(previous)) throw new Error("original guard journal changed");
   }
-  const flags = fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0)
-    | (initial ? fs.constants.O_CREAT | fs.constants.O_EXCL : 0);
+  const flags = io.constants.O_RDWR | (io.constants.O_NOFOLLOW ?? 0)
+    | (initial ? io.constants.O_CREAT | io.constants.O_EXCL : 0);
   const fd = io.openSync(file, flags, 0o600);
   try {
     const identity = admitJournalStat(io.fstatSync(fd), initial ? null : expected);
