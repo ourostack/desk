@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { execFileSync, spawnSync } from "node:child_process"
 import { removeTree } from "../_remove_tree.js"
+import { otherFile } from "../_file_identity.js"
 
 const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
 const require = createRequire(import.meta.url)
@@ -117,7 +118,7 @@ for (const mode of ["identity", "cleanup-noop"]) {
       if (to.startsWith(f.root) && to.endsWith("superpowers-7.0.0.md")) published = true
     }, lstatSync(file) {
       const stat = fs.lstatSync(file)
-      return mode === "identity" && published && file === candidate ? { ...stat, ino: stat.ino + 1, isDirectory: () => true } : stat
+      return mode === "identity" && published && file === candidate ? { ...stat, ...otherFile(stat), isDirectory: () => true } : stat
     }, rmSync(file, ...args) {
       if (mode === "cleanup-noop" && file === candidate) return
       return fs.rmSync(file, ...args)
