@@ -1,3 +1,54 @@
 # Desk black-box tester
 
+## Optional #581 failure observations
+
+The default is unchanged. Only the exact output controls `CI=true`,
+`GITHUB_ACTIONS=true` and `DESK_BLACKBOX_NATIVE_RECEIPT_TRACE=1` together enable
+the diagnostic. They do not authenticate CI or authorize native work. Only the
+measured desk-server launch receives the three controls; the isolated person
+environment, hooks, desk-web and existing warmup do not inherit them.
+
+On `task_archive` exceptions, a descriptor-only, Proxy-rejecting projector
+selects bounded structural observations from the existing receipt. These are
+untrusted data, not a local brand, native admission, OS closure or execution
+proof. Ordinary MCP answers and error messages remain unchanged. The new
+projection never invokes getters, coercion, iterators, `toJSON` or `cause`;
+this guarantee does not change the normal error serializer's existing behavior.
+
+The stderr codec is `DESK_NATIVE_RECEIPT_V1 ` followed by one bounded JSON frame.
+The client reprojects it, binds numeric RPC IDs at dispatch to source-owned
+host/repeat/case/desk-instance context, and preserves bounded completed bindings
+for late frames. Evicted or unscoped frames remain unmatched, never attributed
+to the currently running check. There are no additional waits or retries.
+Only failed-case observations enter `native_receipt_trace` in the existing
+`--out` JSON: at most 64 KiB per case and 1 MiB across the job, including
+correlation/framing and reserved status space. Missing fields/times/counts stay
+unknown; counters and per-case truncation record incomplete collection.
+With this explicit diagnostic opt-in only, the JSON artifact uses compact
+serialization; default-off JSON retains its existing two-space indentation.
+The same serializer accounts admission and writes the artifact. Budgets charge
+actual UTF-8 record/case metadata and array separators, with a schema-derived
+maximum counter/source envelope; no accumulating job is built to measure an
+admission. Counter growth and source identity therefore cannot exceed the job
+cap after observations have been retained. JSON values, checks and Markdown
+are unchanged by the opt-in formatting difference.
+No new raw stderr, paths, environment values, payloads, PID/handles or tokens
+are retained. `native_receipt_source` separately records fixed source hashes,
+HEAD and a nullable dirty indicator, not raw Git status. Markdown and normal
+checks/summary/verdicts are unchanged.
+
+The nonrequired `Desk native receipt diagnostic 581` workflow runs one Windows
+job for PR580's `synchronize` event when its own workflow path matches. It tests
+the exact PR head, not the ordinary event merge checkout, and reports both
+identities separately. It leaves required workflows and concurrency untouched.
+Its name does not configure branch protection: effective required checks must
+be verified before publication. PR path filters use the cumulative diff, so
+later source pushes can trigger another diagnostic even without editing this
+file. One admitted introduction push/attempt is operation policy, not one-shot
+enforcement; further pushes need fresh admission or a separately reviewed
+route-disable change.
+
+An all-pass error-only trace establishes no successful native stage timeline.
+Historical failures, root cause and normal required CI gates remain separate.
+
 Run `node tests/blackbox/run.mjs` from the repository root with Node 22 or later and Git on `PATH`; it needs no `npm install`. It copies the shipped `plugins/desk`, `superpowers`, `plain-language` and `crew` folders into a throwaway home laid out the way Copilot and Claude Code install them, builds a small Git desk with a local bare remote, and then, for each host, runs that host's hooks from its hook manifest, starts the `desk` and `desk-web` MCP servers from its MCP config and the boot script, and checks every Desk tool, search, Git commits and pushes, plain error messages and the browser. It never imports Desk's source, so a refactor that keeps behavior passes. It fails on any broken check or any place Copilot does worse than Claude Code (fewer tools, skills or agents, a weaker hook result, more failures, or clearly slower), and writes `blackbox-<label>.json` and `.md` (timings as p50 and p95, server cold start, boot time, peak memory, time to the first meaning-based recall, pass and fail counts) to `--out` (default: the OS temp folder). Useful flags: `--repeat N` reruns everything N times to find flakes, `--hosts copilot` or `--hosts claude` runs one host, `--no-browser` skips the browser, `--mine` also opens a copy of your own browser profile (local only), `--cache-dir <dir>` keeps the downloaded search model and browser driver between runs (`--no-cache` measures a true first run), and `--keep` leaves the temp folder for inspection. A check that fails on `main` because of a real bug goes in `KNOWN` in `run.mjs` with its reason, never by loosening the check. `node tests/blackbox/real-hosts.mjs` is the separate end-to-end layer: it runs a few real `agency copilot` and `claude -p` sessions on this machine and is not run in CI.
