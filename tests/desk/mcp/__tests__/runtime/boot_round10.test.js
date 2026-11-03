@@ -297,41 +297,94 @@ test("a task_archive whose controlled relocation fails leaves no empty _archive 
   assert.deepEqual(await tree(root), before)
 })
 
+test("an in-flight child hold precedes directory readiness, so assertions must await its callback", async (t) => {
+  const root = await mkTempRoot("desk-round10-readiness-")
+  const parent = path.join(root, "a")
+  const target = path.join(parent, "b")
+  let releaseMkdir, enteredMkdir, releaseChild, enteredChild
+  const mkdirGate = new Promise((resolve) => { releaseMkdir = resolve })
+  const mkdirReady = new Promise((resolve) => { enteredMkdir = resolve })
+  const childGate = new Promise((resolve) => { releaseChild = resolve })
+  const childReady = new Promise((resolve) => { enteredChild = resolve })
+  const mkdir = fs.mkdir.bind(fs)
+  t.mock.method(fs, "mkdir", async (directory, ...args) => {
+    if (directory === target) {
+      enteredMkdir()
+      await mkdirGate
+    }
+    return mkdir(directory, ...args)
+  })
+  const child = withCreatedDirs(target, async () => { enteredChild(); await childGate })
+  try {
+    await Promise.race([mkdirReady, child])
+    await assert.rejects(withCreatedDirs(parent, async () => { throw new Error("parent failed") }), /parent failed/u)
+    assert.ok((await fs.stat(parent)).isDirectory(), "the registered child hold protects its parent before child creation finishes")
+    await assert.rejects(async () => {
+      assert.ok((await fs.stat(target)).isDirectory())
+    }, { code: "ENOENT" }, "the old readiness assertion fails while the child mkdir is deliberately held")
+    releaseMkdir()
+    await Promise.race([childReady, child])
+    assert.ok((await fs.stat(target)).isDirectory(), "callback entry proves the directory is ready")
+  } finally {
+    releaseMkdir()
+    releaseChild()
+    await Promise.allSettled([child])
+  }
+})
+
 test("two concurrent calls into a new folder: the one that made it fails, the other still finds it, and the folder stays", async () => {
   const root = await mkTempRoot("desk-round10-race-")
   const target = path.join(root, "new", "dest")
-  let releaseFirst
-  let releaseSecond
+  let releaseFirst, enteredFirst
+  let releaseSecond, enteredSecond
   const firstGate = new Promise((resolve) => { releaseFirst = resolve })
   const secondGate = new Promise((resolve) => { releaseSecond = resolve })
-  const first = withCreatedDirs(target, async () => { await firstGate; throw new Error("first failed") })
-  await new Promise((resolve) => setTimeout(resolve, 10))
-  const second = withCreatedDirs(target, async () => { await secondGate; return (await fs.stat(target)).isDirectory() })
-  await new Promise((resolve) => setTimeout(resolve, 10))
-  releaseFirst()
-  await assert.rejects(first, /first failed/u)
-  assert.ok((await fs.stat(target)).isDirectory(), "the folder the second call is using survives the first call's failure")
-  releaseSecond()
-  assert.equal(await second, true)
-  assert.ok((await fs.stat(target)).isDirectory(), "and stays after the second succeeds")
+  const firstReady = new Promise((resolve) => { enteredFirst = resolve })
+  const secondReady = new Promise((resolve) => { enteredSecond = resolve })
+  const first = withCreatedDirs(target, async () => { enteredFirst(); await firstGate; throw new Error("first failed") })
+  let second
+  try {
+    await Promise.race([firstReady, first])
+    second = withCreatedDirs(target, async () => { enteredSecond(); await secondGate; return (await fs.stat(target)).isDirectory() })
+    await Promise.race([secondReady, second])
+    releaseFirst()
+    await assert.rejects(first, /first failed/u)
+    assert.ok((await fs.stat(target)).isDirectory(), "the folder the second call is using survives the first call's failure")
+    releaseSecond()
+    assert.equal(await second, true)
+    assert.ok((await fs.stat(target)).isDirectory(), "and stays after the second succeeds")
+  } finally {
+    releaseFirst()
+    releaseSecond()
+    await Promise.allSettled([first, second])
+  }
 })
 
 test("a parent folder is kept while another in-flight call works under it, and removed once nothing does", async () => {
   const root = await mkTempRoot("desk-round10-race2-")
-  let releaseChild
+  let releaseChild, enteredChild, releaseOther, enteredOther
   const childGate = new Promise((resolve) => { releaseChild = resolve })
-  const child = withCreatedDirs(path.join(root, "a", "b"), async () => { await childGate })
-  await new Promise((resolve) => setTimeout(resolve, 10))
-  await assert.rejects(withCreatedDirs(path.join(root, "a"), async () => { throw new Error("parent failed") }), /parent failed/u)
-  assert.ok((await fs.stat(path.join(root, "a", "b"))).isDirectory())
-  let releaseOther
-  const other = withCreatedDirs(path.join(root, "unrelated"), async () => { await new Promise((resolve) => { releaseOther = resolve }) })
-  await new Promise((resolve) => setTimeout(resolve, 10))
-  await assert.rejects(withCreatedDirs(path.join(root, "x", "y"), async () => { throw new Error("alone") }), /alone/u)
-  await assert.rejects(fs.stat(path.join(root, "x")), { code: "ENOENT" }, "an unrelated in-flight folder does not keep it")
-  releaseOther()
-  releaseChild()
-  await Promise.all([child, other])
+  const childReady = new Promise((resolve) => { enteredChild = resolve })
+  const otherGate = new Promise((resolve) => { releaseOther = resolve })
+  const otherReady = new Promise((resolve) => { enteredOther = resolve })
+  const child = withCreatedDirs(path.join(root, "a", "b"), async () => { enteredChild(); await childGate })
+  let other
+  try {
+    await Promise.race([childReady, child])
+    await assert.rejects(withCreatedDirs(path.join(root, "a"), async () => { throw new Error("parent failed") }), /parent failed/u)
+    assert.ok((await fs.stat(path.join(root, "a", "b"))).isDirectory())
+    other = withCreatedDirs(path.join(root, "unrelated"), async () => { enteredOther(); await otherGate })
+    await Promise.race([otherReady, other])
+    await assert.rejects(withCreatedDirs(path.join(root, "x", "y"), async () => { throw new Error("alone") }), /alone/u)
+    await assert.rejects(fs.stat(path.join(root, "x")), { code: "ENOENT" }, "an unrelated in-flight folder does not keep it")
+    releaseOther()
+    releaseChild()
+    await Promise.all([child, other])
+  } finally {
+    releaseOther()
+    releaseChild()
+    await Promise.allSettled([child, other])
+  }
 })
 
 // ── Review: ceiling, blocker forms, sort order, terminal status ─────────
