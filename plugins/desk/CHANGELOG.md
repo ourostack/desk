@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.55 — 2026-11-03
+
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.54 — 2026-11-03
 
 Boot sync wait expiry now reports pending/unknown effects rather than claiming nothing was pulled or pushed. JSON and plain-text startup instructions require safe account-scoped direct Git recovery before reporting local-only state, and no longer mandate a stale-state opener after successful recovery. Session-start and desk-problem guidance require fresh fetch and exact state-branch ahead/behind evidence, preserve other writers and real access barriers, and suppress the timeout banner only after verified current commits. This does not qualify the timed-out helper or change its worker/retry architecture.
