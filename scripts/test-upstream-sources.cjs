@@ -34,7 +34,7 @@ const checkedInLock = JSON.parse(
 
 for (const lockedSource of checkedInLock.sources) {
   for (const file of lockedSource.files) {
-    const generated = path.join(repoRoot, file.generatedPath);
+    const generated = path.join(repoRoot, file.upstreamPath ?? file.generatedPath);
     assert.equal(fs.statSync(generated).isFile(), true);
     assert.equal(hash(fs.readFileSync(generated)), file.sha256, `${file.generatedPath} hash drifted`);
   }

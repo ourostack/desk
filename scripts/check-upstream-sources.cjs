@@ -120,6 +120,7 @@ function inspectSource(source, github) {
   if (!Array.isArray(source.files) || source.files.length === 0) {
     throw new Error(`source ${source.id} has no selected files`);
   }
+  if (source.files.some((file) => file.upstreamPath !== undefined)) generatedPrefix(source);
   // The Apache-2.0 exception was approved for the Gauntlet files under the license text reviewed at commit
   // 187a9af979a7cf096c0890d0eeb998cc3008343a, so it follows those LICENSE bytes rather than one commit: an upstream
   // move that leaves the license alone keeps the approval, and one that changes it lists LICENSE as a changed path.
@@ -178,6 +179,7 @@ function inspectSource(source, github) {
     return {
       source_path: file.sourcePath,
       generated_path: file.generatedPath,
+      ...(file.upstreamPath === undefined ? {} : { upstream_path: file.upstreamPath }),
       locked_sha256: file.sha256,
       candidate_sha256: candidateSha256,
       changed: candidateSha256 !== file.sha256,
@@ -305,7 +307,22 @@ function generatedPrefix(source) {
   if (prefixes.size !== 1) {
     throw new Error(`${source.id}: generated paths do not share one vendored root`);
   }
-  return [...prefixes][0];
+  const prefix = [...prefixes][0];
+  const destinations = new Set(source.files.map((file) => file.generatedPath));
+  if (source.files.filter((file) => file.upstreamPath !== undefined).length > 1) {
+    throw new Error(`${source.id}: only one upstream hook evidence path is supported`);
+  }
+  for (const file of source.files) {
+    if (file.upstreamPath === undefined) continue;
+    if (file.sourcePath !== "hooks/run-hook.cmd" || typeof file.upstreamPath !== "string"
+      || file.upstreamPath !== `${prefix}hooks/upstream/run-hook.cmd` || !file.upstreamPath.startsWith(prefix)
+      || file.upstreamPath.includes("\\") || file.upstreamPath.split("/").some((part) => part === "." || part === ".." || part === "")
+      || destinations.has(file.upstreamPath)) {
+      throw new Error(`${source.id}: invalid or colliding upstream evidence path for ${file.sourcePath}`);
+    }
+    destinations.add(file.upstreamPath);
+  }
+  return prefix;
 }
 
 function selectedUpstreamPaths(source, upstream) {
@@ -348,7 +365,7 @@ function selectedUpstreamPaths(source, upstream) {
 
 function formatFileEntry(file, compact) {
   if (compact) {
-    return `{"sourcePath": ${JSON.stringify(file.sourcePath)}, "generatedPath": ${JSON.stringify(file.generatedPath)}, "sha256": ${JSON.stringify(file.sha256)}}`;
+    return `{"sourcePath": ${JSON.stringify(file.sourcePath)}, "generatedPath": ${JSON.stringify(file.generatedPath)}, "sha256": ${JSON.stringify(file.sha256)}${file.upstreamPath === undefined ? "" : `, "upstreamPath": ${JSON.stringify(file.upstreamPath)}`}}`;
   }
   return JSON.stringify(file, null, 2).replace(/\n/gu, "\n        ");
 }
@@ -398,11 +415,28 @@ const defaultFsOps = {
       directory = path.dirname(directory);
     }
   },
+  admitEvidencePath(filePath, root) {
+    filePath = path.resolve(filePath);
+    root = path.resolve(root);
+    let current = filePath;
+    while (current !== root) {
+      try {
+        const stat = fs.lstatSync(current);
+        if (current === filePath ? !stat.isFile() || stat.nlink !== 1 : !stat.isDirectory()) {
+          throw new Error(`upstream evidence path is not a regular file/directory: ${current}`);
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      current = path.dirname(current);
+    }
+  },
 };
 
 // Refreshes one locked source from an upstream tree: every selected file is copied byte for byte with its executable
 // bit, removed files are deleted, and the lock records the new commit and hashes. When no selected byte or mode
 // changed, nothing is written, so an upstream commit that touches only unselected files is not a refresh.
+// The optional hook evidence path receives raw bytes; downstream output is left to the owning transform.
 function updateSource({ lockPath, sourceId, upstream, fsOps = defaultFsOps }) {
   const lockText = fs.readFileSync(lockPath, "utf8");
   const lock = JSON.parse(lockText);
@@ -410,6 +444,12 @@ function updateSource({ lockPath, sourceId, upstream, fsOps = defaultFsOps }) {
   if (!source) throw new Error(`upstream source lock has no source ${sourceId}`);
   const root = path.dirname(lockPath);
   const prefix = generatedPrefix(source);
+  for (const file of source.files) {
+    if (file.upstreamPath !== undefined) {
+      if (typeof fsOps.admitEvidencePath !== "function") throw new Error("upstream evidence path requires explicit filesystem admission");
+      fsOps.admitEvidencePath(path.join(root, file.upstreamPath), root);
+    }
+  }
   const { selected, unselectedSkills } = selectedUpstreamPaths(source, upstream);
   const locked = new Map(source.files.map((file) => [file.sourcePath, file]));
   const report = {
@@ -430,8 +470,9 @@ function updateSource({ lockPath, sourceId, upstream, fsOps = defaultFsOps }) {
   for (const sourcePath of selected) {
     const content = upstream.read(sourcePath);
     const file = { sourcePath, generatedPath: `${prefix}${sourcePath}`, sha256: sha256(content) };
+    if (locked.get(sourcePath)?.upstreamPath !== undefined) file.upstreamPath = locked.get(sourcePath).upstreamPath;
     files.push(file);
-    const target = path.join(root, file.generatedPath);
+    const target = path.join(root, file.upstreamPath ?? file.generatedPath);
     const mode = REGULAR_FILE_MODES.get(upstream.entries.get(sourcePath).mode);
     const present = fsOps.exists(target);
     if (!locked.has(sourcePath)) report.added_paths.push(sourcePath);
@@ -456,7 +497,8 @@ function updateSource({ lockPath, sourceId, upstream, fsOps = defaultFsOps }) {
   }
   const vendoredRoot = path.join(root, prefix);
   for (const sourcePath of report.removed_paths) {
-    const target = path.join(root, locked.get(sourcePath).generatedPath);
+    const previous = locked.get(sourcePath);
+    const target = path.join(root, previous.upstreamPath ?? previous.generatedPath);
     fsOps.remove(target);
     fsOps.pruneEmptyParents(target, path.resolve(vendoredRoot));
   }

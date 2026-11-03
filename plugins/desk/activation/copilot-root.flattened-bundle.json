@@ -23,7 +23,7 @@
     },
     {
       "id": "superpowers",
-      "version": "6.4.4",
+      "version": "6.4.5",
       "plugin": "plugins/superpowers/plugin.json",
       "skills": "plugins/superpowers/skills/"
     },
