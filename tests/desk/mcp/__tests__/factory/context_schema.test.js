@@ -70,6 +70,19 @@ test("context publishes a separately reviewed work explanation without changing 
   assert.equal(context.contextPayloadHash(value), value.privacy.payload_sha256)
 })
 
+test("GivenSelectedSessionReasonWithoutPartialRecordedScope_WhenValidated_RefusesIt", () => {
+  for (const variant of ["legacy", "measured", "missing_recorded"]) {
+    const value = record()
+    if (variant !== "legacy") {
+      value.schema = "desk.factory.context/2"
+      value.recommendations = []
+    }
+    value.coverage = { state: variant === "measured" ? "measured" : "partial",
+      reasons: variant === "missing_recorded" ? ["selected_sessions"] : ["selected_sessions", "not_recorded"], omitted_events: 0 }
+    refuses(sign(value), "inconsistent")
+  }
+})
+
 test("evidence ranges reject malformed, nonintegral, negative and nonincreasing endpoints", () => {
   for (const range of [{}, [], [1], [1, 2, 3], ["1", 2], [-1, 2], [0.5, 2], [2, 2], [3, 2]]) {
     const value = record()

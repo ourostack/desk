@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.52 — 2026-11-03
+
+New [`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) skill for keeping CI as fast and cheap as it can be without hiding a failure, for every desk. It covers measuring the critical path and the queue before changing anything; fixing slow tests, time-balanced shards with a guard, lockfile caches, fail-closed path selection and pull-request-only fail-fast and cancellation; standard runners first, paid or larger runners only with an approved budget, per-repository budgets, scarce runner pools and yielding to the default branch; merge-queue build concurrency sized to the runner pool; a budget guard that fails pull requests on the critical path, reports wall clock and ratchets; and cause-first flake handling, with one recorded re-run only for a filed failure signature. GitHub's limits and prices are cited from its documentation, and [`examples.md`](skills/fast-honest-ci/examples.md) works through a public component library and two private repositories.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.51 — 2026-11-01
+
+Let source-bound context use a bounded, read-only Copilot conversation index when a raw log is gone and both native and public facts explicitly bind the whole session to one job. Match the native desk identity, seal the small readable projection and its source digest, preserve independent privacy, and refuse unsupported time placement. Indexed replies remain partial evidence, not verified execution or a recreated event log.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.50 — 2026-10-31
 
 An operator's standing grant can now authorize a credential harness for test tenants they own ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). Under such a grant, agents stop handing the operator a sign-in: they build or reuse a harness that reads the password from the tenant's owning portal, keeps it only in the operating system's credential store, fills it programmatically, registers a software TOTP authenticator and reuses the session. The grant never covers the operator's own corporate or personal credentials or anything they don't own, and no secret ever appears in chat, logs, task cards, repositories or screenshots.
