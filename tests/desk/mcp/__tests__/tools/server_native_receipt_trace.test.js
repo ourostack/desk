@@ -243,3 +243,199 @@ test("SDK handler supplies safe request context but does not inspect unrelated m
     }
   }
 })
+
+test("environment descriptor rejection disables diagnostics without evaluating control getters", () => {
+  let getterCalls = 0
+  for (const key of ["CI", "GITHUB_ACTIONS", "DESK_BLACKBOX_NATIVE_RECEIPT_TRACE"]) {
+    const env = { ...controls }
+    Object.defineProperty(env, key, { get() { getterCalls++; throw Error("must not evaluate environment getter") } })
+    assert.equal(server.nativeReceiptTraceEnabled(env), false, key)
+  }
+  assert.equal(getterCalls, 0)
+})
+
+test("absent, unknown and present-empty receipt arrays preserve incomplete observational evidence", () => {
+  for (const status of ["absent", "unknown", "present"]) {
+    const receipt = snapshot()
+    if (status === "absent") {
+      delete receipt.events
+      delete receipt.protocolIssues
+    } else {
+      receipt.events = status === "unknown" ? null : []
+      receipt.protocolIssues = status === "unknown" ? null : []
+    }
+    delete receipt.droppedEvents
+    receipt.stdoutBytes = null
+    const out = project(receipt)
+    assert.equal(out.status, "available")
+    assert.deepEqual(out.events, [])
+    assert.deepEqual(out.protocolIssues, [])
+    assert.equal(out.fieldStatus.events, status)
+    assert.equal(out.fieldStatus.protocolIssues, status)
+    assert.equal(out.incomplete, true)
+    assert.equal(out.originComplete, false)
+    assert.equal(out.droppedEvents, null)
+    assert.equal(out.fieldStatus.droppedEvents, "absent")
+    assert.equal(out.stdoutBytes, null)
+    assert.equal(out.fieldStatus.stdoutBytes, "unknown")
+    assert.equal(out.handles.opened, null)
+    assert.equal(out.capturedValidated, false)
+    assert.equal(out.executedProgramSha256, null)
+  }
+})
+
+test("scope mismatches are unavailable without coercing structural input", () => {
+  let coercions = 0
+  for (const scope of [undefined, null, 1, "wrong", "x".repeat(35), { toString() { coercions++; return "archive_native_preadmission_session" } }]) {
+    const receipt = snapshot()
+    receipt.scope = scope
+    assert.deepEqual(project(receipt), {
+      schemaVersion: 1, observationalOnly: true, tool: "task_archive",
+      status: "unavailable", code: "receipt_unavailable", incomplete: true,
+    })
+  }
+  assert.equal(coercions, 0)
+})
+
+test("array-shaped nonarrays are rejected before their length getters can run", () => {
+  let getterCalls = 0
+  for (const key of ["events", "protocolIssues"]) {
+    const receipt = snapshot()
+    receipt[key] = { get length() { getterCalls++; throw Error("must not inspect array lookalike length") } }
+    assert.equal(project(receipt).status, "unavailable", key)
+  }
+  assert.equal(getterCalls, 0)
+})
+
+test("null nested observations remain unknown rather than confirmed disposal or zero counts", () => {
+  const receipt = snapshot()
+  for (const key of ["bounds", "handles", "archiveMove", "exit", "close"]) receipt[key] = null
+  const out = project(receipt)
+  for (const key of ["bounds", "handles", "archiveMove", "exit", "close"]) assert.equal(out.fieldStatus[key], "unknown")
+  assert.equal(out.incomplete, true)
+  assert.equal(out.handles.opened, null)
+  assert.equal(out.handles.closeAttempts, null)
+  assert.equal(out.handles.closed, null)
+  assert.equal(out.handles.confirmedDisposed, null)
+  assert.equal(out.archiveMove.closed, null)
+  assert.equal(out.archiveMove.retirement, null)
+  assert.deepEqual(out.exit, { observed: false, code: null, signal: null })
+  assert.deepEqual(out.close, { observed: false, code: null, signal: null })
+  assert.equal(out.cleanupConfirmed, false)
+})
+
+test("default stderr completion cannot replace the primary error or wait on backpressure", async () => {
+  const original = server.TOOL_IMPLS.task_archive
+  const originalWrite = process.stderr.write
+  const lines = []
+  let completion
+  server.TOOL_IMPLS.task_archive = async () => { throw Object.assign(new Error("primary archive failure"), { handleReceipt: snapshot() }) }
+  process.stderr.write = (line, callback) => { lines.push(line); completion = callback; return false }
+  try {
+    const result = await server.callTool({ name: "task_archive", env: controls, traceRequestId: 37 })
+    assert.deepEqual(result, {
+      content: [{ type: "text", text: '{"status":"error","tool":"task_archive","message":"primary archive failure"}' }],
+      isError: true,
+    })
+    assert.equal(lines.length, 1)
+    assert.equal(JSON.parse(lines[0].slice(prefix.length)).requestId, 37)
+    assert.equal(typeof completion, "function")
+    assert.doesNotThrow(() => completion(new Error("synthetic sink completion failure")))
+    assert.equal(lines.length, 1)
+  } finally {
+    process.stderr.write = originalWrite
+    server.TOOL_IMPLS.task_archive = original
+  }
+})
+
+test("outbound byte boundary accepts complete ASCII frames at the cap and refuses cap plus one", () => {
+  assert.equal(typeof server.writeBoundedDiagnosticFrame, "function")
+  const overhead = Buffer.byteLength(`${prefix}""\n`)
+  const atCap = `${prefix}${JSON.stringify("x".repeat(65536 - overhead))}\n`
+  const overCap = `${prefix}${JSON.stringify("x".repeat(65537 - overhead))}\n`
+  assert.equal(Buffer.byteLength(atCap), 65536)
+  assert.equal(Buffer.byteLength(overCap), 65537)
+  const written = []
+  assert.equal(server.writeBoundedDiagnosticFrame(atCap, frame => written.push(frame)), true)
+  assert.equal(server.writeBoundedDiagnosticFrame(overCap, frame => written.push(frame)), false)
+  assert.deepEqual(written, [atCap])
+  assert.equal(JSON.parse(written[0].slice(prefix.length)).length, 65536 - overhead)
+})
+
+test("outbound byte boundary measures complete UTF8 frames rather than code units", () => {
+  assert.equal(typeof server.writeBoundedDiagnosticFrame, "function")
+  const remaining = 65536 - Buffer.byteLength(`${prefix}""\n`)
+  const value = "é".repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2)
+  const atCap = `${prefix}${JSON.stringify(value)}\n`
+  const overCap = `${prefix}${JSON.stringify(value + "x")}\n`
+  assert.equal(Buffer.byteLength(atCap), 65536)
+  assert.equal(Buffer.byteLength(overCap), 65537)
+  assert.ok(atCap.length < 65536)
+  assert.ok(overCap.length < 65536)
+  const written = []
+  assert.equal(server.writeBoundedDiagnosticFrame(atCap, frame => written.push(frame)), true)
+  assert.equal(server.writeBoundedDiagnosticFrame(overCap, frame => written.push(frame)), false)
+  assert.deepEqual(written, [atCap])
+  assert.equal(JSON.parse(written[0].slice(prefix.length)), value)
+})
+
+test("outbound byte boundary rejects nonstrings and noncallable sinks without coercion", () => {
+  assert.equal(typeof server.writeBoundedDiagnosticFrame, "function")
+  let getterCalls = 0, coercions = 0, writes = 0
+  const object = {
+    get length() { getterCalls++; throw Error("must not read object length") },
+    toString() { coercions++; return `${prefix}null\n` },
+  }
+  for (const frame of [undefined, null, false, 1, 1n, Symbol("frame"), object, Buffer.from("frame")])
+    assert.equal(server.writeBoundedDiagnosticFrame(frame, () => { writes++ }), false)
+  for (const sink of [undefined, null, "sink", {}])
+    assert.equal(server.writeBoundedDiagnosticFrame(`${prefix}null\n`, sink), false)
+  assert.equal(getterCalls, 0)
+  assert.equal(coercions, 0)
+  assert.equal(writes, 0)
+})
+
+test("outbound byte boundary contains sink exceptions and treats backpressure as invocation not delivery", () => {
+  assert.equal(typeof server.writeBoundedDiagnosticFrame, "function")
+  const frame = `${prefix}null\n`
+  let refused = 0, pressured = 0
+  assert.equal(server.writeBoundedDiagnosticFrame(frame, () => { refused++; throw Error("synthetic sink failure") }), false)
+  assert.equal(server.writeBoundedDiagnosticFrame(frame, received => {
+    assert.equal(received, frame)
+    pressured++
+    return false
+  }), true)
+  assert.equal(refused, 1)
+  assert.equal(pressured, 1)
+})
+
+test("ordinary empty and maximum sparse receipt arrays retain descriptor caps and bounded iteration", () => {
+  const receipt = snapshot()
+  receipt.events = []
+  receipt.protocolIssues = []
+  const empty = project(receipt)
+  assert.deepEqual(empty.events, [])
+  assert.deepEqual(empty.protocolIssues, [])
+  assert.equal(empty.truncated, false)
+  assert.equal(empty.originComplete, false)
+  let beyondCapReads = 0
+  receipt.events = new Array(0xffffffff)
+  receipt.protocolIssues = new Array(0xffffffff)
+  for (let i = 0; i < 128; i++) receipt.events[i] = { type: "native_spawn", sequence: i + 1, monotonicNs: `${i * 1000000}` }
+  for (let i = 0; i < 16; i++) receipt.protocolIssues[i] = "stdin_error"
+  Object.defineProperty(receipt.events, "128", { get() { beyondCapReads++; throw Error("event outside cap") } })
+  Object.defineProperty(receipt.protocolIssues, "16", { get() { beyondCapReads++; throw Error("code outside cap") } })
+  const out = project(receipt)
+  assert.equal(out.status, "available")
+  assert.equal(out.events.length, 128)
+  assert.equal(out.protocolIssues.length, 16)
+  assert.equal(out.fieldStatus.events, "truncated")
+  assert.equal(out.fieldStatus.protocolIssues, "truncated")
+  assert.equal(out.truncated, true)
+  assert.equal(out.incomplete, true)
+  assert.equal(out.events[127].sequence, 128)
+  assert.equal(out.events[127].elapsedMs, 127)
+  assert.equal(out.capturedValidated, false)
+  assert.equal(out.executedProgramSha256, null)
+  assert.equal(beyondCapReads, 0)
+})

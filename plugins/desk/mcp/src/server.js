@@ -93,6 +93,7 @@ export const TOOL_IMPLS = {
 }
 
 const TRACE_PREFIX = "DESK_NATIVE_RECEIPT_V1 "
+const TRACE_FRAME_BYTES = 65536
 const TRACE_MISSING = Symbol("missing")
 const TRACE_EVENTS = new Set(["native_spawn", "capture_requested", "native_captured", "admission_requested", "native_ready",
   "callback_started", "callback_completed", "GO_attempted", "native_result", "close_requested", "native_exit", "native_close", "session_settled"])
@@ -167,7 +168,6 @@ export function projectNativeReceipt(error) {
       traceObject(value)
       if (!Array.isArray(value)) throw new Error("unavailable")
       const length = traceData(value, "length")
-      if (!integer(length)) throw new Error("unavailable")
       out.fieldStatus[key] = length > max ? "truncated" : "present"
       if (length > max) { out.truncated = true; out.incomplete = true }
       const selected = []
@@ -233,12 +233,19 @@ export function projectNativeReceipt(error) {
   } catch { return unavailable() }
 }
 
-function emitNativeReceipt(error, requestId, write) {
+export function writeBoundedDiagnosticFrame(serializedFrame, sink) {
+  if (typeof serializedFrame !== "string" || typeof sink !== "function" || serializedFrame.length > TRACE_FRAME_BYTES) return false
+  if (Buffer.byteLength(serializedFrame, "utf8") > TRACE_FRAME_BYTES) return false
   try {
-    if (!Number.isSafeInteger(requestId) || requestId < 0) return
-    const line = `${TRACE_PREFIX}${JSON.stringify({ requestId, receipt: projectNativeReceipt(error) })}\n`
-    if (Buffer.byteLength(line) <= 65536) write(line)
-  } catch { /* Diagnostics cannot replace the original tool error. */ }
+    sink(serializedFrame)
+    return true // Invocation is not confirmed channel delivery.
+  } catch { return false }
+}
+
+function emitNativeReceipt(error, requestId, write) {
+  if (!Number.isSafeInteger(requestId) || requestId < 0) return
+  const line = `${TRACE_PREFIX}${JSON.stringify({ requestId, receipt: projectNativeReceipt(error) })}\n`
+  writeBoundedDiagnosticFrame(line, write)
 }
 
 
