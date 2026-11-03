@@ -1501,8 +1501,18 @@ requires(
   "archive-workflow keeps the sign-off lines when the archive is the last tool call",
   /`task_archive` preserves an unsigned, evidenced delivery's three sign-off lines[^\n]+carry those literal lines as a required next action through any compaction or handoff; never make them optional/u,
 );
-contract("the question-form rule names each host's tool where the skills own it, and session start asks in a sentence", () => {
-  assert.match(subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms"), /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI[^\n]+write the question as a sentence in your reply, including the resume-or-start question at session start/u);
+contract("question guidance preserves authority and routes contradictory host requirements as an integration defect", () => {
+  const questions = subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms");
+  assert.match(questions, /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI/u);
+  assert.match(questions, /ordinary conversation and already-authorized work remain allowed/u);
+  assert.match(questions, /not a human answer, refusal, revocation or consent/u);
+  assert.match(questions, /Do not retry the form or change permissions, hooks or settings/u);
+  assert.match(questions, /higher-priority host routing[\s\S]+consumer integration defect[\s\S]+supported route/u);
+  assert.match(questions, /A denial alone does not establish incompatible routing; inspect actual instructions and tool availability/u);
+  assert.match(questions, /Headless execution without human input is a capability limit, not approval withdrawal/u);
+  assert.match(questions, /Keep genuine human decisions and native permission gates intact/u);
+  assert.match(questions, /A real human refusal remains a refusal; an unrelated failure or unknown result does not establish a no-forms denial/u);
+  assert.match(questions, /action that needs the missing decision stays gated until an answer arrives through a permitted route/u);
   assert.match(text("plugins/desk/skills/session-start/SKILL.md"), /the one question \(resume which, or start new\), written as a sentence in the reply and never put through the host's question form/u);
 });
 contract("interaction-style opens the reply to a human who is leaving with what it needs, or that it needs nothing", () => {
@@ -1580,8 +1590,8 @@ contract("the changelog text for the loop has no heading and says what changed f
 contract("every general operator rule is stated in the skill that owns its topic", () => {
   const skill = (name) => `plugins/desk/skills/${name}/SKILL.md`;
   const rules = [
-    ["interaction-style", /form-style question interfaces/u],
-    ["interaction-style", /Converse in normal chat, one decision group at a time, and ask only when genuinely blocked/u],
+    ["interaction-style", /Desk rejects form-style question tools/u],
+    ["interaction-style", /Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted/u],
     ["interaction-style", /Plan for few, long conversations, not many short ones/u],
     ["interaction-style", /ask for the principles behind a decision rather than each instance of it, then decide the instances yourself, record them as rulings and keep going/u],
     ["interaction-style", /running agenda on the task card \(questions that are truly theirs, each with the evidence and a recommendation\)/u],
