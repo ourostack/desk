@@ -57,8 +57,8 @@ A final job needs every other job and writes each job's minutes to the step summ
 
 ## 7. Ship small, ship often
 
-- **One change per pull request, one proven fix per release.** A big change is slower to test, harder to verify and harder to bisect or revert.
-- **Ship each proven fix the same day,** as its own release. Never batch fixes behind a daily or weekly schedule. A scheduled release may still run, but only to sweep up what's left; nothing waits for it.
+- **One change per pull request.** A big change is slower to test, harder to verify and harder to bisect or revert.
+- **Release each proven fix the same day,** without waiting for other fixes. Never batch fixes behind a daily or weekly schedule. A scheduled release may still run, but only to sweep up what's left; nothing waits for it.
 - **Fast CI makes this cheap.** If a release takes too long to ship one fix at a time, fix the pipeline, not the cadence.
 
 ## Done when

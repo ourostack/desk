@@ -1,1 +1,1 @@
-[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix shipped as its own release the same day, and no fixes batched behind a daily or weekly release.
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.
