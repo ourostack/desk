@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.54 — 2026-11-03
+
+Boot sync wait expiry now reports pending/unknown effects rather than claiming nothing was pulled or pushed. JSON and plain-text startup instructions require safe account-scoped direct Git recovery before reporting local-only state, and no longer mandate a stale-state opener after successful recovery. Session-start and desk-problem guidance require fresh fetch and exact state-branch ahead/behind evidence, preserve other writers and real access barriers, and suppress the timeout banner only after verified current commits. This does not qualify the timed-out helper or change its worker/retry architecture.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.53 — 2026-11-03
 
 Superpowers wrapper fix: the actual vendored `hooks/run-hook.cmd` no longer uses a here-document. Preserve its raw upstream bytes at an explicitly locked evidence path and separately record the maintained CMD/Unix transform and output hashes. Both authored Copilot commands and the unchanged Claude declaration use the actual wrapper. The complete Superpowers refresh updates raw evidence and regenerates or verifies downstream outputs together, refusing stale artifacts rather than silently accepting them.
