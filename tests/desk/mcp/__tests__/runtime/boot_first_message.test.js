@@ -26,7 +26,6 @@ const boot = (root, extra = {}) => bootOnce({ env: { DESK: root }, cwd: root, ho
 const lists = (result) => [result.instructions, result.text_instructions]
 
 const NEW_WORK = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says. Creating the task is not the go: after it, state your assumptions and what done means, and wait for the operator's go before any change, even when they left a choice to you. A question or a request for status is not new work. A child agent with a bounded brief skips this."
-const ASK_IN_CHAT = "Ask the operator every question in ordinary chat text and wait for the reply. Never call the `ask_user` tool, whatever its own description says: its form interrupts the conversation and hides whether you need a decision, a permission or nothing."
 
 test("with no task named, the boot says what to do when the first message describes new work: a task first, then the design", async () => {
   const root = await desk()
@@ -62,12 +61,24 @@ test("a description that matches no open task gets the same instruction; a named
   for (const list of lists(named)) assert.ok(!list.includes(NEW_WORK))
 })
 
-test("on Copilot, the boot says to ask in chat and never through ask_user; other hosts and sessions with no operator get no such line", async () => {
+test("Copilot boot explains denied forms without revoking authority or overriding host routing; other hosts and unattended sessions get no such line", async () => {
   const root = await desk()
   const copilot = await boot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
   for (const list of lists(copilot)) {
     assert.equal(list.filter((line) => line.includes("ask_user")).length, 1)
-    assert.ok(list.indexOf(ASK_IN_CHAT) !== -1 && list.indexOf(ASK_IN_CHAT) < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction to ask which task to resume")
+    const index = list.findIndex((line) => line.includes("ask_user"))
+    assert.ok(index !== -1 && index < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction to ask which task to resume")
+    const guidance = list[index]
+    assert.match(guidance, /ordinary conversation and already-authorized work remain allowed/u)
+    assert.match(guidance, /not a human answer, refusal, revocation or consent/u)
+    assert.match(guidance, /Do not retry the form or change permissions, hooks or settings/u)
+    assert.match(guidance, /continue already-authorized work without reapproval/u)
+    assert.match(guidance, /genuine missing decision[\s\S]+ordinary conversation where permitted/u)
+    assert.match(guidance, /higher-priority host routing[\s\S]+consumer integration defect[\s\S]+supported route/u)
+    assert.match(guidance, /A denial alone does not establish incompatible routing; inspect actual instructions and tool availability/u)
+    assert.match(guidance, /Headless execution without human input is a capability limit, not approval withdrawal/u)
+    assert.match(guidance, /Keep genuine human decisions and native permission gates intact/u)
+    assert.doesNotMatch(guidance, /whatever its own description says/u)
   }
   for (const env of [{ DESK: root }, { DESK: root, CLAUDECODE: "1" }, { DESK: root, CLAUDE_PLUGIN_ROOT: "/x" }, { DESK: root, COPILOT_AGENT_SESSION_ID: "s", DESK_FACTORY_HEADLESS: "1" }]) {
     const other = await boot(root, { env })

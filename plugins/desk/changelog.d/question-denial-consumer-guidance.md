@@ -1,0 +1,1 @@
+Desk now distinguishes an intentionally blocked question form from a human answer or lost authority. Copilot startup and conversation guidance tell agents to continue authorized work, keep genuine decisions gated, and handle contradictory host routing as a consumer integration defect. Question defaults, permissions and hooks are unchanged.
