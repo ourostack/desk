@@ -1,0 +1,1 @@
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.

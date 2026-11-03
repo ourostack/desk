@@ -1,6 +1,6 @@
 ---
 name: fast-honest-ci
-description: Use when creating, changing or reviewing a CI workflow or merge queue, when CI is slow, queued, flaky, red or over its time budget, when Actions minutes or spend run out or a paid or larger runner is proposed, when asked to speed up, shard, cache, parallelize, path-filter, fail-fast or add a CI budget, when re-running a failed job, or when owning the default branch's health. Keeps CI as fast and cheap as it can be without hiding a failure. Not for one test's product logic; use systematic-debugging for that.
+description: Use when creating, changing or reviewing a CI workflow or merge queue, when CI is slow, queued, flaky, red or over its time budget, when Actions minutes or spend run out or a paid or larger runner is proposed, when asked to speed up, shard, cache, parallelize, path-filter, fail-fast or add a CI budget, when re-running a failed job, when owning the default branch's health, or when planning, batching or scheduling a release. Keeps CI as fast and cheap as it can be without hiding a failure. Not for one test's product logic; use systematic-debugging for that.
 ---
 
 # Fast, honest CI
@@ -54,6 +54,12 @@ A final job needs every other job and writes each job's minutes to the step summ
 - **Never** loosen a gate, lengthen a timeout, take fewer samples, retry automatically, or skip or quarantine a test without an open issue and owner. A bounded, logged retry in product code against a busy OS resource is behaviour, not a test re-run.
 - **Revert on evidence, not suspicion.** Probe the suspect change first.
 - **Own the default branch.** A watcher alerts on each new red run (poll at most every 5 minutes), one owner is named within 15 minutes, a root-cause fix or a clean revert lands before the next release, and each red run, owner and outcome is recorded.
+
+## 7. Ship small, ship often
+
+- **One change per pull request.** A big change is slower to test, harder to verify and harder to bisect or revert.
+- **Release each proven fix the same day,** without waiting for other fixes. Never batch fixes behind a daily or weekly schedule. A scheduled release may still run, but only to sweep up what's left; nothing waits for it.
+- **Fast CI makes this cheap.** If a release takes too long to ship one fix at a time, fix the pipeline, not the cadence.
 
 ## Done when
 
