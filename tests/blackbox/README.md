@@ -37,16 +37,19 @@ are retained. `native_receipt_source` separately records fixed source hashes,
 HEAD and a nullable dirty indicator, not raw Git status. Markdown and normal
 checks/summary/verdicts are unchanged.
 
-The nonrequired `Desk native receipt diagnostic 581` workflow runs one Windows
-job for PR580's `synchronize` event when its own workflow path matches. It tests
-the exact PR head, not the ordinary event merge checkout, and reports both
-identities separately. It leaves required workflows and concurrency untouched.
-Its name does not configure branch protection: effective required checks must
-be verified before publication. PR path filters use the cumulative diff, so
-later source pushes can trigger another diagnostic even without editing this
-file. One admitted introduction push/attempt is operation policy, not one-shot
-enforcement; further pushes need fresh admission or a separately reviewed
-route-disable change.
+The temporary nonrequired `Desk native receipt diagnostic 581` workflow was
+consumed on PR580 at commit `7318a47a23040b416cb6e9958739641fe99084b2`
+([run 41549295986](https://github.com/ourostack/desk/actions/runs/41549295986)).
+That head observation is distinct from the ordinary CI merge checkout.
+The route is now retired: removing the workflow restores scheduled-refresh
+gate discovery and avoids cumulative repeat diagnostic jobs. The published
+commit, run and collected evidence are not rewritten by retirement.
+
+Default-off instrumentation remains; a future diagnostic needs a separately
+reviewed route and operation admission consistent with the maintained CI
+contract. Output controls alone grant no execution authority. The fixed source
+identity slot for the retired workflow is explicitly `null`, not a fabricated
+hash. Required jobs, their names and the scheduled dispatch list are unchanged.
 
 An all-pass error-only trace establishes no successful native stage timeline.
 Historical failures, root cause and normal required CI gates remain separate.
