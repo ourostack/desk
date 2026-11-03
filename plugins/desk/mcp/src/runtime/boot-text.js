@@ -50,16 +50,16 @@ function strayDir(sync, root) {
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
- * One plain sentence about the sync, phrased for what happened, never a word like "partial". A failed sync pulled
- * nothing and pushed nothing; a conflict while restoring local changes means the pull itself succeeded; a desk with no
+ * One plain sentence about the sync. Failure does not establish absent effects; a conflict while restoring local
+ * changes means the pull itself succeeded; a desk with no
  * remote or upstream has nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null
- * when it did not return one); `timedOut` says the boot's time budget ended it; `lastSyncAt` is ISO text or null;
+ * when it did not return one); `timedOut` says boot stopped waiting, not that the operation stopped; `lastSyncAt` is ISO text or null;
  * `root` is the desk's path, used to name where moved files went.
  */
 export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = "" }) {
   const asOf = `local desk is as of ${lastSyncAt ?? "unknown"}`
-  const failed = (why) => `sync failed: ${why}; nothing was pulled or pushed; ${asOf}`
-  if (timedOut) return failed("it did not finish within the boot's time budget")
+  const failed = (why) => `sync failed: ${why}; effects unverified; ${asOf}`
+  if (timedOut) return `sync pending: it did not finish within the boot's time budget; effects unknown; verify with direct Git`
   if (sync === null || sync === undefined) return failed("it did not run")
   const unpushed = unpushedText(sync.unpushed)
   if (sync.state === "unresolved") {
@@ -316,7 +316,8 @@ export function syncWords(summary) {
   if (summary.startsWith("sync ok; ")) return `Desk synced with origin${summary.slice("sync ok".length)}`
   const moved = /^sync ok: moved (.+?) first, then pulled(.*)$/u.exec(summary)
   if (moved) return `Desk synced with origin (moved ${moved[1]} first)${moved[2]}`
-  const failed = /^sync failed: (.+?); nothing was pulled or pushed; local desk is as of (\S+)(.*)$/u.exec(summary)
+  if (summary.startsWith("sync pending: ")) return `Desk sync pending: ${summary.slice("sync pending: ".length)}`
+  const failed = /^sync failed: (.+?); (?:effects unverified|nothing was pulled or pushed); local desk is as of (\S+)(.*)$/u.exec(summary)
   if (failed) return `Desk could not sync: ${failed[1]}; local state shown${failed[2] === "unknown" ? "" : `, as of ${failed[2]}`}${failed[3]}`
   const nothing = /^no (remote|upstream branch); nothing to sync$/u.exec(summary)
   if (nothing) return `Desk has no ${nothing[1]}; nothing to sync`

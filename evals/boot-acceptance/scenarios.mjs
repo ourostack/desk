@@ -352,7 +352,7 @@ export const SCENARIOS = [
   },
   {
     id: "slow-or-failing-status",
-    description: "Origin points at a path that does not exist, so the boot script's sync fails: boot degrades, says so in one line, and still answers.",
+    description: "Origin points at a path that does not exist: the agent attempts safe direct Git recovery, reports the remaining barrier and still answers.",
     prompt: "where were we?",
     inject: "break-origin",
     check(ctx) {
@@ -361,11 +361,14 @@ export const SCENARIOS = [
       const told = operatorPart(ctx).toLowerCase()
       const mentionsSyncProblem = /\b(sync|pull|origin|remote)\b/.test(told) && /(fail|unresolved|degraded|could not|couldn't|cannot|can't|unreachable|not reachable|does not exist|doesn't exist|out of date)/.test(told)
       const mentionsWork = /watering-schedule-api|watering schedule/i.test(operatorPart(ctx))
-      // Nothing was pulled or pushed, so any reply that says the sync worked, or worked partly, is wrong.
+      const directFetch = ctx.toolCalls.some((call) => call.name === "Bash" && call.result !== undefined &&
+        gitCommands(String(call.input?.command ?? "")).some((git) => git.subcommand === "fetch" && git.args.includes("origin")))
+      // This fixture's origin remains unavailable; a helper warning alone is not recovery evidence.
       const [workedClaim] = syncWorkedClaims(operatorPart(ctx))
       return verdict(shared, [
         ...(mentionsSyncProblem ? [] : ["did not tell the operator the desk could not sync with its remote"]),
-        ...(workedClaim === undefined ? [] : [`said the sync worked or partly worked (${JSON.stringify(workedClaim.slice(0, 120))}) but it failed and nothing was pulled or pushed`]),
+        ...(directFetch ? [] : ["did not attempt direct Git recovery after the helper failed"]),
+        ...(workedClaim === undefined ? [] : [`said the sync worked or partly worked (${JSON.stringify(workedClaim.slice(0, 120))}) but the fixture remote remains unavailable`]),
         ...(mentionsWork ? [] : ["did not mention the open work despite the sync failure"]),
       ])
     },
