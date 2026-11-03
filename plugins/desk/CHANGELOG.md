@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.56 — 2026-11-03
+
+Desk now distinguishes an intentionally blocked question form from a human answer or lost authority. Copilot startup and conversation guidance tell agents to continue authorized work, keep genuine decisions gated, and handle contradictory host routing as a consumer integration defect. Question defaults, permissions and hooks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.55 — 2026-11-03
 
 [`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.
