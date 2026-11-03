@@ -68,7 +68,13 @@ test("prewarm does not mark a slow completed response as the qualified cache obs
 
 test("prewarm refuses all-slow ready responses at the original 15 second deadline", async (t) => {
   const f = fixture(t, [{ elapsed: 250 }])
-  await assert.rejects(f.run(), /never completed same-context status before resolver injection/u)
+  await assert.rejects(f.run(), (error) => {
+    assert.match(error.message, /never completed same-context status before resolver injection/u)
+    assert.ok(Array.isArray(error.observations), "failed prewarming must retain every observed round trip")
+    assert.equal(error.observations.length, 56)
+    assert.ok(error.observations.every((sample) => sample.elapsedMs === 250 && !sample.qualified))
+    return true
+  })
   assert.equal(f.calls(), 56)
   assert.equal(existsSync(f.marker), false)
   assert.equal(f.output.listenerCount("data"), 0)

@@ -14,6 +14,7 @@ export async function prewarm(transport, {
   let buffered = ""
   const waiting = new Map()
   const observations = []
+  const failure = (message) => Object.assign(new Error(message), { observations: observations.slice() })
   const onData = (chunk) => {
     buffered += chunk
     let newline
@@ -28,17 +29,17 @@ export async function prewarm(transport, {
     const id = --sequence
     const timer = setTimeout(() => {
       waiting.delete(id)
-      reject(new Error(`prewarm ${method} did not answer`))
+      reject(failure(`prewarm ${method} did not answer`))
     }, timeoutMs)
     waiting.set(id, { timer, finish(reply) {
       clearTimeout(timer)
       waiting.delete(id)
-      if (reply.error) reject(new Error(reply.error.message))
+      if (reply.error) reject(failure(reply.error.message))
       else resolve(reply.result)
     } })
     transport.input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
   })
-  const expired = () => new Error(
+  const expired = () => failure(
     `actual bootstrap never completed same-context status before resolver injection; ${observations.length} round trips observed, maximum ${Math.max(0, ...observations.map((sample) => sample.elapsedMs))} ms`,
   )
   try {
@@ -89,6 +90,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       } catch (error) {
         // runRecovery reports a launch failure only as recovery_error; the test prints this stderr when the run fails.
         process.stderr.write(`prewarm failed: ${error.message}\n`)
+        if (error.observations) process.stderr.write(`prewarm round trips: ${JSON.stringify(error.observations)}\n`)
         await transport.close()
         throw error
       }
