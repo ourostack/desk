@@ -69,18 +69,18 @@ test("a missing repo prints no mode line: boot says 'not at <path>' and never re
   assert.ok(!/mode:/u.test(text.split("Instructions, in order:")[0]), "no mode line before the instructions")
 })
 
-test("a boot degraded by a failed sync tells the reply to open with the sync sentence, in the closing rule of the plain-text boot (the text both hosts read); a synced boot does not", async () => {
+test("a failed sync requires direct verification on both surfaces instead of a permanent stale-state opener", async () => {
   const root = await desk(["flash-valves"])
   const failed = await boot(root, null, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }) })
-  const rule = failed.text_instructions.find((line) => line.startsWith("In every reply:"))
   assert.match(formatBootText(failed), /Desk boot: degraded \(sync failed/u)
-  assert.ok(rule.includes('Desk could not sync: open your reply with "Desk could not sync with origin (remote unreachable); working from local state" before anything else, and never use "synced" for it.'), rule)
-  assert.ok(!rule.includes("<reason>"), "the real reason, never a placeholder")
-  assert.ok(!failed.instructions.some((line) => line.includes("never use \"synced\"")), "JSON instructions are unchanged")
+  for (const lines of [failed.instructions, failed.text_instructions]) {
+    assert.ok(lines.some((line) => line.startsWith("Verify desk sync with direct Git")))
+    assert.ok(!lines.some((line) => line.includes("open your reply with")))
+  }
   const ok = await boot(root, null)
-  assert.ok(!ok.text_instructions.some((line) => line.includes("never use \"synced\"")))
+  assert.ok(!ok.text_instructions.some((line) => line.startsWith("Verify desk sync with direct Git")))
   const unrun = await boot(root, null, { syncFn: async () => null })
-  assert.ok(unrun.text_instructions.some((line) => line.includes("never use \"synced\"")), "a sync that did not run is a failed sync too")
+  assert.ok(unrun.text_instructions.some((line) => line.startsWith("Verify desk sync with direct Git")))
 })
 
 test("every repo path boot prints is already expanded against the real HOME, with the card's own spelling after it, so an agent never expands ~ itself", async () => {
@@ -120,11 +120,12 @@ test("a missing repo with no clone source asks with the expanded path, and clone
   assert.ok(first.includes(`clone valve-firmware to ${expanded} (or record the path they give)`), first)
 })
 
-test("the sync rule carries the summary's own reason for each failure, and for a pull that worked but left the desk's changes in conflict", async () => {
+test("sync diagnosis stays visible beside the recovery instruction, including an applied pull with conflicts", async () => {
   const root = await desk(["flash-valves"])
-  const rule = async (sync) => (await boot(root, null, { syncFn: async () => sync })).text_instructions.find((line) => line.startsWith("In every reply:"))
-  assert.match(await rule({ state: "unresolved", cause: "auth_failed" }), /Desk could not sync with origin \(remote refused this host's credentials\); working from local state/u)
-  assert.match(await rule({ state: "unresolved", cause: "diverged" }), /\(the desk and its remote have diverged\)/u)
-  const conflict = await rule({ state: "unresolved", reason: "autostash_pop_conflict", conflicted: ["a/task.md"] })
-  assert.match(conflict, /Desk pulled but could not finish syncing: open your reply with "Desk pulled from origin, but the desk's uncommitted local changes conflict with what came in \(conflicted: a\/task\.md\); nothing was pushed; resolve them before changing the desk" before anything else, and never use "synced" for it\./u)
+  const text = async (sync) => formatBootText(await boot(root, null, { syncFn: async () => sync }))
+  assert.match(await text({ state: "unresolved", cause: "auth_failed" }), /remote refused this host's credentials/u)
+  assert.match(await text({ state: "unresolved", cause: "diverged" }), /the desk and its remote have diverged/u)
+  const conflict = await text({ state: "unresolved", reason: "autostash_pop_conflict", conflicted: ["a/task.md"] })
+  assert.match(conflict, /Desk pulled from origin, but.*conflicted: a\/task\.md/u)
+  assert.match(conflict, /Verify desk sync with direct Git/u)
 })

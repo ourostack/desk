@@ -1070,30 +1070,11 @@ function movedPathsInstruction(sync, root) {
   return `Sync moved ${moved.length === 1 ? "1 untracked file" : `${moved.length} untracked files`} that the pull would have overwritten, under ${root.path}: ${pairs.join("; ")}. Another session may own them: tell the operator in one line, and leave them for their owner to restore.`
 }
 
-// What a failed sync means for the agent, by why it failed. A conflict or an unknown failure sends the agent to
-// `git status`; an unreachable or refusing origin must not, because `git status` then reads clean and the
-// degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
+// The helper's result is evidence, not a permanent reporting rule after independent recovery.
 function syncInstruction(sync, root) {
-  if (sync?.state !== "unresolved") return null
-  const where = sync.remote ? `origin ${sync.remote}` : "origin"
-  const why = sync.error ? ` (${sync.error})` : ""
-  if (sync.cause === "unreachable") {
-    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "auth_failed") {
-    return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
-    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "deadline") {
-    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "diverged") {
-    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
-  }
-  const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-  return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
+  if (sync !== null && sync !== undefined && sync.state !== "unresolved") return null
+  const git = `git -C ${shellQuote(root.path)}`
+  return `Verify desk sync with direct Git before reporting local-only state (desk-problem, "Direct Git sync recovery"). Helper expiry means pending, effects unknown; it does not establish absent effects. Read back actual HEAD/index/files and observed Git-operation/conflict markers; do not race a checkout mutation. Through the established account-scoped Git transport, run \`${git} fetch --no-tags origin\`, then \`${git} rev-list --left-right --count 'HEAD...@{upstream}'\` on the confirmed state branch and origin upstream. Clean status or cached origin refs are not currentness evidence. A successful fresh fetch and 0 ahead and 0 behind, with no observed Git-operation/conflict barrier, establish current commits even with unrelated dirty files and an unknown helper outcome: do not report working from local state or repeat the helper-timeout banner. This does not prove helper settlement, publication of dirty files or binary/LFS readiness. Otherwise recover only within safe writer ownership; preserve authentication, access, conflict and unknown-effect barriers and report the remaining limitation, continuing independent authorized work. Never stash, rebase, reset, move or overwrite another writer's work, or bypass a lock.`
 }
 
 // A push route worth telling the agent about: no account can deliver, the route goes through a fork, or the only
@@ -1295,25 +1276,12 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
-// What the reply must open with when the sync did not go cleanly, from the sync summary's own words (never a placeholder): a failed sync, or a pull that worked but left the desk's uncommitted changes in conflict.
-function syncOpening(summary) {
-  const failed = /^sync failed: (.+?); nothing was pulled or pushed;/u.exec(summary)
-  if (failed !== null) return { say: `Desk could not sync with origin (${failed[1]}); working from local state`, lead: "Desk could not sync" }
-  const conflict = /^sync: the pull succeeded, but (.+)$/u.exec(summary)
-  if (conflict !== null) return { say: `Desk pulled from origin, but ${conflict[1]}`, lead: "Desk pulled but could not finish syncing" }
-  return null
-}
-const syncRule = ({ say, lead }) => `${lead}: open your reply with \"${say}\" before anything else, and never use \"synced\" for it.`
-
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
 function buildTextInstructions(ctx) {
   const { body, consent } = buildInstructionItems(ctx)
   const plainOf = (items) => items.map((item) => item.plain).filter((line) => line !== null)
-  // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
-  const opening = syncOpening(ctx.syncSummaryText)
-  const closing = opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`
-  return withConsentLast([...plainOf(body), closing], plainOf(consent))
+  return withConsentLast([...plainOf(body), CLOSING_RULES], plainOf(consent))
 }
 
 function withinBudget(promise, ms, timeoutValue) {
