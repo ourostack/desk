@@ -8,10 +8,10 @@ import { archiveFixture, git, retry } from "./_archive_state_helpers.js"
 const trackBefore = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](mode-proof/notes.md) |\n"
 const trackAfter = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](_archive/mode-proof/notes.md) |\n"
 
-async function timedOutArchive({ track = true, committed = false, ...policy } = {}) {
+async function timedOutArchive({ track = true, trackContent = trackBefore, committed = false, ...policy } = {}) {
   const f = await archiveFixture(policy)
   if (track) {
-    await fs.writeFile(path.join(f.root, "t/track.md"), trackBefore)
+    await fs.writeFile(path.join(f.root, "t/track.md"), trackContent)
     git(f.root, "add", "--", "t/track.md")
     git(f.root, "commit", "-q", "-m", "owned track baseline")
   }
@@ -92,6 +92,15 @@ test("a timeout after the commit took effect is reconciled without a duplicate c
 test("staged retry without a track card publishes the relocation", async () => {
   const f = await timedOutArchive({ track: false })
   assert.equal((await retry(f)).status, "archived")
+  assert.equal(git(f.root, "diff", "--cached", "--name-only"), "unrelated.txt")
+})
+
+test("staged retry leaves a track with no archive links unchanged", async () => {
+  const trackContent = "| Slug | State |\n|---|---|\n| `mode-proof` | done |\n"
+  const f = await timedOutArchive({ trackContent })
+  assert.equal((await retry(f)).status, "archived")
+  assert.equal(await fs.readFile(path.join(f.root, "t/track.md"), "utf8"), trackContent)
+  assert.equal(git(f.root, "show", "--format=", "--name-only", "HEAD").includes("t/track.md"), false)
   assert.equal(git(f.root, "diff", "--cached", "--name-only"), "unrelated.txt")
 })
 
