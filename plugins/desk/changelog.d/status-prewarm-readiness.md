@@ -1,0 +1,1 @@
+Keep status cache preparation within its original deadline and require a completed sub-200ms observation, while retaining slower round-trip samples instead of failing setup on a single cold response. Production status behavior and independent latency checks are unchanged.
