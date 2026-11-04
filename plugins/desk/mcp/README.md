@@ -69,6 +69,8 @@ For explicitly requested session explanations, the maintained CLI also exposes `
 - `friction_add`, `lesson_add`
 - `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside this session's write prefix (`desks/<alias>/` in a shared workspace), or the call is refused
 
+After `task_archive` returns `archive_pending`, keep the archived folder and index intact and follow its named repair action before retrying the same track and slug. Retry can publish an exact staged relocation when source HEAD still holds the task, the source index is empty, the archive index and working bytes match that source, and any track-link update matches the update derived from track HEAD. Changed card/report bytes, partial staging, outside track edits and destinations already occupied in HEAD remain pending; do not unstage them to force recovery. A timeout can also occur after the commit takes effect, so retry checks publication before attempting another commit. This recovery does not diagnose or remove the original timeout ([implementation](src/tools/archive-state.js), [qualification](../../../tests/desk/mcp/__tests__/tools/archive_staged_retry.test.js)).
+
 **Improvement cards:**
 - `improvement_open` — open an improvement card on the desk, find it already open, or reopen a closed one; Desk builds every title, and the call commits exactly the card file
 - `improvement_next` — claim the oldest open card as standing, pre-authorized work; refuses in a noninteractive or headless session and at the claim bounds ([the loop](../docs/factory-local-capture.md#the-improvement-loop))
