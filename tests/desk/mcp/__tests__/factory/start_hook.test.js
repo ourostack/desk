@@ -40,8 +40,8 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // The registry.
 // ---------------------------------------------------------------------------
 
-test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy, then improvement", () => {
-  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "improvement"])
+test("the registry runs publication inspection before workspace tidy within the shared budget", () => {
+  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "unsaved-work", "workspace-tidy", "improvement"])
   assert.equal(TOTAL_BUDGET_MS, 300)
   assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })

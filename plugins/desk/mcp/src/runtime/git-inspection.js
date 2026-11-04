@@ -30,7 +30,7 @@ function inspectionEnvironment() {
   for (const key of Object.keys(env)) {
     if (/^(?:GIT_|LD_|DYLD_)/u.test(key)) delete env[key]
   }
-  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", LC_ALL: "C" }
 }
 
 // A hook answers its host within seconds, so by default each inspection call gets 2 s. Callers off the hook path, such as the detached workspace repair, pass a longer limit.
@@ -197,5 +197,5 @@ export async function readInspectionGit(cwd, args, { signal, timeoutMs = INSPECT
   if (timedOut && error) throw Object.assign(new Error(`Git inspection timed out after ${timeoutMs} ms: git ${args.join(" ")}`), { code: "ETIMEDOUT", cause: error })
   if (aborted && error) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: error })
   if (error && (error.killed || typeof error.code !== "number")) throw error
-  return { ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code }
+  return { ok: !error, stdout: stdout.includes("\0") ? stdout : stdout.trim(), stderr: stderr.trim(), code: error?.code }
 }
