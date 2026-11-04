@@ -3,12 +3,12 @@
 // browser_context opens one of two browsers and closes it again:
 //   fresh  an empty throwaway profile in a private temp folder;
 //   mine   a private copy of the person's own Edge (or Chrome) profile, so their sign-ins work.
-// Each runs headless as its own browser process with its own user-data folder, driven by the
-// Playwright CLI inside playwright-core, which talks to the browser over a pipe, not a debugging
+// Each runs headless with its own user-data folder. Fresh uses the legacy CLI; mine uses
+// the owned native producer in web-auth.cjs. Both use playwright-core over a pipe, not a debugging
 // port. So Desk never focuses a window, never attaches to, closes or changes the person's running
 // browser, and never touches another agent's browser. Closing a context ends its own processes and deletes its folder.
 //
-// browser_command runs one Playwright CLI page command (snapshot, click, fill, goto, ...) in it.
+// browser_command runs a legacy fresh command or a validated, protected native mine command.
 //
 // playwright-core is installed with npm into Desk's state folder on the first open.
 
@@ -20,11 +20,15 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var browserDiscovery = require("./web-browser-discovery.cjs");
+var authBrowser = require("./web-auth.cjs");
 
 var PLAYWRIGHT_VERSION = "1.63.0";
 var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
 var ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var PREFIX = "desk-browser-";
+var PROFILE_POLICY = 1;
+var AUTH_PROFILE_POLICY = 2;
+var safeErrors = new WeakMap();
 // Each context folder is its own Playwright CLI workspace, so one fixed session name per folder is enough.
 var SESSION = "desk";
 // The page commands browser_command may run; one of them must come first. Everything else stays out: opening, closing,
@@ -40,7 +44,9 @@ var PAGE_COMMANDS = ["goto", "go-back", "go-forward", "reload", "snapshot", "fin
 // Long options that would switch session or browser, or print help instead of running. The CLI also refuses any option the command does not have.
 var REFUSED_OPTIONS = ["session", "s", "config", "profile", "browser", "persistent", "headed", "extension", "endpoint", "cdp",
   "cdp-endpoint", "all", "global", "g", "help", "h", "version", "v"];
-// Parts of a profile that are large caches, belong to extensions, or would reopen the person's own tabs. Sign-ins live in Cookies, Local Storage and Login Data, which are kept.
+// Keep authorized sessions in Cookies and Local Storage, not saved passwords in Login Data.
+var PASSWORD_STORE = /^Login Data(?:$|[ .-])/i;
+// Parts of a profile that are large caches, belong to extensions, or would reopen the person's own tabs.
 var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "CacheStorage",
   "ScriptCache", "Extensions", "Extension Scripts", "Extension State", "Extension Rules", "Local Extension Settings",
   "Sync Extension Settings", "File System", "Shared Dictionary", "IndexedDB", "WebStorage", "load_statistics.db",
@@ -48,7 +54,14 @@ var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUC
 var BROWSERS = { msedge: { name: "Microsoft Edge", short: "Edge" }, chrome: { name: "Google Chrome", short: "Chrome" } };
 
 function plain(message) {
-  return Object.assign(new Error(message), { plain: true });
+  var error = Object.assign(new Error(message), { plain: true });
+  safeErrors.set(error, Object.freeze({ message: message }));
+  return error;
+}
+
+function safeErrorData(error) {
+  if (!error || typeof error !== "object") return undefined;
+  return safeErrors.get(error) || authBrowser.safeFailure(error);
 }
 
 function exists(file) {
@@ -107,6 +120,11 @@ function settings(o) {
     installMs: o.installMs || 180000,
     openMs: o.openMs || 120000,
     commandMs: o.commandMs || 120000,
+    authDriver: o.authDriver,
+    runtimeStateReader: o.runtimeStateReader || function () {
+      return { execArgv: process.execArgv, inspectorActive: Boolean(require("node:inspector").url()) };
+    },
+    contexts: {},
     exitWaitMs: o.exitWaitMs || 5000,
     processTable: o.processTable || function () {
       return readProcessTable(platform, env);
@@ -128,30 +146,87 @@ function chooseBrowser(s, mine) {
   throw plain("Desk needs Microsoft Edge or Google Chrome to open a browser, and found neither. Install one, then try again.");
 }
 
-// Copy the person's last-used profile, and Local State, which holds the key their sign-ins are encrypted with.
-// A file the running browser holds locked (Windows does this to Cookies and a few others) is skipped, not fatal; the result lists what was skipped.
+function copyPolicyError() {
+  return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. No authenticated copy was opened.");
+}
+
+function copyDestinationError() {
+  return plain("COPY_DESTINATION_FAILED: The private profile destination could not be written completely. No authenticated copy was opened.");
+}
+
+function singleFile(stat) {
+  return stat.isFile() && typeof stat.ino === "bigint" && stat.ino > 0n &&
+    typeof stat.dev === "bigint" && stat.dev >= 0n && stat.nlink === 1n;
+}
+
+function sameFile(a, b) {
+  return singleFile(a) && singleFile(b) && a.dev === b.dev && a.ino === b.ino;
+}
+
+function readProfileFile(file) {
+  var fd;
+  var bytes;
+  try {
+    var before = fs.lstatSync(file, { bigint: true });
+    if (!singleFile(before)) throw copyPolicyError();
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    var opened = fs.fstatSync(fd, { bigint: true });
+    if (!sameFile(before, opened)) throw copyPolicyError();
+    bytes = fs.readFileSync(fd);
+    var after = fs.fstatSync(fd, { bigint: true });
+    if (!sameFile(opened, after) || !sameFile(after, fs.lstatSync(file, { bigint: true })) ||
+      opened.size !== after.size || opened.mtimeNs !== after.mtimeNs) throw copyPolicyError();
+    return bytes;
+  } catch (error) {
+    if (bytes) bytes.fill(0);
+    throw copyPolicyError();
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (error) { if (bytes) bytes.fill(0); throw copyPolicyError(); }
+    }
+  }
+}
+
+// Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
+// a later pathname copy would undo identity/link qualification.
 function copyProfile(source, dest) {
+  var state = readProfileFile(path.join(source, "Local State"));
   var name = "Default";
   try {
-    var last = JSON.parse(fs.readFileSync(path.join(source, "Local State"), "utf8")).profile.last_used;
-    if (typeof last === "string" && /^[^/\\]+$/.test(last) && last !== "..") name = last;
+    var last = JSON.parse(state.toString("utf8")).profile.last_used;
+    if (typeof last === "string" && /^[^/\\]+$/.test(last) && last !== ".." && last !== ".") name = last;
   } catch (error) {
     // no usable last_used: copy Default
   }
-  fs.mkdirSync(dest, { mode: 448 });
-  fs.copyFileSync(path.join(source, "Local State"), path.join(dest, "Local State"));
+  try {
+    fs.mkdirSync(dest, { mode: 448 });
+    fs.writeFileSync(path.join(dest, "Local State"), state, { mode: 384 });
+  } catch (error) {
+    throw copyDestinationError();
+  } finally { state.fill(0); }
   var skipped = [];
   function copy(from, to, relative) {
+    if (!fs.lstatSync(from).isDirectory()) throw copyPolicyError();
     fs.mkdirSync(to);
     fs.readdirSync(from, { withFileTypes: true }).forEach(function (entry) {
-      if (SKIP.indexOf(entry.name) !== -1) return;
+      if (SKIP.indexOf(entry.name) !== -1 || PASSWORD_STORE.test(entry.name)) return;
       var inner = relative ? relative + "/" + entry.name : entry.name;
       if (entry.isDirectory()) return copy(path.join(from, entry.name), path.join(to, entry.name), inner);
-      try {
-        fs.copyFileSync(path.join(from, entry.name), path.join(to, entry.name));
-      } catch (error) {
+      // Following a link could import an excluded store under a different name.
+      if (!entry.isFile()) {
+        if (entry.name === "Network" || /^(?:Network\/)?Cookies(?:$|[-.])/.test(inner)) throw copyPolicyError();
         skipped.push(inner);
+        return;
       }
+      var bytes;
+      try { bytes = readProfileFile(path.join(from, entry.name)); } catch (error) {
+        if (/^(?:Network\/)?Cookies(?:$|[-.])/.test(inner)) throw copyPolicyError();
+        skipped.push(inner);
+        return;
+      }
+      try { fs.writeFileSync(path.join(to, entry.name), bytes, { mode: 384 }); }
+      catch (error) { throw copyDestinationError(); }
+      finally { bytes.fill(0); }
     });
   }
   copy(path.join(source, name), path.join(dest, name), "");
@@ -161,7 +236,8 @@ function copyProfile(source, dest) {
 function launchConfig(kind, browser, profileDir, profileName, outputDir) {
   var launch = { channel: browser.channel, executablePath: browser.executablePath, headless: true, args: ["--no-first-run", "--no-default-browser-check"] };
   if (kind === "mine") {
-    // Playwright's mock keychain and basic password store would hide the saved sign-ins; sync stays off so the copy never writes back to the person's account.
+    // Cookies still need the normal encryption backend; excluding saved-login stores does not change it.
+    // Sync stays off so the copy never writes back to the person's account.
     launch.ignoreDefaultArgs = ["--use-mock-keychain", "--password-store=basic"];
     launch.args.push("--profile-directory=" + profileName, "--disable-sync");
   }
@@ -238,34 +314,97 @@ function contextDir(s, id) {
   return path.join(s.tmpDir, PREFIX + id);
 }
 
+function checkAuthLogging(s) {
+  [s.env, process.env].forEach(function (env) {
+    if (env.DEBUG || env.DEBUG_FILE || env.NODE_OPTIONS) throw plain("AUTH_LOGGING_REFUSED: Unqualified Node options, preloads or raw logging are incompatible with authenticated output protection.");
+    ["PWDEBUG", "npm_config_pwdebug", "npm_package_config_pwdebug"].forEach(function (key) {
+      if (env[key] && env[key] !== "0" && env[key] !== "false") throw plain("AUTH_LOGGING_REFUSED: Browser inspection mode is incompatible with authenticated output protection.");
+    });
+  });
+  var runtime;
+  try { runtime = s.runtimeStateReader(); } catch (error) { throw plain("AUTH_LOGGING_REFUSED: Node runtime inspection state could not be qualified."); }
+  if (!runtime || !Array.isArray(runtime.execArgv) || typeof runtime.inspectorActive !== "boolean" ||
+    runtime.inspectorActive || require("node:inspector").url()) {
+    throw plain("AUTH_LOGGING_REFUSED: Active or unqualified Node inspection is incompatible with authenticated output protection.");
+  }
+  if (runtime.execArgv.some(function (arg) {
+    return typeof arg !== "string" || !(arg === "--test" || /^--test-(?:name|skip)-pattern=/.test(arg));
+  })) throw plain("AUTH_LOGGING_REFUSED: Node runtime flags or preloads are unqualified for authenticated output protection.");
+}
+
+function loadAuthDriver(s) {
+  checkAuthLogging(s);
+  var driver = s.authDriver;
+  if (!driver) {
+    var root = path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION, "node_modules", "playwright-core");
+    var version = require(path.join(root, "package.json")).version;
+    driver = { version: version, chromium: require(root).chromium };
+  }
+  if (driver.version !== PLAYWRIGHT_VERSION || !driver.chromium || typeof driver.chromium.launchPersistentContext !== "function") {
+    throw plain("AUTH_DRIVER_REFUSED: The authenticated browser requires the pinned native driver API.");
+  }
+  return driver;
+}
+
+async function openAuth(s) {
+  checkAuthLogging(s);
+  var browser = chooseBrowser(s, true);
+  var id = crypto.randomUUID();
+  var dir = contextDir(s, id);
+  var outputDir = path.join(dir, "files");
+  try {
+    await ensurePlaywright(s);
+    var driver = loadAuthDriver(s);
+    fs.mkdirSync(dir, { mode: 448 });
+    s.contexts[id] = { kind: "mine", transport: "auth-api" };
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: "mine", profilePolicy: AUTH_PROFILE_POLICY, transport: "auth-api" }) + "\n");
+    fs.mkdirSync(outputDir);
+    var profileDir = path.join(dir, "profile");
+    var copied = copyProfile(browser.profileRoot, profileDir);
+    var config = launchConfig("mine", browser, profileDir, copied.name, outputDir);
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
+    var launch = Object.assign({}, config.browser.launchOptions, {
+      ignoreDefaultArgs: ["--disable-extensions"].concat(config.browser.launchOptions.ignoreDefaultArgs),
+      acceptDownloads: false, chromiumSandbox: true, viewport: { width: 1280, height: 720 },
+      handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false, env: s.env, timeout: s.openMs
+    });
+    var context = await driver.chromium.launchPersistentContext(profileDir, launch);
+    s.contexts[id].context = context;
+    checkAuthLogging(s);
+    s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); });
+    var opened = {
+      contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir,
+      note: "Owned native output: all input/textarea/editable values are opaque. Only one main document and qualified light-DOM actions are supported; raw commands and unqualified frames are refused. Close this context when done."
+    };
+    if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
+    return opened;
+  } catch (error) {
+    if (s.contexts[id]) {
+      try { await close(s, id); } catch (cleanupError) { throw plain("AUTH_CLEANUP_FAILED: The failed authenticated context was retained because its owned cleanup could not be confirmed."); }
+    }
+    var safe = safeErrorData(error);
+    if (safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_DESTINATION_FAILED)/.test(safe.message)) throw error;
+    throw plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.");
+  }
+}
+
 function open(s, kind) {
   if (kind !== "fresh" && kind !== "mine") throw plain("browser must be \"fresh\" or \"mine\".");
-  var browser = chooseBrowser(s, kind === "mine");
-  var short = BROWSERS[browser.channel].short;
+  if (kind === "mine") return openAuth(s);
+  var browser = chooseBrowser(s, false);
   var id = crypto.randomUUID();
   var dir = contextDir(s, id);
   // Screenshots, snapshots and logs stay inside the private context folder, so they go when the context closes.
   var outputDir = path.join(dir, "files");
-  var cookiesLeft = false;
   return ensurePlaywright(s).then(function () {
     fs.mkdirSync(dir, { mode: 448 });
-    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind }) + "\n");
+    s.contexts[id] = { kind: "fresh", transport: "legacy-cli" };
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind, profilePolicy: PROFILE_POLICY, transport: "legacy-cli" }) + "\n");
     fs.mkdirSync(path.join(dir, ".playwright"));
     fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
-    var profileName = null;
-    if (kind === "mine") {
-      try {
-        var copied = copyProfile(browser.profileRoot, profileDir);
-        profileName = copied.name;
-        cookiesLeft = copied.skipped.indexOf("Network/Cookies") !== -1 || copied.skipped.indexOf("Cookies") !== -1;
-      } catch (error) {
-        throw plain("Desk could not copy your " + short + " profile, probably because " + short + " is using it. Close " + short + ", or use a fresh browser (browser: \"fresh\").");
-      }
-    } else {
-      fs.mkdirSync(profileDir, { mode: 448 });
-    }
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, profileName, outputDir)));
+    fs.mkdirSync(profileDir, { mode: 448 });
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, null, outputDir)));
     return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
     return recordProcesses(s, dir, result.text).then(function () {
@@ -277,11 +416,6 @@ function open(s, kind) {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
       note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, so copy out any screenshot you need first."
     };
-    if (cookiesLeft) {
-      opened.signIns = browser.channel === "msedge"
-        ? "Edge is open, so only your Microsoft work sign-in carries over; close Edge to use all your sign-ins."
-        : "Chrome is open, so some of your sign-ins did not carry over; close Chrome to use all your sign-ins.";
-    }
     return opened;
   }).catch(function (error) {
     return close(s, id).then(function () {
@@ -412,12 +546,33 @@ function endProcesses(s, recorded) {
 
 function close(s, id) {
   var dir = contextDir(s, id);
+  var owned = s.contexts[id];
+  if (owned && owned.kind === "mine") {
+    return Promise.resolve().then(function () {
+      if (owned.adapter) return owned.adapter.close();
+      if (owned.context) return owned.context.close();
+    }).catch(function () {
+      throw plain("AUTH_CLOSE_FAILED: Owned authenticated cleanup could not be confirmed; its files were retained.");
+    }).then(function () {
+      try { removeDir(dir); } catch (error) { throw plain("AUTH_FILES_RETAINED: The owned browser closed, but its private files could not be removed."); }
+      delete s.contexts[id];
+      return { contextId: id, closed: true };
+    });
+  }
+  var owner = readOwner(dir);
+  if (!owned && fs.existsSync(dir) && !(owner.browser === "fresh" && ownerGone(path.join(dir, "owner.json")))) {
+    throw plain("AUTH_CONTEXT_REFUSED: An unowned or older context cannot be closed or migrated through this server.");
+  }
+  if (owner.browser === "mine" || owner.transport === "auth-api" || owner.profilePolicy === AUTH_PROFILE_POLICY) {
+    throw plain("AUTH_CONTEXT_REFUSED: No current owned native handle exists for this authenticated context.");
+  }
   var recorded = readOwner(dir).processes;
   var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
   return stop.then(function () {
     return endProcesses(s, recorded);
   }).then(function () {
     removeDir(dir);
+    delete s.contexts[id];
     return { contextId: id, closed: true };
   });
 }
@@ -444,9 +599,19 @@ function checkArgs(args) {
 
 function command(s, id, args) {
   checkId(id);
-  checkArgs(args);
   var dir = contextDir(s, id);
   if (!fs.existsSync(path.join(dir, "config.json"))) throw plain("There is no open browser with that contextId. Open one with browser_context.");
+  var record = s.contexts[id];
+  var owner = readOwner(dir);
+  if (record && record.kind === "mine") {
+    if (owner.browser !== "mine" || owner.transport !== "auth-api" || owner.profilePolicy !== AUTH_PROFILE_POLICY ||
+      owner.pid !== process.pid || !record.adapter) throw plain("AUTH_CONTEXT_POLICY: This context has no current password-store exclusion policy and owned native handle. Open a new context; no profile was migrated.");
+    return record.adapter.call(args);
+  }
+  if (!record || owner.browser !== "fresh" || owner.transport !== "legacy-cli" || owner.pid !== process.pid || owner.profilePolicy !== PROFILE_POLICY) {
+    throw plain("This browser context has no current password-store exclusion policy. Close it with browser_context and open a new context; Desk will not scrub or migrate an existing profile.");
+  }
+  checkArgs(args);
   return runCli(s, dir, args, s.commandMs).then(function (result) {
     if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
     if (result.code !== 0) throw plain(result.text || "The command failed.");
@@ -467,7 +632,9 @@ function ownerGone(file) {
 function sweep(s) {
   var names = fs.existsSync(s.tmpDir) ? fs.readdirSync(s.tmpDir) : [];
   var stale = names.filter(function (name) {
-    return name.indexOf(PREFIX) === 0 && ID.test(name.slice(PREFIX.length)) && ownerGone(path.join(s.tmpDir, name, "owner.json"));
+    var owner = readOwner(path.join(s.tmpDir, name));
+    return name.indexOf(PREFIX) === 0 && ID.test(name.slice(PREFIX.length)) && owner.browser === "fresh" &&
+      ownerGone(path.join(s.tmpDir, name, "owner.json"));
   });
   return stale.reduce(function (chain, name) {
     return chain.then(function () {
@@ -480,24 +647,22 @@ function sweep(s) {
 
 function createController(options) {
   var s = settings(options || {});
-  var owned = {};
   function answer(work) {
     return Promise.resolve().then(work).then(function (value) {
       return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError: false };
     }, function (error) {
-      return { content: [{ type: "text", text: error.plain ? error.message : "Desk's browser hit an unexpected problem: " + error.message }], isError: true };
+      var safe = safeErrorData(error);
+      return { content: [{ type: "text", text: safe ? safe.message : "Desk's browser hit an unexpected problem: BROWSER_INTERNAL_FAILURE." }], isError: true };
     });
   }
   function context(input) {
     if (input.action === "open") {
       return open(s, input.browser || "fresh").then(function (opened) {
-        owned[opened.contextId] = true;
         return opened;
       });
     }
     if (input.action !== "close") throw plain("action must be \"open\" or \"close\".");
     checkId(input.contextId);
-    delete owned[input.contextId];
     return close(s, input.contextId);
   }
   return {
@@ -509,8 +674,7 @@ function createController(options) {
       return answer(function () { throw plain("Unknown tool " + name + "."); });
     },
     closeAll: function () {
-      return Promise.all(Object.keys(owned).map(function (id) {
-        delete owned[id];
+      return Promise.all(Object.keys(s.contexts).map(function (id) {
         return close(s, id);
       }));
     },
