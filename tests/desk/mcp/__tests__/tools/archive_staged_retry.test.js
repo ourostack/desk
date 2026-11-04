@@ -170,7 +170,7 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
   const hook = path.join(f.root, ".git", "hooks", phase)
   const entered = path.join(f.root, "owned-hook-pid")
   const trace = path.join(f.root, "owned-commit-trace.jsonl")
-  await fs.writeFile(hook, `#!${process.execPath}\nconst fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n`, { mode: 0o755 })
+  await fs.writeFile(hook, `#!${process.execPath}\nconst fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`, { mode: 0o755 })
   let result, hookPid
   try {
     result = await retry(f, {
