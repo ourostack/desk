@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.57 — 2026-11-04
+
+Keep status cache preparation within its original deadline and require a completed sub-200ms observation, while retaining slower round-trip samples instead of failing setup on a single cold response. Production status behavior and independent latency checks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.56 — 2026-11-03
 
 Desk now distinguishes an intentionally blocked question form from a human answer or lost authority. Copilot startup and conversation guidance tell agents to continue authorized work, keep genuine decisions gated, and handle contradictory host routing as a consumer integration defect. Question defaults, permissions and hooks are unchanged.
