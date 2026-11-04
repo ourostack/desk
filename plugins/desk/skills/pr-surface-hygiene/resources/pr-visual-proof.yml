@@ -1,0 +1,29 @@
+name: PR visual proof
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-visual-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  visual-proof:
+    name: PR visual proof
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted base only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check saved PR body
+        run: node .github/scripts/check-pr-visual-proof.cjs --event "$GITHUB_EVENT_PATH"

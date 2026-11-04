@@ -1,6 +1,6 @@
 ---
 name: pr-surface-hygiene
-description: Rules for writing and auditing PR descriptions and comments. Use before drafting or publishing either.
+description: Rules for writing and auditing PR descriptions and comments. Use before drafting, opening or marking a PR ready, and before publishing comments.
 ---
 
 # PR surface hygiene
@@ -62,6 +62,26 @@ Before opening any PR, look for a template (`.github/PULL_REQUEST_TEMPLATE.md`, 
 ## PSH-009 — one body for human and agent readers
 
 Anything both people and agents read (PR descriptions, bug reports, runbooks, status posts) gets one canonical body. No "For your AI agent" or "Agent prompt" section and no JSON or YAML that mirrors the prose: a second copy drifts. Use stable headings ("Repro", "Acceptance criteria", "Suspect code surface"), put queries and commands in code blocks and references in tables, and use `<details>` for depth humans skip. A separate machine-readable attachment for tooling is fine.
+
+## PSH-010 — visual proof blocks creation and readiness
+
+Before opening a PR (including a draft), marking it ready or saying it is ready for review, read the full diff and classify whether it changes anything a person sees, including rendered documents, replies, errors and settings. The PR body must contain an inline image of the actual changed result, or a standalone `No visual change: <specific accurate reason>` for wholly nonvisual work. A link to an image, a comment elsewhere, a terminal success line or a promise to add proof later does not satisfy this gate. A visible change cannot use the reason as a bypass; privacy is not a no-visual-change reason.
+
+Run the bundled checker against the exact body to publish, using the actual loaded skill directory and an existing body file:
+
+```sh
+node <loaded-desk-plugin>/skills/pr-surface-hygiene/check-visual-proof.cjs --body <pr-body-file> --visual-change yes
+```
+
+Use `--visual-change no` only after confirming the full diff is nonvisual. A nonzero exit blocks publication or readiness. The checker accepts HTTPS Markdown images, reference images and quoted HTML `<img src="...">` images; it rejects common comment/code examples and placeholders. It is a conservative presence check, not a Markdown renderer or proof that a URL loads, a capture is genuine or a reason is true. Inspect the rendered body, open the images with the intended reviewer access and check their relevance and privacy. Badges, unrelated images, hidden markup and stale captures do not count even if the checker passes. Replace unsupported markup with a plain inline image; do not skip the check.
+
+After authorized creation or a body update, read the saved body back from the PR, rerun the same check and inspect its rendering. Repeat against the current diff and saved body immediately before a ready transition or review announcement; earlier success does not cover later edits. If published proof is missing or invalid, block the readiness claim, report the gap and correct it only within existing authority. This gate never grants permission to create, edit or change a PR's state.
+
+For private captures, use [`evidence-discipline`, "Privacy-safe rendered proof"](../evidence-discipline/SKILL.md#privacy-safe-rendered-proof). If safe proof cannot be produced, keep readiness blocked and state what remains unverified.
+
+## PSH-011 — offer repository enforcement; do not install it by default
+
+When the repository lacks equivalent enforcement, recommend the [opt-in PR template and CI check](repository-setup.md). Offer setup once in the current task; a PR-writing request does not authorize changing repository workflows, templates, required checks, permissions or user-wide rules. Preserve existing templates and policy. Install only within explicit repository-owner approval, and leave required-check settings to their authorized owner.
 
 ## Allowed specifics
 
