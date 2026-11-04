@@ -209,6 +209,8 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
     let stat
     try { stat = await fs.readFile(`/proc/${hookPid}/stat`, "utf8") } catch (error) {
       if (error.code !== "ENOENT") throw error
+      assert.throws(() => process.kill(hookPid, 0), { code: "ESRCH" },
+        "missing procfs cannot establish owned hook termination")
       absent = true
     }
     if (!absent) {
