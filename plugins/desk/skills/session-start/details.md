@@ -64,6 +64,8 @@ a crew workspace may also commit `_meta/crew.json`. it changes nothing about the
 
 In a Crew workspace, also read the existing navigation under `_shared/tracks/` at the Crew repository root, not under the person's desk. Use `crew:shared-initiative` for shared-effort discovery and introduce relevant initiatives alongside personal tasks, with links to their existing coordination entries. An absent or empty directory means no shared initiatives are recorded. Do not create cards, infer membership or copy shared focus into personal task state during startup. This adds read-only awareness, not another task scan or registry.
 
+In a Crew workspace, the boot also lists the open notes teammates left in this person's `desks/<alias>/_inbox/` under "Notes from teammates" (`notes` with `--json`), oldest first and at most five, with one instruction. Follow it: mention the notes to the operator early without letting them displace the requested work, read a note before acting on work it relates to, and call `note_ack` once the operator has seen it (`crew:leave-note`).
+
 `desks/<alias>/**/task.md` globs already match nested paths, so the boot script's active-task scan picks up person-scoped task cards without change — this step only adds the *awareness* layer (the desk-set + which-desk-am-I framing). the scan itself is remap-transparent.
 
 ### agent-work migrations

@@ -569,7 +569,7 @@ jobs:
             arch: x64
             node_abi: "137"
           - target: darwin-arm64-node-127
-            runner: macos-14
+            runner: macos-latest
             node: "22.23.2"
             platform: darwin
             arch: arm64

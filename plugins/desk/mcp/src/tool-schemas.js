@@ -85,6 +85,17 @@ const RESOURCE = {
     intended: text("What you intend to do with it, in a few words (for example `remove after merge`)."),
     disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record this once the resource is dealt with; needs `details`. Desk removes nothing." },
     details: text("With `disposition`: removed-and-absent, the readback that it is gone; named transfer, who took it and that they acknowledged; retained-with-trigger, why, who owns it and what triggers its cleanup."),
+    migrate: {
+      type: "object",
+      properties: Object.fromEntries(["identity", "owner", "writers", "intended", "evidence", "terminal"].map((key) => [key,
+        key === "identity"
+          ? text("Existing identity column name (case-insensitive).")
+          : oneOf([{ type: "string" }, { type: "null" }], "Existing source column name (case-insensitive), or null only if absent. In a partially canonical table, existing canonical columns must map to themselves."),
+      ])),
+      required: ["identity", "owner", "writers", "intended", "evidence", "terminal"],
+      additionalProperties: false,
+      description: "Explicit legacy Resources table recovery, applied atomically with this row write. Map all six fields; Desk puts them in standard order, adds absent columns, and preserves every other column after them, all row cells and surrounding prose. Duplicate headers/typed identities and malformed rows refuse without writing. Repeating on a canonical table leaves its schema unchanged. Live cards only; archived cards still accept only a disposition on an existing readable row.",
+    },
   },
   required: ["identity"],
   additionalProperties: false,
@@ -259,6 +270,15 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     repo: text("For scope \"team\": the path of your local clone of the team's repository. Defaults to the desk when the desk is a shared workspace."),
     source: text("Required when scope is \"team\": where the lesson comes from, on one line. In a repository with _shared/decisions/, the path of the decision record; elsewhere who said it, where and when, with the date as YYYY-MM-DD."),
   }, ["scope", "topic", "body"]),
+  note_leave: schema({
+    to: text("The alias of the member the note is for, as in the workspace roster (_meta/desks.md)."),
+    subject: text("What the note is about, on one line of at most 120 characters."),
+    body: text("The note: your own explanation, in your own voice, at most 8000 characters. Relay someone else's thinking as your understanding of it, never in their words or voice. Everyone in the workspace can read it."),
+    related: list("Up to 10 links the note is about: https URLs, or paths in the workspace relative to its root."),
+  }, ["to", "subject", "body"]),
+  note_ack: schema({
+    note: text("The note's path as session start listed it (desks/<you>/_inbox/<file>.md), or its file name."),
+  }, ["note"]),
   desk_save: schema({
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
     files: {

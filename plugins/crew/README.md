@@ -12,6 +12,7 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
   pull-latest -> branch -> PR -> merge-now serialization (no human review gate; the PR is a concurrency
   primitive).
 - **team lessons** -- a correction that holds for the whole team goes, attributed and sourced, into the root `AGENTS.md` of the repository the team works in, which Desk's session start, Copilot CLI and Codex load (Claude Code through `CLAUDE.md`), so nobody teaches it twice; a personal one goes into that person's `desks/<alias>/AGENTS.md`. `lesson_add` routes each one and writes a team lesson through a pull request it merges.
+- **teammate notes** -- `note_leave` puts a dated, attributed note in a teammate's `desks/<alias>/_inbox/` through a pull request it merges; their session start lists it until they acknowledge it with `note_ack`.
 - **perspective queries** -- answer "what would `<person>` think about X", "what's `<person>` working
   on", "what's actually agreed vs just a fact", read from the right home and attributed honestly.
 - **crew onboarding** -- clone a shared workspace through an overlay-supplied identity, resolve the
@@ -32,3 +33,4 @@ the identity skin (how a teammate's writes authenticate); this plugin is the sub
 - `join-crew` -- vendor-neutral onboarding; an overlay supplies identity, transport, and private tooling.
 - `start-crew` -- start a workspace in a new or existing repository, monorepo or dual-repo.
 - `roster` -- the team's people file: the team and everyone it works with; joining ends with a short interview that adds the newcomer.
+- `leave-note` -- leave a teammate a dated, attributed note (`note_leave`) that their session start lists until they acknowledge it (`note_ack`); relay someone's thinking as your understanding, never in their voice; the whole workspace can read it.

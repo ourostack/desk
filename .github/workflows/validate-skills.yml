@@ -58,6 +58,9 @@ jobs:
       - name: Validate Desk content contracts
         run: node scripts/test-desk-contracts.cjs
 
+      - name: Validate PR visual-proof gate
+        run: node --test scripts/test-pr-visual-proof.cjs
+
       - name: Validate V2 onboarding paths
         run: node scripts/test-v2-onboarding-paths.cjs
 

@@ -308,7 +308,7 @@ test("Copilot root packaging declares a generated flattened dependency closure",
   })
   assert.deepEqual(deskPlugin.activation?.copilot?.dependencies?.["plain-language"], {
     path: "../plain-language",
-    version: "0.2.9",
+    version: "0.2.10",
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   })
@@ -434,7 +434,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.46"],
+    ["Copilot root Desk version must match activation version 3.2.59"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -448,7 +448,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   stalePlainLanguageVersion.plainLanguagePlugin.version = "0.0.9"
   assert.deepEqual(
     validateCopilotPackagingContract(stalePlainLanguageVersion),
-    ["Copilot root Plain Language version must match activation lock 0.2.9"],
+    ["Copilot root Plain Language version must match activation lock 0.2.10"],
   )
 })
 
@@ -579,6 +579,12 @@ test("ordinary Agency declaration (copilot packaging): desk/agency.json declares
   ])
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("ponytail")), false)
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("work-suite")), false)
+})
+
+// Agency treats configured copies that share a pluginId as one plugin, so the Agency marketplace listing and a
+// github: install (directly or as MS Desk's dependency) load one Desk. The marketplace stub carries the same value.
+test("ordinary Agency declaration (copilot packaging): desk/agency.json carries Desk's fixed pluginId", () => {
+  assert.equal(loadJson("plugins", "desk", "agency.json").pluginId, "006b58c2-230c-47b1-831a-a1cc2fd10ef9", "never change or reuse this id")
 })
 
 // The committed bundle is release output, so these tests exercise the writer against a scratch repository

@@ -11,6 +11,11 @@ import { readStatus, serializeTaskContext, setConsent, taskContextPath, updateSt
 import { contextPayloadHash } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
 import { contextFacts, contextRecord, CONTEXT_JOB, replaceContextInput } from "./_context_fixture.js"
 import { osEnv } from "../_os_env.js"
+import { DatabaseSync } from "node:sqlite"
+import { createHmac } from "node:crypto"
+import { readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { stableStringify } from "../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const queue = await import("../../../../../plugins/desk/mcp/src/factory/context-outbox.js").catch((error) => {
   if (error.code === "ERR_MODULE_NOT_FOUND") return null
@@ -35,10 +40,371 @@ async function fixture({ prose = true, contribute = true } = {}) {
 }
 async function prepared() {
   const f = await fixture()
+  f.options.readRemote = () => null
   await queue.prepareTaskContexts(f.env, f.options)
   const [work] = await queue.listContextWork(f.env, { store: STORE })
   return { ...f, work }
 }
+async function indexedFixture(t) {
+  const f = await fixture()
+  f.env.COPILOT_HOME = join(f.root, "copilot")
+  await mkdir(f.env.COPILOT_HOME)
+  const db = new DatabaseSync(join(f.env.COPILOT_HOME, "session-store.db"))
+  t.after(() => db.close())
+  const native = "12345678-1234-4123-8123-123456789abc"
+  db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT); CREATE TABLE turns (session_id TEXT, turn_index INTEGER, timestamp TEXT, user_message TEXT, assistant_response TEXT)")
+  db.prepare("INSERT INTO sessions VALUES (?, ?)").run(native, f.desk)
+  db.prepare("INSERT INTO turns VALUES (?, 0, ?, ?, ?)").run(native, "2026-10-01T00:00:01.000Z", "Explain the recorded reader", "The result is still pending")
+  f.facts.session.host = "copilot-cli"
+  f.facts.jobs[0].agents = [0]
+  f.facts.jobs[0].segments = [{ start_ms: 0, end_ms: f.facts.session.duration_ms }]
+  f.entries[0].nativeContext = { session: native, job: CONTEXT_JOB, started_at: "2026-10-01T00:00:00.000Z",
+    duration_ms: f.facts.session.duration_ms, full_share: true }
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
+    json({ schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: [native] } } }))
+  await rename(f.entries[0].logPath, `${f.entries[0].logPath}.retained`)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  return { ...f, db, native, work }
+}
+
+test("indexed source binds the native identity and seals untimed readable conversation", async t => {
+  const f = await indexedFixture(t)
+  const evidence = f.work.source.private_evidence[0]
+  assert.equal(evidence.log_path, null)
+  assert.equal(evidence.conversation.kind, "native_copilot_turn_index")
+  assert.equal(evidence.conversation.native_session, f.native)
+  assert.equal(evidence.conversation.status, "available")
+  assert.equal(evidence.clock_origin, null)
+  const projection = JSON.parse(await readFile(await taskContextPath(f.env, STORE, f.work.job, evidence.conversation.file), "utf8"))
+  assert.deepEqual(projection.turns, [
+    { turn_index: 0, user_message_parts: ["Explain the recorded reader"], assistant_response_parts: ["The result is still pending"] },
+  ])
+})
+
+test("indexed conversation has a small direct source file instead of hiding text behind numerical facts", async t => {
+  const f = await indexedFixture(t)
+  const descriptor = f.work.source.private_evidence[0].conversation
+  assert.equal(typeof descriptor.file, "string")
+  assert.ok(!json(f.work.source).includes("Explain the recorded reader"))
+  const bytes = await readFile(await taskContextPath(f.env, STORE, f.work.job, descriptor.file), "utf8")
+  const projection = JSON.parse(bytes)
+  assert.equal(projection.schema, "desk.factory.conversation-index/1")
+  assert.equal(projection.turns[0].user_message_parts.join(""), "Explain the recorded reader")
+  await writeFile(await taskContextPath(f.env, STORE, f.work.job, descriptor.file), `${bytes} `)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
+})
+
+test("GivenChangedIndexedProjection_WhenPrepared_RefusesToOverwriteRetainedEvidence", async t => {
+  const f = await indexedFixture(t)
+  const descriptor = f.work.source.private_evidence[0].conversation
+  const file = await taskContextPath(f.env, STORE, f.work.job, descriptor.file)
+  const changed = `${await readFile(file, "utf8")} `
+  await writeFile(file, changed)
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_projection_changed" })
+  assert.equal(await readFile(file, "utf8"), changed)
+})
+
+test("GivenUnreadableIndexedSource_WhenPrepared_DefersWithoutReplacingItsSealedInput", async t => {
+  const f = await indexedFixture(t)
+  const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
+  const before = await readFile(stateFile, "utf8")
+  f.db.exec("DROP TABLE turns")
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_preparation_deferred" })
+  assert.equal(await readFile(stateFile, "utf8"), before)
+})
+
+test("indexed projection preserves long source messages without native Read line truncation", async t => {
+  const f = await indexedFixture(t)
+  const message = `Long retained source ${"\\\"\n".repeat(1500)} end`
+  f.db.prepare("UPDATE turns SET user_message = ? WHERE session_id = ?").run(message, f.native)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const descriptor = work.source.private_evidence[0].conversation
+  const bytes = await readFile(await taskContextPath(f.env, STORE, work.job, descriptor.file), "utf8")
+  assert.ok(bytes.split("\n").every(line => line.length < 500))
+  const projection = JSON.parse(bytes)
+  assert.equal(projection.turns[0].user_message_parts.join(""), message)
+})
+
+test("GivenNullIndexedMessages_WhenPrepared_PreservesNullInsteadOfInventingText", async t => {
+  const f = await indexedFixture(t)
+  f.db.prepare("UPDATE turns SET assistant_response = NULL").run()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const file = await taskContextPath(f.env, STORE, work.job, work.source.private_evidence[0].conversation.file)
+  assert.equal(JSON.parse(await readFile(file, "utf8")).turns[0].assistant_response_parts, null)
+})
+
+test("GivenFormattedProjectionOverLimit_WhenPrepared_ReportsTooLargeWithoutRetainingPrefix", async t => {
+  const f = await indexedFixture(t)
+  f.db.prepare("UPDATE turns SET user_message = ?, assistant_response = NULL").run("a\n".repeat(85000))
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.reason, "projection_too_large")
+  assert.equal(work.source.private_evidence[0].conversation.file, null)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 1)
+})
+
+test("GivenNoIndexedText_WhenPrepared_ReportsNoAttributableTurns", async t => {
+  const f = await indexedFixture(t)
+  f.db.exec("UPDATE turns SET user_message = NULL, assistant_response = NULL")
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.status, "no_attributable_turns")
+  assert.equal(work.source.private_evidence[0].conversation.file, null)
+})
+
+test("GivenMissingProjection_WhenRead_DoesNotTreatItsSealAsReadableEvidence", async t => {
+  const f = await indexedFixture(t)
+  const file = await taskContextPath(f.env, STORE, f.work.job, f.work.source.private_evidence[0].conversation.file)
+  await rename(file, `${file}.retained`)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+})
+
+test("GivenInvalidIndexedPolicy_WhenPrepared_RefusesRatherThanReadingTheDatabase", async t => {
+  const f = await indexedFixture(t)
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"), "{}")
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_preparation_deferred" })
+})
+
+test("GivenMissingRawPath_WhenPrepared_UsesOnlyTheCanonicalNativeSessionPath", async t => {
+  const f = await indexedFixture(t)
+  f.entries[0].logPath = null
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation.native_session, f.native)
+  assert.equal(work.source.private_evidence[0].native_context.raw_log_path,
+    join(f.env.COPILOT_HOME, "session-state", f.native, "events.jsonl"))
+})
+
+test("GivenSealedInputWithoutItsEvidenceSource_WhenRead_RefusesTheMismatch", async () => {
+  const f = await prepared()
+  const input = structuredClone(f.work.source)
+  input.private_evidence[0].session = "12345678-1234-4123-8123-123456789abc"
+  await replaceContextInput(f.env, STORE, f.work, input)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+})
+
+test("GivenOrdinarySourceWithSelectedSessionClaim_WhenAccepted_RefusesUnsupportedScope", async () => {
+  const f = await prepared()
+  const value = { ...candidate(f.facts), schema: "desk.factory.context/2", recommendations: [],
+    coverage: { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 } }
+  assert.equal((await queue.acceptContextCandidate(f.env, { store: STORE, job: f.work.job,
+    basis: f.work.basis, bytes: json(value) })).result, "invalid_candidate")
+})
+
+test("GivenEmptyTaskWalk_WhenPrepared_CompletesWithoutGuessingACard", async () => {
+  const f = await fixture()
+  await queue.prepareTaskContexts(f.env, { ...f.options, readRemote: () => "https://github.com/synthetic/desk.git" })
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.task_card_status, "not_associated")
+})
+
+test("indexed source edits invalidate accepted evidence while other sessions do not", async t => {
+  const f = await indexedFixture(t)
+  f.db.prepare("INSERT INTO turns VALUES ('unrelated', 0, '2026-10-01 00:00:01', 'not ours', NULL)").run()
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 1)
+  f.db.prepare("UPDATE turns SET user_message = 'Changed source request' WHERE session_id = ?").run(f.native)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
+})
+
+test("indexed source requires partial unplaced coverage and refuses timed or waiting references", async t => {
+  const f = await indexedFixture(t)
+  const value = candidate(f.facts)
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
+  const accept = () => queue.acceptContextCandidate(f.env, { store: STORE, job: f.work.job, basis: f.work.basis, bytes: json(value) })
+  assert.equal((await accept()).result, "invalid_candidate")
+  value.coverage = { state: "partial", reasons: ["not_recorded"], omitted_events: 0 }
+  assert.equal((await accept()).result, "invalid_candidate")
+  value.coverage = { state: "partial", reasons: ["unplaced"], omitted_events: 0 }
+  assert.equal((await accept()).result, "invalid_candidate")
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
+  assert.equal((await accept()).result, "invalid_candidate")
+  value.events[0].evidence[0].anchor = "start"
+  value.events[0].evidence[0].range = null
+  assert.equal((await accept()).result, "candidate_accepted")
+  const hash = contextPayloadHash(value)
+  assert.equal((await queue.acceptContextPrivacy(f.env, { store: STORE, job: f.work.job, basis: f.work.basis, bytes: json(review(hash)) })).result, "context_accepted")
+})
+
+test("indexed source is not read for ambiguous native job ownership and raw log restoration wins", async t => {
+  const f = await indexedFixture(t)
+  await rename(`${f.entries[0].logPath}.retained`, f.entries[0].logPath)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [raw] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(raw.source.private_evidence[0].conversation, undefined)
+  assert.equal(raw.source.private_evidence[0].log_path, f.entries[0].logPath)
+  await rename(f.entries[0].logPath, `${f.entries[0].logPath}.retained`)
+  f.entries[0].nativeContext.full_share = false
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [ineligible] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(ineligible.source.private_evidence[0].conversation, undefined)
+})
+
+test("indexed source privacy rechecks a valid candidate that acquired unsupported timed evidence", async t => {
+  const f = await indexedFixture(t)
+  const value = candidate(f.facts)
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
+  await updateTaskContextState(f.env, STORE, f.work.job, state => ({
+    ...state, phase: "privacy", candidate: value, candidate_hash: contextPayloadHash(value),
+  }))
+  const response = await queue.acceptContextPrivacy(f.env, {
+    store: STORE, job: f.work.job, basis: f.work.basis, bytes: json(review(contextPayloadHash(value))),
+  })
+
+  assert.equal(response.result, "invalid_review")
+})
+
+test("indexed source refuses implicit public ownership without an explicit full share", async t => {
+  const f = await indexedFixture(t)
+  delete f.facts.jobs[0].segments
+  delete f.facts.jobs[0].agents
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation, undefined)
+})
+
+test("indexed source never bypasses an unsafe raw-source alias", async t => {
+  const f = await indexedFixture(t)
+  await symlink(`${f.entries[0].logPath}.retained`, f.entries[0].logPath)
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
+  await assert.rejects(queue.prepareTaskContexts(f.env, f.options), { code: "context_preparation_deferred" })
+})
+
+test("indexed source read and retention require a live job-specific opt-in", async t => {
+  const f = await indexedFixture(t)
+  await writeFile(join(f.desk, "_meta", "factory-indexed-context.json"),
+    json({ schema_version: 1, stores: { [STORE]: { ["2".repeat(32)]: [f.native] } } }))
+  assert.equal((await queue.listContextWork(f.env, { store: STORE })).length, 0)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.private_evidence[0].conversation, undefined)
+})
+
+test("indexed source scope excludes unrelated changing sibling sessions and current task cards", async t => {
+  const f = await indexedFixture(t)
+  const peer = structuredClone(f.entries[0])
+  peer.facts.session.id = "87654321-1234-4123-8123-123456789abc"
+  peer.nativeContext = null
+  peer.logPath = join(f.root, "changing-peer.jsonl")
+  await writeFile(peer.logPath, '{"unrelated":"current sibling work"}\n')
+  f.entries.push(peer)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.sources.length, 1)
+  assert.equal(work.source.source_selection, "indexed_conversation")
+  assert.equal(work.source.task_card_status, "scoped_out")
+  await writeFile(peer.logPath, '{"unrelated":"sibling changed again"}\n')
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [unchanged] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(unchanged.basis, work.basis)
+})
+
+test("indexed source state cannot be downgraded by the previously released reader", async t => {
+  const f = await indexedFixture(t)
+  const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/context-outbox.js", import.meta.url)
+  const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
+  const source = execFileSync("git", ["show", "dd1c9fe7c2fdf77b788581e71338b0ba720fd152:plugins/desk/mcp/src/factory/context-outbox.js"], { cwd: repo, encoding: "utf8" })
+    .replace(/from "(\.[^"]+)"/g, (_, name) => `from "${new URL(name, moduleUrl).href}"`)
+  const file = join(f.root, "released-context-reader.mjs")
+  await writeFile(file, source)
+  const previous = await import(pathToFileURL(file).href)
+  const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
+  const before = await readFile(stateFile, "utf8")
+  await assert.rejects(previous.prepareTaskContexts(f.env, f.options), /context_state_invalid/)
+  assert.equal(await readFile(stateFile, "utf8"), before)
+})
+
+test("indexed selected-session scope reaches publication with an excluded sibling still present", async t => {
+  const f = await indexedFixture(t)
+  const peer = structuredClone(f.entries[0])
+  peer.facts.session.id = "87654321-1234-4123-8123-123456789abc"
+  peer.nativeContext = null
+  peer.logPath = join(f.root, "excluded-sibling.jsonl")
+  await writeFile(peer.logPath, '{"synthetic":"excluded sibling"}\n')
+  f.entries.push(peer)
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const value = candidate(f.facts)
+  value.schema = "desk.factory.context/2"
+  value.recommendations = []
+  value.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
+  value.events[0].evidence[0].anchor = "start"
+  value.events[0].evidence[0].range = null
+  const accepted = await queue.acceptContextCandidate(f.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(value) })
+  assert.equal(accepted.result, "candidate_accepted")
+  assert.equal((await queue.acceptContextPrivacy(f.env, { store: STORE, job: work.job, basis: work.basis,
+    bytes: json(review(accepted.payload_sha256)) })).result, "context_accepted")
+  const ready = await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries })
+  assert.equal(ready.length, 1)
+  assert.deepEqual(JSON.parse(ready[0].bytes).sources, value.sources)
+})
+
+test("indexed permissions are closed, session-specific and cannot grant ordinary context consent", async () => {
+  const f = await fixture({ prose: false })
+  const native = "12345678-1234-4123-8123-123456789abc"
+  const file = join(f.desk, "_meta", "factory-indexed-context.json")
+  const permission = () => queue.indexedContextPermission(f.desk, STORE, CONTEXT_JOB, native)
+  assert.equal(permission(), "not_opted_in")
+  await writeFile(file, json({ schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: [native] } } }))
+  assert.equal(permission(), "allowed")
+  assert.equal((await queue.prepareTaskContexts(f.env, f.options)).prepared, 0)
+  assert.equal(queue.indexedContextPermission(f.desk, STORE, CONTEXT_JOB, "87654321-1234-4123-8123-123456789abc"), "not_opted_in")
+  for (const value of [
+    {}, { schema_version: 2, stores: {} }, { schema_version: 1, stores: [], extra: true },
+    { schema_version: 1, stores: { bad: {} } },
+    { schema_version: 1, stores: { [STORE]: [] } },
+    { schema_version: 1, stores: { [STORE]: { bad: [native] } } },
+    { schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: ["not a session"] } } },
+    { schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: [native, native] } } },
+  ]) {
+    await writeFile(file, json(value))
+    assert.equal(permission(), "policy_invalid")
+  }
+  await writeFile(file, "{not json")
+  assert.equal(permission(), "policy_invalid")
+  assert.equal(queue.indexedContextPermission("relative", STORE, CONTEXT_JOB, native), "policy_invalid")
+})
+
+test("GivenUnsafeIndexedPolicyMetadata_WhenChecked_RefusesTheDeclaration", async t => {
+  const f = await fixture()
+  const native = "12345678-1234-4123-8123-123456789abc"
+  const meta = join(f.desk, "_meta")
+  const file = join(meta, "factory-indexed-context.json")
+  await writeFile(file, json({ schema_version: 1, stores: { [STORE]: { [CONTEXT_JOB]: [native] } } }))
+  const permission = () => queue.indexedContextPermission(f.desk, STORE, CONTEXT_JOB, native)
+  const original = fsNative.lstatSync
+  for (const target of [meta, file]) {
+    t.mock.method(fsNative, "lstatSync", (name, ...args) => {
+      const stat = original(name, ...args)
+      return String(name) === target ? { ...stat, isDirectory: () => false, isFile: () => false, isSymbolicLink: () => false } : stat
+    })
+    syncBuiltinESMExports()
+    try { assert.equal(permission(), "policy_invalid") }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports() }
+  }
+  await rename(meta, `${meta}.retained`)
+  assert.equal(permission(), "not_opted_in")
+})
+test("indexed source publisher refuses an otherwise sealed reviewed record with timed evidence", async t => {
+  const f = await indexedFixture(t)
+  const record = contextRecord(f.facts)
+  record.schema = "desk.factory.context/2"
+  record.recommendations = []
+  record.coverage = { state: "partial", reasons: ["not_recorded", "unplaced", "selected_sessions"], omitted_events: 0 }
+  record.privacy.payload_sha256 = contextPayloadHash(record)
+  const reviewSeal = createHmac("sha256", await readMachineSecret(f.env))
+    .update(stableStringify({ kind: "review", basis: f.work.basis, value: record })).digest("hex")
+  await updateTaskContextState(f.env, STORE, f.work.job, state => ({
+    ...state, phase: "ready", record, candidate: null, review_seal: reviewSeal,
+  }))
+  assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
+})
 async function cardFixture() {
   const f = await fixture()
   const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()

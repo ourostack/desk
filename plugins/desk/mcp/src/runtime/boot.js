@@ -33,8 +33,9 @@
 // whole call.
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
-// instructions, root, host, prereqs, sync, sync_summary, agents_md, active_tasks,
-// card_validation, push_accounts, factory }`. The CLI prints it as readable
+// instructions, root, host, prereqs, sync, sync_summary, agents_md, notes, active_tasks,
+// card_validation, push_accounts, factory }` (among others); `notes` is the open notes teammates left in this
+// person's `_inbox/` (`inbox.js`), or null. The CLI prints it as readable
 // text (`boot-text.js`) unless `--json` asks for this structure. `status` is one of "ready", "degraded" or
 // "setup_required" — never two words, and `degraded` always lists why.
 // `instructions` is the one list of next steps an agent acts on, each naming
@@ -77,6 +78,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { memberMessage, resolveMember } from "../desk/crew-member.js"
 import { personAgentsCap } from "./agents-md.js"
 import { shelfIndex } from "./lessons-shelf.js"
+import { openNotes } from "./inbox.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
@@ -85,7 +87,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
+import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, notesInstruction, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
@@ -990,6 +992,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     agents_md: null,
     person_agents_md: null,
     lessons_shelf: null,
+    notes: null,
     active_tasks: null,
     card_parser: parserName(NESTED_CARD_FIELDS),
     card_validation: [],
@@ -1067,30 +1070,11 @@ function movedPathsInstruction(sync, root) {
   return `Sync moved ${moved.length === 1 ? "1 untracked file" : `${moved.length} untracked files`} that the pull would have overwritten, under ${root.path}: ${pairs.join("; ")}. Another session may own them: tell the operator in one line, and leave them for their owner to restore.`
 }
 
-// What a failed sync means for the agent, by why it failed. A conflict or an unknown failure sends the agent to
-// `git status`; an unreachable or refusing origin must not, because `git status` then reads clean and the
-// degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
+// The helper's result is evidence, not a permanent reporting rule after independent recovery.
 function syncInstruction(sync, root) {
-  if (sync?.state !== "unresolved") return null
-  const where = sync.remote ? `origin ${sync.remote}` : "origin"
-  const why = sync.error ? ` (${sync.error})` : ""
-  if (sync.cause === "unreachable") {
-    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "auth_failed") {
-    return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
-    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "deadline") {
-    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "diverged") {
-    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
-  }
-  const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-  return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
+  if (sync !== null && sync !== undefined && sync.state !== "unresolved") return null
+  const git = `git -C ${shellQuote(root.path)}`
+  return `Verify desk sync with direct Git before reporting local-only state (desk-problem, "Direct Git sync recovery"). Helper expiry means pending, effects unknown; it does not establish absent effects. Read back actual HEAD/index/files and observed Git-operation/conflict markers; do not race a checkout mutation. Through the established account-scoped Git transport, run \`${git} fetch --no-tags origin\`, then \`${git} rev-list --left-right --count 'HEAD...@{upstream}'\` on the confirmed state branch and origin upstream. Clean status or cached origin refs are not currentness evidence. A successful fresh fetch and 0 ahead and 0 behind, with no observed Git-operation/conflict barrier, establish current commits even with unrelated dirty files and an unknown helper outcome: do not report working from local state or repeat the helper-timeout banner. This does not prove helper settlement, publication of dirty files or binary/LFS readiness. Otherwise recover only within safe writer ownership; preserve authentication, access, conflict and unknown-effect barriers and report the remaining limitation, continuing independent authorized work. Never stash, rebase, reset, move or overwrite another writer's work, or bypass a lock.`
 }
 
 // A push route worth telling the agent about: no account can deliver, the route goes through a fork, or the only
@@ -1238,6 +1222,7 @@ function buildInstructionItems(ctx) {
     `Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`,
     `Use ${root.path} as the desk path in every command and tool call; where a Desk skill says \`$DESK\`, it means this path.`,
   )
+  if (ctx.notes) add(notesInstruction(ctx.notes))
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.soft === true || check.reason.endsWith("_timeout")) continue
     add(`Prerequisite unavailable: ${prereqAction(name, check)} Only operations depending on ${name} are affected. Do not use an unverified identity, bypass a real access denial or protected write, or claim this check passed. Continue independent authorized work through available trusted tools; preserve the diagnostic without starting unsolicited maintenance.`)
@@ -1291,25 +1276,12 @@ function buildInstructions(ctx) {
 // The three closing rules that `--json` carries as separate lines, as one instruction, plus the step-heading rule.
 const CLOSING_RULES = "In every reply: if the next step needs something that is not on this machine (a branch, a file, a clone), say what is missing and stop, and never recreate or simulate it; never clone or fetch to look for something the card says is on another machine, never clone inside the desk folder, and clone a missing repo only where an instruction above says to, at the path it gives; give each task's real status and say 'done' only for a task whose status is done; do not print Desk skill step headings."
 
-// What the reply must open with when the sync did not go cleanly, from the sync summary's own words (never a placeholder): a failed sync, or a pull that worked but left the desk's uncommitted changes in conflict.
-function syncOpening(summary) {
-  const failed = /^sync failed: (.+?); nothing was pulled or pushed;/u.exec(summary)
-  if (failed !== null) return { say: `Desk could not sync with origin (${failed[1]}); working from local state`, lead: "Desk could not sync" }
-  const conflict = /^sync: the pull succeeded, but (.+)$/u.exec(summary)
-  if (conflict !== null) return { say: `Desk pulled from origin, but ${conflict[1]}`, lead: "Desk pulled but could not finish syncing" }
-  return null
-}
-const syncRule = ({ say, lead }) => `${lead}: open your reply with \"${say}\" before anything else, and never use \"synced\" for it.`
-
 // The plain-text wording of the same instructions, in the order the text boot prints them: the closing rules, then the
 // factory line, so the factory question never comes before the work.
 function buildTextInstructions(ctx) {
   const { body, consent } = buildInstructionItems(ctx)
   const plainOf = (items) => items.map((item) => item.plain).filter((line) => line !== null)
-  // A boot degraded by a failed sync adds how to say it (round S2: the headline said "sync failed" and the reply said "Desk synced locally").
-  const opening = syncOpening(ctx.syncSummaryText)
-  const closing = opening === null ? CLOSING_RULES : `${CLOSING_RULES} ${syncRule(opening)}`
-  return withConsentLast([...plainOf(body), closing], plainOf(consent))
+  return withConsentLast([...plainOf(body), CLOSING_RULES], plainOf(consent))
 }
 
 function withinBudget(promise, ms, timeoutValue) {
@@ -1358,6 +1330,7 @@ export async function bootOnce({
   cardGuardFn = installCardGuard,
   agentsFn = readAgentsMd,
   shelfFn = shelfIndex,
+  notesFn = openNotes,
   personFn = improvementPerson,
   memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
@@ -1533,6 +1506,13 @@ export async function bootOnce({
   } catch {
     lessonsShelf = null
   }
+  // The notes teammates left in this person's inbox (note_leave), in a shared workspace only: the open ones, oldest first.
+  let notes = null
+  try {
+    if (who?.status === "ok" && who.personPrefix !== "") notes = notesFn(root.path, who.personPrefix)
+  } catch {
+    notes = null
+  }
 
   let tasks = null
   try {
@@ -1652,7 +1632,7 @@ export async function bootOnce({
   const status = healthWord(degraded)
   // Whether an agent on this machine already told the operator about the undecided store: then no session raises it again.
   const consentWasMentioned = consentUndecided(factory, isNoninteractive(env)) && consentMentionedFn(resolveDeskStateDir({ env, homeDir }), factory.store)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned }
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned, notes }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
@@ -1670,6 +1650,7 @@ export async function bootOnce({
     agents_md: agentsMd,
     person_agents_md: personAgentsMd,
     lessons_shelf: lessonsShelf,
+    notes,
     person: personSummary(member),
     active_tasks: tasks,
     card_parser: parserName(nestedCards),
