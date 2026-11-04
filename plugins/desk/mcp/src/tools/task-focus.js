@@ -10,13 +10,15 @@
 // no tool call fails, waits or changes because focus is unset or different, and every hint is worded for the
 // session's main agent because a subagent shares the session's server.
 
+import * as path from "node:path"
 import { readMarkdown, pathExists } from "../util/fm.js"
-import { EFFECTIVE_ROOT_MISSING, resolveWriteTarget, validateWriteSegment } from "../util/paths.js"
+import { EFFECTIVE_ROOT_MISSING, deskRelativePath, resolveWriteTarget, validateWriteSegment } from "../util/paths.js"
 import { recentProgress } from "./task-body.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
+import { SHELF_FILE, readShelf, shelfForTask } from "../runtime/lessons-shelf.js"
 
 export const TASK_FOCUS_FIELDS = ["track", "slug", "clear", "display_label"]
 
@@ -60,12 +62,31 @@ export async function findCard({ deskRoot, person, track, slug }) {
 }
 
 /**
+ * The lessons on this person's shelf (LESSONS.md beside their AGENTS.md) for a session focusing the task described by
+ * `task` (any text about it), as `{ path, lessons, not_shown }`, or undefined when there is no shelf or it cannot be
+ * read. lesson_add moves lessons there when AGENTS.md outgrows what session start prints; this is where they load.
+ */
+export async function shelvedLessons({ deskRoot, person, task }) {
+  let file
+  try {
+    file = await resolveWriteTarget({ deskRoot, person, segments: [SHELF_FILE], createPersonRoot: false })
+  } catch {
+    return undefined
+  }
+  const shelf = readShelf(path.dirname(file))
+  if (shelf === null) return undefined
+  const { shown, not_shown: notShown } = shelfForTask(shelf.entries, task)
+  return { path: deskRelativePath(deskRoot, file), lessons: shown.map(redactCredentialLikeText), not_shown: notShown }
+}
+
+/**
  * task_focus
  *
  * Input: { track, slug } or { clear: true }
  *
- * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], next_step: string | null, archived?: true } or
- * { status: "cleared" }. A card found only under `_archive/` is still focused (a session may be wrapping up or
+ * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], next_step: string | null, archived?: true,
+ * shelved_lessons?: { path, lessons: [string], not_shown } } or { status: "cleared" }. `shelved_lessons` carries the
+ * person's shelved lessons (see `shelvedLessons`) when they have any, those closest to this task first. A card found only under `_archive/` is still focused (a session may be wrapping up or
  * reopening finished work) and the answer says `archived: true`. `recent_progress` is the last PROGRESS_ENTRIES entries
  * of the card's `## Progress log`, each cut to PROGRESS_ENTRY_CHARS characters, and is empty when the card has none.
  * Throws `card not found: <track>/<slug>` for a missing card, leaving the focus as it was.
@@ -99,6 +120,8 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   }
   if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
+  const lessons = await shelvedLessons({ deskRoot, person, task: [track, slug, card.data.title, result.next_step].join(" ") })
+  if (lessons !== undefined) result.shelved_lessons = lessons
   const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel })
   if (proposal.code !== "missing_safe_label") result.session_label = proposal
   Object.assign(result, archiveDueAnswer({ track, slug, status: card.data.status, archived: found.archived }))

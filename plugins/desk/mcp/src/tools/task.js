@@ -28,7 +28,7 @@ import {
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
-import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
@@ -46,7 +46,7 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
-import { focusNote } from "./task-focus.js"
+import { focusNote, shelvedLessons } from "./task-focus.js"
 import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
 import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
@@ -800,7 +800,13 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   if (values.focus === true && statusContext.focus) {
     statusContext.focus.set({ track, slug })
     result.focused = true
-  } else if (values.focus !== true) {
+  }
+  // Focusing a new task loads the person's shelved lessons, as task_focus does.
+  if (values.focus === true) {
+    const lessons = await shelvedLessons({ deskRoot, person, task: [track, slug, data.title, values.body].join(" ") })
+    if (lessons !== undefined) result.shelved_lessons = lessons
+  }
+  if (values.focus !== true) {
     const note = focusNote(statusContext)
     if (note !== undefined) result.focus_note = note
   }
@@ -1171,7 +1177,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (deskCommit !== null) {
     result.desk_commit = deskCommit
     result.desk_pushed = false
-    result.desk_note = DESK_COMMIT_NOTE
+    Object.assign(result, deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE }))
     result.desk_commit_note = DESK_COMMIT_HASH_NOTE
     if (heldChanges) result.included_uncommitted_changes = INCLUDED_CHANGES_NOTE
   }

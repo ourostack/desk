@@ -149,6 +149,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import { deskTimingKept, deskVisibilityOf, githubRepoOfRemote, visibilityMap } from "./desk-visibility.js"
 import { readDeskRemote } from "./desk-repo.js"
+import { copilotContextIdentity } from "./copilot-turn-index.js"
 import { BINDING_VERSION, deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
   clearFinalize,
@@ -1166,6 +1167,7 @@ async function deliver(env, context) {
     return [{
       name, facts: JSON.parse(bytes.toString("utf8")), deskRoot,
       personPrefix: marker?.person_prefix ?? "", logPath: marker?.log_path ?? null, clockOrigin: local.session.started_at,
+      nativeContext: copilotContextIdentity(local),
       localJobs: local.jobs.map((job) => ({ local: job.job, published: keepIdentity ? job.job : keyedJobId(job.job, secret) })),
     }]
   })

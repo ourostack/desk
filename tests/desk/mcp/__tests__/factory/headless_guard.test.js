@@ -173,7 +173,7 @@ test("every registered tool is either read-only or refused under the flag, and t
   for (const name of TOOL_NAMES) assert.equal(headlessRefusal(name, { DESK_FACTORY_HEADLESS: "1" }) === null, READ_ONLY_TOOLS.includes(name), name)
   for (const name of TOOL_NAMES) assert.equal(headlessRefusal(name, {}), null)
   assert.notEqual(headlessRefusal("a_future_writing_tool", { DESK_FACTORY_HEADLESS: "1" }), null, "an unknown tool is refused by default")
-  for (const name of ["task_create", "task_update", "task_archive", "task_move", "task_focus", "track_create", "track_update", "track_rename", "friction_add", "lesson_add", "desk_save", "desk_reindex", "improvement_open", "improvement_next", "improvement_update"]) {
+  for (const name of ["task_create", "task_update", "task_archive", "task_move", "task_focus", "track_create", "track_update", "track_rename", "friction_add", "lesson_add", "desk_save", "note_leave", "note_ack", "desk_reindex", "improvement_open", "improvement_next", "improvement_update"]) {
     assert.equal(READ_ONLY_TOOLS.includes(name), false, `${name} changes state`)
   }
 })

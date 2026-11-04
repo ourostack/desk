@@ -232,11 +232,16 @@ test("isIndexable matches the intended set", () => {
   assert.equal(isIndexable("AGENTS.md"), true)
   assert.equal(isIndexable("desks/ari/AGENTS.md"), true)
   assert.equal(isIndexable("trackA/AGENTS.md"), false)
+  // The lessons shelf beside each, where lesson_add moves the lessons AGENTS.md has no room for.
+  assert.equal(isIndexable("LESSONS.md"), true)
+  assert.equal(isIndexable("desks/ari/LESSONS.md"), true)
+  assert.equal(isIndexable("trackA/LESSONS.md"), false)
   assert.equal(isIndexable("README.md"), false)
 })
 
 test("classify calls the AGENTS.md files session start prints instructions", () => {
   for (const rel of ["AGENTS.md", "desks/ari/AGENTS.md"]) assert.deepEqual(classify(rel), { kind: "instructions", track: null, task_slug: null })
+  for (const rel of ["LESSONS.md", "desks/ari/LESSONS.md"]) assert.deepEqual(classify(rel), { kind: "lesson", track: null, task_slug: null })
 })
 
 test("classify is purely path-driven", () => {

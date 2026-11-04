@@ -5,6 +5,24 @@ const unavailable = (code) => ({ state: "unavailable", code })
 const mainEvent = (event) => event.agentId === undefined &&
   event.data?.agentId === undefined && event.data?.parentToolCallId === undefined
 const taskTools = new Map([["task_focus", "focused"], ["task_create", "created"], ["task_update", "updated"]])
+class NativeTimeout extends Error {}
+
+// Diagnostics come only from this fixed vocabulary, never from a native
+// error's text, data or stack. An error that cannot be read safely is
+// `failed`; that cause deliberately does not claim a transport fault.
+const methodMissing = (error) => {
+  try { return error?.code === -32601 } catch { return false }
+}
+const failureCause = (error) => {
+  try {
+    if (error instanceof NativeTimeout) return "timeout"
+    const code = error?.code
+    if (code === -32602) return "invalid_params"
+    if (code === -32603) return "internal_error"
+    if (Number.isInteger(code) && code >= -32768 && code <= -32000) return "rpc_error"
+  } catch {}
+  return "failed"
+}
 
 function toolResult(result) {
   if (result?.structuredContent && typeof result.structuredContent === "object") return result.structuredContent
@@ -35,7 +53,7 @@ export async function attachCopilotSessionLabels({
       return await Promise.race([
         operation(),
         new Promise((_, reject) => {
-          timer = setTimeout(() => reject(Object.assign(Error("native_timeout"), { code: "NATIVE_TIMEOUT" })), budgetMs)
+          timer = setTimeout(() => reject(Object.assign(new NativeTimeout("native_timeout"), { code: "NATIVE_TIMEOUT" })), budgetMs)
         }),
       ])
     } finally { clearTimeout(timer) }
@@ -98,14 +116,17 @@ export async function attachCopilotSessionLabels({
     waitForIdle: () => queue,
     getState: () => ({ ...state }),
   }
-  const failure = (error, applying = false) => {
-    if (applying && error?.code !== -32601) {
+  const failure = (stage, error, current = true) => {
+    const missing = methodMissing(error)
+    if (stage === "apply" && !missing) {
       // An unacknowledged write may still complete. Do not issue another
       // automatic write that it could overtake, or claim a retry was safe.
       stopped = true
       unsubscribe()
       publish(unavailable("native_apply_uncertain"))
-    } else publish(unavailable(error?.code === -32601 ? "unsupported_runtime" : "native_api_failed"))
+    } else if (current) {
+      publish(unavailable(missing ? "unsupported_runtime" : `native_${stage}_${failureCause(error)}`))
+    }
   }
   if (!expectedSessionId || session?.sessionId !== expectedSessionId) {
     publish(unavailable("owner_unknown"))
@@ -123,7 +144,7 @@ export async function attachCopilotSessionLabels({
       publish(unavailable("owner_unknown"))
       return consumer
     }
-  } catch (error) { failure(error); return consumer }
+  } catch (error) { failure("snapshot", error); return consumer }
   if (!await boundProvider()) {
     publish(unavailable("provider_binding_unavailable"))
     return consumer
@@ -132,7 +153,7 @@ export async function attachCopilotSessionLabels({
 
   const apply = async (observation, proposal) => {
     if (!active(observation)) return
-    let applying = false
+    let stage = "recheck"
     try {
       const providerKnown = await boundProvider()
       if (!active(observation)) return
@@ -146,9 +167,9 @@ export async function attachCopilotSessionLabels({
         publish(unavailable("owner_unknown"))
         return
       }
-      applying = true
+      stage = "apply"
       const result = await bounded(() => session.rpc.name.setAuto({ summary: proposal.text }))
-      applying = false
+      stage = "readback"
       if (!active(observation)) return
       if (result?.applied !== true) {
         publish({ state: "preserved", code: "native_owner_refused" })
@@ -160,7 +181,7 @@ export async function attachCopilotSessionLabels({
         ? { state: "applied", code: "native_readback_verified" }
         : unavailable("native_readback_mismatch"))
     } catch (error) {
-      if ((applying && error?.code !== -32601) || active(observation)) failure(error, applying)
+      failure(stage, error, active(observation))
     }
   }
 

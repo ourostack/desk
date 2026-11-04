@@ -34,10 +34,17 @@ function endSession(ctx, marker, nodeOptions = "") {
   assert.equal(run.status, 0, run.stderr)
 }
 
-async function endRecorded(ctx, waitMs = WAIT_MS) {
-  const deadline = Date.now() + waitMs
-  const ended = async () => (await listMarkers(ctx.env))[0]?.end_reason === "prompt_input_exit"
-  while (!(await ended()) && Date.now() < deadline) await pause(100)
+const markerLockPath = (root) => path.join(root, "locks", `marker-claude-code-${ID}.lock`)
+
+async function endRecorded(ctx, waitMs = WAIT_MS, { clock = Date.now, onCheck = () => {} } = {}) {
+  const deadline = clock() + waitMs
+  const lock = markerLockPath(await factoryStateRoot(ctx.env))
+  const ended = async () => {
+    const complete = (await listMarkers(ctx.env))[0]?.end_reason === "prompt_input_exit" && !existsSync(lock)
+    onCheck(complete)
+    return complete
+  }
+  while (!(await ended()) && clock() < deadline) await pause(100)
   return ended()
 }
 
@@ -55,6 +62,110 @@ for (const [name, content, ageMs] of [
     assert.equal(existsSync(lock), false, "the abandoned lock is gone")
   }))
 }
+
+test("marker replacement visibility precedes owned lock retirement", (t) => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const lock = await plantLock(ctx, "", 60000)
+  const old = await fs.stat(lock, { bigint: true })
+  const markerFile = path.join(path.dirname(path.dirname(lock)), "markers", `claude-code-${ID}.json`)
+  let release
+  const held = new Promise((resolve) => { release = resolve })
+  let signalVisible
+  const visible = new Promise((resolve) => { signalVisible = resolve })
+  const rename = fs.rename
+  const unlink = fs.unlink
+  let gated = false
+  let replacement
+  let replacementPid
+  let unlinkAttempts = 0
+  let unlinkCompleted = 0
+  const renameMock = t.mock.method(fs, "rename", async (from, to, ...rest) => {
+    const result = await rename(from, to, ...rest)
+    if (to === markerFile && !gated) {
+      gated = true
+      replacement = await fs.stat(lock, { bigint: true })
+      replacementPid = JSON.parse(await fs.readFile(lock, "utf8")).pid
+      signalVisible()
+      await held
+    }
+    return result
+  })
+  const unlinkMock = t.mock.method(fs, "unlink", async (file, ...rest) => {
+    if (file !== lock) return unlink(file, ...rest)
+    unlinkAttempts += 1
+    const result = await unlink(file, ...rest)
+    unlinkCompleted += 1
+    return result
+  })
+  const worker = runHook({ host: "claude", payload: payload(ctx, marker, "SessionEnd"), env: ctx.env, launch: async () => {}, supportsFinalize: false })
+  let completion
+  try {
+    await Promise.race([visible, worker.then(() => { throw new Error("capture finished before the marker-rename gate") })])
+    assert.equal((await listMarkers(ctx.env))[0]?.end_reason, "prompt_input_exit", "the original marker-only predicate is already true")
+    assert.equal(replacementPid, process.pid, "the current lock belongs to this actual capture")
+    assert.notDeepEqual([replacement.dev, replacement.ino, replacement.mtimeNs], [old.dev, old.ino, old.mtimeNs], "the abandoned lock identity was replaced")
+    assert.equal(existsSync(lock), true)
+    assert.throws(() => assert.equal(existsSync(lock), false, "the abandoned lock is gone"), assert.AssertionError, "the original pathname assertion fails during a legitimate replacement lock")
+    let checked
+    let checkFailed
+    const observed = new Promise((resolve, reject) => { checked = resolve; checkFailed = reject })
+    let completionSettled = false
+    completion = endRecorded(ctx, WAIT_MS, { onCheck: (complete) => checked(complete) })
+    completion.then(() => { completionSettled = true }, (error) => { completionSettled = true; checkFailed(error) })
+    assert.equal(await observed, false, "the completion predicate sees the still-held lock")
+    assert.equal(completionSettled, false)
+    assert.equal(unlinkAttempts, 0)
+    release()
+    assert.equal(await worker, "written")
+    assert.equal(await completion, true)
+    assert.equal(unlinkAttempts, 1)
+    assert.equal(unlinkCompleted, 1)
+    assert.equal(existsSync(lock), false, "the replacement owner's lock was retired")
+  } finally {
+    release()
+    try {
+      await Promise.allSettled(completion ? [worker, completion] : [worker])
+    } finally {
+      unlinkMock.mock.restore()
+      renameMock.mock.restore()
+    }
+  }
+}))
+
+test("marker completion refuses a persistent owned-lock unlink failure", (t) => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const lock = await plantLock(ctx, "", 60000)
+  const old = await fs.stat(lock, { bigint: true })
+  const unlink = fs.unlink
+  let unlinkAttempts = 0
+  const mock = t.mock.method(fs, "unlink", async (file, ...rest) => {
+    if (file !== lock) return unlink(file, ...rest)
+    unlinkAttempts += 1
+    throw Object.assign(new Error("synthetic owned-lock unlink refusal"), { code: "EPERM" })
+  })
+  const worker = runHook({ host: "claude", payload: payload(ctx, marker, "SessionEnd"), env: ctx.env, launch: async () => {}, supportsFinalize: false })
+  try {
+    assert.equal(await worker, "written", "the existing hook swallows cleanup failure; this is not cleanup success")
+    assert.equal((await listMarkers(ctx.env))[0]?.end_reason, "prompt_input_exit")
+    const current = await fs.stat(lock, { bigint: true })
+    assert.notDeepEqual([current.dev, current.ino, current.mtimeNs], [old.dev, old.ino, old.mtimeNs])
+    assert.equal(JSON.parse(await fs.readFile(lock, "utf8")).pid, process.pid)
+    assert.equal(unlinkAttempts, 1)
+    const start = Date.now()
+    let clockReads = 0
+    let checks = 0
+    const complete = await endRecorded(ctx, WAIT_MS, {
+      clock: () => clockReads++ === 0 ? start : start + WAIT_MS + 1,
+      onCheck: () => { checks += 1 },
+    })
+    assert.equal(clockReads, 2, "one original deadline, not another waiting window")
+    assert.equal(checks, 2)
+    assert.equal(complete, false, "old identity retirement cannot hide failed replacement cleanup")
+    assert.equal(existsSync(lock), true)
+  } finally {
+    try { await Promise.allSettled([worker]) } finally { mock.mock.restore() }
+  }
+}))
 
 const sleeper = () => spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
 const named = (pid) => JSON.stringify({ pid, started_at: new Date().toISOString() })

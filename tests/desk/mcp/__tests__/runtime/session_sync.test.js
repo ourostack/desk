@@ -27,6 +27,10 @@ import {
   syncWorkspace,
 } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 
+// These tests are about the pull; the detached delivery a pull may start is covered in sync_deliver.test.js.
+const noDelivery = () => {}
+
+
 function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
@@ -112,7 +116,7 @@ const env = process.env
 test("syncWorkspace reports synced, without ever pulling, on a plain repo with no remote configured", async () => {
   const root = await mkPlainRepo()
   await writeAndCommit(root, "seed.md", "seed\n", "seed")
-  const result = await syncWorkspace({ root, env })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env })
   assert.deepEqual(result, { state: "synced", nothingToSync: "no_remote" })
 })
 
@@ -121,7 +125,7 @@ test("syncWorkspace reports synced when a remote exists but the current branch h
   const root = await mkPlainRepo()
   git(root, ["remote", "add", "origin", origin])
   await writeAndCommit(root, "seed.md", "seed\n", "seed")
-  const result = await syncWorkspace({ root, env })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env })
   assert.deepEqual(result, { state: "synced", nothingToSync: "no_upstream" })
 })
 
@@ -142,7 +146,7 @@ test("syncWorkspace reports synced when the pull needs nothing (already up to da
 test("a dirty-index pull failure is resolved by quarantining the stray paths and retrying", async () => {
   const { cloneA } = await mkDirtyIndexFixture()
   const today = new Date().toISOString().slice(0, 10)
-  const result = await syncWorkspace({ root: cloneA, env })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env })
   assert.equal(result.state, "quarantined")
   assert.deepEqual(result.quarantinedPaths, [path.join("_cache", `stray-${today}`, "stray.txt")])
   assert.ok(existsSync(path.join(cloneA, "_cache", `stray-${today}`, "stray.txt")))
@@ -160,7 +164,7 @@ test("sync leaves untracked files alone when the pull fails on a conflict", asyn
   mkdirSync(path.join(cloneA, "track", "task"), { recursive: true })
   await fs.writeFile(path.join(cloneA, "track", "task", "planning.md"), "in progress\n")
 
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem: () => {} })
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.cause, "conflict")
@@ -188,7 +192,7 @@ test("sync moves only the paths git says would be overwritten", async () => {
   await writeAndCommit(cloneA, "local.md", "local\n", "local commit")
   const today = new Date().toISOString().slice(0, 10)
 
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem: () => {} })
 
   assert.equal(result.state, "quarantined", JSON.stringify(result))
   assert.deepEqual([...result.quarantinedPaths].sort(), [
@@ -238,7 +242,7 @@ test("on a desk that does not ignore _cache/, an earlier quarantine is left wher
   writeFileSync(path.join(earlier, "kept.txt"), "from an earlier quarantine\n")
   const today = new Date().toISOString().slice(0, 10)
 
-  const result = await syncWorkspace({ root: cloneA, env })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env })
   assert.equal(result.state, "quarantined")
   assert.deepEqual(result.quarantinedPaths, [path.join("_cache", `stray-${today}`, "stray.txt")])
   assert.equal(await fs.readFile(path.join(earlier, "kept.txt"), "utf8"), "from an earlier quarantine\n")
@@ -258,7 +262,7 @@ test("on a desk that does not ignore _cache/, a pull failure with nothing stray 
   mkdirSync(earlier, { recursive: true })
   writeFileSync(path.join(earlier, "kept.txt"), "from an earlier quarantine\n")
 
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem: () => {} })
   assert.equal(result.state, "unresolved")
   assert.equal(result.reason, "pull_rebase_failed")
   assert.equal(result.quarantinedPaths, undefined)
@@ -275,7 +279,7 @@ test("a second (and third) same-day quarantine does not clobber the ones before 
   mkdirSync(secondDir, { recursive: true })
   writeFileSync(path.join(secondDir, "existing2.txt"), "from a second earlier quarantine today\n")
 
-  const result = await syncWorkspace({ root: cloneA, env })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env })
   assert.equal(result.state, "quarantined")
   assert.deepEqual(result.quarantinedPaths, [path.join("_cache", `stray-${today}-3`, "stray.txt")])
   assert.ok(existsSync(path.join(cloneA, "_cache", `stray-${today}-3`, "stray.txt")))
@@ -295,7 +299,7 @@ test("quarantine skips a stray path that no longer exists by the time it runs, a
     if (args.includes("pull") && result.status !== 0) return { ...result, stderr: result.stderr.replace("\tstray.txt\n", "\tstray.txt\n\tghost.txt\n") }
     return result
   }
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit })
   assert.equal(result.state, "quarantined")
   assert.ok(result.quarantinedPaths.some((p) => p.endsWith("stray.txt")))
   assert.ok(!result.quarantinedPaths.some((p) => p.includes("ghost")))
@@ -310,7 +314,7 @@ test("a genuine tracked-file conflict with no untracked paths is unresolved, fil
   const { cloneA } = await mkConflictFixture()
   let filed = null
   const fileProblem = (args) => { filed = args }
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem })
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
@@ -337,7 +341,7 @@ test("a quarantine retry that still fails is unresolved, reports the quarantined
 
   let filed = null
   const fileProblem = (args) => { filed = args }
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem })
 
   assert.equal(result.state, "unresolved")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.length === 1)
@@ -354,7 +358,7 @@ test("conflictedPaths and untrackedPaths degrade to empty when their own git com
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
   assert.doesNotMatch(result.diagnostic, /conflicted:/u)
@@ -379,7 +383,7 @@ test("syncWorkspace's own git calls extend an already-set GIT_SSH_COMMAND with -
       if (captured === null && opts?.env?.GIT_SSH_COMMAND) captured = opts.env.GIT_SSH_COMMAND
       return spawnSync(cmd, args, opts)
     }
-    await syncWorkspace({ root: cloneA, env, spawnGit })
+    await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit })
     assert.equal(captured, "ssh -i /custom/identity -o BatchMode=yes")
   } finally {
     if (originalSsh === undefined) delete process.env.GIT_SSH_COMMAND
@@ -397,7 +401,7 @@ test("GIT_SSH_COMMAND defaults to -o BatchMode=yes alone when nothing was alread
       if (captured === null && opts?.env?.GIT_SSH_COMMAND) captured = opts.env.GIT_SSH_COMMAND
       return spawnSync(cmd, args, opts)
     }
-    await syncWorkspace({ root: cloneA, env, spawnGit })
+    await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit })
     assert.equal(captured, "ssh -o BatchMode=yes")
   } finally {
     if (originalSsh !== undefined) process.env.GIT_SSH_COMMAND = originalSsh
@@ -427,7 +431,7 @@ test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop
   await fs.writeFile(path.join(cloneA, "seed.md"), "seed\nfrom A working tree\n")
 
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, fileProblem: (args) => { filed = args } })
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
@@ -464,7 +468,7 @@ test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop c
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, fileProblem: (args) => { filed = args } })
 
   assert.equal(result.state, "unresolved")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the original stray path was still quarantined before the retry ran")
@@ -510,7 +514,7 @@ test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull whe
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.equal(clock.checkpoints(), 1, "the sequence stopped at its first budget checkpoint")
@@ -529,7 +533,7 @@ test("syncWorkspace reports sync_deadline_exceeded, without attempting a second 
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
   assert.equal(pullCalls, 1, "only the first pull attempt ran; the sequence gave up before a second")
@@ -559,7 +563,7 @@ test("run() itself refuses to spawn once the per-call budget is exhausted, never
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.ok(clock.checkpoints() >= 1, "the pre-pull checkpoint was passed within budget")
   assert.equal(spawnGitCalled, false, "run()'s own budget-exhausted guard synthesized every remaining step's failure without ever spawning git for it")
   assert.equal(result.state, "unresolved")
@@ -573,14 +577,14 @@ test("stashCount falls back to 0 when its own git stash list call fails, and aga
     if (args.includes("stash") && args.includes("list")) return { status: 1, stdout: "" }
     return spawnSync(cmd, args, opts)
   }
-  assert.deepEqual(await syncWorkspace({ root: cloneStatus, env, spawnGit: failingStatus }), { state: "synced" }, "a stashCount lookup that fails outright still resolves synced on an already-clean pull")
+  assert.deepEqual(await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneStatus, env, spawnGit: failingStatus }), { state: "synced" }, "a stashCount lookup that fails outright still resolves synced on an already-clean pull")
 
   const { cloneA: cloneStdout } = await mkOriginWithClone()
   const nonStringStdout = (cmd, args, opts) => {
     if (args.includes("stash") && args.includes("list")) return { status: 0, stdout: undefined }
     return spawnSync(cmd, args, opts)
   }
-  assert.deepEqual(await syncWorkspace({ root: cloneStdout, env, spawnGit: nonStringStdout }), { state: "synced" }, "a stashCount lookup with non-string stdout falls back the same way")
+  assert.deepEqual(await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneStdout, env, spawnGit: nonStringStdout }), { state: "synced" }, "a stashCount lookup with non-string stdout falls back the same way")
 })
 
 test("syncWorkspace reports sync_deadline_exceeded right after the first pull's own conflict is captured and aborted, carrying firstConflicted through", async () => {
@@ -596,7 +600,7 @@ test("syncWorkspace reports sync_deadline_exceeded right after the first pull's 
     return spawnSync(cmd, args, opts)
   }
   let filed = null
-  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined, "the budget ran out before quarantine was ever attempted")
   assert.equal(clock.checkpoints(), 2, "the sequence stopped at the checkpoint right after the first pull's abort")
@@ -789,7 +793,7 @@ test("syncWorkspace: a slow pull leaves the event loop running", async () => {
   let ticks = 0
   const ticker = setInterval(() => { ticks += 1 }, 50)
   try {
-    const result = await syncWorkspace({ root: cloneB, env: {} })
+    const result = await syncWorkspace({ scheduleDelivery: noDelivery, root: cloneB, env: {} })
     assert.equal(result.state, "synced")
   } finally {
     clearInterval(ticker)

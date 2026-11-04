@@ -1010,7 +1010,7 @@ test("bootOnce: a repo no signed-in account can push degrades status and tells t
   assert.ok(action && action.includes("track-a/push-task"))
 })
 
-test("bootOnce: sync states surface as instructions — unresolved degrades and points at git status, quarantined stays ready and notes the review", async () => {
+test("bootOnce: unresolved sync degrades and requires direct verification, quarantined stays ready and notes the review", async () => {
   const root = await mkDeskWorkspace()
   const { gh, jq } = okPrereqRunners()
   const factoryStatusFn = () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] })
@@ -1021,7 +1021,7 @@ test("bootOnce: sync states surface as instructions — unresolved degrades and 
   })
   assert.equal(unresolved.status, "degraded")
   assert.ok(unresolved.degraded.some((line) => line.includes("unresolved")))
-  assert.ok(unresolved.instructions.some((line) => line.includes("git status")))
+  assert.ok(unresolved.instructions.some((line) => line.startsWith("Verify desk sync with direct Git")))
 
   const quarantined = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
@@ -1832,7 +1832,7 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
   assert.match(text, /Continue independent authorized work/u)
   assert.doesNotMatch(text, /never fall back to local-only/u)
   assert.doesNotMatch(text, /auth_timeout/u)
-  assert.match(text, /git sync is unresolved/u)
+  assert.match(text, /Verify desk sync with direct Git/u)
   assert.match(text, /Fix the frontmatter of track-a\/bad-card\/task\.md/u)
   assert.match(text, /Do not push acme\/widgets/u)
   const quarantined = await healthyBoot(root, { syncFn: async () => ({ state: "quarantined" }) })

@@ -24,7 +24,7 @@ import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
-import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
@@ -265,7 +265,7 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = headSha(deskRoot, spawnGit)
   schedulePush({ root: deskRoot })
-  const answer = { status: "committed", desk_note: DESK_SAVE_NOTE, desk_pushed: false }
+  const answer = { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
   return deskCommit === null ? answer : { ...answer, desk_commit: deskCommit, desk_commit_note: DESK_COMMIT_HASH_NOTE }
 }
 
