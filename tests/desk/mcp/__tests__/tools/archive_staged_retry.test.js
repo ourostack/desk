@@ -199,5 +199,24 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
   t.diagnostic(`Synthetic ${phase} timeout: HEAD ${head === f.head ? "unchanged" : "advanced"}; status completed in ${Math.round(performance.now() - statusStarted)} ms. This does not identify issue #556's timeout cause.`)
   assert.equal((await retry(f)).status, phase === "pre-commit" ? "archived" : "already_archived")
   assert.equal(git(f.root, "status", "--porcelain"), "?? owned-commit-trace.jsonl\n?? owned-hook-pid")
-  assert.throws(() => process.kill(hookPid, 0), { code: "ESRCH" }, "owned hook process must retire before fixture cleanup")
+  let absent = false
+  try { process.kill(hookPid, 0) } catch (error) {
+    if (error.code !== "ESRCH") throw error
+    absent = true
+  }
+  if (!absent && process.platform === "linux") {
+    // Git's killed parent cannot reap the hook; Linux may retain its terminated zombie.
+    let stat
+    try { stat = await fs.readFile(`/proc/${hookPid}/stat`, "utf8") } catch (error) {
+      if (error.code !== "ENOENT") throw error
+      absent = true
+    }
+    if (!absent) {
+      const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]
+      assert.equal(state, "Z", `owned hook ${hookPid} must be terminated, not runnable: ${stat}`)
+      t.diagnostic(`Owned hook ${hookPid} is terminated but unreaped (Linux state Z); PID absence is not established.`)
+    }
+  } else {
+    assert.ok(absent, "owned hook process must retire before fixture cleanup")
+  }
 })
