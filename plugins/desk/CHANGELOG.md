@@ -1,5 +1,65 @@
 # desk plugin — changelog
 
+## 3.2.59 — 2026-11-04
+
+Recover legacy Resources tables through `task_update` with an explicit [`resource.migrate` column mapping](skills/task-card-format/SKILL.md#resources-worktrees-and-branches-you-create), instead of instructions to edit a protected table by hand. The checked write preserves inventory, ownership, dispositions, extra cells and surrounding prose, rejects ambiguous or malformed tables without writing, and supports repeat calls without another migration.
+
+PR preparation and self-review now block creation and readiness without inline rendered proof or a specific, accurate nonvisual reason. [PR surface hygiene](skills/pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness) provides a local presence checker and [opt-in repository enforcement](skills/pr-surface-hygiene/repository-setup.md); human review still verifies the capture and reason. [Evidence discipline](skills/evidence-discipline/SKILL.md#privacy-safe-rendered-proof) routes privacy-withheld captures to real renders with safe made-up data and explicit limits, never fabricated screenshots.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.58 — 2026-11-04
+
+Wait for actual directory readiness in the concurrent-folder tests instead of assuming a short sleep means creation finished. A controlled filesystem interleaving distinguishes an active hold from a completed mkdir without changing directory cleanup behavior.
+
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md)'s [examples](skills/fast-honest-ci/examples.md) show a release train that ships each proven fix the same day, with the scheduled morning run only as a safety net, and why waiting for the default branch's runners needs a longer cap than waiting for a release.
+
+The Copilot automatic session-label consumer no longer reports every failed native read as `unavailable/native_api_failed`. It now names the failing read (`snapshot`, `recheck` or `readback`) and a fixed cause (`timeout`, `invalid_params`, `internal_error`, `rpc_error` or `failed`), such as `unavailable/native_readback_timeout`, without logging the native error's text. An error whose fields cannot be read safely no longer escapes the naming queue. Unsupported methods, refused names and the stop after an uncertain write are unchanged. This locates a failure; it does not fix the underlying native labeling failure. See [session labels](docs/session-labels.md#diagnostics).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.57 — 2026-11-04
+
+Keep status cache preparation within its original deadline and require a completed sub-200ms observation, while retaining slower round-trip samples instead of failing setup on a single cold response. Production status behavior and independent latency checks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.56 — 2026-11-03
+
+Desk now distinguishes an intentionally blocked question form from a human answer or lost authority. Copilot startup and conversation guidance tell agents to continue authorized work, keep genuine decisions gated, and handle contradictory host routing as a consumer integration defect. Question defaults, permissions and hooks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.55 — 2026-11-03
+
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.54 — 2026-11-03
+
+Boot sync wait expiry now reports pending/unknown effects rather than claiming nothing was pulled or pushed. JSON and plain-text startup instructions require safe account-scoped direct Git recovery before reporting local-only state, and no longer mandate a stale-state opener after successful recovery. Session-start and desk-problem guidance require fresh fetch and exact state-branch ahead/behind evidence, preserve other writers and real access barriers, and suppress the timeout banner only after verified current commits. This does not qualify the timed-out helper or change its worker/retry architecture.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.53 — 2026-11-03
+
+Superpowers wrapper fix: the actual vendored `hooks/run-hook.cmd` no longer uses a here-document. Preserve its raw upstream bytes at an explicitly locked evidence path and separately record the maintained CMD/Unix transform and output hashes. Both authored Copilot commands and the unchanged Claude declaration use the actual wrapper. The complete Superpowers refresh updates raw evidence and regenerates or verifies downstream outputs together, refusing stale artifacts rather than silently accepting them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.52 — 2026-11-03
+
+New [`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) skill for keeping CI as fast and cheap as it can be without hiding a failure, for every desk. It covers measuring the critical path and the queue before changing anything; fixing slow tests, time-balanced shards with a guard, lockfile caches, fail-closed path selection and pull-request-only fail-fast and cancellation; standard runners first, paid or larger runners only with an approved budget, per-repository budgets, scarce runner pools and yielding to the default branch; merge-queue build concurrency sized to the runner pool; a budget guard that fails pull requests on the critical path, reports wall clock and ratchets; and cause-first flake handling, with one recorded re-run only for a filed failure signature. GitHub's limits and prices are cited from its documentation, and [`examples.md`](skills/fast-honest-ci/examples.md) works through a public component library and two private repositories.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.51 — 2026-11-01
+
+Let source-bound context use a bounded, read-only Copilot conversation index when a raw log is gone and both native and public facts explicitly bind the whole session to one job. Match the native desk identity, seal the small readable projection and its source digest, preserve independent privacy, and refuse unsupported time placement. Indexed replies remain partial evidence, not verified execution or a recreated event log.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.50 — 2026-10-31
 
 An operator's standing grant can now authorize a credential harness for test tenants they own ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). Under such a grant, agents stop handing the operator a sign-in: they build or reuse a harness that reads the password from the tenant's owning portal, keeps it only in the operating system's credential store, fills it programmatically, registers a software TOTP authenticator and reuses the session. The grant never covers the operator's own corporate or personal credentials or anything they don't own, and no secret ever appears in chat, logs, task cards, repositories or screenshots.

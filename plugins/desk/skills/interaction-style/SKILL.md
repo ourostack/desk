@@ -133,7 +133,11 @@ A "please review" moment for your own work (a plan, a draft, captured notes, a f
 
 ### No question forms
 
-Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Do not use form-style question interfaces with the operator, whatever the host calls its structured-question tool (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI): write the question as a sentence in your reply, including the resume-or-start question at session start. Forms make stream-of-thought input and cursor control painful.
+Desk rejects form-style question tools (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI) because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed; ordinary conversation and already-authorized work remain allowed. Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted, including the resume-or-start question at session start.
+
+A no-forms denial is not a human answer, refusal, revocation or consent, and does not mean the app is broken. Do not retry the form or change permissions, hooks or settings. Recheck the request and existing go, then continue already-authorized work without reapproval. Keep genuine human decisions and native permission gates intact. A real human refusal remains a refusal; an unrelated failure or unknown result does not establish a no-forms denial.
+
+A denial alone does not establish incompatible routing; inspect actual instructions and tool availability. Headless execution without human input is a capability limit, not approval withdrawal. Respect higher-priority host routing. If it requires a blocked form, own the consumer integration defect through the supported route, not a human approval hold. Report the exact conflicting requirements and the question that was not delivered; repair or escalate the integration within existing authority while continuing independent authorized work. Do not override host rules or invent a supported route. The action that needs the missing decision stays gated until an answer arrives through a permitted route.
 
 ### Few, long conversations
 

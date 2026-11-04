@@ -21,6 +21,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { types } from "node:util"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -91,12 +92,169 @@ export const TOOL_IMPLS = {
   improvement_update,
 }
 
+const TRACE_PREFIX = "DESK_NATIVE_RECEIPT_V1 "
+const TRACE_FRAME_BYTES = 65536
+const TRACE_MISSING = Symbol("missing")
+const TRACE_EVENTS = new Set(["native_spawn", "capture_requested", "native_captured", "admission_requested", "native_ready",
+  "callback_started", "callback_completed", "GO_attempted", "native_result", "close_requested", "native_exit", "native_close", "session_settled"])
+const TRACE_ISSUES = new Set(["events_oversized", "invalid_or_unexpected_protocol", "stdin_error", "spawn_error", "stdout_error",
+  "stderr_error", "stdout_oversized", "stderr_oversized", "stderr_nonempty", "malformed_json", "unterminated_output", "closed_before_requested_stage"])
+const TRACE_SIGNALS = new Set(["SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGIOT", "SIGBUS", "SIGFPE",
+  "SIGKILL", "SIGUSR1", "SIGSEGV", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP",
+  "SIGTTIN", "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGIO", "SIGPOLL",
+  "SIGPWR", "SIGSYS", "SIGBREAK", "SIGINFO", "SIGEMT", "SIGLOST", "SIGUNUSED"])
+
+function traceObject(value) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function") || types.isProxy(value)) throw new Error("unavailable")
+  return value
+}
+
+function traceData(value, key) {
+  traceObject(value)
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  if (!descriptor) return TRACE_MISSING
+  if (!Object.hasOwn(descriptor, "value")) throw new Error("unavailable")
+  return descriptor.value
+}
+
+export function nativeReceiptTraceEnabled(env) {
+  try {
+    return traceData(env, "CI") === "true" && traceData(env, "GITHUB_ACTIONS") === "true" &&
+      traceData(env, "DESK_BLACKBOX_NATIVE_RECEIPT_TRACE") === "1"
+  } catch { return false }
+}
+
+export function nativeReceiptRequestId(extra) {
+  try {
+    const id = traceData(extra, "requestId")
+    return Number.isSafeInteger(id) && id >= 0 ? id : null
+  } catch { return null }
+}
+
+/** Untrusted structural observations only; never used for archive admission or verdicts. */
+export function projectNativeReceipt(error) {
+  const unavailable = () => ({ schemaVersion: 1, observationalOnly: true, tool: "task_archive", status: "unavailable", code: "receipt_unavailable", incomplete: true })
+  try {
+    const receipt = traceData(error, "handleReceipt")
+    const scope = traceData(receipt, "scope")
+    if (typeof scope !== "string" || scope.length !== "archive_native_preadmission_session".length || scope !== "archive_native_preadmission_session") return unavailable()
+    const out = { schemaVersion: 1, observationalOnly: true, tool: "task_archive", status: "available", scope: "archive_native_preadmission_session",
+      incomplete: false, truncated: false, originComplete: false, fieldStatus: {} }
+    const primitive = (object, key, label, valid) => {
+      const value = traceData(object, key)
+      const status = value === TRACE_MISSING ? "absent" : value === null ? "unknown" : valid(value) ? "present" : "invalid"
+      out.fieldStatus[label] = status
+      if (status !== "present") out.incomplete = true
+      return status === "present" ? value : null
+    }
+    const integer = value => Number.isSafeInteger(value) && value >= 0
+    const boolean = value => typeof value === "boolean"
+    const member = (object, key) => {
+      const value = traceData(object, key)
+      if (value === TRACE_MISSING || value === null) {
+        out.fieldStatus[key] = value === TRACE_MISSING ? "absent" : "unknown"
+        out.incomplete = true
+        return {}
+      }
+      return traceObject(value)
+    }
+    const array = (key, max) => {
+      const value = traceData(receipt, key)
+      if (value === TRACE_MISSING || value === null) {
+        out.fieldStatus[key] = value === TRACE_MISSING ? "absent" : "unknown"
+        out.incomplete = true
+        return []
+      }
+      traceObject(value)
+      if (!Array.isArray(value)) throw new Error("unavailable")
+      const length = traceData(value, "length")
+      out.fieldStatus[key] = length > max ? "truncated" : "present"
+      if (length > max) { out.truncated = true; out.incomplete = true }
+      const selected = []
+      for (let i = 0; i < Math.min(length, max); i++) selected.push(traceData(value, `${i}`))
+      return selected
+    }
+    for (const key of ["helperSha256", "programSha256", "executedProgramSha256"])
+      out[key] = primitive(receipt, key, key, value => typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/u.test(value))
+    for (const key of ["capturedValidated", "admissionValidated", "operationFailure", "cleanupFailure", "cleanupConfirmed", "uncertain", "settled"])
+      out[key] = primitive(receipt, key, key, boolean)
+    for (const key of ["droppedEvents", "stdoutBytes", "stderrBytes"]) out[key] = primitive(receipt, key, key, integer)
+    const bounds = member(receipt, "bounds")
+    out.bounds = {}
+    for (const key of ["readinessMs", "ackAndCloseMs", "closeGraceMs", "retirementMs", "stdoutBytes", "stderrBytes", "events"])
+      out.bounds[key] = primitive(bounds, key, `bounds.${key}`, integer)
+    const handles = member(receipt, "handles")
+    out.handles = {}
+    for (const key of ["opened", "closeAttempts", "closed"]) out.handles[key] = primitive(handles, key, `handles.${key}`, integer)
+    out.handles.confirmedDisposed = primitive(handles, "confirmedDisposed", "handles.confirmedDisposed", boolean)
+    const move = member(receipt, "archiveMove")
+    out.archiveMove = {}
+    for (const key of ["released", "closed", "forced"]) out.archiveMove[key] = primitive(move, key, `archiveMove.${key}`, boolean)
+    for (const [key, choices] of [["movement", ["not_released", "confirmed", "refused", "unconfirmed"]], ["retirement", ["unconfirmed", "forced", "confirmed"]]])
+      out.archiveMove[key] = primitive(move, key, `archiveMove.${key}`, value => typeof value === "string" && value.length <= 32 && choices.includes(value))
+    for (const key of ["exit", "close"]) {
+      const value = traceData(receipt, key)
+      const observed = value !== TRACE_MISSING && value !== null
+      out.fieldStatus[key] = value === TRACE_MISSING ? "absent" : value === null ? "unknown" : "present"
+      if (!observed) out.incomplete = true
+      out[key] = { observed, code: null, signal: null }
+      if (observed) {
+        out[key].code = primitive(value, "code", `${key}.code`, code => Number.isSafeInteger(code) && code >= -2147483648 && code <= 2147483647)
+        out[key].signal = primitive(value, "signal", `${key}.signal`, signal => typeof signal === "string" && signal.length <= 16 && TRACE_SIGNALS.has(signal))
+      }
+    }
+    let origin = null, previousTime = null, previousSequence = 0
+    out.events = array("events", 128).map((event, index) => {
+      traceObject(event)
+      const type = primitive(event, "type", `events.${index}.type`, value => typeof value === "string" && value.length <= 32 && TRACE_EVENTS.has(value))
+      const sequence = primitive(event, "sequence", `events.${index}.sequence`, value => integer(value) && value > previousSequence)
+      if (sequence !== null) previousSequence = sequence
+      const time = traceData(event, "monotonicNs")
+      let qualified = null
+      if (typeof time === "string" && time.length >= 1 && time.length <= 30 && /^[0-9]+$/u.test(time)) qualified = BigInt(time)
+      if (index === 0 && qualified !== null) { origin = qualified; out.originComplete = true }
+      let elapsedMs = null
+      if (qualified !== null && origin !== null && qualified >= origin && (previousTime === null || qualified >= previousTime)) {
+        const delta = qualified - origin
+        if (delta <= 900000000000n) elapsedMs = Number(delta) / 1000000
+      }
+      if (qualified !== null && (previousTime === null || qualified >= previousTime)) previousTime = qualified
+      if (elapsedMs === null) out.incomplete = true
+      return { type, sequence, elapsedMs, timeStatus: elapsedMs === null ? "unavailable" : "present",
+        sequenceStatus: out.fieldStatus[`events.${index}.sequence`] }
+    })
+    if (!out.events.length) out.incomplete = true
+    out.protocolIssues = []
+    for (const code of array("protocolIssues", 16)) {
+      if (typeof code === "string" && code.length <= 40 && TRACE_ISSUES.has(code)) out.protocolIssues.push(code)
+      else { out.incomplete = true; out.fieldStatus.protocolIssues = "invalid" }
+    }
+    return out
+  } catch { return unavailable() }
+}
+
+export function writeBoundedDiagnosticFrame(serializedFrame, sink) {
+  if (typeof serializedFrame !== "string" || typeof sink !== "function" || serializedFrame.length > TRACE_FRAME_BYTES) return false
+  if (Buffer.byteLength(serializedFrame, "utf8") > TRACE_FRAME_BYTES) return false
+  try {
+    sink(serializedFrame)
+    return true // Invocation is not confirmed channel delivery.
+  } catch { return false }
+}
+
+function emitNativeReceipt(error, requestId, write) {
+  if (!Number.isSafeInteger(requestId) || requestId < 0) return
+  const line = `${TRACE_PREFIX}${JSON.stringify({ requestId, receipt: projectNativeReceipt(error) })}\n`
+  writeBoundedDiagnosticFrame(line, write)
+}
+
 
 /**
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal, env = process.env }) {
+export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal, env = process.env,
+  traceRequestId = null, traceWrite = line => process.stderr.write(line, () => {}) }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -136,6 +294,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
   } catch (err) {
+    if (name === "task_archive" && nativeReceiptTraceEnabled(env)) emitNativeReceipt(err, traceRequestId, traceWrite)
     return {
       content: [
         {
@@ -190,7 +349,8 @@ export async function startServer({
   activeServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const name = request.params?.name
     const input = request.params?.arguments ?? {}
-    return callTool({ deskRoot, name, input, person, statusContext, signal: extra?.signal })
+    const traceRequestId = nativeReceiptTraceEnabled(process.env) ? nativeReceiptRequestId(extra) : null
+    return callTool({ deskRoot, name, input, person, statusContext, signal: extra?.signal, traceRequestId })
   })
 
   await activeServer.connect(activeTransport)

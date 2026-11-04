@@ -356,6 +356,27 @@ test("a GitHub fallback sign-in for an account with Desk access off gets a 403 p
 
 // ---- the account check ----
 
+test("gateway access tokens stay usable until expiry on the account clock", async (t) => {
+  const ctx = await setup();
+  const tokens = await exchange(ctx, await entraCode(ctx));
+  assert.deepEqual((await ctx.provider.verifyAccessToken(tokens.access_token)).extra, { accountId: ctx.accountId });
+  const base = await startGateway(t, ctx);
+  const mcp = () => fetch(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${tokens.access_token}`, "content-type": "application/json" }, body: "{}" });
+  const fresh = await mcp();
+  assert.equal(fresh.status, 200, await fresh.text());
+
+  ctx.advance(3_599_000);
+  assert.equal((await mcp()).status, 200, "the token is still valid one second before expiry");
+  ctx.advance(1_000);
+  const expired = await mcp();
+  assert.equal(expired.status, 401);
+  assert.equal((await expired.json()).error, "invalid_token");
+
+  const renewed = await refresh(ctx, tokens.refresh_token);
+  tokens.access_token = renewed.access_token;
+  assert.equal((await mcp()).status, 200, "refresh restores access on the same clock");
+});
+
 test("verify refuses an account with access off (401) and answers server_error (500) when the store is down and the cache is stale", async (t) => {
   const ctx = await setup();
   const tokens = await exchange(ctx, await entraCode(ctx));
@@ -408,6 +429,8 @@ test("a code exchange or refresh while the store is down and the cache is stale 
 // ---- through the gateway's routes ----
 
 async function startGateway(t, ctx) {
+  // The SDK also checks expiry with Date.now(), outside the provider's injected clock.
+  t.mock.method(Date, "now", ctx.now);
   const relay = { handle: (req, res, auth) => res.json({ relayed: true, extra: auth.extra }) };
   const app = createApp({ provider: ctx.provider, relay, githubCallback: ctx.provider.githubCallback, issuer: GATEWAY, resource: RESOURCE, entra: ctx.entra, invites: createInvites({ key: KEY, store: ctx.store, now: ctx.now, log }), log });
   const server = app.listen(0, "127.0.0.1");
