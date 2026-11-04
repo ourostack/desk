@@ -87,6 +87,7 @@ test("ambiguous or malformed legacy recovery refuses without guessing a column o
     [LEGACY, [], /migrate.*object/u],
     [LEGACY.replace("| Notes |", "| Owner |"), MAPPING, /duplicate.*Owner/iu],
     [LEGACY.replace("|---|---|---|---|---|---|", "|---|---|"), MAPPING, /separator/u],
+    ["## Resources\n\n| Resource | Owner | Plan | Proof | Disposition | Notes |", MAPPING, /separator/u],
     [LEGACY.replace("| old\\|note |", "| old\\|note | orphan |"), MAPPING, /row.*cells/u],
     [LEGACY.replace("| extra |", "|"), MAPPING, /row.*cells/u],
     [LEGACY.replace("| branch:o/r#open |", "| branch:o/r#old |"), MAPPING, /identity.*more than once/u],
