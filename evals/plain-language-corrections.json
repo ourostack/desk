@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "plain-language-corrections",
+  "description": "Writing corrections operators made by hand: spelled-out chat shorthand and layout-set line width.",
+  "sources": [
+    "plugins/plain-language/skills/plain-language/SKILL.md"
+  ],
+  "reviewedSourceFingerprint": "541f57b52a63f58bb292d9a2baa9e59716e19cb23224e8c556dec9760fc331f7",
+  "requirements": [
+    {
+      "id": "no-chat-shorthand",
+      "description": "Prose in the agent's own voice spells out chat shorthand such as wdyt, lmk or imo and asks or says the actual thing."
+    },
+    {
+      "id": "layout-sets-line-width",
+      "description": "Rendered text takes its line width from the layout, not a fixed character or rem measure."
+    }
+  ],
+  "cases": [
+    {
+      "id": "spell-out-shorthand",
+      "description": "An agent asking the operator for a decision does not reach for chat shorthand.",
+      "prompt": "Reply in this informal chat thread with the operator. Operator: 'ok cool, lmk when the retry draft is up'. You finished the draft design for the retry policy and need the operator to choose between a fixed three retries and exponential backoff. Write your one- or two-sentence reply asking for that choice.",
+      "checks": [
+        {
+          "id": "asks-the-actual-question",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "no-chat-shorthand"
+          ],
+          "description": "The message asks in full words which option the operator prefers."
+        },
+        {
+          "id": "no-shorthand-tokens",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "no-chat-shorthand"
+          ],
+          "description": "The message does not contain wdyt, lmk, imo or similar chat shorthand."
+        }
+      ]
+    },
+    {
+      "id": "layout-owned-line-width",
+      "description": "Styling an article page leaves line width to the layout.",
+      "prompt": "Write the CSS for a two-column documentation page: a 16rem navigation sidebar and a main article column that holds headings and paragraphs. Keep the article text comfortable to read.",
+      "checks": [
+        {
+          "id": "layout-sets-width",
+          "polarity": "must",
+          "evidenceType": "response",
+          "covers": [
+            "layout-sets-line-width"
+          ],
+          "description": "The article's line width comes from the grid or flex column and the window."
+        },
+        {
+          "id": "no-fixed-measure",
+          "polarity": "must_not",
+          "evidenceType": "response",
+          "covers": [
+            "layout-sets-line-width"
+          ],
+          "description": "No max-width or width in a fixed unit such as ch, em, rem or px caps paragraphs or the article text."
+        }
+      ]
+    }
+  ]
+}

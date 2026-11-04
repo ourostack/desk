@@ -13,7 +13,7 @@ const CLAUDE_SEARCH = new Set(["Grep", "Glob", "ToolSearch"])
 const CLAUDE_WEB = new Set(["WebFetch", "WebSearch"])
 const CLAUDE_AGENT = new Set(["Agent", "Task", "SendMessage"])
 const CLAUDE_PLAN = new Set(["TodoWrite", "ExitPlanMode"])
-const CLAUDE_DESK_MCP = /^mcp__.*desk.*__(task|track|friction|lesson|desk)_/u
+const CLAUDE_DESK_MCP = /^mcp__.*desk.*__(task|track|friction|lesson|desk|note)_/u
 
 function claudeToolKind(name) {
   if (CLAUDE_SHELL.has(name)) return "shell"
@@ -36,6 +36,7 @@ const COPILOT_DESK_SUFFIXES = [
   "task_create", "task_update", "task_archive", "track_create", "track_update",
   "friction_add", "lesson_add", "desk_status", "desk_search", "desk_recall",
   "task_focus", "desk_save", "task_move", "task_signoff", "desk_skill",
+  "note_leave", "note_ack",
 ]
 
 function copilotToolKind(name) {
@@ -56,7 +57,7 @@ function copilotToolKind(name) {
 // and `local_shell_call` run a shell command, `apply_patch` edits files,
 // `spawn_agent` starts a child thread. An MCP tool is `mcp__<server>__<tool>`.
 const CODEX_SHELL = new Set(["exec_command", "local_shell_call"])
-const CODEX_DESK_MCP = /^mcp__.*desk.*__(task|track|friction|lesson|desk)_/u
+const CODEX_DESK_MCP = /^mcp__.*desk.*__(task|track|friction|lesson|desk|note)_/u
 
 function codexToolKind(name) {
   if (CODEX_SHELL.has(name)) return "shell"

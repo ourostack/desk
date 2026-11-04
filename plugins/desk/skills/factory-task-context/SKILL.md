@@ -19,6 +19,8 @@ The brief's top-level `task_card`, when present, names the independently associa
 
 `task_card_status` distinguishes `associated`, `not_associated` and `unavailable`. `not_associated` means the completed lookup supplied no associated card, not that no card exists. `unavailable` means optional card discovery is incomplete.
 
+`scoped_out` means an explicitly indexed source scope deliberately excludes the current task card and other sessions. It makes no claim about card discovery. Explain only the supplied historical conversation, with partial/not-recorded and unplaced coverage; do not turn current task progress into that session's work.
+
 Without an associated card, do not search for one, guess its identity or infer missing work. Use only the supplied session evidence. With an unavailable card, any published explanation must have partial coverage with `not_recorded`; never claim complete context. If the remaining evidence cannot establish the explanation, use `unavailable` for the record.
 
 `instructions` is this rubric as separate readable lines. `evidence_outline` lists each session's source hash, private clock origin, exact own-share ranges and a bounded selection of eligible first, last and waiting intervals. Omission counts are explicit; the full snapshot remains authoritative.
@@ -26,6 +28,20 @@ Without an associated card, do not search for one, guess its identity or infer m
 No share means no inferred ownership. An outline is a navigation aid, not proof of a purpose, dependency or outcome.
 
 Read the associated card when supplied, then search and read bounded relevant log passages. Use the outline to navigate and consult the full snapshot for specific evidence details, not as a substitute for task meaning.
+
+An outline with `evidence_kind: native_copilot_turn_index` has no raw log. When its `conversation_status` is `available`, read its small `conversation_file` directly before opening the numerical snapshot. That file is a bounded native conversation index, not reconstructed events.
+
+It supplies ordered `turns`; other statuses supply no usable conversation. Excluded rows are counted. No timestamp places an action on the session clock. Its sealed descriptor and exact file hash are in `private_evidence[].conversation` in `input_file`; never replace its content.
+
+Each turn has `user_message_parts` and `assistant_response_parts`. Concatenate each array without adding separators to recover the exact retained text; null means no recorded text. These short parts prevent native Read line truncation. They are not separate messages, events or time periods.
+
+Indexed user messages establish only requests recorded in that conversation; forwarded or automated input is not proof of a human turn. Assistant responses are the worker's claims, not tool results or proof of tests, merge, delivery or benefit. Do not certify those claims.
+
+If the conversation supports safe observations and a concrete proposal, use partial coverage with both `not_recorded` and `unplaced`. Do not calculate durations or cite an interval from indexed text.
+
+When `source_selection` is `indexed_conversation`, also include `selected_sessions` in partial coverage. This declares that only the listed sessions support the explanation; changing unselected siblings do not. Never use this reason for an ordinary full-source brief.
+
+References to that source may use only `start`, `share_start` or `share_end`, as source-scope references, not action times. Never make a waiting event from indexed evidence. Unknown timing remains unplaced in the reader.
 
 Establish the actual request, work, dependency, resumption and result separately. A card title is not proof of the original request. A tool kind does not establish a production stage or business result. Do not imply delivery or acceptance that the lifecycle evidence does not record.
 
@@ -82,6 +98,8 @@ Do not turn either into "no work", "no waiting" or a guessed explanation.
 You are a fresh reviewer. Do not author replacement wording or edit the candidate. `candidate` is the exact proposed public payload and `payload_sha256` is its parent-computed hash. Review every public string, not just the heading; source references and keys must carry only the public identities and allowed fields.
 
 Read the underlying evidence independently. Check both semantic support and privacy: identity, personal circumstances, private customer or organization details, private repository names, hidden paths or secrets, raw quotations and unnecessary technical specifics. Mechanical keyword checks are insufficient.
+
+For indexed conversation, independently read the sealed projection and preserve its limits. Withhold any unsupported execution, test, delivery, benefit or action-time claim; a recorded assistant reply is not its verification. Check partial/unplaced coverage and reject timed or waiting references to indexed evidence.
 
 Check the Waiting classification, prerequisite and resumption independently; a capture gap alone is not a dependency. Check partial coverage, terminal state and that no duration or causality has been invented. Uncertainty is a reason to withhold, not to approve.
 

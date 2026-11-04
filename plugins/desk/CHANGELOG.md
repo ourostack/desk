@@ -1,5 +1,124 @@
 # desk plugin — changelog
 
+## 3.2.57 — 2026-11-04
+
+Keep status cache preparation within its original deadline and require a completed sub-200ms observation, while retaining slower round-trip samples instead of failing setup on a single cold response. Production status behavior and independent latency checks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.56 — 2026-11-03
+
+Desk now distinguishes an intentionally blocked question form from a human answer or lost authority. Copilot startup and conversation guidance tell agents to continue authorized work, keep genuine decisions gated, and handle contradictory host routing as a consumer integration defect. Question defaults, permissions and hooks are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.55 — 2026-11-03
+
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) gains a standing rule to ship small and often: one change per pull request, each proven fix released the same day without waiting for other fixes, and no fixes batched behind a daily or weekly release.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.54 — 2026-11-03
+
+Boot sync wait expiry now reports pending/unknown effects rather than claiming nothing was pulled or pushed. JSON and plain-text startup instructions require safe account-scoped direct Git recovery before reporting local-only state, and no longer mandate a stale-state opener after successful recovery. Session-start and desk-problem guidance require fresh fetch and exact state-branch ahead/behind evidence, preserve other writers and real access barriers, and suppress the timeout banner only after verified current commits. This does not qualify the timed-out helper or change its worker/retry architecture.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.53 — 2026-11-03
+
+Superpowers wrapper fix: the actual vendored `hooks/run-hook.cmd` no longer uses a here-document. Preserve its raw upstream bytes at an explicitly locked evidence path and separately record the maintained CMD/Unix transform and output hashes. Both authored Copilot commands and the unchanged Claude declaration use the actual wrapper. The complete Superpowers refresh updates raw evidence and regenerates or verifies downstream outputs together, refusing stale artifacts rather than silently accepting them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.52 — 2026-11-03
+
+New [`fast-honest-ci`](skills/fast-honest-ci/SKILL.md) skill for keeping CI as fast and cheap as it can be without hiding a failure, for every desk. It covers measuring the critical path and the queue before changing anything; fixing slow tests, time-balanced shards with a guard, lockfile caches, fail-closed path selection and pull-request-only fail-fast and cancellation; standard runners first, paid or larger runners only with an approved budget, per-repository budgets, scarce runner pools and yielding to the default branch; merge-queue build concurrency sized to the runner pool; a budget guard that fails pull requests on the critical path, reports wall clock and ratchets; and cause-first flake handling, with one recorded re-run only for a filed failure signature. GitHub's limits and prices are cited from its documentation, and [`examples.md`](skills/fast-honest-ci/examples.md) works through a public component library and two private repositories.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.51 — 2026-11-01
+
+Let source-bound context use a bounded, read-only Copilot conversation index when a raw log is gone and both native and public facts explicitly bind the whole session to one job. Match the native desk identity, seal the small readable projection and its source digest, preserve independent privacy, and refuse unsupported time placement. Indexed replies remain partial evidence, not verified execution or a recreated event log.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.50 — 2026-10-31
+
+An operator's standing grant can now authorize a credential harness for test tenants they own ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). Under such a grant, agents stop handing the operator a sign-in: they build or reuse a harness that reads the password from the tenant's owning portal, keeps it only in the operating system's credential store, fills it programmatically, registers a software TOTP authenticator and reuses the session. The grant never covers the operator's own corporate or personal credentials or anything they don't own, and no secret ever appears in chat, logs, task cards, repositories or screenshots.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.49 — 2026-10-31
+
+Agents now honour standing authority an operator records in their own desk, in their own words with a source and date and stated as standing ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). A grant outranks a skill's default stop, such as "never auto-submit", for what it covers; a broad grant covers routine steps on the operator's own surfaces and their routine work, while money, irreversible destruction (on their own surfaces too) and anything sent in their name, pull request descriptions included, stay gated unless named. A grant never widens the request's verb, never overrides an explicit stop, and never covers passwords, secrets or surfaces the operator doesn't own. [`operator-voice-comments`](skills/operator-voice-comments/SKILL.md#approval-before-anything-is-sent) accepts a grant that names a kind of send as approval for that kind only. `interaction-style` also asks agents to push back and name what the operator is missing, to try a different approach after go rather than ask for sign-off on one, and not to stop on their own discomfort with an authorized step, while treating security prompts as safeguards, never discomfort. `work-orchestration` keeps the root agent for coordination, honours an operator's model preference per kind of work and supervises every running lane at each milestone, and `evidence-discipline` puts visual proof inline where the reader looks. These rules had lived only in one operator's desk file, where session start's AGENTS.md budget could cut them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.48 — 2026-10-31
+
+Crew members can now leave each other notes. In a shared workspace, `note_leave` puts a dated, attributed note in a teammate's `desks/<alias>/_inbox/`: Desk records the session's person as the sender (never a value the caller passes), refuses anyone not on the roster in `_meta/desks.md` (checked in the clone and again on the default branch) and refuses an exact duplicate of a note already there. It writes that one new file through a pull request it merges at once, the same shared-write path as a team lesson, now shared in [`shared-write.js`](mcp/src/tools/shared-write.js), and replies `merged`, `pr_open`, `duplicate` or `failed`. The recipient's session start lists their open notes under "Notes from teammates" (`notes` with `--json`), oldest first and at most five, with one instruction: tell the operator early without letting the notes displace the requested work, read a note before acting on related work, and call `note_ack` once the operator has seen it. `note_ack` marks the note acknowledged on the recipient's own desk and keeps the file. Crew 0.2.15 adds the `leave-note` skill: when a note is the right path, relaying someone's thinking as your understanding rather than in their voice, and that the whole workspace can read every note.
+
+Desk now ships Plain Language 0.2.10, which adds three general writing rules: an agent relaying someone's views writes as itself and points the reader back to that person, chat shorthand such as "wdyt" gets spelled out, and rendered text takes its line width from the layout rather than a fixed measure. The [operator-voice drafting rules](skills/operator-voice-comments/SKILL.md#no-padding) no longer suggest "wdyt" as a way to soften a recommendation.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.47 — 2026-10-30
+
+### Desk has a fixed Agency plugin ID
+
+[`agency.json`](agency.json) now carries `pluginId` `006b58c2-230c-47b1-831a-a1cc2fd10ef9`. Agency treats installs that share a plugin ID as one plugin, so Desk from the coming Agency marketplace listing and Desk from `github:ourostack/desk:plugins/desk@main` (installed directly, or as a dependency of MS Desk or cit) load as one Desk instead of two.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.46 — 2026-10-30
+
+`lesson_add` no longer refuses a personal lesson once AGENTS.md outgrows what session start prints ([#554](https://github.com/ourostack/desk/issues/554)). In a Crew workspace the team's AGENTS.md and a person's share 16 KB, so a busy desk could stop learning until someone trimmed the file by hand. Now the newest lessons stay in AGENTS.md and the oldest move to a `LESSONS.md` shelf beside it, first any lesson already past the cut, which nothing loaded before. If the rest of AGENTS.md leaves no room at all, the new lesson goes on the shelf itself. No lesson is dropped: session start lists every shelved topic, [`task_focus`](mcp/src/tools/task-focus.js) and `task_create` with `focus` return the shelved lessons closest to the task first, `desk_search` indexes the shelf, and recording a lesson again under its topic brings it back to AGENTS.md. The reply's new `tier` says where the lesson landed, and `shelved` names every lesson that moved. AGENTS.md and the shelf are committed together. Team lessons, which reach a shared repository through a pull request, keep their 16 KB refusal.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.45 — 2026-10-29
+
+Operator-voice drafts and humanizing guidance now point to Plain Language's shared rule for attributing authorized work to the person. The [collaboration rationale](docs/agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent) explains why agent use is normally implicit; approval and audit boundaries remain unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.44 — 2026-10-29
+
+### Desk's own commits always reach the remote
+
+The background push no longer rebases the shared checkout to make room for its push, so nothing else in that checkout can hold Desk's commits back ([#396](https://github.com/ourostack/desk/issues/396)). Before, an untracked file matching an incoming tracked one, or a conflict on a task card while other sessions had files open, stopped every later push, and Desk commits piled up locally while each tool reply still said they were being pushed.
+
+- **Delivery uses a private copy.** A fast-forward is pushed as it is. Anything else is replayed onto the remote in a temporary worktree under Desk's state folder and pushed from there (`mcp/src/runtime/deliver.js`). The shared checkout then follows only the way `git checkout` would: a file another session changed, or an untracked file in the way, stops the move instead of being overwritten. An untracked file whose content is exactly what is coming in is replaced by itself. Desk never stashes, rebases or force-pushes for this.
+- **Card conflicts resolve themselves.** A conflict on a Markdown file or line log in the desk's own folder keeps both sides' lines and merges frontmatter key by key, the newer side (by its `updated` time) winning a key both sides changed. A commit with a conflict Desk cannot merge (a shared file, a JSON file, a binary file) stays local and is named, and every other commit still lands.
+- **Boot delivers too.** When the session-start pull fails for any reason other than an unreachable remote or refused credentials, boot starts the delivery in the background and says how many local commits are not on the remote yet.
+- **Replies never claim a push that is not happening.** While the last push is blocked, `task_update`, `task_signoff` and `desk_save` say the commit is only local, how many commits are waiting and why (`desk_unpushed`, `desk_push_blocked`), instead of "pushing it in the background". Boot's sync line adds the same count and reason and is degraded while a push is blocked, and `desk_status` reports `sync.unpushed` and names a blocked push before a failed pull.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.43 — 2026-10-29
+
+Crew startup now introduces existing shared initiatives under `_shared/tracks/` alongside personal tasks, using Crew's shared-initiative skill. Discovery is read-only and does not create assignments or duplicate task state.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.42 — 2026-10-29
+
+New [`delightful-decks`](skills/delightful-decks/SKILL.md) skill for making presentation decks that surprise and delight a live audience. It sets an explicit bar for every slide (visual aids, not explainers; only the words that must be there; beautiful art on every slide; room to breathe; soft depth; titles that wrap like speech; the real artifact, unredacted), a process that agrees the spec slide by slide with the presenter before building and then builds art, rendered diagrams, screenshots, research and the deck in parallel, a simulated-audience review panel filtered against the presenter's decisions, and the common failure modes. A builder's "nothing overflows" check proves layout, not quality, and never stands in for the bar.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.41 — 2026-10-29
+
+Parallelize and fast-follow is now a default for every operator. Independent streams run at the same time, downstream artifacts are updated right after an upstream change, and usable milestones are pushed early and often so whoever is waiting always finds the latest. [work-orchestration](skills/work-orchestration/SKILL.md) "Parallelize and fast-follow" holds the rule and builds on `superpowers:dispatching-parallel-agents` instead of restating it. [using-desk](skills/using-desk/SKILL.md) names it under waste judgment, and the work-orchestration description makes it the default for any work.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.40 — 2026-10-29
+
+Content routing now covers teams that share a Crew workspace. General agent-work tooling goes to Desk or Crew, employer-specific tooling that isn't team-specific goes to the employer's overlay, a team's own process goes to its own tooling as skills, shared context and evidence stay in the team workspace, and changes to repositories the team doesn't own go through pull requests there with a heads-up to their owner. See [content-routing](skills/content-routing/SKILL.md) "When a team shares a workspace".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.39 — 2026-10-28
 
 Give explicitly requested session explanations one complete generation/privacy allowance, separate from unattended maintenance's daily ledger. The requested CLI keeps source, consent, billing, retry and publication checks, holds the normal evaluator lock across both phases, and never enables an automatic budget escape.

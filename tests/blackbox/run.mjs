@@ -5,13 +5,14 @@
 // It never imports Desk's source, so a refactor that keeps behavior cannot break it. See README.md beside it.
 
 import { execFileSync } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { McpSession } from "./lib/mcp.mjs"
+import { McpSession, NativeReceiptCollector, nativeReceiptLaunch, nativeReceiptTraceRequested,
+  nativeReceiptArtifactJson, NATIVE_RECEIPT_SOURCE_FILES } from "./lib/mcp.mjs"
 import { hookContext, hookEntries, runHook } from "./lib/hooks.mjs"
 import { claudeConfigDir, copyTree, deskStateDir, git, installPlugins, makeDesk, makeHome, makeTempRoot, NOTES, personEnv, WINDOWS } from "./lib/world.mjs"
 import { treeRssKiB } from "./lib/proc.mjs"
@@ -79,6 +80,8 @@ function knownReason(host, id) {
 }
 
 async function check(ctx, id, area, fn) {
+  const nativeReceiptTrace = ctx.nativeReceiptTrace
+  if (nativeReceiptTrace) nativeReceiptTrace.enterCase(ctx, id)
   const started = performance.now()
   let ok = true
   let error = null
@@ -90,6 +93,7 @@ async function check(ctx, id, area, fn) {
     error = caught instanceof Error ? caught.message : String(caught)
   }
   const ms = performance.now() - started
+  if (nativeReceiptTrace) nativeReceiptTrace.finishCase(ctx, id, ok)
   const known = knownReason(ctx.host, id)
   results.push({ repeat: ctx.repeat, host: ctx.host, id, area, ok, ms, error, known })
   const mark = ok ? (known ? "FIXED" : "ok  ") : known ? "KNOWN" : "FAIL"
@@ -239,6 +243,7 @@ function resultPaths(response) {
 
 async function hostSession(options, host, repeat, shared) {
   const ctx = { host, repeat }
+  if (shared.nativeReceiptTrace) ctx.nativeReceiptTrace = shared.nativeReceiptTrace
   const root = path.join(shared.tempRoot, `r${repeat}-${host}`)
   fs.mkdirSync(root, { recursive: true })
   const home = makeHome(root)
@@ -498,7 +503,9 @@ async function endHooks(ctx, world) {
 async function deskServer(ctx, world, shared) {
   return check(ctx, "desk_server.handshake", "mcp", async () => {
     const launch = serverLaunch(world, "desk")
-    const session = new McpSession({ ...launch, name: `${world.host} desk` })
+    const measuredLaunch = nativeReceiptLaunch(launch, process.env)
+    const session = new McpSession({ ...measuredLaunch, name: `${world.host} desk`,
+      ...(shared.nativeReceiptTrace ? { nativeReceiptTrace: shared.nativeReceiptTrace.session(ctx) } : {}) })
     try {
       await session.handshake(world.host === "copilot" ? "github-copilot-cli" : "claude-code")
     } catch (error) {
@@ -1086,6 +1093,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   const tempRoot = makeTempRoot()
   const shared = { tempRoot, pluginsSource: options.plugins, tools: {}, surface: {}, hooks: {}, unpushed: {}, seeded: {}, startedAt: new Date().toISOString() }
+  if (nativeReceiptTraceRequested(process.env)) shared.nativeReceiptTrace = new NativeReceiptCollector()
   try {
     const registry = execFileSync(WINDOWS ? "npm.cmd" : "npm", ["config", "get", "registry"], { encoding: "utf8", shell: WINDOWS, windowsHide: true, timeout: 20000 }).trim()
     if (/^https?:\/\//u.test(registry) && !/registry\.npmjs\.org/u.test(registry)) shared.npmRegistry = registry
@@ -1112,11 +1120,24 @@ async function main() {
   }
   parityChecks(shared, options.hosts)
   const summary = summarize(options, shared, performance.now() - started)
+  if (shared.nativeReceiptTrace) {
+    summary.native_receipt_trace = shared.nativeReceiptTrace.snapshot()
+    const hashes = {}
+    for (const file of NATIVE_RECEIPT_SOURCE_FILES) {
+      try { hashes[file] = createHash("sha256").update(fs.readFileSync(path.join(repoRoot, file))).digest("hex") }
+      catch { hashes[file] = null }
+    }
+    let dirty = null
+    try { dirty = git(repoRoot, ["status", "--porcelain", "--untracked-files=normal"]) !== "" } catch { /* Unknown is not clean. */ }
+    const head = summary.git_head
+    summary.native_receipt_source = { head: typeof head === "string" && (head.length === 40 || head.length === 64) &&
+      /^[a-f0-9]+$/u.test(head) ? head : null, dirty, hashes }
+  }
   summary.leftover_processes = leftover.map((p) => p.command.slice(0, 200))
   if (leftover.length) summary.ok = false
   fs.mkdirSync(options.out, { recursive: true })
   const base = path.join(options.out, `blackbox-${options.label}`)
-  fs.writeFileSync(`${base}.json`, `${JSON.stringify(summary, null, 2)}\n`)
+  fs.writeFileSync(`${base}.json`, nativeReceiptArtifactJson(summary, Boolean(shared.nativeReceiptTrace)))
   fs.writeFileSync(`${base}.md`, markdown(summary))
   console.log(markdown(summary))
   console.log(`Wrote ${base}.json and ${base}.md`)

@@ -9,7 +9,7 @@
       "files": [
         {"sourcePath": "LICENSE", "generatedPath": "plugins/superpowers/LICENSE", "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"},
         {"sourcePath": "hooks/hooks.json", "generatedPath": "plugins/superpowers/hooks/hooks.json", "sha256": "47fd72cc8bedf31c72702b35b4ed7bab670294d658c4ce518330337525a3798b"},
-        {"sourcePath": "hooks/run-hook.cmd", "generatedPath": "plugins/superpowers/hooks/run-hook.cmd", "sha256": "d3d9c6199678dab2858e60509dde5e7414f13c2a2b5e48a38b1d368b6e1d6abb"},
+        {"sourcePath": "hooks/run-hook.cmd", "generatedPath": "plugins/superpowers/hooks/run-hook.cmd", "sha256": "d3d9c6199678dab2858e60509dde5e7414f13c2a2b5e48a38b1d368b6e1d6abb", "upstreamPath": "plugins/superpowers/hooks/upstream/run-hook.cmd"},
         {"sourcePath": "hooks/session-start", "generatedPath": "plugins/superpowers/hooks/session-start", "sha256": "5e92229e49d7cff5e0355ab84b0bceb0d27d53c565b33210132ce6e413ee9665"},
         {"sourcePath": "skills/brainstorming/SKILL.md", "generatedPath": "plugins/superpowers/skills/brainstorming/SKILL.md", "sha256": "a32d2255354775aa124855aa7100cf276bea096fff4ebb3a0edf57be216e6c72"},
         {"sourcePath": "skills/brainstorming/scripts/frame-template.html", "generatedPath": "plugins/superpowers/skills/brainstorming/scripts/frame-template.html", "sha256": "6a8a4e58bd6a44b904e2e3c57de774481d909204597e1498de53f1b2fecc4c4e"},

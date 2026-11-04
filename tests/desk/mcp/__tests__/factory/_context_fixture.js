@@ -25,7 +25,7 @@ export function reviewContext(value) {
   value.privacy = { verdict: "approved", payload_sha256: contextPayloadHash(value), reviewer: { plugin_version: "3.2.0-alpha.1", rubric: "1" } }
   return value
 }
-export function contextRecord(facts = contextFacts(), job = CONTEXT_JOB) {
+export function contextRecord(facts = contextFacts(), job = CONTEXT_JOB, taskCardStatus = "not_associated") {
   const source = contextSource(facts, job)
   return reviewContext({
     schema: "desk.factory.context/1",
@@ -40,7 +40,9 @@ export function contextRecord(facts = contextFacts(), job = CONTEXT_JOB) {
       evidence: [{ session: source.session, source: source.sha256, anchor: "interval", range: [1000, 250000] }],
     }],
     sources: [source],
-    coverage: { state: "measured", reasons: [], omitted_events: 0 },
+    coverage: taskCardStatus === "unavailable"
+      ? { state: "partial", reasons: ["not_recorded"], omitted_events: 0 }
+      : { state: "measured", reasons: [], omitted_events: 0 },
     privacy: null,
   })
 }

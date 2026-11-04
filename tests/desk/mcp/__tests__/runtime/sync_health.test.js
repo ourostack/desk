@@ -15,6 +15,10 @@ import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/sessi
 import { readFetchOkAt, readSyncStatus, recordFetchOk, syncStatusPath, recordPullOutcome, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 
+// These tests are about the pull; the detached delivery a pull may start is covered in sync_deliver.test.js.
+const noDelivery = () => {}
+
+
 const env = process.env
 const instantClock = { sleep: () => Promise.resolve() }
 
@@ -47,12 +51,16 @@ test("healthWord and syncDegradation are the one source of the words boot report
   assert.equal(syncDegradation(null), null)
   assert.equal(syncDegradation({ state: "unresolved", reason: "pull_rebase_failed", cause: "unreachable" }), "sync: unresolved (pull_rebase_failed, unreachable)")
   assert.equal(syncDegradation({ state: "unresolved" }), "sync: unresolved")
+  // Local commits a push could not deliver degrade boot even after a good pull; commits merely waiting for their push do not.
+  assert.equal(syncDegradation({ state: "synced", unpushed: { count: 2, delivering: true, reason: null } }), null)
+  assert.equal(syncDegradation({ state: "synced", unpushed: { count: 2, delivering: true, reason: "conflict" } }), "push: 2 local commit(s) not on the remote (conflict)")
+  assert.equal(syncDegradation({ state: "unresolved", cause: "unreachable", unpushed: { count: 105, delivering: false } }), "sync: unresolved (unreachable); push: 105 local commit(s) not on the remote (not delivered)")
 })
 
 test("a failed sync is recorded for desk_status, and a later good sync clears it", async () => {
   const { origin, root } = await mkDeskWithOrigin()
   git(root, ["remote", "set-url", "origin", path.join(origin, "gone")])
-  const failed = await syncWorkspace({ root, env, fileProblem: () => ({ file: "none" }) })
+  const failed = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem: () => ({ file: "none" }) })
   assert.equal(failed.state, "unresolved")
   const recorded = readSyncStatus({ root, env }).last_pull
   assert.equal(recorded.state, "unresolved")
@@ -62,7 +70,7 @@ test("a failed sync is recorded for desk_status, and a later good sync clears it
   assert.equal(status.sync.last_pull.state, "unresolved")
 
   git(root, ["remote", "set-url", "origin", origin])
-  assert.equal((await syncWorkspace({ root, env })).state, "synced")
+  assert.equal((await syncWorkspace({ scheduleDelivery: noDelivery, root, env })).state, "synced")
   assert.equal(readSyncStatus({ root, env }).last_pull, null)
   assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false)
 })
@@ -164,7 +172,7 @@ const later = () => new Promise((resolve) => setTimeout(resolve, 20))
 async function failedPullDesk() {
   const { origin, root } = await mkDeskWithOrigin()
   git(root, ["remote", "set-url", "origin", path.join(origin, "gone")])
-  await syncWorkspace({ root, env, fileProblem: () => ({ file: "none" }) })
+  await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem: () => ({ file: "none" }) })
   return { origin, root }
 }
 
