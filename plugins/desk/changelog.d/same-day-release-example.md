@@ -1,0 +1,1 @@
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md)'s [examples](skills/fast-honest-ci/examples.md) show a release train that ships each proven fix the same day, with the scheduled morning run only as a safety net, and why waiting for the default branch's runners needs a longer cap than waiting for a release.
