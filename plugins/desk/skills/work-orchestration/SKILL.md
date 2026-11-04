@@ -97,6 +97,8 @@ While the operator is present, wait in short slices and answer them first (`inte
 
 Supervise every lane. At each milestone, check every running child's live status; when a child has failed, vanished or really stalled, stop it and, once its writer is verified released (`session-resumption`), restart it or hand its work to a new one (the root takes it on only when no child can); a child whose release can't be shown is not replaced on that write set. Do this at once, and report each lane's health with the milestone.
 
+A child going idle or sending a routine notification is not news. If it was expected to go quiet, say nothing to the operator. If it should still be working, find out why, fix it, then tell the operator what was wrong and what you did. Never send "nothing new", "still quiet" or "X went idle" as an update. Every update to the operator carries real progress on the work in flight (what merged, what is ready, what is blocked and who owns it) or a decision only they can make.
+
 Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
 
 Pace children as well as choosing their models (see above). Near a usage limit, run fewer children in parallel. Prefer one child per independent unit, and resume an existing child with its context rather than spawning a fresh one for a follow-up fix.
