@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.59 — 2026-11-04
+
+Recover legacy Resources tables through `task_update` with an explicit [`resource.migrate` column mapping](skills/task-card-format/SKILL.md#resources-worktrees-and-branches-you-create), instead of instructions to edit a protected table by hand. The checked write preserves inventory, ownership, dispositions, extra cells and surrounding prose, rejects ambiguous or malformed tables without writing, and supports repeat calls without another migration.
+
+PR preparation and self-review now block creation and readiness without inline rendered proof or a specific, accurate nonvisual reason. [PR surface hygiene](skills/pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness) provides a local presence checker and [opt-in repository enforcement](skills/pr-surface-hygiene/repository-setup.md); human review still verifies the capture and reason. [Evidence discipline](skills/evidence-discipline/SKILL.md#privacy-safe-rendered-proof) routes privacy-withheld captures to real renders with safe made-up data and explicit limits, never fabricated screenshots.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.58 — 2026-11-04
 
 Wait for actual directory readiness in the concurrent-folder tests instead of assuming a short sleep means creation finished. A controlled filesystem interleaving distinguishes an active hold from a completed mkdir without changing directory cleanup behavior.
