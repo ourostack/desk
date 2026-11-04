@@ -1,1 +1,0 @@
-Wait for actual directory readiness in the concurrent-folder tests instead of assuming a short sleep means creation finished. A controlled filesystem interleaving distinguishes an active hold from a completed mkdir without changing directory cleanup behavior.

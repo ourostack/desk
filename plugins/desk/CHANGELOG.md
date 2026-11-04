@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.58 — 2026-11-04
+
+Wait for actual directory readiness in the concurrent-folder tests instead of assuming a short sleep means creation finished. A controlled filesystem interleaving distinguishes an active hold from a completed mkdir without changing directory cleanup behavior.
+
+[`fast-honest-ci`](skills/fast-honest-ci/SKILL.md)'s [examples](skills/fast-honest-ci/examples.md) show a release train that ships each proven fix the same day, with the scheduled morning run only as a safety net, and why waiting for the default branch's runners needs a longer cap than waiting for a release.
+
+The Copilot automatic session-label consumer no longer reports every failed native read as `unavailable/native_api_failed`. It now names the failing read (`snapshot`, `recheck` or `readback`) and a fixed cause (`timeout`, `invalid_params`, `internal_error`, `rpc_error` or `failed`), such as `unavailable/native_readback_timeout`, without logging the native error's text. An error whose fields cannot be read safely no longer escapes the naming queue. Unsupported methods, refused names and the stop after an uncertain write are unchanged. This locates a failure; it does not fix the underlying native labeling failure. See [session labels](docs/session-labels.md#diagnostics).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.57 — 2026-11-04
 
 Keep status cache preparation within its original deadline and require a completed sub-200ms observation, while retaining slower round-trip samples instead of failing setup on a single cold response. Production status behavior and independent latency checks are unchanged.
