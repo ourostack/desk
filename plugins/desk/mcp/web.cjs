@@ -379,12 +379,15 @@ async function openAuth(s) {
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
   } catch (error) {
-    if (s.contexts[id]) {
-      try { await close(s, id); } catch (cleanupError) { throw plain("AUTH_CLEANUP_FAILED: The failed authenticated context was retained because its owned cleanup could not be confirmed."); }
-    }
     var safe = safeErrorData(error);
-    if (safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_DESTINATION_FAILED)/.test(safe.message)) throw error;
-    throw plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.");
+    var primary = safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_DESTINATION_FAILED)/.test(safe.message) ? error :
+      plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.");
+    if (s.contexts[id]) {
+      try { await close(s, id); } catch (cleanupError) {
+        throw plain(safeErrorData(primary).message + " Retained cleanup uncertainty: AUTH_CLEANUP_FAILED; the failed authenticated context remains owned.");
+      }
+    }
+    throw primary;
   }
 }
 

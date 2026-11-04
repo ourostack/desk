@@ -360,7 +360,12 @@ test("rejected stage cleanup proceeds independently of failed handle disposal", 
       })
       assert.equal(attempts, 1, "owned stage removal is still attempted")
       assert.equal(fs.readdirSync(root).length, failUnlink ? 1 : 0)
-    } finally { fs.promises.unlink = original; await adapter.close() }
+    } finally {
+      fs.promises.unlink = original
+      await assert.rejects(adapter.close(), /AUTH_HANDLE_CLEANUP_FAILED/u)
+      for (const handle of native.handles.values()) handle.dispose = async () => {}
+      await adapter.close()
+    }
   }
 })
 
@@ -476,4 +481,142 @@ test("successful tab creation carries effects through subsequent reader and prot
       assert.deepEqual(fs.readdirSync(root), [])
     } finally { await adapter.close() }
   }
+})
+
+test("native value changes during binding or staging invalidate earlier redaction decisions", async () => {
+  for (const phase of ["binding", "staging"]) {
+    const root = await mkTempRoot("auth-value-continuity-")
+    const packet = nativeSnapshot({ value: "" })
+    packet.strings.push(PASSWORD)
+    const marker = packet.strings.length - 1
+    packet.documents[0].nodes.attributes[3][3] = marker
+    const change = () => { packet.documents[0].nodes.inputValue.value[0] = marker }
+    const native = fakeDriver({ packet, hook: ({ method, count }) => {
+      if (phase === "binding" && method === "DOM.getDocument" && count === 2) change()
+    } })
+    const restore = phase === "staging" ? hookStageWrites(root, change) : () => {}
+    const adapter = adapterFor(native, root)
+    try {
+      await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_REDACTION_INVALIDATED/u)
+      assert.deepEqual(fs.readdirSync(root), [])
+      await assert.rejects(adapter.call(["fill", "e3", "literal"]), /AUTH_TARGET_REFUSED/u)
+      assert.equal(native.calls.some(call => call[0] === "fill"), false)
+    } finally { restore(); await adapter.close() }
+  }
+})
+
+test("committed ref disposal attempts every handle and retains failures for owned close", async () => {
+  for (const synchronous of [false, true]) {
+    const root = await mkTempRoot("auth-committed-handle-")
+    const native = fakeDriver()
+    const adapter = adapterFor(native, root)
+    const attempts = new Map()
+    let refuse = true
+    try {
+      await adapter.call(["snapshot"])
+      for (const [id, handle] of native.handles) {
+        handle.dispose = () => {
+          attempts.set(id, (attempts.get(id) || 0) + 1)
+          if (id === 102 && refuse) {
+            if (synchronous) throw new Error(PASSWORD)
+            return Promise.reject(new Error(PASSWORD))
+          }
+          return Promise.resolve()
+        }
+      }
+      await assert.rejects(adapter.call(["snapshot", "--save"]), error =>
+        /AUTH_HANDLE_CLEANUP_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
+      assert.ok(attempts.get(103) > 0 && attempts.get(104) > 0, "a previous failure does not prevent other disposals")
+      assert.deepEqual(fs.readdirSync(root), [])
+      const before = attempts.get(102)
+      refuse = false
+      await adapter.close()
+      assert.ok(attempts.get(102) > before, "close retries the still-owned rejected disposal")
+    } finally { refuse = false; await adapter.close() }
+  }
+})
+
+test("tab selection retains Page identity when an unrelated earlier page closes", async () => {
+  const root = await mkTempRoot("auth-page-selection-")
+  const natives = [fakeDriver(), fakeDriver(), fakeDriver()]
+  const context = natives[0].context
+  let pages = natives.map(native => native.page)
+  context.pages = () => pages.slice()
+  context.newCDPSession = async page => natives.find(native => native.page === page).cdp
+  for (const native of natives) {
+    native.page.context = () => context
+    native.page.isClosed = () => !pages.includes(native.page)
+    native.page.close = async () => {
+      pages = pages.filter(page => page !== native.page)
+      native.page.emit("close")
+    }
+  }
+  const adapter = auth.create(context, root, 5000, () => {})
+  try {
+    await adapter.call(["tab-select", "1"])
+    await natives[0].page.close()
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }, { index: 1, selected: false }] })
+    await adapter.call(["goto", "https://synthetic.invalid/"])
+    assert.equal(natives[1].calls.filter(call => call[0] === "goto").length, 1)
+    assert.equal(natives[2].calls.filter(call => call[0] === "goto").length, 0)
+    await adapter.call(["tab-close"])
+    assert.deepEqual(pages, [natives[2].page])
+  } finally { await adapter.close() }
+})
+
+test("a closed selected Page refuses navigation instead of choosing another tab", async () => {
+  const root = await mkTempRoot("auth-selected-page-closed-")
+  const native = fakeDriver()
+  const other = fakeDriver()
+  const context = native.context
+  let pages = [native.page, other.page]
+  context.pages = () => pages.slice()
+  native.page.isClosed = () => !pages.includes(native.page)
+  other.page.context = () => context
+  context.newCDPSession = async page => page === native.page ? native.cdp : other.cdp
+  const adapter = auth.create(context, root, 5000, () => {})
+  try {
+    await adapter.call(["snapshot"])
+    pages = [other.page]
+    native.page.emit("close")
+    await assert.rejects(adapter.call(["goto", "https://synthetic.invalid/"]), /AUTH_CONTEXT_REFUSED/u)
+    assert.equal(other.calls.some(call => call[0] === "goto"), false)
+    await assert.rejects(adapter.call(["tab-close"]), /AUTH_TARGET_REFUSED/u)
+    assert.deepEqual(pages, [other.page])
+  } finally { await adapter.close() }
+})
+
+test("reader setup and detach failures preserve primary refusal and cleanup uncertainty", async () => {
+  const root = await mkTempRoot("auth-reader-primary-")
+  const native = fakeDriver({ hook: ({ method }) => {
+    if (method === "DOM.enable") throw auth.fail("AUTH_RUNTIME_POLICY_REFUSED")
+  } })
+  native.cdp.detach = async () => { throw new Error(PASSWORD) }
+  const adapter = adapterFor(native, root)
+  try {
+    await assert.rejects(adapter.call(["snapshot"]), error =>
+      error.message.includes("AUTH_RUNTIME_POLICY_REFUSED") &&
+      error.message.includes("AUTH_READER_CLEANUP_FAILED") &&
+      !error.message.includes(PASSWORD))
+    await assert.rejects(adapter.call(["snapshot"]), /AUTH_READER_REFUSED/u)
+  } finally { await adapter.close() }
+})
+
+test("the native document envelope is validated without reading accessors", async () => {
+  const root = await mkTempRoot("auth-envelope-")
+  const native = fakeDriver()
+  const send = native.cdp.send
+  let reads = 0
+  native.cdp.send = async (method, params) => {
+    if (method === "DOM.getDocument") return Object.defineProperty({}, "root", {
+      enumerable: true, get() { reads++; throw new Error(PASSWORD) },
+    })
+    return send(method, params)
+  }
+  const adapter = adapterFor(native, root)
+  try {
+    await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_NATIVE_DATA_INVALID/u)
+    assert.equal(reads, 0)
+    assert.deepEqual(fs.readdirSync(root), [])
+  } finally { await adapter.close() }
 })

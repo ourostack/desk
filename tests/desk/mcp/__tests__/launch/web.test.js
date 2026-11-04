@@ -514,6 +514,35 @@ test("unbranded outer errors are formatted without arbitrary message-property re
   assert.equal(text(result).includes(PASSWORD), false)
   assert.equal(reads, 0)
 })
+
+test("failed authenticated open cleanup preserves the original safe refusal", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver({ closeError: new Error(PASSWORD) })
+  let active = false
+  const launch = native.driver.chromium.launchPersistentContext
+  native.driver.chromium.launchPersistentContext = async (...args) => {
+    const context = await launch(...args)
+    active = true
+    return context
+  }
+  const controller = web.createController({
+    ...options, authDriver: native.driver,
+    runtimeStateReader: () => ({ execArgv: [], inspectorActive: active }),
+  })
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.match(text(result), /AUTH_CLEANUP_FAILED/u)
+    assert.equal(text(result).includes(PASSWORD), false)
+    assert.equal(Object.keys(controller.settings.contexts).length, 1, "failed cleanup remains owned")
+  } finally {
+    native.context.close = async () => {}
+    await controller.closeAll()
+  }
+})
+
 test("startup retains stale authenticated copies without native CLI attachment or scrubbing", async () => {
   const { options, tmp, calls } = await setup()
   const dead = spawnSync(process.execPath, ["-e", ""]).pid

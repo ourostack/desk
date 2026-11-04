@@ -248,7 +248,8 @@ function prepare(packet, scope, frameId, nextRef) {
       var modify = row.css.length === 3 && ["read-only", "read-write", "read-write-plaintext-only"].indexOf(row.css[2]) !== -1 ? row.css[2] : "unknown";
       return [row.id, row.parent ? row.parent.id : 0, row.type, row.opaque, modify];
     });
-    return { tree: tree, targets: targets, protection: protection };
+    var redaction = crypto.createHash("sha256").update(JSON.stringify(Array.from(secrets).sort())).digest("hex");
+    return { tree: tree, targets: targets, protection: protection, redaction: redaction };
   } finally {
     secrets.clear();
     rows.length = 0;
@@ -289,8 +290,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
   var closed = false;
   var readers = new Map();
   var refs = new Map();
+  var cleanupRecords = new Set();
   var next = 0;
-  var selected = 0;
+  var selected = context.pages()[0];
   var queue = Promise.resolve();
   var pending = new Set();
   var stageHandles = new Set();
@@ -321,10 +323,19 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     reader.listeners.forEach(function (entry) { entry[0].off(entry[1], entry[2]); });
     reader.listeners.length = 0;
   }
+  async function disposeRecords(records) {
+    var results = await Promise.allSettled(records.map(function (record) {
+      return Promise.resolve().then(async function () {
+        await record.handle.dispose();
+        cleanupRecords.delete(record);
+      });
+    }));
+    if (results.some(function (result) { return result.status === "rejected"; })) throw fail("AUTH_HANDLE_CLEANUP_FAILED");
+  }
   function dropRefs() {
     var previous = Array.from(refs.values());
     refs.clear();
-    return Promise.all(previous.map(function (record) { return record.handle.dispose(); }));
+    return disposeRecords(previous);
   }
   async function readerFor(page) {
     checkRuntime();
@@ -351,11 +362,14 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
       await send(reader, "Runtime.enable");
       reader.ready = true;
     } catch (error) {
+      var primary = knownFailure(error) ? safeFailure(error).code : "AUTH_READER_SETUP_FAILED";
       reader.alive = false;
       unwatch(reader);
+      try { await cdp.detach(); } catch (cleanupError) {
+        throw fail(primary + "; retained cleanup uncertainty: AUTH_READER_CLEANUP_FAILED");
+      }
       readers.delete(page);
-      try { await cdp.detach(); } catch (cleanupError) { throw fail("AUTH_READER_CLEANUP_FAILED"); }
-      throw knownFailure(error) ? error : fail("AUTH_READER_SETUP_FAILED");
+      throw fail(primary);
     }
     return reader;
   }
@@ -371,6 +385,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
       typeof tree.frame.loaderId === "string" && tree.frame.loaderId &&
       (tree.childFrames === undefined || (Array.isArray(tree.childFrames) && tree.childFrames.length === 0)), "AUTH_FRAME_COVERAGE_REFUSED");
     var dom = await send(reader, "DOM.getDocument", { depth: -1, pierce: true });
+    dataOnly(dom);
     var scope = inspect(dom.root);
     return { scope: scope, frameId: tree.frame.id, loaderId: tree.frame.loaderId };
   }
@@ -385,6 +400,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     try { current = prepare(packet, scope.scope, scope.frameId); } finally { packet = null; }
     same(scope, scope, reader, epoch);
     requireTrue(JSON.stringify(current.protection) === JSON.stringify(prepared.protection), "AUTH_PROTECTION_INVALIDATED");
+    requireTrue(current.redaction === prepared.redaction, "AUTH_REDACTION_INVALIDATED");
   }
   async function snapshot(reader, save, applied) {
     var provisional = [];
@@ -404,7 +420,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
         checkRuntime();
         var handle = await reader.page.mainFrame().waitForSelector("css=" + target.path, { state: "attached", strict: true, timeout: timeoutMs });
         requireTrue(handle, "AUTH_TARGET_REFUSED");
-        provisional.push({ ref: target.ref, handle: handle, reader: reader, epoch: epoch, stamp: before });
+        var record = { ref: target.ref, handle: handle, reader: reader, epoch: epoch, stamp: before };
+        provisional.push(record);
+        cleanupRecords.add(record);
         checkRuntime();
       }
       var qualified = await qualify(reader);
@@ -459,10 +477,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
       var cleanup = [];
       if (stageCloseFailed) cleanup.push("AUTH_STAGE_CLOSE_FAILED");
       if (!committed) {
-        var disposal = await Promise.allSettled(provisional.map(function (record) {
-          return Promise.resolve().then(function () { return record.handle.dispose(); });
-        }));
-        if (disposal.some(function (result) { return result.status === "rejected"; })) cleanup.push("AUTH_HANDLE_CLEANUP_FAILED");
+        try { await disposeRecords(provisional); } catch (error) { cleanup.push("AUTH_HANDLE_CLEANUP_FAILED"); }
       }
       if (staged) {
         try {
@@ -481,16 +496,20 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     checkArgs(args);
     requireTrue(!closed, "AUTH_CONTEXT_REFUSED");
     var pages = context.pages();
-    var page = pages[selected];
+    var page = selected;
     var command = args[0];
-    if (command === "tab-select") { requireTrue(Number(args[1]) < pages.length, "AUTH_TARGET_REFUSED"); selected = Number(args[1]); page = pages[selected]; }
+    if (command === "tab-select") { requireTrue(Number(args[1]) < pages.length, "AUTH_TARGET_REFUSED"); selected = pages[Number(args[1])]; page = selected; }
     if (command === "tab-new") {
-      try { checkRuntime(); page = await context.newPage(); checkRuntime(); selected = context.pages().indexOf(page); }
+      try { checkRuntime(); page = await context.newPage(); checkRuntime(); selected = page; }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
-    if (command === "tab-list") return { tabs: context.pages().map(function (_, index) { return { index: index, selected: index === selected }; }) };
+    if (command === "tab-list") return { tabs: context.pages().map(function (tab, index) { return { index: index, selected: tab === selected }; }) };
     if (command === "tab-close") {
-      try { requireTrue(page, "AUTH_TARGET_REFUSED"); checkRuntime(); await page.close(); checkRuntime(); selected = 0; await dropRefs(); checkRuntime(); return { closed: true }; }
+      try {
+        requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TARGET_REFUSED");
+        checkRuntime(); await page.close(); checkRuntime(); selected = context.pages()[0];
+        await dropRefs(); checkRuntime(); return { closed: true };
+      }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
     var reader;
@@ -561,11 +580,15 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
           stageHandles.delete(file);
         }));
         if (fileClosures.some(function (result) { return result.status === "rejected"; })) throw fail("AUTH_STAGE_CLOSE_FAILED");
-        await dropRefs();
+        refs.clear();
+        await disposeRecords(Array.from(cleanupRecords));
         // Closing the owned persistent context closes its CDP targets; stale detach calls can fail after that.
         readers.forEach(unwatch);
         readers.clear();
-      } catch (error) { throw fail("AUTH_CLOSE_FAILED"); }
+      } catch (error) {
+        var primary = knownFailure(error) ? safeFailure(error).code : "AUTH_CLOSE_FAILED";
+        throw fail(primary + "; retained cleanup uncertainty: AUTH_CLOSE_FAILED");
+      }
     }
   };
 }
