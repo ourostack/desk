@@ -304,9 +304,9 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     await until("the task_update commit on origin", () => git(["--git-dir", origin, "rev-parse", "main"]) === head);
   });
 
-  it("rebases onto a commit pushed elsewhere first, and both land on origin", async () => {
+  it("replays onto a commit pushed elsewhere first, and both land on origin", async () => {
     const elsewhere = pushFromElsewhere({ scratch, origin, file: "elsewhere.md" });
-    // The gateway's clone has not seen it, so Desk's push is rejected and has to pull and rebase.
+    // The gateway's clone has not seen it, so Desk has to replay its commit onto it before pushing.
     assert.equal(gitSucceeds(["-C", cloneDir, "cat-file", "-e", `${elsewhere}^{commit}`]), false);
     const seen = reflog(cloneDir).length;
 
@@ -319,11 +319,12 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     });
     assert.deepEqual(originSubjects(origin).slice(0, 2), [`task_update: ${TRACK}/${SLUG}`, "elsewhere: elsewhere.md"]);
     // The clone's reflog since the call: Desk committed on the old tip first,
-    // and only then (its push rejected) pulled with rebase. A pull before the
-    // commit would put the rebase first.
+    // and only then moved the clone to what it delivered. A pull before the
+    // commit would put the move first.
     const since = reflog(cloneDir).slice(seen);
     assert.match(since[0] ?? "", new RegExp(`^commit: task_update: ${TRACK}/${SLUG}`), since.join("\n"));
-    assert.ok(since.slice(1).some((entry) => /rebase/.test(entry)), `no rebase after the commit:\n${since.join("\n")}`);
+    await until("the clone to follow what Desk delivered", () => reflog(cloneDir).slice(seen + 1).some((entry) => entry === "desk: catch up with delivered commits"));
+    assert.equal(git(["-C", cloneDir, "rev-parse", "HEAD"]), git(["--git-dir", origin, "rev-parse", "main"]));
   });
 
   it("still pushes a task_update when the session closes right after it", async () => {

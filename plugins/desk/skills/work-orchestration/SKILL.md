@@ -78,11 +78,14 @@ This is the default for all work, not only multi-step plans. `superpowers:dispat
 
 - **Run independent streams at the same time.** Never hold a stream for one it doesn't depend on.
 - **Fast-follow downstream.** When an upstream artifact changes, update what depends on it right away, not in a final sweep.
+- **Keep the root for coordination.** When a subagent tool is available and the human has not chosen inline execution, the root agent coordinates and talks with the human; it hands doable work (builds, research, site updates, status reconciliation) to children rather than doing it inline, so the conversation never waits on the work.
 - **Ship usable milestones early and often.** Push each one where the people waiting look, so they always find the latest instead of waiting for one big drop.
 
 ## Choosing and briefing agents
 
 Choose each subagent's model deliberately, by the work's need for capability. Pick from whatever model family the host offers rather than inheriting the default, and reserve the most capable, most expensive tier for work that needs it, usually the root agent's own synthesis and judgment. Use the smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review. A launch mode that copies the parent's context and model (for example, a fork) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default.
+
+When the operator has recorded a model preference for a kind of work (for example, one model for design), run that work on it, delegating to a child on that model when yours differs; the root may still plan and orchestrate. The preference outranks the tiering above for that work.
 
 A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief. A handoff never tells that agent how to do its work. Put yourself in its shoes: it owns its task and its method, and you do not know its state. Do not presume what it has done, where it stopped or what blocks it. Say what you would want to hear in its position: what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you. No step lists, no commands. Keep the message short and point to the task card.
 
@@ -91,6 +94,8 @@ A child brief bounds the work and leaves the method to the child; a handoff to a
 A worker must not end its turn while any child it launched is still running. An interim child notification, such as "still waiting on CI", is not a terminal result: keep the turn alive by blocking on a foreground wait or monitor until each child returns a terminal result, because a child's final report goes to whoever is still waiting, and a worker that has ended its turn is not that agent. If the turn genuinely must end (a human gate or a hard limit), first record on the task card which children are still running, what each owns (for example its PR URL), and the exact next action on each result, so whoever resumes acts on them.
 
 While the operator is present, wait in short slices and answer them first (`interaction-style`, "The operator comes before a wait").
+
+Supervise every lane. At each milestone, check every running child's live status; when a child has failed, vanished or really stalled, stop it and, once its writer is verified released (`session-resumption`), restart it or hand its work to a new one (the root takes it on only when no child can); a child whose release can't be shown is not replaced on that write set. Do this at once, and report each lane's health with the milestone.
 
 Before ending any turn, list the children still running. If any exist, wait for them or do the recorded handoff above; never end the turn on a child's interim notification.
 
