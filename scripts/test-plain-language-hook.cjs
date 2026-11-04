@@ -39,6 +39,10 @@ for (const event of ["SessionStart", "SubagentStart"]) {
 {
   const skill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-language", "skills", "plain-language", "SKILL.md"), "utf8");
   const contract = `[PLAIN_LANGUAGE_CONTRACT]\n${skill.replace(/^---[\s\S]*?---\s*/u, "")}`;
+  for (const event of ["SessionStart", "SubagentStart", "sessionStart", "subagentStart"]) {
+    const output = JSON.parse(run(hook, event).stdout);
+    assert.match(output.hookSpecificOutput?.additionalContext ?? output.additionalContext, /## Attribute work to the person/u);
+  }
   for (const event of ["SessionStart", "SubagentStart"]) {
     const result = run(hook, event);
     assert.equal(result.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: contract } }));

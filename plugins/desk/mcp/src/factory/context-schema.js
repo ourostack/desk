@@ -78,7 +78,7 @@ const TOP = {
   sources: arrayField(objectField(SOURCE_SPEC), 512),
   coverage: objectField({
     state: enumField(["measured", "partial", "unavailable"]),
-    reasons: arrayField(enumField(["not_recorded", "withheld", "omitted", "unplaced", "review_pending"]), 5),
+    reasons: arrayField(enumField(["not_recorded", "withheld", "omitted", "unplaced", "review_pending", "selected_sessions"]), 6),
     omitted_events: rangeIntField(0, 1000000),
   }),
   privacy: nullableObjectField({
@@ -120,6 +120,8 @@ export function validateContext(value, { candidate = false } = {}) {
       (omitted > 0 && (state !== "partial" || !reasons.includes("omitted"))) ||
       (omitted === 0 && reasons.includes("omitted"))) addError(errors, "inconsistent", "coverage")
   if (new Set(reasons).size !== reasons.length) addError(errors, "duplicate", "coverage.reasons")
+  if (reasons.includes("selected_sessions") && (value.schema !== RECOMMENDATION_SCHEMA || state !== "partial" || !reasons.includes("not_recorded")))
+    addError(errors, "inconsistent", "coverage")
   if (reasons.includes("review_pending") && value.state !== "unavailable") addError(errors, "inconsistent", "coverage")
   if (omitted > 0 && value.events.at(-1)?.kind !== "result") addError(errors, "inconsistent", "events")
   if (value.state === "published") {
@@ -194,7 +196,8 @@ export function checkContextAgainstFacts(value, facts, options) {
   if (!Array.isArray(facts)) return answer([{ code: "type", path: "sources" }])
   const errors = []
   const bySession = new Map()
-  if (value.state === "published" && facts.some((item) => item?.jobs?.some((entry) => entry.job === value.job) &&
+  const selected = value.schema === RECOMMENDATION_SCHEMA && value.coverage.reasons.includes("selected_sessions")
+  if (value.state === "published" && !selected && facts.some((item) => item?.jobs?.some((entry) => entry.job === value.job) &&
       !value.sources.some((source) => source.session === item.session?.id))) addError(errors, "source_set_changed", "sources")
   for (const [index, source] of value.sources.entries()) {
     const matches = facts.filter((item) => item?.session?.id === source.session)

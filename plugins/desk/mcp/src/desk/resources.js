@@ -19,7 +19,8 @@ import { scan } from "../tools/task-body.js"
 import { TERMINAL_STATES } from "./lifecycle.js"
 import { readSteps, SETTLED, SEPARATOR, splitCells } from "./steps.js"
 
-const RESOURCE_FIELDS = ["identity", "step", "intended", "disposition", "details"]
+const RESOURCE_FIELDS = ["identity", "step", "intended", "disposition", "details", "migrate"]
+const MIGRATION_FIELDS = ["identity", "owner", "writers", "intended", "evidence", "terminal"]
 const DISPOSITIONS = ["removed-and-absent", "named transfer", "retained-with-trigger"]
 const HEADING = "## Resources"
 // The contract's columns, in its order.
@@ -85,6 +86,7 @@ const rowLine = (set, cells, col, width) => {
   for (const [index, value] of set) out[col[index]] = value
   return `| ${out.map((cell) => cell.replaceAll("|", "\\|")).join(" | ")} |`
 }
+const rawCells = (line) => line.trim().replace(/^\|/u, "").replace(/(?<!\\)\|$/u, "").split(/(?<!\\)\|/u)
 
 // The index just past the section that starts at the first heading `match` accepts, or -1 when the card has none.
 function afterSection({ lines, fenced }, match) {
@@ -106,6 +108,74 @@ function withNewSection(read, rowText) {
   return [...before, ...(before.length > 0 ? [""] : []), ...table, ...(after.length > 0 ? ["", ...after] : [""])]
 }
 
+// Migration uses explicit source columns, keeps their raw cells, and leaves unassigned columns after the standard six.
+function migrateResources(body, mapping, refuse) {
+  if (mapping === null || typeof mapping !== "object" || Array.isArray(mapping)) refuse("resource.migrate must be an object mapping all six fields to existing column names or null")
+  const unknown = Object.keys(mapping).filter((key) => !MIGRATION_FIELDS.includes(key))
+  if (unknown.length > 0) refuse(`resource.migrate has unknown fields: ${unknown.join(", ")}`)
+  if (MIGRATION_FIELDS.some((key) => !Object.hasOwn(mapping, key))) refuse(`resource.migrate needs all six fields: ${MIGRATION_FIELDS.join(", ")}`)
+  for (const key of MIGRATION_FIELDS) {
+    if (mapping[key] !== null && (typeof mapping[key] !== "string" || mapping[key].trim() === "" || /[\r\n\0]/u.test(mapping[key]))) refuse(`resource.migrate.${key} must name an existing column or be null for an absent column`)
+  }
+  if (mapping.identity === null) refuse("resource.migrate.identity must name an existing column")
+  const { lines, eol, fenced } = scan(body)
+  const headings = lines.flatMap((line, index) => !fenced[index] && line.trim() === HEADING ? [index] : [])
+  if (headings.length === 0) refuse("resource.migrate found no `## Resources` section")
+  if (headings.length > 1) refuse("resource.migrate found more than one `## Resources` section")
+  const heading = headings[0]
+  let end = heading + 1
+  while (end < lines.length && (fenced[end] || !/^## /u.test(lines[end]))) end += 1
+  const head = lines.findIndex((line, index) => index > heading && index < end && !fenced[index] && line.trim().startsWith("|"))
+  if (head === -1) refuse("resource.migrate found no table under `## Resources`")
+  const names = splitCells(lines[head])
+  const lower = names.map((name) => name.toLowerCase())
+  for (const [index, name] of names.entries()) {
+    if (name === "" || lower.indexOf(lower[index]) !== index) refuse(`resource.migrate found an empty or duplicate column ${JSON.stringify(name)}`)
+  }
+  const separator = splitCells(lines[head + 1] ?? "")
+  if (separator.length !== names.length || separator.some((cell) => !/^:?-+:?$/u.test(cell))) refuse("resource.migrate needs a separator cell for every header column")
+  let stop = head + 2
+  for (; stop < end && !fenced[stop] && lines[stop].trim().startsWith("|"); stop += 1) {
+    const cells = splitCells(lines[stop])
+    if (cells.length !== names.length) refuse(`resource.migrate row at body line ${stop + 1} has a different number of cells than the header`)
+    if (cells.every((cell) => /^:?-+:?$/u.test(cell))) refuse("resource.migrate found more than one table under `## Resources`")
+  }
+  if (lines.some((line, index) => index >= stop && index < end && !fenced[index] && line.trim().startsWith("|"))) refuse("resource.migrate found more than one table under `## Resources`")
+  const canonical = COLUMNS.map((name) => lower.indexOf(name.toLowerCase()))
+  const complete = canonical.every((index) => index !== -1)
+  const sources = complete ? canonical : MIGRATION_FIELDS.map((key, index) => {
+    const source = mapping[key]
+    if (canonical[index] !== -1) {
+      if (source === null || source.trim().toLowerCase() !== COLUMNS[index].toLowerCase()) refuse(`resource.migrate.${key} must keep the existing ${JSON.stringify(COLUMNS[index])} column`)
+      return canonical[index]
+    }
+    if (source === null) return -1
+    const at = lower.indexOf(source.trim().toLowerCase())
+    if (at === -1) refuse(`resource.migrate: ${JSON.stringify(source)} is not a column of this table`)
+    return at
+  })
+  const used = sources.filter((index) => index !== -1)
+  if (new Set(used).size !== used.length) refuse("resource.migrate maps one column to more than one field")
+  const identities = new Set()
+  for (let at = head + 2; at < stop; at += 1) {
+    const value = splitCells(lines[at])[sources[IDENTITY]]
+    if (EMPTY.test(value)) refuse(`resource.migrate row at body line ${at + 1} has no resource identity`)
+    const identity = canonicalIdentity(value)
+    if (identity !== null && identities.has(identity)) refuse(`resource.migrate identity ${JSON.stringify(identity)} appears more than once`)
+    if (identity !== null) identities.add(identity)
+  }
+  if (complete) return body
+  const extra = names.flatMap((_, index) => used.includes(index) ? [] : [index])
+  const rawNames = rawCells(lines[head])
+  lines[head] = `|${[...COLUMNS.map((name) => ` ${name} `), ...extra.map((index) => rawNames[index])].join("|")}|`
+  for (let at = head + 1; at < stop; at += 1) {
+    const cells = rawCells(lines[at])
+    const empty = at === head + 1 ? "---" : "  "
+    lines[at] = `|${[...sources.map((index) => index === -1 ? empty : cells[index]), ...extra.map((index) => cells[index])].join("|")}|`
+  }
+  return lines.join(eol)
+}
+
 /**
  * The body with one resource row added or updated, and what it now says: `{ body, row }`. `taskRef` (`<track>/<slug>`) names
  * the owner of a new row that has no `step`. Refuses, changing nothing, for an identity that is not typed, a step that is not on
@@ -123,8 +193,9 @@ export function applyResource(body, input, tool, taskRef) {
   if ((disposition === undefined) !== (details === undefined)) refuse("resource `disposition` and `details` go together: the details are the absence readback, the named transferee and their acknowledgement, or the reason, owner and cleanup trigger")
   if (disposition !== undefined && details === "") refuse("resource `details` cannot be empty")
   if (step !== undefined && !(readSteps(body).rows ?? []).some((row) => row.id === step)) refuse(`resource \`step\` ${JSON.stringify(step)} is not a step of this card's \`## Steps\` table`)
+  if (input.migrate !== undefined) body = migrateResources(body, input.migrate, refuse)
   const read = readResources(body)
-  if (read.found && read.rows === undefined) refuse(`the \`## Resources\` table on this card is left as prose because ${read.reason}, so ${identity} cannot be written there. Fix the table by hand or leave this resource out`)
+  if (read.found && read.rows === undefined) refuse(`the \`## Resources\` table on this card is left as prose because ${read.reason}, so ${identity} cannot be written there. For a legacy table, repeat this resource write with \`resource.migrate: {identity, owner, writers, intended, evidence, terminal}\`: name each existing source column, or use null only for an absent column (identity must name a column). Desk preserves other columns and prose and refuses ambiguous or malformed tables`)
   const existing = (read.rows ?? []).find((row) => canonicalIdentity(row.identity) === identity)
   const set = [[IDENTITY, identity]]
   if (step !== undefined) set.push([OWNER, `step ${step}`])
@@ -139,7 +210,15 @@ export function applyResource(body, input, tool, taskRef) {
   else {
     const { col, width, end } = read.table
     if (existing === undefined) lines.splice(end, 0, rowLine(set, [], col, width))
-    else lines[existing.line] = rowLine(set, splitCells(lines[existing.line]), col, width)
+    else if (input.migrate === undefined) lines[existing.line] = rowLine(set, splitCells(lines[existing.line]), col, width)
+    else {
+      const line = lines[existing.line]
+      const cells = splitCells(line)
+      const raw = rawCells(line)
+      const changes = set.filter(([index, value]) => cells[col[index]] !== value)
+      for (const [index, value] of changes) raw[col[index]] = ` ${value.replaceAll("|", "\\|")} `
+      if (changes.length > 0) lines[existing.line] = `|${raw.join("|")}|`
+    }
     out = lines
   }
   const now = readResources(out.join(read.eol)).rows.find((row) => canonicalIdentity(row.identity) === identity)

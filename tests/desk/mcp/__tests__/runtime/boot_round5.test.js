@@ -57,42 +57,39 @@ async function boot(root, { sync = { state: "synced" }, gh, taskQuery = null } =
 
 // ── sync ────────────────────────────────────────────────────────────────
 
-for (const [cause, sync, expected, degraded] of [
+for (const [cause, sync, degraded] of [
   ["unreachable", { state: "unresolved", reason: "pull_rebase_failed", cause: "unreachable", remote: "https://github.com/o/desk.git", error: "fatal: unable to access 'https://github.com/o/desk.git/': Could not resolve host: github.com", conflicted: [] },
-    [/could not sync: origin https:\/\/github\.com\/o\/desk\.git is unreachable \(fatal: unable to access/u, /Work continues on local state; say so in one line/u, /retry sync/u, /`git status` will read clean/u], "pull_rebase_failed, unreachable"],
+    "pull_rebase_failed, unreachable"],
   ["auth_failed", { state: "unresolved", reason: "pull_rebase_failed", cause: "auth_failed", remote: "https://github.com/o/desk.git", error: "fatal: Authentication failed", conflicted: [] },
-    [/origin https:\/\/github\.com\/o\/desk\.git refused this host's credentials \(fatal: Authentication failed\)/u, /gh auth status/u, /retry sync before pushing/u], "pull_rebase_failed, auth_failed"],
+    "pull_rebase_failed, auth_failed"],
   ["auth_failed without a remote or error", { state: "unresolved", reason: "pull_rebase_failed", cause: "auth_failed", remote: null, error: "", conflicted: [] },
-    [/could not sync: origin refused this host's credentials\. Work continues/u], "pull_rebase_failed, auth_failed"],
+    "pull_rebase_failed, auth_failed"],
   ["deadline", { state: "unresolved", reason: "sync_deadline_exceeded", cause: "deadline", remote: null, error: "", conflicted: [] },
-    [/sync ran out of time/u, /retry sync/u], "sync_deadline_exceeded, deadline"],
+    "sync_deadline_exceeded, deadline"],
   ["a per-call timeout", { state: "unresolved", reason: "pull_rebase_failed", cause: "deadline", remote: "https://github.com/o/desk.git", error: "", conflicted: [] },
-    [/A git call timed out while syncing the desk with origin https:\/\/github\.com\/o\/desk\.git/u, /retry sync/u], "pull_rebase_failed, deadline"],
+    "pull_rebase_failed, deadline"],
   ["a per-call timeout without a remote", { state: "unresolved", reason: "pull_rebase_failed", cause: "deadline", remote: null, error: "", conflicted: [] },
-    [/A git call timed out while syncing the desk: the remote is slow/u], "pull_rebase_failed, deadline"],
+    "pull_rebase_failed, deadline"],
   ["diverged", { state: "unresolved", reason: "pull_rebase_failed", cause: "diverged", remote: "git@github.com:o/desk.git", error: "fatal: Need to specify how to reconcile divergent branches.", conflicted: [] },
-    [/has diverged from origin git@github\.com:o\/desk\.git/u, /log --oneline --left-right @\{u\}\.\.\.HEAD/u, /do not push until they agree/u], "pull_rebase_failed, diverged"],
+    "pull_rebase_failed, diverged"],
   ["conflict", { state: "unresolved", reason: "pull_rebase_failed", cause: "conflict", remote: "x", error: "CONFLICT", conflicted: ["seed.md", "a/b.md"] },
-    [/git sync is unresolved \(conflicted: seed\.md, a\/b\.md\): run `git status`/u], "pull_rebase_failed, conflict"],
+    "pull_rebase_failed, conflict"],
   ["an unknown failure", { state: "unresolved", reason: "pull_rebase_failed", cause: "other", remote: null, error: "strange", conflicted: [] },
-    [/git sync is unresolved: run `git status`/u], "pull_rebase_failed, other"],
+    "pull_rebase_failed, other"],
 ]) {
-  test(`bootOnce: a sync that failed as ${cause} gets its own accurate instruction and action`, async () => {
+  test(`bootOnce: a sync that failed as ${cause} preserves its diagnosis and requires safe verification`, async () => {
     const result = await boot(await mkDesk(), { sync })
     assert.equal(result.status, "degraded")
     assert.ok(result.degraded.includes(`sync: unresolved (${degraded})`), result.degraded.join("|"))
-    const line = result.instructions.find((entry) => /^(The desk|A git call)/u.test(entry))
-    for (const pattern of expected) {
-      assert.match(line, pattern)
-      assert.match(result.instructions.join("\n"), pattern)
-    }
-    if (!/conflict|unknown|diverged/u.test(cause)) assert.doesNotMatch(line, /git sync is unresolved/u)
+    assert.deepEqual(result.sync, sync)
+    assert.ok(result.instructions.some((entry) => entry.startsWith("Verify desk sync with direct Git")))
+    assert.doesNotMatch(result.instructions.join("\n"), /pull --rebase --autostash|reconcile with a rebase/u)
   })
 }
 
-test("bootOnce: a sync result without a cause (an older syncFn) keeps the git status instruction", async () => {
+test("bootOnce: a sync result without a cause (an older syncFn) still requires direct verification", async () => {
   const result = await boot(await mkDesk(), { sync: { state: "unresolved" } })
-  assert.ok(result.instructions.some((line) => /git sync is unresolved: run `git status`/u.test(line)))
+  assert.ok(result.instructions.some((line) => line.startsWith("Verify desk sync with direct Git")))
   assert.ok(result.degraded.includes("sync: unresolved"))
 })
 

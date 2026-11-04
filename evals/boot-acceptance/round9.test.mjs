@@ -259,13 +259,18 @@ test("syncWorkedClaims: a reply that says the sync worked or partly worked, not 
   }
 })
 
-test("slow-or-failing-status fails a reply that says the sync worked or partly worked, and passes one that says it failed", () => {
+test("slow-or-failing-status requires direct Git recovery evidence, not just a local-state warning", () => {
   const scenario = findScenario("slow-or-failing-status")
-  const run = (reply) => scenario.check(buildContext(parseStreamJson(stream(BOOT, text(reply), done(reply)))))
+  const run = (reply, events = []) => scenario.check(buildContext(parseStreamJson(stream(BOOT, ...events, text(reply), done(reply)))))
   const partial = run("The desk synced partially. The remote origin is unreachable, so work continues on local state. You have watering-schedule-api in progress.")
   assert.equal(partial.outcome, "fail")
-  assert.ok(failures(partial).some((failure) => /said the sync worked or partly worked/.test(failure) && /nothing was pulled or pushed/.test(failure)))
-  const plain = run("Sync failed: remote unreachable; nothing was pulled or pushed; the local desk is as of unknown. You have watering-schedule-api in progress.")
+  assert.ok(failures(partial).some((failure) => /said the sync worked or partly worked/.test(failure) && /remote remains unavailable/.test(failure)))
+  const warning = "The remote is unreachable. You have watering-schedule-api in progress."
+  assert.ok(failures(run(warning)).some((failure) => /direct Git/.test(failure)))
+  const plain = run(warning, [
+    use("f", "Bash", { command: 'git -C "$DESK" fetch --no-tags origin' }),
+    answer("f", "fatal: origin does not exist", { is_error: true }),
+  ])
   assert.equal(plain.outcome, "pass")
 })
 

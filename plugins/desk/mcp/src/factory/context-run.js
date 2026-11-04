@@ -1,14 +1,14 @@
-import { randomBytes } from "node:crypto"
-import { promises as fs, readFileSync } from "node:fs"
+import { createHash, randomBytes } from "node:crypto"
+import { constants, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { deskPluginRoot, deskVersion } from "../package-metadata.js"
 import {
-  acceptContextCandidate, acceptContextPrivacy, listContextWork,
+  acceptContextCandidate, acceptContextPrivacy, contextEvidenceCurrent, listContextWork,
 } from "./context-outbox.js"
 import { RECOMMENDATION_SCHEMA, contextShare, contextSource } from "./context-schema.js"
 import {
   factoryStateRoot, readConsent, readStatus, readTaskContextFile,
-  taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
+  taskContextPath, updateStatus, updateTaskContextState,
 } from "./outbox.js"
 import {
   HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY, billingVariableBlocks, findAgentCli, probeSignIn, qualifyHeadlessSource, runHeadless,
@@ -33,14 +33,15 @@ function due(work, now) {
     (last === undefined || (typeof last === "string" && isoDay(Date.parse(last)) < isoDay(now)))
 }
 
-async function runnableContextWork(env, status, now) {
+async function runnableContextWork(env, status, now, requested = false) {
   const stores = Object.entries((await readConsent(env)).stores).filter(([, value]) => value.contribute === true).map(([store]) => store).sort()
   const jobs = []
   for (const store of stores) {
     const readiness = status.context_publication?.[store]
     const checked = Date.parse(readiness?.checked_at)
     if (readiness?.ready !== true || !Number.isFinite(checked) || checked - now > 300000 || now - checked > 3 * DAY) continue
-    for (const work of await listContextWork(env, { store })) if (due(work, now)) jobs.push({ ...work, store })
+    for (const work of await listContextWork(env, { store })) if (due(work, now) &&
+      (requested || work.source.private_evidence.every(entry => entry.conversation === undefined))) jobs.push({ ...work, store })
   }
   return jobs
 }
@@ -72,8 +73,8 @@ function template(work) {
   }
 }
 
-function evidenceOutline(work) {
-  return work.source.sources.map((facts) => {
+async function evidenceOutline(env, work) {
+  return Promise.all(work.source.sources.map(async (facts) => {
     const share = contextShare(facts, work.job)
     const eligible = facts.intervals.filter((interval) => share.some((span) => interval.start_ms >= span.start_ms && interval.end_ms <= span.end_ms))
       .sort((left, right) => left.start_ms - right.start_ms || left.end_ms - right.end_ms)
@@ -82,16 +83,49 @@ function evidenceOutline(work) {
     const intervals = eligible.filter((interval) => selected.has(interval))
     const shares = share.length <= 8 ? share : [...share.slice(0, 4), ...share.slice(-4)]
     const evidence = work.source.private_evidence.find((entry) => entry.session === facts.session.id)
+    const indexed = evidence.conversation !== undefined
     return {
       session: facts.session.id, source: contextSource(facts, work.job).sha256,
       session_offset_ms: facts.jobs.find((entry) => entry.job === work.job).session_offset_ms,
       duration_ms: facts.session.duration_ms, ended: facts.session.ended,
       clock_origin: evidence.clock_origin, log_path: evidence.log_path,
+      ...(indexed ? { evidence_kind: "native_copilot_turn_index", conversation_status: evidence.conversation.status,
+        conversation_file: evidence.conversation.file === null ? null : await taskContextPath(env, work.store, work.job, evidence.conversation.file),
+        indexed_turns: evidence.conversation.turns_count, excluded_turns: evidence.conversation.excluded_rows } : {}),
       shares: shares.map((span) => [span.start_ms, span.end_ms]), omitted_shares: share.length - shares.length,
-      intervals: intervals.map((interval) => ({ kind: interval.kind, range: [interval.start_ms, interval.end_ms] })),
-      omitted_intervals: eligible.length - intervals.length,
+      intervals: indexed ? [] : intervals.map((interval) => ({ kind: interval.kind, range: [interval.start_ms, interval.end_ms] })),
+      omitted_intervals: eligible.length - (indexed ? 0 : intervals.length),
     }
-  })
+  }))
+}
+
+async function readRunFile(file, maxBytes = 16 * 1024 * 1024) {
+  let stat
+  try { stat = await fs.lstat(file) } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maxBytes)
+    throw new Error("context_run_file_unsafe")
+  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error("context_run_file_changed")
+    return await handle.readFile()
+  } finally { await handle.close() }
+}
+
+async function stageFile(files, file, bytes) {
+  await fs.writeFile(file, bytes, { flag: "wx", mode: 0o600 })
+  files.set(file, createHash("sha256").update(bytes).digest("hex"))
+}
+
+async function unchangedRunFiles(files) {
+  for (const [file, expected] of files) {
+    const bytes = await readRunFile(file)
+    if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== expected) return false
+  }
+  return true
 }
 
 /** One existing-ledger launch, one phase, at most eight jobs. Labels retain priority in the caller. */
@@ -180,7 +214,7 @@ async function runContextStep(env, options, requestPolicy) {
   const deadline = new Date(options.deadline).getTime()
   if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: valid now and deadline required")
   const status = await readStatus(env)
-  const waiting = (await runnableContextWork(env, status, now)).filter(work => requestPolicy === null ||
+  const waiting = (await runnableContextWork(env, status, now, requestPolicy !== null)).filter(work => requestPolicy === null ||
     work.store.toLowerCase() === requestPolicy.store.toLowerCase() && work.job === requestPolicy.job)
   if (waiting.length === 0) return idle("no_context_waiting")
   const version = deskVersion(env)
@@ -209,16 +243,16 @@ async function runContextStep(env, options, requestPolicy) {
     throw error
   }
   const root = await factoryStateRoot(env)
-  const workDir = path.join(root, "scratch", "context")
-  await fs.mkdir(workDir, { recursive: true, mode: 0o700 })
-  const selectedDirs = new Set(selected.map((work) => path.dirname(work.input)))
+  const scratch = path.join(root, "scratch", "context")
+  await fs.mkdir(scratch, { recursive: true, mode: 0o700 })
+  const workDir = await fs.mkdtemp(path.join(scratch, "run-"))
+  const selectedDirs = new Set([workDir])
   for (const work of selected) {
     for (const entry of work.source.private_evidence) if (entry.log_path !== null) selectedDirs.add(path.dirname(entry.log_path))
-    if (work.source.task_card !== null) selectedDirs.add(path.dirname(work.source.task_card.path))
   }
   const sourceOptions = {
     env, cli, pluginRoot, pluginVersion: version, workDir,
-    evaluationDir: path.dirname(selected[0].input), logDirs: [...selectedDirs],
+    evaluationDir: workDir, logDirs: [...selectedDirs],
     onChild: impl.onChild, onChildExit: impl.onChildExit,
   }
   const qualify = async (options) => {
@@ -237,7 +271,8 @@ async function runContextStep(env, options, requestPolicy) {
     : await requestPolicy.reserve(phase)
   if (reservation.state !== "reserved") return idle("budget_exhausted")
   const briefs = []
-  const logDirs = new Set()
+  const logDirs = new Set(selectedDirs)
+  const runFiles = new Map()
   let run
   let requested = false
   let sourceQualified = true
@@ -253,25 +288,51 @@ async function runContextStep(env, options, requestPolicy) {
       })
       if (claimed.run !== token) continue
       const outputName = `${token}.${phase}.json`
+      const input = structuredClone(work.source)
+      const outline = await evidenceOutline(env, work)
+      for (const evidence of input.private_evidence) {
+        if (!evidence.conversation?.file) continue
+        const bytes = await readTaskContextFile(env, work.store, work.job, evidence.conversation.file)
+        if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== evidence.conversation.projection_sha256)
+          throw new Error("context_projection_changed")
+        const name = `${work.job}-${evidence.conversation.file}`
+        const staged = path.join(workDir, name)
+        await stageFile(runFiles, staged, bytes)
+        evidence.conversation.file = name
+        outline.find(entry => entry.session === evidence.session).conversation_file = staged
+      }
+      let card = work.source.task_card
+      if (card !== null) {
+        const bytes = await readRunFile(card.path, 1024 * 1024)
+        if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== card.sha256) throw new Error("context_card_changed")
+        const file = path.join(workDir, `${work.job}.task.md`)
+        await stageFile(runFiles, file, bytes)
+        card = { ...card, path: file }
+        input.task_card = card
+      }
+      const inputFile = path.join(workDir, `${work.job}.input.json`)
+      await stageFile(runFiles, inputFile, `${JSON.stringify(input, null, 2)}\n`)
       const brief = {
         schema: "desk.factory.context-brief/1", phase, job: work.job, evaluator: work.source.evaluator,
-        input_file: work.input, task_card: work.source.task_card,
+        input_file: inputFile, task_card: card,
         task_card_status: work.source.task_card_status ?? (work.source.task_card === null ? "not_associated" : "associated"),
-        output: await taskContextPath(env, work.store, work.job, outputName),
-        instructions, template: template(work), evidence_outline: evidenceOutline(work),
+        source_selection: work.source.source_selection ?? "all",
+        output: path.join(workDir, outputName),
+        instructions, template: template(work), evidence_outline: outline,
         ...(phase === "privacy" ? { candidate: work.state.candidate, payload_sha256: work.state.candidate_hash } : {}),
       }
-      const file = await writeTaskContextFile(env, work.store, work.job, `${token}.brief.json`, brief)
-      for (const entry of work.source.private_evidence) if (entry.log_path !== null) logDirs.add(path.dirname(entry.log_path))
-      if (work.source.task_card !== null) logDirs.add(path.dirname(work.source.task_card.path))
-      logDirs.add(path.dirname(file))
-      briefs.push({ ...work, file, outputName })
+      const file = path.join(workDir, `${token}.brief.json`)
+      await stageFile(runFiles, file, `${JSON.stringify(brief, null, 2)}\n`)
+      briefs.push({ ...work, file, output: brief.output })
     }
     run = { state: "not_started", cost_usd: null }
     if (briefs.length > 0) {
       const actualSourceOptions = { ...sourceOptions, evaluationDir: path.dirname(briefs[0].file), logDirs: [...logDirs] }
       sourceQualified = await qualify(actualSourceOptions)
       if (!sourceQualified) run = { state: "context_source_unqualified", cost_usd: null }
+      else if (!(await Promise.all(briefs.map(work => contextEvidenceCurrent(env, {
+        store: work.store, job: work.job, basis: work.basis, phase,
+      })))).every(Boolean)) run = { state: "context_source_changed", cost_usd: null }
       else if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) run = { state: "no_time_for_a_run", cost_usd: null }
       else {
         requested = true
@@ -282,6 +343,7 @@ async function runContextStep(env, options, requestPolicy) {
           onChild: impl.onChild, onChildExit: impl.onChildExit,
         })
         sourceQualified = await qualify(actualSourceOptions)
+        if (run.state === "ran" && !await unchangedRunFiles(runFiles)) run = { ...run, state: "context_source_changed" }
       }
     }
   } finally {
@@ -293,7 +355,7 @@ async function runContextStep(env, options, requestPolicy) {
   let refused = 0
   if (run.state === "ran" && sourceQualified) {
     for (const work of briefs) {
-      const bytes = await readTaskContextFile(env, work.store, work.job, work.outputName)
+      const bytes = await readRunFile(work.output, 128 * 1024)
       const checked = await (phase === "privacy" ? acceptContextPrivacy : acceptContextCandidate)(env, {
         store: work.store, job: work.job, basis: work.basis, bytes,
       })
