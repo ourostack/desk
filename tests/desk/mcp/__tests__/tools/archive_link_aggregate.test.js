@@ -1,6 +1,6 @@
 import { archiveFencedExecFileSync } from "./_archive_source_fence.mjs"
 import "../_isolated_env.mjs"
-import { test, after } from "node:test"
+import { test as portableTest, after } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs, writeFileSync } from "node:fs"
 import * as fsSync from "node:fs"
@@ -15,6 +15,13 @@ import { prepareArchiveAggregate, ARCHIVE_LIMITS, archiveMarkerState } from "../
 import { openArchiveMoveSession } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
 import { withCreatedDirs } from "../../../../../plugins/desk/mcp/src/util/created-dirs.js"
 import { parseMarkdownText, patchMarkdownFrontmatter, writeMarkdown, writeFileAtomic } from "../../../../../plugins/desk/mcp/src/util/fm.js"
+const aggregatePlatform = process.platform === "darwin" || process.platform === "linux"
+// Provider/body tests require POSIX; portable guard and planner controls stay active on every host.
+function test(name, options, body) {
+  if (typeof options === "function") { body = options; options = {} }
+  return portableTest(name, { ...options,
+    skip: aggregatePlatform ? options.skip : "requires the POSIX/non-Git aggregate provider; Windows retains its native route" }, body)
+}
 const roots = []
 const plans = new Set()
 const initialFencedExecFileSync = cp.execFileSync
@@ -109,7 +116,7 @@ async function movedSession(f, dependencies = {}, options) {
   await session.move(() => plan.assertCurrent())
   return { plan, session }
 }
-test("legacy transport preserves its original failure when placement recheck is uncertain without a marker", async () => {
+portableTest("legacy transport preserves its original failure when placement recheck is uncertain without a marker", async () => {
   const f = await fixture(), original = new Error("owned transport refused after original source changed")
   await assert.rejects(f.invoke({ moveArchive: async (source, destination, beforeMove) => {
     await beforeMove()
@@ -121,7 +128,7 @@ test("legacy transport preserves its original failure when placement recheck is 
   assert.equal(await f.read("alpha/job/FOREIGN"), "not the admitted task\n")
   assert.equal(await f.read("alpha/job-retained/task.md"), f.files["alpha/job/task.md"])
 })
-test("legacy capture replacement rejects with the exact returned retirement state instead of pending", async () => {
+portableTest("legacy capture replacement rejects with the exact returned retirement state instead of pending", async () => {
   const f = await fixture(), state = { released: false, closed: true, forced: false,
     movement: "not_released", retirement: "confirmed" }
   let closed = 0, admitted = 0
@@ -141,7 +148,7 @@ test("legacy capture replacement rejects with the exact returned retirement stat
   assert.equal(await f.read("alpha/job-original/task.md"), f.files["alpha/job/task.md"])
   await assert.rejects(fs.lstat(path.join(f.root, "alpha/_archive")), { code: "ENOENT" })
 })
-test("legacy source-directory symlink retains its explicit preflight rejection rather than a pending result", async () => {
+portableTest("legacy source-directory symlink retains its explicit preflight rejection rather than a pending result", async () => {
   const f = await fixture()
   await fs.rename(path.join(f.root, "alpha/job"), path.join(f.root, "alpha/retained-job"))
   await fs.symlink("retained-job", path.join(f.root, "alpha/job"))
@@ -150,7 +157,7 @@ test("legacy source-directory symlink retains its explicit preflight rejection r
   assert.equal(await f.read("alpha/retained-job/task.md"), f.files["alpha/job/task.md"])
 })
 for (const shape of ["track alias", "nested destination"]) {
-  test(`legacy ${shape} keeps its metadata rejection and exact source bytes`, async () => {
+  portableTest(`legacy ${shape} keeps its metadata rejection and exact source bytes`, async () => {
     const f = await fixture(), track = path.join(f.root, "alpha"), source = path.join(track, "job")
     await fs.rename(path.join(source, "task.md"), path.join(source, "card.md"))
     await fs.symlink("card.md", path.join(source, "task.md"))
@@ -496,7 +503,7 @@ for (const failure of ["reader", "close", "expiry"]) {
     assert.equal(unlinks, 1)
   })
 }
-test("AGI9 full Unicode-fold reference admits its outside non-Markdown target bytes before effects", async () => {
+portableTest("AGI9 full Unicode-fold reference admits its outside non-Markdown target bytes before effects", async () => {
   const f = await fixture(), file = path.join(f.root, "alpha/peer/data.txt"), bytes = Buffer.from("actual outside data\n")
   await fs.writeFile(file, bytes)
   await fs.writeFile(path.join(f.root, "alpha/job/task.md"), "---\nstatus: cancelled\n---\n\n[STRASSE]\n\n[STRAẞE]: ../peer/data.txt\n")
@@ -709,7 +716,7 @@ function observeAggregateReaders(t, forbiddenWholeDirectoryReads = []) {
   t.after(async () => { for (const record of records) if (!record.closed) await record.cleanup() })
   return records
 }
-test("AGI5 configured 4096-entry inventory succeeds through bounded readers with exact closure", async t => {
+portableTest("AGI5 configured 4096-entry inventory succeeds through bounded readers with exact closure", async t => {
   const f = await entryLimitFixture(), readers = observeAggregateReaders(t, f.directories)
   const plan = await prepare(f)
   try {
@@ -723,7 +730,7 @@ test("AGI5 configured 4096-entry inventory succeeds through bounded readers with
   } finally { await plan.close() }
 })
 for (const split of [false, true]) {
-  test(`AGI5 actual cap plus one across ${split ? "two directories" : "one directory"} refuses before effects`, async t => {
+  portableTest(`AGI5 actual cap plus one across ${split ? "two directories" : "one directory"} refuses before effects`, async t => {
     const f = await entryLimitFixture(1, split), readers = observeAggregateReaders(t, f.directories)
     await assert.rejects(prepare(f), { code: "archive_limit" })
     assert.ok(readers.some(reader => f.directories.includes(reader.file)))
@@ -733,7 +740,7 @@ for (const split of [false, true]) {
     assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
   })
 }
-test("AGI5 cap plus one is rejected before retaining or sorting the extra directory member", async t => {
+portableTest("AGI5 cap plus one is rejected before retaining or sorting the extra directory member", async t => {
   const f = await entryLimitFixture(1)
   const readers = observeAggregateReaders(t, f.directories)
   let failure
@@ -758,7 +765,7 @@ test("AGI5 post-admission cross-directory growth cannot begin any archive effect
     assert.equal(await fs.readFile(path.join(f.directories[1], "agi5-entry-growth"), "utf8"), "foreign growth")
   } finally { await session.close(new Error("AGI5 foreign growth")) }
 })
-test("AGI5 a reader acquired at D is tracked and closed without a first read", async t => {
+portableTest("AGI5 a reader acquired at D is tracked and closed without a first read", async t => {
   const f = await fixture(), opendir = fs.opendir.bind(fs)
   let now = Date.now(), acquired = false, reads = 0, closed = false, cleanup
   const deadline = now + 30000
@@ -774,7 +781,7 @@ test("AGI5 a reader acquired at D is tracked and closed without a first read", a
   assert.equal(acquired, true); assert.equal(reads, 0); assert.equal(closed, true)
   await assert.rejects(fs.lstat(path.join(f.root, "alpha/job/.desk-archive-operation.json")), { code: "ENOENT" })
 })
-test("AGI5 reader error after a real read retains the primary cause and closes its exact reader", async t => {
+portableTest("AGI5 reader error after a real read retains the primary cause and closes its exact reader", async t => {
   const f = await fixture(), opendir = fs.opendir.bind(fs)
   const primary = Object.freeze(new Error("directory read outcome unavailable"))
   let acquired = false, closed = false, calls = 0, cleanup
@@ -791,7 +798,7 @@ test("AGI5 reader error after a real read retains the primary cause and closes i
   await assert.rejects(fs.lstat(path.join(f.root, "alpha/job/.desk-archive-operation.json")), { code: "ENOENT" })
 })
 for (const readFailure of [false, true]) {
-  test(`AGI5 unknown reader close ${readFailure ? "preserves earlier read failure" : "cannot certify settlement"}`, async t => {
+  portableTest(`AGI5 unknown reader close ${readFailure ? "preserves earlier read failure" : "cannot certify settlement"}`, async t => {
     const f = await fixture(), opendir = fs.opendir.bind(fs)
     const primary = new Error("primary directory read failed"), closing = new Error("directory close unacknowledged")
     let cleanup, closeCalls = 0
@@ -1204,7 +1211,7 @@ test("a directory target's own changed membership refuses before moving any fold
   assert.equal(plan.receipt.effects.length, 0)
   assert.ok(await fs.stat(path.join(f.root, "alpha/job")))
 })
-test("causal late descriptor settlement is recorded against the original evidence cutoff", async () => {
+portableTest("causal late descriptor settlement is recorded against the original evidence cutoff", async () => {
   const f = await fixture()
   let now = Date.now()
   const plan = await prepare(f, { now: () => now, deadline: now + 30000, evidenceDeadline: now + 40000 })
@@ -1301,7 +1308,7 @@ test("two row-link prefix insertions are a real positive with unrelated code and
   assert.equal((await f.invoke()).status, "archived")
   assert.equal(await f.read("alpha/track.md"), expected)
 })
-test("overlapping created-directory callbacks retain original registry semantics and exact created names", async () => {
+portableTest("overlapping created-directory callbacks retain original registry semantics and exact created names", async () => {
   const f = await fixture(), directory = path.join(f.root, "created-registry")
   let enteredA, enteredB, releaseA, releaseB, removals = 0
   const aEntered = new Promise(resolve => { enteredA = resolve }), bEntered = new Promise(resolve => { enteredB = resolve })
@@ -1323,7 +1330,7 @@ test("overlapping created-directory callbacks retain original registry semantics
   await assert.rejects(fs.lstat(next), { code: "ENOENT" })
 })
 for (const guarded of [false, true]) {
-  test(`default created-directory ${guarded ? "successful callback" : "no-callback parity"} preserves mkdir and rollback`, async () => {
+  portableTest(`default created-directory ${guarded ? "successful callback" : "no-callback parity"} preserves mkdir and rollback`, async () => {
     const f = await fixture(), directory = path.join(f.root, "ordinary-created/deep")
     let admitted = !guarded
     const options = guarded ? { beforeCreate: async () => { admitted = true } } : {}
@@ -1337,7 +1344,7 @@ for (const guarded of [false, true]) {
   })
 }
 for (const retain of [false, true]) {
-  test(`beforeCreate refusal releases overlap once with retention ${retain}`, async () => {
+  portableTest(`beforeCreate refusal releases overlap once with retention ${retain}`, async () => {
     const f = await fixture(), directory = path.join(f.root, "gate-overlap")
     let enteredA, releaseA, enteredB, releaseB
     const aEntered = new Promise(resolve => { enteredA = resolve }), aWait = new Promise(resolve => { releaseA = resolve })
@@ -1361,7 +1368,7 @@ for (const retain of [false, true]) {
     await assert.rejects(fs.lstat(directory), { code: "ENOENT" })
   })
 }
-test("custom aggregate create never invokes the default beforeCreate seam twice", async () => {
+portableTest("custom aggregate create never invokes the default beforeCreate seam twice", async () => {
   const f = await fixture(), directory = path.join(f.root, "custom-created")
   await withCreatedDirs(directory, () => fs.writeFile(path.join(directory, "owned"), "custom"), {
     create: async (file, recordMade) => { await fs.mkdir(file); recordMade(file) },
@@ -1403,7 +1410,7 @@ test("causal nonextensible original writer error is preserved without attachment
 })
 for (const placement of ["source", "destination"]) {
   for (const type of ["file", "directory", "symlink"]) {
-    test(`causal any ${type} unfinished flag at ${placement} blocks even legacy transport without parsing`, async () => {
+    portableTest(`causal any ${type} unfinished flag at ${placement} blocks even legacy transport without parsing`, async () => {
       const f = await fixture()
       if (placement === "destination") {
         await fs.mkdir(path.join(f.root, "alpha/_archive"))
@@ -1475,7 +1482,7 @@ test("causal source flag and directory move during a preflight await returns typ
   assert.deepEqual(f.changes, [])
 })
 for (const timing of ["status read", "refill read", "publication preflight read", "patch helper read"]) {
-  test(`legacy actual destination flag during ${timing} prevents report writes and success`, async t => {
+  portableTest(`legacy actual destination flag during ${timing} prevents report writes and success`, async t => {
     const f = await fixture(), read = fs.readFile.bind(fs)
     await fs.mkdir(path.join(f.root, "alpha/_archive"))
     await fs.rename(path.join(f.root, "alpha/job"), path.join(f.root, "alpha/_archive/job"))
@@ -1497,7 +1504,7 @@ for (const timing of ["status read", "refill read", "publication preflight read"
     assert.equal(await read(file, "utf8"), before); assert.deepEqual(f.changes, [])
   })
 }
-test("legacy unmarked destination replacement during await cannot inherit the prior directory generation", async t => {
+portableTest("legacy unmarked destination replacement during await cannot inherit the prior directory generation", async t => {
   const f = await fixture(), read = fs.readFile.bind(fs)
   const destination = path.join(f.root, "alpha/_archive/job")
   await fs.mkdir(path.dirname(destination)); await fs.rename(path.join(f.root, "alpha/job"), destination)
@@ -1516,7 +1523,7 @@ test("legacy unmarked destination replacement during await cannot inherit the pr
   assert.equal(await f.read("alpha/_archive/job-original/task.md"), f.files["alpha/job/task.md"])
   assert.deepEqual(f.changes, [])
 })
-test("an unreadable reserved slot is uncertainty, not absence", async t => {
+portableTest("an unreadable reserved slot is uncertainty, not absence", async t => {
   const f = await fixture(), lstat = fs.lstat.bind(fs)
   t.mock.method(fs, "lstat", (file, ...args) => file === path.join(f.root, "alpha/job/.desk-archive-operation.json")
     ? Promise.reject(Object.assign(new Error("marker observation denied"), { code: "EACCES" })) : lstat(file, ...args))
@@ -1525,7 +1532,7 @@ test("an unreadable reserved slot is uncertainty, not absence", async t => {
   assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
   assert.deepEqual(f.changes, [])
 })
-test("causal legacy missing-parent await must not mkdir or remove an externally appeared parent after a flag", async t => {
+portableTest("causal legacy missing-parent await must not mkdir or remove an externally appeared parent after a flag", async t => {
   const f = await fixture(), stat = fs.stat.bind(fs), mkdir = fs.mkdir.bind(fs)
   const directory = path.join(f.root, "alpha/_archive")
   let active = false, foreign, attempts = 0
@@ -1552,7 +1559,7 @@ test("causal legacy missing-parent await must not mkdir or remove an externally 
   assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
 })
 for (const route of ["Git metadata", "Windows model", "custom move"]) {
-  test(`reserved negative compatibility runs before ${route} admission without activating its provider`, async t => {
+  portableTest(`reserved negative compatibility runs before ${route} admission without activating its provider`, async t => {
     const f = await fixture()
     await fs.writeFile(path.join(f.root, "alpha/job/.desk-archive-operation.json"), "")
     if (route === "Git metadata") await fs.mkdir(path.join(f.root, ".git"))
@@ -1787,7 +1794,7 @@ test("late informational failure preserves actual Final-complete phase after con
   assert.equal(Object.hasOwn(result, "factory_report"), false)
 })
 for (const kind of ["Finalize", "Evaluation"]) {
-  test(`boundary model only: legacy task-local ${kind} post-await guard prevents the next dispatch`, async () => {
+  portableTest(`boundary model only: legacy task-local ${kind} post-await guard prevents the next dispatch`, async () => {
     const f = await fixture(), file = path.join(f.root, `UNEXPECTED_${kind}_REQUEST`)
     const source = await fs.readFile(new URL("../../../../../plugins/desk/mcp/src/tools/task.js", import.meta.url), "utf8")
     const expression = source.match(new RegExp(`async function requestTask${kind}\\([^]*?\\n\\}`, "u"))?.[0]
@@ -1810,7 +1817,7 @@ for (const kind of ["Finalize", "Evaluation"]) {
     await assert.rejects(fs.lstat(file), { code: "ENOENT" })
   })
 }
-test("boundary model only: terminal sync observes a marker after the last evaluation await", async () => {
+portableTest("boundary model only: terminal sync observes a marker after the last evaluation await", async () => {
   const f = await fixture(), source = await fs.readFile(new URL("../../../../../plugins/desk/mcp/src/tools/task.js", import.meta.url), "utf8")
   const expression = source.match(/async function requestTaskTerminalSync\([^]*?\n\}/u)?.[0]
   assert.ok(expression)
@@ -1853,7 +1860,7 @@ for (const purpose of ["archive operation marker", "archive replacement"]) {
   })
 }
 for (const timing of ["before stage", "after stage"]) {
-  test(`causal legacy publication marker ${timing} prevents the next modeled Git mutation`, async () => {
+  portableTest(`causal legacy publication marker ${timing} prevents the next modeled Git mutation`, async () => {
     const f = await fixture(), file = path.join(f.root, "UNEXPECTED_GIT_MUTATION")
     const source = await fs.readFile(new URL("../../../../../plugins/desk/mcp/src/tools/archive-state.js", import.meta.url), "utf8")
     const expression = source.match(/(?:async )?function publishExpected\([^]*?\n\}/u)?.[0]
@@ -1881,7 +1888,7 @@ for (const timing of ["before stage", "after stage"]) {
   })
 }
 for (const timing of ["realpath", "temporary write", "target stat", "chmod"]) {
-  test(`causal atomic markdown marker after ${timing} refuses the next mutation and retains its actual temporary`, async t => {
+  portableTest(`causal atomic markdown marker after ${timing} refuses the next mutation and retains its actual temporary`, async t => {
     const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
     const marker = path.join(f.root, "alpha/job/.desk-archive-operation.json")
     const original = Object.assign(new Error("marker refusal"), { code: "EPERM" })
@@ -1917,7 +1924,7 @@ for (const timing of ["realpath", "temporary write", "target stat", "chmod"]) {
     if (temporary) assert.ok(await fs.lstat(temporary))
   })
 }
-test("causal frontmatter serialization fallback renews a marker guard after its mkdir await", async t => {
+portableTest("causal frontmatter serialization fallback renews a marker guard after its mkdir await", async t => {
   const f = await fixture(), target = path.join(f.root, "alpha/job/task.md"), mkdir = fs.mkdir.bind(fs)
   await fs.writeFile(target, "body without frontmatter\n")
   let appeared = false
@@ -1938,7 +1945,7 @@ test("causal frontmatter serialization fallback renews a marker guard after its 
   assert.equal(appeared, true); assert.equal(await fs.readFile(target, "utf8"), "body without frontmatter\n")
 })
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {
-  test(`causal beforeWrite ${code} is terminal, never held-open fallback or cleanup`, async () => {
+  portableTest(`causal beforeWrite ${code} is terminal, never held-open fallback or cleanup`, async () => {
     const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
     const original = Object.freeze(Object.assign(new Error("guard refusal with held-open code"), { code }))
     await assert.rejects(writeMarkdown(target, { status: "done" }, "must not write", {
@@ -1948,7 +1955,7 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) {
     assert.deepEqual((await fs.readdir(path.dirname(target))).filter(name => name.endsWith(".tmp")), [])
   })
 }
-test("causal earlier atomic IO error survives secondary cleanup-admission refusal with its temporary retained", async t => {
+portableTest("causal earlier atomic IO error survives secondary cleanup-admission refusal with its temporary retained", async t => {
   const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
   const original = new Error("original rename IO error"), secondary = new Error("cleanup admission refused")
   let ioFailed = false
@@ -1960,7 +1967,7 @@ test("causal earlier atomic IO error survives secondary cleanup-admission refusa
   assert.equal((await fs.readdir(path.dirname(target))).filter(name => name.endsWith(".tmp")).length, 1)
   assert.equal(original.fmWrite.secondaryError, secondary.message)
 })
-test("causal guarded markdown temp replaced during write cannot be adopted for cleanup", async t => {
+portableTest("causal guarded markdown temp replaced during write cannot be adopted for cleanup", async t => {
   const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
   const retained = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "desk-markdown-retained-")))
   roots.push(retained)
@@ -1992,7 +1999,7 @@ test("causal guarded markdown temp replaced during write cannot be adopted for c
   assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
 })
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {
-  test(`guarded unmarked atomic ${code} still supports a qualified held-open fallback`, async t => {
+  portableTest(`guarded unmarked atomic ${code} still supports a qualified held-open fallback`, async t => {
     const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
     t.mock.method(fs, "rename", async () => { throw Object.assign(new Error("held open"), { code }) })
     const beforeWrite = async () => {
@@ -2006,7 +2013,7 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) {
   })
 }
 for (const timing of ["cleanup stat", "cleanup returned"]) {
-  test(`marker after atomic ${timing} prevents subsequent cleanup or fallback and preserves first IO cause`, async t => {
+  portableTest(`marker after atomic ${timing} prevents subsequent cleanup or fallback and preserves first IO cause`, async t => {
     const f = await fixture(), target = path.join(f.root, "alpha/job/task.md")
     const original = Object.assign(new Error("first held-open IO failure"), { code: "EPERM" })
     const lstat = fs.lstat.bind(fs), rm = fs.rm.bind(fs), write = fs.writeFile.bind(fs)
@@ -2033,7 +2040,7 @@ for (const timing of ["cleanup stat", "cleanup returned"]) {
       timing === "cleanup returned" ? 0 : 1)
   })
 }
-test("unknown guarded markdown FD close retains temporary and never enters cleanup or fallback", async t => {
+portableTest("unknown guarded markdown FD close retains temporary and never enters cleanup or fallback", async t => {
   const f = await fixture(), target = path.join(f.root, "alpha/job/task.md"), open = fs.open.bind(fs)
   const original = Object.freeze(new Error("guarded markdown descriptor close unknown"))
   t.mock.method(fs, "open", async (file, ...args) => {
@@ -2049,7 +2056,7 @@ test("unknown guarded markdown FD close retains temporary and never enters clean
   assert.equal((await fs.readdir(path.dirname(target))).filter(name => name.endsWith(".tmp")).length, 1)
   assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
 })
-test("actual legacy track writer retains temporary evidence when a destination marker appears during FD write", async t => {
+portableTest("actual legacy track writer retains temporary evidence when a destination marker appears during FD write", async t => {
   const f = await fixture(), open = fs.open.bind(fs), write = fs.writeFile.bind(fs), opened = new WeakMap()
   let retained
   t.mock.method(fs, "open", async (file, ...args) => {
@@ -2075,7 +2082,7 @@ test("actual legacy track writer retains temporary evidence when a destination m
   assert.equal((await f.invoke()).publication.reason, "unqualified_original_map")
 })
 for (const key of Object.keys(ARCHIVE_LIMITS)) {
-  test(`aggregate ${key} admission bound refuses before effects`, async () => {
+  portableTest(`aggregate ${key} admission bound refuses before effects`, async () => {
     const f = await fixture()
     await assert.rejects(prepare(f, { limits: { ...ARCHIVE_LIMITS, [key]: 0 } }), { code: "archive_limit" })
     assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])

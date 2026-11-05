@@ -1494,8 +1494,16 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (error.archiveMarkerPending) return markerRefusal(error)
     throw error
   }
-  const aggregateRoute = ["darwin", "linux"].includes(process.platform) && moveArchive === undefined &&
+  let aggregateRoute = ["darwin", "linux"].includes(process.platform) && moveArchive === undefined &&
     openArchiveMove === openArchiveMoveDefault && !(await archiveHasGit(effectiveRoot, archiveEnteredAt + 30000))
+  if (aggregateRoute) {
+    let card
+    try { card = await fs.lstat(srcFile) } catch (error) { if (error.code !== "ENOENT") throw error }
+    if (card?.isSymbolicLink()) {
+      await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+      aggregateRoute = false
+    }
+  }
   if (aggregateRoute) markerDeadline = archiveEnteredAt + 30000
   terminalHandoff.deadline = markerDeadline ?? null
 

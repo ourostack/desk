@@ -5,6 +5,10 @@ Markdown links across a move in a non-Git desk. It observes files and directory
 referents in the effective person's root before writing, then composes outbound
 and inbound links, track rows and card updates against one original/final map.
 Git, Windows and custom transports retain their existing archive behavior.
+An original `task.md` symlink also retains the existing legacy route, after
+metadata-only relocation checks and before reading card contents. A stable
+symlink is not admitted into the aggregate map; a symlink that would change
+referent still refuses before the move.
 
 The operation refuses ambiguous, missing, aliased or out-of-scope targets.
 External `.git` and `node_modules` directories are opaque storage boundaries:
@@ -64,3 +68,7 @@ mkdir-to-first-observation races remain. No native Git/Windows aggregate
 custody, persistent trusted Final retry or installed recovery guarantee is
 implied. The real non-Git and source-boundary controls are in
 [archive_link_aggregate.test.js](../../../../tests/desk/mcp/__tests__/tools/archive_link_aggregate.test.js).
+POSIX-provider cases run only on macOS/Linux. Portable marker, legacy,
+frontmatter, directory-registry and read-only planner controls stay active on
+Windows, with subprocess dispatch fenced before production imports. These
+controls do not activate or qualify a Windows aggregate provider.
