@@ -10,7 +10,7 @@
     "plugins/crew/skills/join-crew/SKILL.md",
     "plugins/desk/skills/session-start/details.md"
   ],
-  "reviewedSourceFingerprint": "3a03d9c530ea92714535981c13bf9d143d9294c78a383394942c479f475ceade",
+  "reviewedSourceFingerprint": "ac1588bf1ec6a8aa54f2036adafec44fb2d45b5f74ae6e0aa6acec45de738074",
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
