@@ -59,7 +59,7 @@ function safeStat(root, relative) {
   }
 }
 
-function readLocal(root, rel, budget, { expected, prefix = false } = {}) {
+function readLocal(root, rel, budget, { expected, prefix = false }) {
   const found = safeStat(root, rel)
   if (found.state !== "file") return { state: found.state }
   const size = found.stat.size
