@@ -488,6 +488,11 @@ const majorReport = {
   const long = pullRequestBody({ report: { ...majorReport, release: { ...majorReport.release, notes: [{ version: "7.0.2", heading: "v7.0.2", body: "y".repeat(70_000) }] } }, runUrl });
   assert.ok(long.length < 60_000);
   assert.match(long, /y…\n\n\[Read the full release notes\]\(https:\/\/github\.com\/obra\/superpowers\/blob\/b{40}\/RELEASE-NOTES\.md\)/u);
+
+  const compatible = pullRequestBody({ report: { ...majorReport, release: { ...majorReport.release, range: null } }, runUrl });
+  assert.match(compatible, /Major upstream release: Superpowers 6 → 7/u);
+  assert.doesNotMatch(compatible, /moved Desk's Superpowers compatibility floor/u);
+  assert.match(compatible, /<details><summary>v7\.0\.2 \(2026-11-03\)<\/summary>/u);
 }
 
 {
@@ -536,6 +541,42 @@ const majorReport = {
   ], { report: majorReport });
   assert.equal(again.result.adoption, "https://github.com/owner/desk/issues/21");
   assert.equal(again.calls.some((call) => call.line.startsWith("issue create")), false);
+}
+
+{
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "superpowers-major-summary-"));
+  try {
+    const reportPath = path.join(tempRoot, "report.json");
+    const summaryPath = path.join(tempRoot, "summary.md");
+    const outputPath = path.join(tempRoot, "output.txt");
+    fs.writeFileSync(reportPath, JSON.stringify(majorReport));
+    const { run } = fakeGh([
+      existingPull,
+      ["pr edit 7", ok("")],
+      [`label list --repo ${repo} --search superpowers-major`, ok([{ name: "superpowers-major" }])],
+      [`issue list --repo ${repo} --label superpowers-major --state open`, ok([{ number: 21, title: "Superpowers 7: adopt what's new", url: "https://github.com/owner/desk/issues/21" }])],
+      ["workflow run", ok("")],
+      runsRoute("ci.yml", completed(95)),
+      jobs(95, [{ name: "a", conclusion: "success", html_url: "https://job/95" }]),
+      noRules,
+      ["pr merge 7", ok("")],
+      [`issue list --repo ${repo} --label upstream-refresh`, ok([])],
+    ]);
+    const { now, sleep } = clock();
+    let output = "";
+    assert.equal(main(["publish", "--repo", repo, "--branch", branch, "--base", "main", "--sha", sha,
+      "--report", reportPath, "--workflows", "ci.yml", "--run-url", runUrl], {
+      run, env: { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      stdout: { write(value) { output += value; } }, now, sleep,
+    }), 0);
+    assert.match(output, /^## Superpowers upstream refresh: merged\n/u);
+    assert.match(output, /Pull request: https:\/\/github\.com\/owner\/desk\/pull\/7\n/u);
+    assert.match(output, /Adoption issue: https:\/\/github\.com\/owner\/desk\/issues\/21\n/u);
+    assert.equal(fs.readFileSync(summaryPath, "utf8"), output);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "outcome=merged\ndelivered=true\n");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 {
@@ -625,6 +666,16 @@ const majorReport = {
     assert.equal(held.outcome, "pending");
     assert.match(held.message, /https:\/\/github\.com\/owner\/desk\/pull\/7 has carried this upstream payload for 23 days and is still not on main\. See https:\/\/github\.com\/owner\/desk\/issues\/4\./u);
 
+    const noIssue = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(), [openIssue[0], ok([])]]);
+    const untracked = pending({ ...options, gh: noIssue.gh });
+    assert.equal(untracked.rerun, false);
+    assert.equal(untracked.outcome, "pending");
+    assert.doesNotMatch(untracked.message, /See |undefined/u);
+    const noSource = fakeGh([openPull, lockRoute(ok({ sources: [] }))]);
+    const missingPayload = pending({ ...options, gh: noSource.gh });
+    assert.equal(missingPayload.rerun, true);
+    assert.equal(missingPayload.outcome, "upstream-moved");
+
     for (const [localMode, carriedMode] of [[0o644, "100755"], [0o755, "100644"]]) {
       setMode(path.join(tempRoot, tool), localMode);
       const modesMoved = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(ok(tree(carriedMode))), openIssue]);
@@ -696,6 +747,18 @@ const majorReport = {
     assert.equal(main(argv, { run: fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n");
     assert.throws(() => parseArgs(["pending", "--repo", repo]), /pending requires --branch, --base, --lock/u);
+
+    const summaryPath = path.join(tempRoot, "pending-summary.md");
+    const refusalPath = path.join(tempRoot, "pending-output.txt");
+    let refusal = "";
+    assert.equal(main(argv, {
+      run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: refusalPath, GITHUB_STEP_SUMMARY: summaryPath },
+      stdout: { write(value) { refusal += value; } }, now: at,
+    }), 1);
+    assert.match(refusal, /^## Superpowers upstream refresh: pending\n/u);
+    assert.match(refusal, /has carried this upstream payload for 23 days and is still not on main/u);
+    assert.equal(fs.readFileSync(summaryPath, "utf8"), refusal);
+    assert.equal(fs.readFileSync(refusalPath, "utf8"), "rerun=false\n");
   } finally {
     fs.lstatSync = originalLstatSync;
     fs.rmSync(tempRoot, { recursive: true, force: true });
