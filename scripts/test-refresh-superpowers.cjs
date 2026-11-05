@@ -99,6 +99,7 @@ function filesNaming(version, files) {
   // upstream version separately, and tests derive the shipped version instead of hard-coding it.
   const shipped = filesNaming(currentSuperpowers, trackedFiles()).filter((file) => (
     file !== "plugins/desk/CHANGELOG.md"
+    && !file.startsWith("plugins/desk/changelog.d/")
     && file !== "plugins/superpowers/README.md"
     && !file.includes("/__tests__/")
     && !/^scripts\/test-[^/]+\.cjs$/u.test(file)
