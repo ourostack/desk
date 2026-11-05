@@ -48,7 +48,7 @@ Use this phase only after a current V2 repository is present and the authenticat
 - `refused`: nothing was written. A registered alias or conflicting pending claim must be reconciled with its owner; choose another alias only when the intended alias genuinely belongs to someone else. An unregistered folder with existing work follows the adoption procedure below, keeping the intended alias.
 - `failed`: it stopped at the named `stage`. An ordinary join whose desk is already pushed can run `join --apply` again to add only the row. An interrupted adoption instead requires a fresh reviewed inventory and explicit `--adopt-existing <reviewed-commit>` confirmation until registration finishes; ordinary resumption cannot drop its member-authentication or revision checks. At `push` with GitHub's `GH006` "Protected branch update failed", the default branch does not take the member's direct desk push: someone who administers the repository allows members to push to it (see `crew:start-crew`, "What the repository must allow"), then retry the appropriate flow. At `verify`, read the result: the row may be missing, still in an open PR, or merged while content or reservations changed. Run `status --identity <login>`, review the current contents and authority, and keep onboarding open until the named check passes.
 
-### Finish an existing unregistered folder
+#### Finish an existing unregistered folder
 
 An existing folder can be a partially set-up desk, not a taken alias. Keep the requested desk identity. The absence of template files or `Crew-Identity` trailers, and a document's author, do not establish folder ownership.
 
