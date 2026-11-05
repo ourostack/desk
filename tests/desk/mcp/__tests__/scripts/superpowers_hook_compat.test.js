@@ -502,6 +502,52 @@ for (const fault of ["destination", "guard"]) {
   })
 }
 
+for (const operation of ["read", "write"]) {
+  for (const field of ["ino", "dev", "birthtimeNs"]) {
+    test(`journal ${operation} rejects a same-byte replacement hidden by numeric ${field} precision loss`, (t) => {
+      const { root } = fixture(t)
+      const journal = path.join(root, "journal")
+      const outside = path.join(root, "outside")
+      const previous = Buffer.from("captured original bytes\n")
+      let replaced = false
+      const replace = () => {
+        fs.renameSync(journal, outside)
+        writeFileSync(journal, previous)
+        fs.chmodSync(journal, 0o600)
+        replaced = true
+      }
+      const identityStat = (stat, options) => {
+        const exact = { ino: 9007199254740992n, dev: 9007199254740992n, birthtimeNs: 9007199254740992n }
+        if (replaced) exact[field] += 1n
+        const bigint = options?.bigint === true
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          ino: bigint ? exact.ino : Number(exact.ino),
+          dev: bigint ? exact.dev : Number(exact.dev),
+          birthtimeMs: bigint ? exact.birthtimeNs / 1000000n : Number(exact.birthtimeNs) / 1000000,
+          ...(bigint ? { birthtimeNs: exact.birthtimeNs } : {}),
+        })
+      }
+      const io = { ...fs,
+        lstatSync(file, options) { return identityStat(fs.lstatSync(file, options), options) },
+        fstatSync(fd, options) { return identityStat(fs.fstatSync(fd, options), options) },
+        openSync(file, flags, ...args) {
+          if (operation === "write" && !replaced && flags === (fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0))) replace()
+          return fs.openSync(file, flags, ...args)
+        },
+      }
+      const identity = compat.writeOwnedJournal(journal, null, null, previous, true, io)
+      if (operation === "read") replace()
+      assert.throws(() => operation === "read"
+        ? compat.readOwnedJournal(journal, identity, io)
+        : compat.writeOwnedJournal(journal, identity, previous, Buffer.from("forbidden overwrite\n"), false, io),
+      /original guard journal file identity changed/)
+      assert.equal(replaced, true)
+      assert.deepEqual(readFileSync(outside), previous)
+      assert.deepEqual(readFileSync(journal), previous)
+    })
+  }
+}
+
 for (const alias of ["symlink", "hardlink", "regular-replacement"]) {
   test(`same-byte ${alias} cannot become owned guard journal authority`, (t) => {
     const { root } = fixture(t)

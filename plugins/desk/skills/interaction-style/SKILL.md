@@ -42,11 +42,13 @@ The host's session task list (TaskCreate, TodoWrite) is scratch for an ordered, 
 
 ### Host commands that duplicate the desk
 
-Hosts offer their own memory, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
+Hosts offer their own memory, storage, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
 
 | The host offers | Use instead |
 | --- | --- |
 | `store_memory`, `vote_memory`, `/memory` | the desk: the operator's rules and preferences there, and a skill for a rule that is general |
+| the session folder `~/.copilot/session-state/<id>/` (its `files/`, `plan.md`, checkpoints), which the host calls persistent; Claude Code's `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` and Codex's `${CODEX_HOME:-~/.codex}/sessions/` | the repository for code and docs; the desk for private work product. Work runs across agents and machines, and a host's local folder reaches neither |
+| a new dot folder (`~/.<name>`) or another private location you invent | the operating system's standard app-data folder for an app's runtime data; otherwise the repository or the desk |
 | a session `plan.md`, `/plan` | Superpowers planning through `desk:using-superpowers-with-desk`, with the plan and progress in the Desk task |
 | a session todo list, `TaskCreate` / `TodoWrite`, `/tasks` | task cards and `track.md` for work state; the session list only as scratch, as above |
 | "don't create markdown files for planning or notes" | the desk is Markdown: planning, progress, friction and lessons live there as files |
@@ -177,7 +179,7 @@ Do not end with offers of more work ("Let me know if you'd like me to...", "Want
 
 ### The sign-off ask is the one closing question
 
-A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording. Ask it only for a task you have just moved to `done`: while anything the task promised is left (a check that has not passed, a step still to run), the reply is a progress report that says what is left, never a delivery. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording, and make `Delivered:` a receipt (`evidence-discipline`, "Delivery receipt"). Ask it only for a task you have just moved to `done`: while anything the task promised is left (a check that has not passed, a step still to run), the reply is a progress report that says what is left, never a delivery. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
 
 ### Ban these specific phrases
 

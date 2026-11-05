@@ -253,7 +253,7 @@ test("a background writer that finds the index lock held stages nothing and defe
   assert.ok(COMMIT_CODES.includes(out.commit))
   assert.deepEqual(out.pushes, [])
   assert.equal(git.calls.some((call) => call[0] === "add" || call[0] === "commit"), false)
-  // A person's write in the same state commits: it does not check the lock first, and Git's own lock is retried (below).
+  // A person's write waits before staging; this fake Git succeeds even when the observed lock remains.
   assert.equal((await run({ spawn, calls: git.calls })).commit, "committed")
   // No lock, or Git cannot say where it would be: the background write commits.
   const free = (cmd, args) => args.includes("--git-path") ? { status: 0, stdout: `${path.join(base, "no.lock")}\n`, stderr: "" } : git.spawn(cmd, args)
@@ -262,7 +262,7 @@ test("a background writer that finds the index lock held stages nothing and defe
   assert.equal((await asBackgroundWriter(() => run({ spawn: unknown, calls: git.calls }))).commit, "committed")
 })
 
-test("a person's commit waits out a briefly held lock, and a background writer's does not", () => {
+test("a lock-shaped commit failure is returned without redispatch for people and background writers", () => {
   const lockError = { status: 128, stdout: "", stderr: "fatal: Unable to create '/desk/.git/index.lock': File exists.\n" }
   const script = (failures) => {
     let commits = 0
@@ -274,13 +274,11 @@ test("a person's commit waits out a briefly held lock, and a background writer's
     return { spawn, commits: () => commits }
   }
   const person = script(2)
-  assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, true)
-  assert.equal(person.commits(), 3)
-  // A lock that stays held is given up on after the wait, and Git's own message comes back.
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), { ok: false, stderr: lockError.stderr })
+  assert.equal(person.commits(), 1)
   const held = script(Infinity)
-  const started = Date.now()
-  assert.equal(commitPaths("/desk", ["a.md"], "m", held.spawn).ok, false)
-  assert.ok(Date.now() - started >= 2900 && held.commits() > 2)
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), { ok: false, stderr: lockError.stderr })
+  assert.equal(held.commits(), 1)
   const background = script(2)
   const before = process.env[YIELD_ENV]
   process.env[YIELD_ENV] = "1"
