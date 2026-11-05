@@ -10,37 +10,59 @@ import { liveInspectionChildren, readInspectionGit } from "../../../../../plugin
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const modulePath = "../../../../../plugins/desk/mcp/src/runtime/unsaved-work.js"
 
-test("Windows index metadata uses creation time and Git's synthetic device and inode fields", async () => {
-  const { metadataMatches } = await import(modulePath)
-  const entry = { mode: "100644", stat: [1700000000n, 123456700n, 1700000020n, 765432100n, 0n, 0n, 0n, 0n, 8n] }
+async function metadataObservation(t, index, platform) {
+  const root = await mkTempRoot("desk-unsaved-metadata-")
+  await fs.mkdir(path.join(root, "_meta"))
+  await fs.mkdir(path.join(root, "desks"))
+  await fs.writeFile(path.join(root, "_meta", "crew.json"), "{}")
+  const oid = "a".repeat(40)
+  const inventory = `worktree ${root}\0HEAD ${oid}\0branch refs/heads/main\0\0`
+  const lstat = fs.lstat
+  let current
+  t.mock.method(fs, "lstat", (file, options) => file === path.join(root, "tracked") ? Promise.resolve(current) : lstat(file, options))
+  const git = async (_cwd, args) => {
+    if (args.includes("worktree")) return { ok: true, stdout: inventory }
+    if (args.includes("rev-parse")) return { ok: true, stdout: oid }
+    if (args.includes("--stage")) return { ok: true, stdout: index }
+    if (args.includes("diff") || args.includes("--others")) return { ok: true, stdout: "" }
+    if (args.includes("for-each-ref")) return { ok: true, stdout: "refs/remotes/origin/main\0" }
+    if (args.includes("rev-list")) return { ok: true, stdout: "0" }
+    throw new Error(`unexpected inspection command: ${args.join(" ")}`)
+  }
+  return async (stat) => {
+    current = stat
+    return inspect(root, { git, platform })
+  }
+}
+
+test("Windows index metadata uses creation time and Git's synthetic device and inode fields", async (t) => {
+  const observe = await metadataObservation(t, `100644 ${"a".repeat(40)} 0\ttracked\0  ctime: 1700000000:123456700\n  mtime: 1700000020:765432100\n  dev: 0\tino: 0\n  uid: 0\tgid: 0\n  size: 8\tflags: 0\n`, "win32")
   const current = {
     birthtimeNs: 1700000000123456700n, ctimeNs: 1700000010000000000n, mtimeNs: 1700000020765432100n,
     dev: 123n, ino: 10414574139658612n, uid: 0n, gid: 0n, size: 8n,
     isFile: () => true, isSymbolicLink: () => false,
   }
-  assert.equal(metadataMatches(entry, current, "win32"), true)
+  assert.equal(await observe(current), "")
   for (const changed of [
     { birthtimeNs: current.birthtimeNs + 100n },
     { mtimeNs: current.mtimeNs + 100n },
     { size: 9n },
     { isFile: () => false },
-  ]) assert.equal(metadataMatches(entry, { ...current, ...changed }, "win32"), false)
-  assert.equal(metadataMatches(entry, current, "linux"), false, "native Unix identity must not use Windows normalization")
+  ]) assert.match(await observe({ ...current, ...changed }), /1 tracked entries need review \(content not compared\)/)
 })
 
-test("Unix index metadata retains nanoseconds and the native file identity", async () => {
-  const { metadataMatches } = await import(modulePath)
-  const entry = { mode: "100644", stat: [1700000000n, 123456789n, 1700000020n, 765432109n, 123n, 456n, 501n, 20n, 8n] }
+test("Unix index metadata retains nanoseconds and the native file identity", async (t) => {
+  const observe = await metadataObservation(t, `100644 ${"a".repeat(40)} 0\ttracked\0  ctime: 1700000000:123456789\n  mtime: 1700000020:765432109\n  dev: 123\tino: 456\n  uid: 501\tgid: 20\n  size: 8\tflags: 0\n`, "linux")
   const current = {
     ctimeNs: 1700000000123456789n, mtimeNs: 1700000020765432109n,
     dev: 123n, ino: 456n, uid: 501n, gid: 20n, size: 8n,
     isFile: () => true, isSymbolicLink: () => false,
   }
-  assert.equal(metadataMatches(entry, current, "linux"), true)
+  assert.equal(await observe(current), "")
   for (const changed of [
     { ctimeNs: current.ctimeNs + 1n }, { mtimeNs: current.mtimeNs + 1n },
     { dev: 124n }, { ino: 457n }, { uid: 502n }, { gid: 21n }, { size: 9n },
-  ]) assert.equal(metadataMatches(entry, { ...current, ...changed }, "linux"), false)
+  ]) assert.match(await observe({ ...current, ...changed }), /1 tracked entries need review \(content not compared\)/)
 })
 
 async function fixture(t, { remote = true } = {}) {
@@ -161,7 +183,7 @@ test("missing and corrupt linked worktrees report incomplete coverage without ra
   await fs.rm(missing, { recursive: true })
   const corrupt = path.join(f.root, "private-corrupt")
   git(f.desk, "worktree", "add", "-b", "corrupt", corrupt)
-  await fs.chmod(path.join(corrupt, ".git"), 0o600)
+  await fs.unlink(path.join(corrupt, ".git"))
   await fs.writeFile(path.join(corrupt, ".git"), "invalid private gitdir")
   const output = await line(f)
   assert.match(output, /2 checkouts could not be inspected/)

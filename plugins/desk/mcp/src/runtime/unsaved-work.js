@@ -42,7 +42,7 @@ function indexEntries(raw) {
   return entries
 }
 
-export function metadataMatches(entry, current, platform = process.platform) {
+function metadataMatches(entry, current, platform) {
   const small = (value) => BigInt.asUintN(32, value)
   // Git for Windows records creation time as ctime and zeroes dev/ino/uid/gid.
   const ctime = platform === "win32" ? current.birthtimeNs : current.ctimeNs
@@ -56,7 +56,7 @@ export function metadataMatches(entry, current, platform = process.platform) {
 }
 
 /** Read-only, local evidence only. Labels are counts: no user paths, refs, filenames or Git error text reach the boot line. */
-export async function inspectUnsavedWork({ deskRoot, deadline, signal, git = readInspectionGit, maxWorktrees = 16 }) {
+export async function inspectUnsavedWork({ deskRoot, deadline, signal, git = readInspectionGit, maxWorktrees = 16, platform = process.platform }) {
   try {
     const root = crewWorkspaceAbove(deskRoot)
     if (!root) return ""
@@ -104,7 +104,7 @@ export async function inspectUnsavedWork({ deskRoot, deadline, signal, git = rea
             const file = path.resolve(place, entry.name)
             if (!insidePath(place, file)) throw new Error("invalid index path")
             try {
-              if (!metadataMatches(entry, await fs.lstat(file, { bigint: true }))) contentUnknown += 1
+              if (!metadataMatches(entry, await fs.lstat(file, { bigint: true }), platform)) contentUnknown += 1
             } catch (error) {
               if (error.code === "ENOENT" || error.code === "ENOTDIR") contentUnknown += 1
               else throw error
