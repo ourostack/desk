@@ -68,7 +68,7 @@ function readLocal(root, rel, budget, { expected, prefix = false } = {}) {
   if (length > LIMITS.file_bytes || length > budget.bytes || performance.now() >= budget.deadline) return { state: "not_checked_limit" }
   let fd
   try {
-    fd = openSync(found.file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    fd = openSync(found.file, constants.O_RDONLY | constants.O_NOFOLLOW)
     const before = fstatSync(fd)
     if (!before.isFile() || before.ino !== found.stat.ino || before.dev !== found.stat.dev || before.size !== size) return { state: "changed_during_read" }
     const hash = expected === undefined ? null : createHash("sha256")
@@ -248,7 +248,7 @@ export function inspectLfs({ repo = process.cwd(), spawn = spawnSync, env = proc
   const scoped = entries.slice(0, LIMITS.paths)
   const skipped = (entry) => ignoredPaths.has(entry.path) ? "ignored" : sensitivePath(entry.path) ? "sensitive_path"
     : entry.mode !== "100644" && entry.mode !== "100755" || entry.stage !== "0" ? "non_regular_or_unmerged" : null
-  const read = (file) => sensitivePath(file) ? { state: "sensitive_path" } : readLocal(cwd, file, budget, { prefix: true })
+  const read = (file) => readLocal(cwd, file, budget, { prefix: true })
   result.repository.package_roots = packageRoots(scoped, (file) => ignoredPaths.has(file) ? { state: "ignored" } : read(file), result.findings)
   const isPackage = (file) => result.repository.package_roots.some((root) => root === "" || file === root || file.startsWith(`${root}/`))
   const shared = entries.some((entry) => entry.path.startsWith("desks/"))
@@ -267,7 +267,6 @@ export function inspectLfs({ repo = process.cwd(), spawn = spawnSync, env = proc
   } else result.findings.push({ code: "attributes_unavailable" })
   const blobs = new Map()
   const blob = (entry) => {
-    if (sensitivePath(entry.path)) return { state: "sensitive_path" }
     if (blobs.has(entry.oid)) return blobs.get(entry.oid)
     const size = git(["cat-file", "-s", entry.oid])
     const count = Number(size.data.toString("utf8").trim())

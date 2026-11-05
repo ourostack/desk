@@ -724,3 +724,66 @@ test("GivenCliInspectWithoutRepoArgument_WhenRunInRepository_InspectsCurrentDire
   assert.equal(result.status, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).state, "inspected")
 })
+
+test("GivenDeclarationsWithRemoteOrMalformedSources_WhenInspected_AddsOnlyLocalRoots", async () => {
+  const marketplace = { plugins: [{ source: "https://example.invalid/remote" }, { source: 5 }, null, { source: "local/one" }] }
+  const root = await fixture({
+    ".claude-plugin/marketplace.json": JSON.stringify(marketplace),
+    ".github/plugin/marketplace.json": JSON.stringify({ name: "no plugin list" }),
+    "_meta/crew.json": JSON.stringify({ tooling: { repo: "org/remote", path: "ignored/tools" } }),
+    "local/one/report.pdf": pointer,
+    "ignored/tools/report.pdf": pointer,
+  })
+  const roots = inspect(root).repository.package_roots
+  assert.ok(roots.includes("local/one"))
+  assert.ok(!roots.includes("ignored/tools"))
+  assert.ok(!roots.some((entry) => entry.includes("remote")))
+  const nonString = await fixture({ "_meta/crew.json": JSON.stringify({ tooling: { path: 7 } }) })
+  assert.deepEqual(inspect(nonString).repository.package_roots, ["plugins"])
+})
+
+test("GivenIndexedFileLargerThanPrefix_WhenInspected_DoesNotReadItsBlob", async () => {
+  const root = await fixture({ "big.txt": "x".repeat(5000) })
+  let blobReads = 0
+  const result = inspect(root, { spawn: withGit(root, (sub) => { if (sub.startsWith("cat-file blob")) blobReads++ }) })
+  assert.equal(blobReads, 0)
+  assert.equal(fileAt(result, "big.txt").tracking, "ordinary_git")
+})
+
+test("GivenGitDirectoryProbeDeniedAfterRevParseFailure_WhenInspected_DoesNotClaimNotGit", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const fail = { status: 128, stdout: Buffer.alloc(0) }
+  const result = patched(fs, "lstatSync", (original) => (file, ...args) => path.basename(String(file)) === ".git" ? (() => { throw denied("EACCES") })() : original(file, ...args),
+    () => inspect(root, { spawn: withGit(root, (sub) => sub.startsWith("rev-parse --show-toplevel") ? fail : undefined) }))
+  assert.notEqual(result.state, "not_git")
+  assert.equal(result.findings[0].code, "git_metadata_unavailable")
+})
+
+test("GivenDeadlineExpiresBeforeToolProbe_WhenInspected_DoesNotRunGitLfs", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const realNow = performance.now.bind(performance)
+  let jumped = false
+  let probes = 0
+  const result = patched(performance, "now", () => () => realNow() + (jumped ? 1e9 : 0), () => inspect(root, {
+    spawn: (cmd, args, options) => {
+      if (cmd === "git-lfs") probes++
+      const sub = cmd === "git" ? args.slice(args.indexOf("-C") + 2).join(" ") : ""
+      const answer = spawnSync(cmd, args, options)
+      if (sub.startsWith("rev-parse --git-common-dir")) jumped = true
+      return answer
+    },
+  }))
+  assert.equal(probes, 0)
+  assert.equal(result.tool.state, "not_checked")
+})
+
+test("GivenNoArguments_WhenInspectedFromRepository_UsesCurrentDirectory", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const previous = process.cwd()
+  process.chdir(root)
+  try {
+    assert.equal(inspectLfs().state, "inspected")
+  } finally {
+    process.chdir(previous)
+  }
+})
