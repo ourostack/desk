@@ -187,15 +187,22 @@ export function createSearchEngine(options) {
       changedFiles = new Set()
       otherPaths = new Set()
       fullScan = false
-      const restoring = indexFailure !== null
       try {
-        useForNextDiscover(deskRoot, discoverCache, full || await movesFiles(others) ? null : files, { strict: restoring })
+        const scanAll = full || await movesFiles(others)
+        const restoring = indexFailure !== null
+        const generation = recoveryGeneration
+        useForNextDiscover(deskRoot, discoverCache, scanAll ? null : files, { strict: restoring })
         const run = rebuildIndex(deskRoot, { db, tombstones: { pluginRoot: deskPluginRoot() } })
         useForNextDiscover(null)
         await run
         built = true
-        indexFailure = null
-        directFiles = false
+        if (generation === recoveryGeneration) {
+          indexFailure = null
+          directFiles = false
+        } else {
+          dirty = true
+          fullScan = true
+        }
         // Strict restoration bypasses the cache; the next changed-files refresh must rebuild it.
         if (restoring) fullScan = true
       } catch (error) {
@@ -213,6 +220,8 @@ export function createSearchEngine(options) {
 
   async function current() {
     if (!built || dirty || watcherFailed) await refresh()
+    // A failure arriving during a tolerant refresh requires a strict read before that index can answer.
+    while (dirty && indexFailure !== null) await refresh()
   }
 
   function ensureModel() {

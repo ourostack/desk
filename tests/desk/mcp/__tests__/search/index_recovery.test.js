@@ -324,3 +324,67 @@ test("GivenRecovery_WhenAbortedDuringFinalRankingRead_ItDoesNotAdmitResults", as
   await assert.rejects(router.lexical({ query: "seedword", signal: controller.signal }), { name: "AbortError" })
   assert.equal(engine.searchStatus().lexical_backend, "unavailable")
 })
+
+test("GivenRefreshOverlapsIndexFailure_WhenItsCorpusIsDenied_ItCannotClearNewerFailure", async (t) => {
+  for (const stage of ["planning", "discovery"]) {
+    await t.test(stage, async (st) => {
+      const { deskRoot, engine, router } = await fixture(st)
+      let releaseSearch
+      const searchGate = new Promise(resolve => { releaseSearch = resolve })
+      let searchReached
+      const searching = new Promise(resolve => { searchReached = resolve })
+      let releaseRefresh
+      const refreshGate = new Promise(resolve => { releaseRefresh = resolve })
+      let refreshReached
+      const refreshing = new Promise(resolve => { refreshReached = resolve })
+      st.after(() => { releaseSearch(); releaseRefresh() })
+      const target = path.join(deskRoot, "work/one/task.md")
+      const featured = path.join(deskRoot, "_meta/featured.md")
+      const readFile = fs.readFile
+      const stat = fs.stat
+      const prepare = Database.prototype.prepare
+      const denied = Object.assign(new Error("synthetic concurrent corpus refusal"), { code: "EACCES" })
+      let deny = false
+      let failPin = true
+      st.mock.method(fs, "readFile", async function (file, ...args) {
+        if (file === featured) {
+          searchReached()
+          await searchGate
+          return "work\n"
+        }
+        if (deny && file === target) throw denied
+        return readFile.call(this, file, ...args)
+      })
+      st.mock.method(fs, "stat", async function (file, ...args) {
+        if (stage === "discovery" && file === target) {
+          refreshReached()
+          await refreshGate
+        }
+        if (deny && file === target) throw denied
+        return stat.call(this, file, ...args)
+      })
+      st.mock.method(Database.prototype, "prepare", function (sql, ...args) {
+        if (failPin && sql === "SELECT path, frontmatter FROM docs WHERE track = ? AND kind = 'task'") {
+          failPin = false
+          deny = true
+          throw Object.assign(new Error("synthetic concurrent indexed ranking failure"), { code: "SQLITE_IOERR" })
+        }
+        return prepare.call(this, sql, ...args)
+      })
+      const older = router.lexical({ query: "seedword" })
+      await searching
+      engine.noteChange("marker.txt")
+      engine.noteChange("work/one/task.md")
+      const newer = router.lexical({ query: "seedword" }).then(
+        result => ({ result }), error => ({ error }),
+      )
+      if (stage === "discovery") await refreshing
+      releaseSearch()
+      await assert.rejects(older, error => error === denied)
+      releaseRefresh()
+      assert.equal((await newer).error, denied)
+      assert.equal(engine.searchStatus().state, "index_unavailable")
+      assert.equal(engine.searchStatus().lexical_backend, "unavailable")
+    })
+  }
+})
