@@ -460,6 +460,22 @@ for (const selector of ["environment", "configuration"]) {
   })
 }
 
+test("GivenExternalAttributesFile_WhenInspected_KeepsItsPolicyInEffect", async () => {
+  const root = await fixture({ "_meta/.gitkeep": "", "_archive/.gitkeep": "", "report.pdf": bytes })
+  const external = path.join(root, "..", `${path.basename(root)}-external-attributes`)
+  mkdirSync(external)
+  try {
+    write(external, "attributes", "*.pdf diff=astextplain\n")
+    write(external, "config", `[core]\n\tattributesFile = ${path.join(external, "attributes").replaceAll("\\", "/")}\n`)
+    const file = fileAt(inspect(root, { env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(external, "config") } }), "report.pdf")
+    assert.equal(file.attributes.diff, "custom")
+    assert.equal(file.proposal, "review_existing_policy")
+    assert.equal(fileAt(inspect(root), "report.pdf").proposal, "track_exact_path")
+  } finally {
+    fs.rmSync(external, { recursive: true, force: true })
+  }
+})
+
 for (const command of ["git", "git-lfs"]) {
   test(`GivenIgnoringOwned${command}_WhenTimeoutExpires_TerminatesWithoutWaitingForSelfExit`, async (t) => {
     if (process.platform === "win32") return t.skip("POSIX ignored-SIGTERM regression; native Windows termination remains unqualified")
