@@ -24,6 +24,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { crewWorkspace, parseCrewRoster } from "../desk/crew-roster.js"
 import { INBOX, acknowledgeNote, parseNote, renderNote } from "../runtime/inbox.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
+import { commitFailureWords } from "../util/route-around.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
 
 // Every field each tool reads off `input`; __tests__/tool_schema_parity.test.js checks these against tool-schemas.js.
@@ -240,7 +241,7 @@ export async function note_ack({ deskRoot, input, person = null, spawnGit = spaw
   if (committed) schedulePush({ root: deskRoot })
   const result = { status: "acknowledged", note: rel, from: parsed.from, subject: parsed.subject, committed }
   if (commit !== undefined) result.commit = commit
-  const why = !isGit ? "this desk is not a Git checkout" : commit === undefined ? "the note already held uncommitted changes, so Desk left it for you to commit" : `the commit failed: ${commit.reason}`
+  const why = !isGit ? "this desk is not a Git checkout" : commit === undefined ? "the note already held uncommitted changes, so Desk left it for you to commit" : commitFailureWords(commit)
   result.message = committed
     ? `Acknowledged ${rel} from ${parsed.from}. It is committed, and ${parsed.from} sees it once your desk syncs.`
     : `Acknowledged ${rel} from ${parsed.from} on this machine, but not committed (${why}), so ${parsed.from} does not see it yet.`

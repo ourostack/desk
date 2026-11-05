@@ -156,6 +156,65 @@ export function indexEntries(root, relPaths, spawnGit) {
   })
 }
 
+// #561: a commit Git was killed for (a post-commit hook such as Git LFS's outlasting GIT_TIMEOUT_MS) or reported as failed can
+// still have landed. The failed dispatch is never repeated (a commit's hooks may already have run); HEAD is read back once instead.
+const READBACK_LIMIT = 50
+
+/** HEAD's full hash, `""` for an unborn branch, or null when Git cannot say. A read; only `run`'s read retry applies. */
+function headOf(root, spawnGit) {
+  const result = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+  if (result?.error) return null
+  if (result?.status === 0) return String(result.stdout).trim()
+  return result?.status === 1 && String(result?.stdout ?? "").trim() === "" ? "" : null
+}
+
+// Git's own message clean-up, near enough to compare: trailing spaces off each line, runs of blank lines folded, ends trimmed.
+const cleanMessage = (text) => String(text).split("\n").map((line) => line.replace(/\s+$/u, "")).join("\n").replace(/\n{3,}/gu, "\n\n").trim()
+
+function nulList(result) {
+  return String(result.stdout).split("\0").filter(Boolean)
+}
+
+/**
+ * Whether a commit of exactly `relPaths` with `message` landed after HEAD was `before` (`""` for unborn): `committed` when a new commit on
+ * HEAD has that message, changes only those paths and holds what this call meant (`holdsExpected(commit)`); `absent` when HEAD has not
+ * moved or no new commit touches those paths; `unknown` otherwise, and whenever Git cannot answer. Reads only.
+ */
+export function readBackCommit(root, relPaths, message, before, holdsExpected, spawnGit) {
+  if (before === null) return "unknown"
+  const after = headOf(root, spawnGit)
+  if (after === null) return "unknown"
+  if (after === before) return "absent"
+  if (after === "") return "unknown"
+  const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, before === "" ? after : `${before}..${after}`])
+  if (listed?.status !== 0) return "unknown"
+  const commits = String(listed.stdout).split("\n").map((line) => line.trim()).filter(Boolean)
+  if (commits.length > READBACK_LIMIT) return "unknown"
+  let touched = false
+  for (const commit of commits) {
+    const ours = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
+    if (ours?.status !== 0) return "unknown"
+    const inside = nulList(ours).length
+    if (inside === 0) continue
+    touched = true
+    const all = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit])
+    const body = run(spawnGit, root, ["log", "-1", "--format=%B", commit])
+    if (all?.status !== 0 || body?.status !== 0) return "unknown"
+    if (nulList(all).length !== inside || cleanMessage(body.stdout) !== cleanMessage(message)) continue
+    const holds = holdsExpected(commit)
+    if (holds === null) return "unknown"
+    if (holds) return "committed"
+  }
+  return touched ? "unknown" : "absent"
+}
+
+// A failed commit call's answer: `ok` when the read-back finds it landed (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
+function afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit) {
+  const stderr = timedOut(result) ? "timeout" : result.stderr
+  const readback = readBackCommit(root, relPaths, message, before, holdsExpected, spawnGit)
+  return readback === "committed" ? { ok: true, stderr, readback } : { ok: false, stderr, readback }
+}
+
 /**
  * Commits exactly what the index holds at `relPaths` (`entries`, from `indexEntries` for the same paths), never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
  * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
@@ -163,23 +222,35 @@ export function indexEntries(root, relPaths, spawnGit) {
  */
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
-  if (refusal !== null) return { ok: false, stderr: refusal }
+  if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
-    const hasHead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"]).status === 0
+    const before = headOf(root, spawnGit)
+    const hasHead = before !== null && before !== ""
     const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
-    if (seed.status !== 0) return { ok: false, stderr: seed.stderr }
+    if (seed.status !== 0) return { ok: false, stderr: seed.stderr, readback: "absent" }
     const held = new Set(entries.map((entry) => entry.path))
     const lines = [
       ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}\0`),
       ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${"0".repeat(40)}\t${p}\0`),
     ]
     const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
-    if (update.status !== 0) return { ok: false, stderr: update.stderr }
+    if (update.status !== 0) return { ok: false, stderr: update.stderr, readback: "absent" }
     const result = run(spawnGit, root, ["commit", "-m", message], { env })
-    if (timedOut(result)) return { ok: false, stderr: "timeout" }
-    return { ok: result.status === 0, stderr: result.stderr }
+    if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
+    // What this call meant to commit is exactly `entries` at `relPaths`, and nothing at the paths the index did not hold.
+    const holdsExpected = (commit) => {
+      const tree = run(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...relPaths])
+      if (tree?.status !== 0) return null
+      const found = nulList(tree).map((record) => {
+        const [meta, entryPath] = record.split("\t")
+        const [mode, , sha] = meta.split(" ")
+        return `${mode} ${sha}\t${entryPath}`
+      }).sort()
+      return JSON.stringify(found) === JSON.stringify(entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}`).sort())
+    }
+    return afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -213,10 +284,16 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
  */
 export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
-  if (refusal !== null) return { ok: false, stderr: refusal }
+  if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
+  const before = headOf(root, spawnGit)
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
-  if (timedOut(result)) return { ok: false, stderr: "timeout" }
-  return { ok: result.status === 0, stderr: result.stderr }
+  if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
+  // `git commit -- <paths>` commits the working tree at those paths, so what this call meant is what the working tree still holds there.
+  const holdsExpected = (commit) => {
+    const diff = run(spawnGit, root, ["diff", "--quiet", commit, "--", ...relPaths])
+    return diff?.status === 0 ? true : diff?.status === 1 ? false : null
+  }
+  return afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit)
 }
