@@ -13,6 +13,7 @@ import * as path from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { different } from "../_file_identity.js"
 import { NO_POSIX_MODES, isWindows } from "../_platform.js"
 import { fakeDriver, PASSWORD } from "./_auth_fixtures.js"
 
@@ -259,7 +260,7 @@ test("copyProfile binds Local State to its opened identity before reading bytes"
   let reads = 0
   fs.fstatSync = (...args) => {
     const stat = originalStat(...args)
-    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: stat.ino + 1n })
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: different(stat.ino) })
   }
   fs.readFileSync = (...args) => { reads++; return originalRead(...args) }
   try {
