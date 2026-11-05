@@ -8,13 +8,14 @@ import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { isGitRepository, hasUnstagedWork, indexLockHeld, stagePaths, commitPaths, yieldsGitLock } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { commitFailure, commitRoute } from "../util/route-around.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const CARD_FOLDER = "improvement"
 const VERB = /^[a-z][a-z_]{0,23}$/u
 
 /** What `writeCardCommitted` reports as `commit`: one stable code, never text from Git. */
-export const COMMIT_CODES = Object.freeze(["committed", "no_files", "unsafe_path", "not_git", "no_change", "stage_failed", "commit_failed", "deferred"])
+export const COMMIT_CODES = Object.freeze(["committed", "no_files", "unsafe_path", "not_git", "no_change", "stage_failed", "commit_failed", "commit_unknown", "deferred"])
 
 /**
  * On a Git desk, a friction file is staged only when it held no unstaged changes before the write, so a dirty or
@@ -37,9 +38,9 @@ export function stageAndCommitFile(filePath, message, spawnGit) {
 /** `stageAndCommitFile` for several files in one folder (`names` relative to `dir`), in one commit. */
 export function stageAndCommitFiles(dir, names, message, spawnGit) {
   const staged = stagePaths(dir, names, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: names, message, readback: "absent" }) }
   const committed = commitPaths(dir, names, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : commitFailure({ root: dir, paths: names, message, committed })
 }
 
 /** The fixed commit message for a card: `improvement: <verb> <card file name>`; never any title text. `verb` is a short lowercase word. */
@@ -98,16 +99,19 @@ function reportedPaths(deskRoot, folder, result) {
  * returned `result`, so a message can name the card file) and the push is scheduled.
  *
  * Input: { deskRoot (absolute), personPrefix ("" or "desks/<alias>"), write, message, spawnGit?, schedulePush? }.
- * Returns { result, commit, left_alone }: `result` is the writer's result without `file` and `set_aside_files` (it has
+ * Returns { result, commit, left_alone, route_around? }: `result` is the writer's result without `file` and `set_aside_files` (it has
  * `file_name` instead, and `set_aside` stays as a count); `commit` is one of COMMIT_CODES; `left_alone` counts files in
  * the card folder that are neither a card file nor a set-aside file (never staged, never touched). No absolute path is
- * ever returned, and no text from Git.
+ * ever returned in `result` or `commit`, and no text from Git. `route_around` comes with every answer that leaves the card
+ * uncommitted (`deferred`, `stage_failed`, `commit_failed`, `commit_unknown`): the commands that finish the commit by hand and
+ * read it back. It names the desk root, so it is for the agent in this session and is never put in anything filed elsewhere.
  *
  * Only paths inside `<personPrefix>/_meta/improvement/` are staged, by exact path (never `-a`), and never a name that
  * starts with `.improvement` (the lock and temp files): a reported path outside the folder or relative gives
  * `unsafe_path` and nothing is staged. A desk that is not a Git repository gives `not_git`: the card file stays on
- * disk, uncommitted, and no push is scheduled. A Git failure gives `stage_failed` or `commit_failed` and never loses the
- * card; the next write commits it. A background writer (`yieldsGitLock`) that finds another Git process holding the desk's
+ * disk, uncommitted, and no push is scheduled. A Git failure gives `stage_failed`, `commit_failed` (the commit did not land) or
+ * `commit_unknown` (Desk cannot tell whether it landed) and never loses the card; the next write commits it. A commit that failed
+ * or timed out but landed all the same is read back as `committed`, and its push is scheduled (#561). A background writer (`yieldsGitLock`) that finds another Git process holding the desk's
  * index lock stages nothing and gives `deferred`, so a person's write in the same desk is never held up; the next write
  * commits the card.
  */
@@ -119,14 +123,26 @@ export async function writeCardCommitted({ deskRoot, personPrefix = "", write, m
   const reported = path.isAbsolute(deskRoot) ? reportedPaths(deskRoot, folder, written) : null
   if (reported === null) return { result, commit: "unsafe_path", left_alone: 0 }
   if (!isGitRepository(deskRoot, spawnGit)) return { result, commit: reported.length === 0 ? "no_files" : "not_git", left_alone: 0 }
+  const textOf = () => (typeof message === "function" ? message(result) : message)
   const dirty = dirtyUnder(spawnGit, deskRoot, folder)
-  if (dirty === null) return { result, commit: "stage_failed", left_alone: 0 }
+  // Git could not say which files changed: the route covers exactly the files this write reported, and only those.
+  if (dirty === null) {
+    if (reported.length === 0) return { result, commit: "no_files", left_alone: 0 }
+    return { result, commit: "stage_failed", left_alone: 0, route_around: commitRoute({ root: deskRoot, paths: reported, message: textOf(), readback: "absent" }) }
+  }
   const stage = dirty.filter((rel) => isCardOutput(folder, rel, reported))
   const leftAlone = dirty.length - stage.length
   if (stage.length === 0) return { result, commit: reported.length === 0 ? "no_files" : "no_change", left_alone: leftAlone }
-  if (yieldsGitLock() && indexLockHeld(deskRoot, spawnGit)) return { result, commit: "deferred", left_alone: leftAlone }
-  if (!stagePaths(deskRoot, stage, spawnGit).ok) return { result, commit: "stage_failed", left_alone: leftAlone }
-  if (!commitPaths(deskRoot, stage, typeof message === "function" ? message(result) : message, spawnGit).ok) return { result, commit: "commit_failed", left_alone: leftAlone }
+  const text = textOf()
+  // Every answer that leaves the card uncommitted carries the route to finish the commit another way (#561, #623).
+  const route = (readback) => commitRoute({ root: deskRoot, paths: stage, message: text, readback })
+  if (yieldsGitLock() && indexLockHeld(deskRoot, spawnGit)) return { result, commit: "deferred", left_alone: leftAlone, route_around: route("absent") }
+  if (!stagePaths(deskRoot, stage, spawnGit).ok) return { result, commit: "stage_failed", left_alone: leftAlone, route_around: route("absent") }
+  const committed = commitPaths(deskRoot, stage, text, spawnGit)
+  if (!committed.ok) {
+    const code = committed.readback === "absent" ? "commit_failed" : "commit_unknown"
+    return { result, commit: code, left_alone: leftAlone, route_around: route(committed.readback) }
+  }
   schedulePush({ root: deskRoot })
   return { result, commit: "committed", left_alone: leftAlone }
 }

@@ -8,6 +8,7 @@ import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.j
 import { stagedChanges } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { ensureCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { assertRoute } from "./_route_around.js"
 
 const CARD = "---\ntitle: One\nstatus: active\n---\nBody of the card.\n"
 
@@ -237,14 +238,22 @@ test("git failures are reported, not thrown", async () => {
   const root = await makeDesk()
   await stageTidy(root)
   const run = (spawnGit) => desk_save({ deskRoot: root, input: { paths: TIDY_PATHS, message: "m", tidy: true }, spawnGit, schedulePush: () => {} })
-  assert.equal((await run(failing("add"))).commit.status, "failed")
-  assert.match((await run(failing("diff", "--cached"))).commit.reason, /list the staged changes/u)
-  assert.match((await run(failing("ls-files", "-s"))).commit.reason, /read the index/u)
-  assert.equal((await run(failing("read-tree"))).commit.reason, "read-tree failed")
-  assert.equal((await run(failing("update-index"))).commit.reason, "update-index failed")
-  assert.equal((await run(failing("commit"))).commit.reason, "commit failed")
+  // Each failure also carries the route that finishes the tidy commit by hand (#623).
+  const routed = async (spawnGit) => {
+    const { commit } = await run(spawnGit)
+    assertRoute(commit.route_around)
+    return commit
+  }
+  assert.equal((await routed(failing("add"))).status, "failed")
+  assert.match((await routed(failing("diff", "--cached"))).reason, /list the staged changes/u)
+  assert.match((await routed(failing("ls-files", "-s"))).reason, /read the index/u)
+  assert.equal((await routed(failing("read-tree"))).reason, "read-tree failed")
+  assert.equal((await routed(failing("update-index"))).reason, "update-index failed")
+  assert.equal((await routed(failing("commit"))).reason, "commit failed")
   const slow = (cmd, args, options) => (args[2] === "commit" ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
-  assert.equal((await run(slow)).commit.reason, "timeout")
+  const timedOut = await routed(slow)
+  assert.equal(timedOut.reason, "timeout")
+  assert.equal(timedOut.status, "failed", "a timed-out tidy commit that left HEAD where it was is read back as not landed")
 })
 
 test("the temporary index leaves the real index and the working tree alone", async () => {

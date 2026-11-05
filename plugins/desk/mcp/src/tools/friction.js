@@ -103,7 +103,7 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
   const key = cardKey("friction_candidate", fingerprint)
   const evidence = Array.isArray(card.evidenceJobs) ? card.evidenceJobs.map((job) => `job:${job}`) : []
   try {
-    const { result, commit } = await commitCard({
+    const { result, commit, route_around: routeAround } = await commitCard({
       deskRoot,
       personPrefix: prefix,
       message: (written) => cardCommitMessage("friction", written.file_name ?? "set_aside"),
@@ -113,7 +113,10 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
     })
     const out = { improvement: result.result }
     if (OPENED_CODES.has(result.result) && typeof result.file_name === "string") Object.assign(out, { improvement_key: key, improvement_path: path.posix.join(prefix, "_meta", "improvement", result.file_name) })
-    if (OPENED_CODES.has(result.result) && commit !== "committed" && commit !== "no_change" && commit !== "no_files") out.improvement_commit = commit
+    if (OPENED_CODES.has(result.result) && commit !== "committed" && commit !== "no_change" && commit !== "no_files") {
+      out.improvement_commit = commit
+      if (routeAround) out.improvement_route_around = routeAround
+    }
     return out
   } catch {
     return { improvement: "card_write_failed" }

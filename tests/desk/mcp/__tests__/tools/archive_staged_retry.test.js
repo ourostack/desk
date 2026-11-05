@@ -30,8 +30,16 @@ async function timedOutArchive({ track = true, trackContent = trackBefore, commi
         error: Object.assign(new Error("owned commit timeout"), { code: "ETIMEDOUT" }) }
     },
   })
-  assert.equal(result.status, "archive_pending")
-  assert.equal(result.commit.reason, "timeout")
+  if (committed) {
+    // A commit that timed out after it landed is read back as committed (#561, #556): archived at once, no pending answer.
+    assert.equal(result.status, "archived")
+    assert.equal(result.commit, undefined)
+  } else {
+    assert.equal(result.status, "archive_pending")
+    assert.equal(result.commit.reason, "timeout")
+    assert.equal(result.publication.status, "pending")
+    assert.ok(result.route_around, "an archive that is not published carries route_around")
+  }
   f.index = git(f.root, "ls-files", "-s")
   return f
 }
@@ -80,7 +88,7 @@ for (const [name, mutate] of [
   assert.equal(git(f.root, "status", "--porcelain"), status)
 })
 
-test("a timeout after the commit took effect is reconciled without a duplicate commit", async () => {
+test("a timeout after the commit took effect is read back as archived, without a duplicate commit", async () => {
   const f = await timedOutArchive({ committed: true })
   const head = git(f.root, "rev-parse", "HEAD")
   assert.notEqual(head, f.head)
@@ -196,8 +204,10 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
     } catch (error) { if (error.code !== "ENOENT") throw error }
     await fs.unlink(hook)
   }
-  assert.equal(result.status, "archive_pending")
-  assert.equal(result.commit.reason, "timeout")
+  // The post-commit hook runs after the commit landed, so the read-back finds it committed (#561, #556); a pre-commit timeout left nothing.
+  assert.equal(result.status, phase === "pre-commit" ? "archive_pending" : "archived")
+  if (phase === "pre-commit") assert.equal(result.commit.reason, "timeout")
+  else assert.equal(result.commit, undefined)
   const events = (await fs.readFile(trace, "utf8")).trim().split("\n").map(line => JSON.parse(line))
   assert.ok(events.some(event => event.event === "child_start" && event.hook_name === phase),
     "native trace must identify the hook phase reached before timeout")
