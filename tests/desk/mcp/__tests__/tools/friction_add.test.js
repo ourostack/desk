@@ -12,6 +12,7 @@ import { osEnv } from "../_os_env.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fingerprintOf } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
 import { cardFile, claimNext, readCards, updateCard } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { notCommitted } from "./_route_around.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -330,7 +331,7 @@ test("friction_add reports a commit failure without losing the write", async () 
   })
   assert.equal(result.status, "added", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "_meta", "friction.md")))
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
@@ -347,7 +348,7 @@ test("friction_add reports a staging failure without losing the write", async ()
     spawnGit,
   })
   assert.equal(result.status, "added", "the write itself is never lost to a staging failure")
-  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
   assert.ok(await exists(path.join(root, "_meta", "friction.md")))
 })
 
@@ -609,6 +610,8 @@ test("the friction entry keeps its own dirty rule while the card is still commit
   assert.match(log[0], /^improvement: friction /u)
 })
 
+const ROUTE = { summary: "route", steps: [] }
+
 test("the card write goes through the injected commit seam, in the person's folder, and a failed commit is reported", async () => {
   const root = await mkTempDeskRoot()
   const env = await stateEnv()
@@ -616,11 +619,12 @@ test("the card write goes through the injected commit seam, in the person's fold
   const commitCard = async (options) => {
     calls.push(options)
     const result = await options.write()
-    return { result: { result: result.result, file_name: path.basename(result.file) }, commit: "commit_failed", left_alone: 0, message: options.message({ file_name: "x.md" }) }
+    return { result: { result: result.result, file_name: path.basename(result.file) }, commit: "commit_failed", route_around: ROUTE, left_alone: 0, message: options.message({ file_name: "x.md" }) }
   }
   const result = await friction_add({ deskRoot: root, input: sysInput(), env, commitCard })
   assert.equal(result.improvement, "opened")
   assert.equal(result.improvement_commit, "commit_failed")
+  assert.equal(result.improvement_route_around, ROUTE, "the card's route comes back with its code")
   assert.equal(calls.length, 1)
   assert.equal(calls[0].deskRoot, root)
   assert.equal(calls[0].personPrefix, "")

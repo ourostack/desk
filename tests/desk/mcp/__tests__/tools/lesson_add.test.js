@@ -322,7 +322,7 @@ test("lesson_add personal leaves an AGENTS.md that already held unstaged edits u
   const calls = []
   const result = await lesson_add({ deskRoot: root, input: personal("Rule", "Do it."), schedulePush: (opts) => calls.push(opts) })
   assert.equal(result.in_effect, false)
-  assert.equal(result.message, "Written to AGENTS.md, but not in effect: it is not committed (AGENTS.md already held changes from elsewhere, so Desk left it for you to commit), so other machines do not have it.")
+  assert.equal(result.message, "Written to AGENTS.md, but not in effect: it is not committed (AGENTS.md already held changes from elsewhere, so Desk left it for you to commit without them; route_around says how), so other machines do not have it.")
   assert.equal(git(root, ["log", "--format=%s"]).trim(), "init")
   assert.match(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), /Another session's edit\.\n\n## Lessons/u)
   assert.deepEqual(calls, [])

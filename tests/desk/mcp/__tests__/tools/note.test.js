@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process"
 import { note_ack, note_leave, localIso, noteFileName } from "../../../../../plugins/desk/mcp/src/tools/note.js"
 import { parseNote, renderNote } from "../../../../../plugins/desk/mcp/src/runtime/inbox.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { notCommitted } from "./_route_around.js"
 
 const URL = "https://github.com/acme/cit"
 const PR = `${URL}/pull/9`
@@ -284,8 +285,8 @@ test("note_ack writes but does not commit when it cannot, and says why", async (
   const failing = await saranyaDesk()
   const spawnGit = (cmd, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(cmd, args, options))
   const refused = await run(failing, { spawnGit })
-  assert.deepEqual([refused.committed, refused.commit], [false, { status: "failed", reason: "hook said no" }])
-  assert.match(refused.message, /not committed \(the commit failed: hook said no\)/u)
+  assert.deepEqual([refused.committed, notCommitted(refused.commit)], [false, { status: "failed", reason: "hook said no" }])
+  assert.match(refused.message, /not committed \(the commit failed: hook said no; route_around finishes it\)/u)
 })
 
 test("note_ack refuses anything but a note in the person's own inbox", async () => {

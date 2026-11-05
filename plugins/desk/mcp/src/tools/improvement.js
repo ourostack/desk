@@ -41,8 +41,9 @@ function prefixOf(deskRoot, person) {
   return deskRelativePath(deskRoot, personPrefix(deskRoot, person))
 }
 
-function withCommit(answer, commit, setAside, leftAlone) {
+function withCommit(answer, commit, setAside, leftAlone, routeAround) {
   if (commit !== "committed" && commit !== "no_files" && commit !== "no_change") answer.commit = commit
+  if (routeAround) answer.route_around = routeAround
   if (setAside) answer.set_aside = setAside
   if (leftAlone) answer.left_alone = leftAlone
   return answer
@@ -68,7 +69,7 @@ export async function improvement_open({ deskRoot, input, person = null, search,
     return { status: "refused", result: "invalid_source" }
   }
   const prefix = prefixOf(deskRoot, person)
-  const { result, commit, left_alone: leftAlone } = await writeCardCommitted({
+  const { result, commit, left_alone: leftAlone, route_around: routeAround } = await writeCardCommitted({
     deskRoot,
     personPrefix: prefix,
     message: messageFor("open"),
@@ -82,7 +83,7 @@ export async function improvement_open({ deskRoot, input, person = null, search,
   record(search, prefix, result.file_name)
   const answer = { status: OPENED.has(result.result) ? "ok" : "refused", result: result.result }
   if (result.file_name) answer.file_name = result.file_name
-  return withCommit(answer, commit, result.set_aside, leftAlone)
+  return withCommit(answer, commit, result.set_aside, leftAlone, routeAround)
 }
 
 /**
@@ -93,7 +94,7 @@ export async function improvement_open({ deskRoot, input, person = null, search,
 export async function improvement_next({ deskRoot, input, person = null, search, env = process.env, now, spawnGit, schedulePush }) {
   if (isNoninteractive(env) || isHeadlessFactorySession(env)) return { status: "noninteractive", meaning: NEXT_REFUSALS.noninteractive }
   const prefix = prefixOf(deskRoot, person)
-  const { result, commit, left_alone: leftAlone } = await writeCardCommitted({
+  const { result, commit, left_alone: leftAlone, route_around: routeAround } = await writeCardCommitted({
     deskRoot,
     personPrefix: prefix,
     message: messageFor("claim"),
@@ -105,12 +106,12 @@ export async function improvement_next({ deskRoot, input, person = null, search,
     const answer = { status: result.result }
     if (NEXT_REFUSALS[result.result]) answer.meaning = NEXT_REFUSALS[result.result]
     if (result.result === "claim_held") answer.key = result.key
-    return withCommit(answer, commit, result.set_aside, leftAlone)
+    return withCommit(answer, commit, result.set_aside, leftAlone, routeAround)
   }
   record(search, prefix, result.file_name)
   const { key, source, title, evidence, state, plugin, signal, countermeasure, kaizen_url: kaizenUrl, recurrences, reopened, checks_run: checksRun } = result.card
   const card = { key, source, title, evidence, state, plugin, signal, countermeasure, kaizen_url: kaizenUrl, recurrences, reopened, checks_run: checksRun }
-  return withCommit({ status: "claimed", card, claim_id: result.claim_id, authority: AUTHORITY }, commit, result.set_aside, leftAlone)
+  return withCommit({ status: "claimed", card, claim_id: result.claim_id, authority: AUTHORITY }, commit, result.set_aside, leftAlone, routeAround)
 }
 
 // What the holder of a claim may do, as the library patch it means; null when the input asks for something else.
@@ -139,7 +140,7 @@ export async function improvement_update({ deskRoot, input, person = null, searc
   const card = held.cards.find((candidate) => candidate.key === values.key)
   if (!card) return { status: "refused", result: "not_found" }
   if (card.state !== "claimed" || card.claim?.claim_id !== values.claim_id) return { status: "refused", result: "not_your_claim" }
-  const { result, commit, left_alone: leftAlone } = await writeCardCommitted({
+  const { result, commit, left_alone: leftAlone, route_around: routeAround } = await writeCardCommitted({
     deskRoot,
     personPrefix: prefix,
     message: messageFor("update"),
@@ -148,8 +149,8 @@ export async function improvement_update({ deskRoot, input, person = null, searc
     write: () => updateCard({ deskRoot, personPrefix: prefix, key: values.key, claim_id: values.claim_id, patch, now }),
   })
   if (result.result !== "updated") {
-    return withCommit({ status: "refused", result: result.result }, commit, result.set_aside, leftAlone)
+    return withCommit({ status: "refused", result: result.result }, commit, result.set_aside, leftAlone, routeAround)
   }
   record(search, prefix, result.file_name)
-  return withCommit({ status: "updated", state: result.card.state }, commit, result.set_aside, leftAlone)
+  return withCommit({ status: "updated", state: result.card.state }, commit, result.set_aside, leftAlone, routeAround)
 }
