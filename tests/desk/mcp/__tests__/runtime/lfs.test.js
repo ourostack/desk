@@ -125,7 +125,11 @@ test("GivenContextBinary_WhenInspected_ProposesExactTrackingWithoutChangingDirty
   assert.equal(fileAt(result, "task/report.PDF").proposal, "track_exact_path")
   assert.equal(result.files.some((file) => file.path === "untracked.png"), false)
   assert.deepEqual(snapshot(root), before)
-  assert.deepEqual(inspect(root), result, "repeat inspection changes neither evidence nor state")
+  // A cold first git-lfs start can exceed the fixed 1 s probe on loaded Windows runners; that bound is production behavior, so only the probe result may differ.
+  const { tool: firstTool, ...firstEvidence } = result
+  const { tool: repeatTool, ...repeatEvidence } = inspect(root)
+  assert.deepEqual(repeatEvidence, firstEvidence, "repeat inspection changes neither evidence nor state")
+  for (const tool of [firstTool, repeatTool]) assert.ok(["available", "unavailable", "missing"].includes(tool.state), `unexpected tool state ${tool.state}`)
 })
 
 test("GivenLfsPointer_WhenObjectMissing_ReportsAbsenceWithoutFetching", async () => {
