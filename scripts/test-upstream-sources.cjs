@@ -120,6 +120,29 @@ function github({
 
 {
   const locked = source();
+  locked.files[0].sourcePath = "hooks/run-hook.cmd";
+  locked.files[0].generatedPath = "plugins/example/hooks/run-hook.cmd";
+  const client = github();
+  client.tree = () => assert.fail("hook-only selection must not query the recursive tree");
+  client.file = (repository, sourcePath, ref) => {
+    assert.equal(repository, locked.repository);
+    assert.equal(sourcePath, "hooks/run-hook.cmd");
+    assert.equal(ref, lockedCommit);
+    return Buffer.from("locked");
+  };
+  const result = inspectSource(locked, client);
+  assert.equal(result.classification, "current");
+  assert.deepEqual(result.selected_files, [{
+    source_path: "hooks/run-hook.cmd",
+    generated_path: "plugins/example/hooks/run-hook.cmd",
+    locked_sha256: hash("locked"),
+    candidate_sha256: hash("locked"),
+    changed: false,
+  }]);
+}
+
+{
+  const locked = source();
   locked.files.push({
     sourcePath: "skills/example/retired.md",
     generatedPath: "plugins/example/skills/example/retired.md",
@@ -196,8 +219,10 @@ function github({
   }));
   assert.deepEqual(tree.topLevel("owner/repo", "complete"), ["LICENSE", "NOTICE"]);
   assert.throws(() => tree.topLevel("owner/repo", "partial"), /did not return a complete top-level tree/u);
+  assert.throws(() => tree.tree("owner/repo", "partial"), /did not return a complete recursive tree/u);
   const noTree = createGitHubClient(() => ({ status: 0, stdout: "{}", stderr: "" }));
   assert.throws(() => noTree.topLevel("owner/repo", "x"), /complete top-level tree/u);
+  assert.throws(() => noTree.tree("owner/repo", "x"), /complete recursive tree/u);
 
   const noReleases = createGitHubClient(() => ({
     status: 0,
