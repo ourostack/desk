@@ -1,0 +1,1 @@
+Failed fresh-browser launches now report the CLI exit code, termination signal or startup deadline even when the driver prints nothing. Spawn failures expose only their error code, not the private command line. Launch deadlines and retry behavior are unchanged; this improves diagnosis without claiming to fix an underlying browser startup hang.

@@ -250,13 +250,18 @@ function cliPath(s) {
   return path.join(s.stateRoot, "playwright-core-" + PLAYWRIGHT_VERSION, "node_modules", "playwright-core", "lib", "tools", "cli-client", "cli.js");
 }
 
-// Run the Playwright CLI in a context folder; resolves { code, text, timedOut }.
+// Run the Playwright CLI in a context folder; retain process identity even when it prints nothing.
 function runCli(s, cwd, args, timeoutMs) {
   return new Promise(function (resolve) {
     childProcess.execFile(s.node, [cliPath(s), "--session=" + SESSION].concat(args), {
       cwd: cwd, env: s.env, timeout: timeoutMs, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: "utf8"
     }, function (error, stdout, stderr) {
-      resolve({ code: error ? 1 : 0, text: (stdout + "\n" + stderr).trim(), timedOut: Boolean(error && error.killed) });
+      resolve({
+        code: error ? error.code || 1 : 0,
+        signal: error && error.signal || null,
+        text: (stdout + "\n" + stderr).trim(),
+        timedOut: Boolean(error && error.killed)
+      });
     });
   });
 }
@@ -414,7 +419,14 @@ function open(s, kind) {
       return result;
     });
   }).then(function (result) {
-    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
+    if (result.code !== 0) {
+      var failure = result.timedOut
+        ? "CLI took longer than " + s.openMs / 1000 + " seconds and was stopped"
+        : result.signal ? "CLI ended" : "CLI failed with code " + result.code;
+      if (result.signal) failure += " (signal " + result.signal + ")";
+      throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + failure + "." +
+        (result.text ? " " + result.text.slice(-1500) : ""));
+    }
     var opened = {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
       note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, so copy out any screenshot you need first."

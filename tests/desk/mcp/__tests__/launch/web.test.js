@@ -29,6 +29,9 @@ const args = process.argv.slice(2)
 fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify({ args, cwd: process.cwd() }) + "\\n")
 const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI_MODE || ""
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
+if (verb === "open" && mode === "open-quiet") process.exit(23)
+if (verb === "open" && mode === "open-signal") process.kill(process.pid, "SIGTERM")
+if (verb === "open" && mode === "open-timeout") setTimeout(() => {}, 10000)
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
@@ -691,7 +694,7 @@ test("a missing browser, a failed start and bad input each give a plain message"
   const controller = web.createController(options)
   const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
   assert.equal(failed.isError, true)
-  assert.equal(text(failed), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed\nline two")
+  assert.match(text(failed), /code 1.*Browser failed\nline two/su)
   assert.deepEqual(fs.readdirSync(tmp), [])
   assert.match(text(await controller.call("browser_context", { action: "open", browser: "other" })), /must be "fresh" or "mine"/u)
   assert.match(text(await controller.call("browser_context", { action: "reopen" })), /action must be "open" or "close"/u)
@@ -700,6 +703,35 @@ test("a missing browser, a failed start and bad input each give a plain message"
   assert.match(text(await controller.call("browser_other")), /Unknown tool browser_other/u)
   const gone = await controller.call("browser_context", { action: "close", contextId: "00000000-0000-4000-8000-000000000000" })
   assert.deepEqual(json(gone), { contextId: "00000000-0000-4000-8000-000000000000", closed: true })
+})
+
+test("a quiet failed browser start reports its exit code or signal", async () => {
+  for (const [mode, expected] of [["open-quiet", /code 23/u], ["open-signal", /signal SIGTERM/u]]) {
+    const { options, tmp } = await setup({ mode })
+    const result = await web.createController(options).call("browser_context", { action: "open" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), expected)
+    assert.deepEqual(fs.readdirSync(tmp), [], "the failed context is removed")
+  }
+})
+
+test("a quiet browser startup timeout names the deadline and stop signal without retrying", async () => {
+  const { options, tmp, calls } = await setup({ mode: "open-timeout" })
+  const result = await web.createController({ ...options, openMs: 2000 }).call("browser_context", { action: "open" })
+  assert.equal(result.isError, true)
+  assert.match(text(result), /longer than 2 seconds/u)
+  assert.match(text(result), /signal SIGTERM/u)
+  assert.equal(calls().filter((call) => call.args[1] === "open").length, 1)
+  assert.deepEqual(fs.readdirSync(tmp), [], "timeout cleanup removes the failed context")
+})
+
+test("a browser CLI spawn failure reports its error code without the private command line", async () => {
+  const { options, root, tmp } = await setup()
+  const result = await web.createController({ ...options, node: path.join(root, "missing-node") }).call("browser_context", { action: "open" })
+  assert.equal(result.isError, true)
+  assert.match(text(result), /ENOENT/u)
+  assert.equal(text(result).includes(root), false)
+  assert.deepEqual(fs.readdirSync(tmp), [], "spawn failure cleanup removes the failed context")
 })
 
 test("browser_command runs only page commands, refuses options that switch session or browser, and reports failures plainly", async () => {
