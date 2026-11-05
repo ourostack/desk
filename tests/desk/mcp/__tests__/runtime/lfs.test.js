@@ -17,6 +17,9 @@ try {
   if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
 }
 const cli = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/lfs.js", import.meta.url))
+// Git for Windows ships system attributes (diff=astextplain for *.pdf); fixtures must not inherit host policy.
+process.env.GIT_ATTR_NOSYSTEM = "1"
+
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const bytes = Buffer.from([0, 1, 2, 255, 13, 10])
 const oid = digest(bytes)
