@@ -13,7 +13,7 @@ import { otherFile } from "../_file_identity.js"
 const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
 const require = createRequire(import.meta.url)
 const compat = require(path.join(repo, "scripts/superpowers-hook-compat.cjs"))
-const { refresh, main, upstreamVersion, chooseSuperpowersVersion, SUPERPOWERS_VERSION_FILES } = require(path.join(repo, "scripts/refresh-superpowers.cjs"))
+const { refresh, main, upstreamVersion, chooseSuperpowersVersion, SUPERPOWERS_RANGE_FILES, SUPERPOWERS_VERSION_FILES } = require(path.join(repo, "scripts/refresh-superpowers.cjs"))
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 
 function fixture(t) {
@@ -27,6 +27,11 @@ function fixture(t) {
     fs.writeFileSync(path.join(root, file), content)
   }
   for (const file of SUPERPOWERS_VERSION_FILES) put(file, '{"version":"6.4.5"}\n')
+  for (const site of SUPERPOWERS_RANGE_FILES) {
+    const json = fs.existsSync(path.join(root, site.file)) ? JSON.parse(fs.readFileSync(path.join(root, site.file))) : {}
+    json.dependencies = [{ name: "superpowers", id: "superpowers", [site.key]: "^6.3.0" }]
+    put(site.file, JSON.stringify(json) + "\n")
+  }
   put("plugins/superpowers/README.md", `version 6.4.2, commit \`${"a".repeat(40)}\`; the upstream tree is \`${"b".repeat(40)}\`\n`)
   const raw = fs.readFileSync(path.join(repo, "plugins/superpowers/hooks/upstream/run-hook.cmd"))
   const bytes = new Map([
