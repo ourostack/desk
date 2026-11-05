@@ -706,7 +706,7 @@ test("a missing browser, a failed start and bad input each give a plain message"
 })
 
 test("a quiet failed browser start reports its exit code or signal", async () => {
-  for (const [mode, expected] of [["open-quiet", /code 23/u], ["open-signal", /signal SIGTERM/u]]) {
+  for (const [mode, expected] of [["open-quiet", /code 23/u], ["open-signal", isWindows ? /code 1/u : /signal SIGTERM/u]]) {
     const { options, tmp } = await setup({ mode })
     const result = await web.createController(options).call("browser_context", { action: "open" })
     assert.equal(result.isError, true)
