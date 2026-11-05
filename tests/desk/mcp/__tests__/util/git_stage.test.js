@@ -21,6 +21,7 @@ import {
   commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
+  YIELD_ENV,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
 async function mkTempRepo() {
@@ -67,17 +68,24 @@ test("isGitRepository fails safe to false when the spawned command throws", asyn
 })
 
 test("a read-only repository observation retries a transient lock with the same bounded command", () => {
-  let dispatches = 0
-  const found = isGitRepository("/owned-read-probe", (command, args, options) => {
-    assert.equal(command, "git")
-    assert.deepEqual(args, ["-C", "/owned-read-probe", "rev-parse", "--is-inside-work-tree"])
-    assert.deepEqual(options, { windowsHide: true, encoding: "utf8", timeout: 10_000 })
-    return ++dispatches === 1
-      ? { status: 128, stdout: "", stderr: "fatal: cannot lock ref during owned read" }
-      : { status: 0, stdout: "true\n", stderr: "" }
-  })
-  assert.equal(found, true)
-  assert.equal(dispatches, 2)
+  const before = process.env[YIELD_ENV]
+  delete process.env[YIELD_ENV]
+  try {
+    let dispatches = 0
+    const found = isGitRepository("/owned-read-probe", (command, args, options) => {
+      assert.equal(command, "git")
+      assert.deepEqual(args, ["-C", "/owned-read-probe", "rev-parse", "--is-inside-work-tree"])
+      assert.deepEqual(options, { windowsHide: true, encoding: "utf8", timeout: 10_000 })
+      return ++dispatches === 1
+        ? { status: 128, stdout: "", stderr: "fatal: cannot lock ref during owned read" }
+        : { status: 0, stdout: "true\n", stderr: "" }
+    })
+    assert.equal(found, true)
+    assert.equal(dispatches, 2)
+  } finally {
+    if (before === undefined) delete process.env[YIELD_ENV]
+    else process.env[YIELD_ENV] = before
+  }
 })
 
 test("hasUnstagedWork is true for an untracked file and for an unstaged edit, false once committed", async () => {
