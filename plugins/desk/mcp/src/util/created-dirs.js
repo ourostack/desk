@@ -37,14 +37,19 @@ async function missingFolders(directory) {
   return missing
 }
 
-export async function withCreatedDirs(directory, work, { shouldCleanup = () => true } = {}) {
+export async function withCreatedDirs(directory, work, { shouldCleanup = () => true, create, remove, beforeCreate } = {}) {
   const entry = inFlight.get(directory) ?? { count: 0, retain: false }
   entry.count++
   inFlight.set(directory, entry)
   let made = []
   try {
-    made = await missingFolders(directory)
-    await fs.mkdir(directory, { recursive: true })
+    if (create) await create(directory, (created) => made.push(created))
+    else {
+      const proposedMade = await missingFolders(directory)
+      if (beforeCreate) await beforeCreate()
+      made = proposedMade
+      await fs.mkdir(directory, { recursive: true })
+    }
     const result = await work()
     release(directory)
     return result
@@ -61,7 +66,8 @@ export async function withCreatedDirs(directory, work, { shouldCleanup = () => t
     for (const dir of made) {
       if (inUse(dir)) break
       try {
-        await fs.rmdir(dir)
+        if (remove) await remove(dir)
+        else await fs.rmdir(dir)
       } catch {
         break
       }

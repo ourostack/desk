@@ -71,6 +71,39 @@ test("archive links leave examples, unrelated tables, absent rows and unchanged 
   ]) assert.equal(setTaskArchiveLinks(before,"api-validation-layer"),null)
 })
 
+test("archive links leave inline code examples in the matching row untouched", () => {
+  const before = TABLE.replace("`x/doing.md`",
+    "`[example](api-validation-layer/task.md)` [real](api-validation-layer/task.md#proof)")
+  assert.equal(setTaskArchiveLinks(before, "api-validation-layer"),
+    before.replace("[real](api-validation-layer/", "[real](_archive/api-validation-layer/"))
+})
+
+test("archive links rewrite a valid nested-label destination in the matching row", () => {
+  const before = TABLE.replace("`x/doing.md`", "[outer [label]](api-validation-layer/task.md)")
+  assert.equal(setTaskArchiveLinks(before, "api-validation-layer"),
+    before.replace("](api-validation-layer/", "](_archive/api-validation-layer/"))
+})
+
+test("archive links refuse an incomplete row extraction rather than returning partial edits", () => {
+  const before = TABLE.replace("`x/doing.md`", "[x](".repeat(200))
+  assert.throws(() => setTaskArchiveLinks(before, "api-validation-layer"), /parse_budget_exceeded/u)
+})
+
+test("archive row rewrites leave external autolinks byte-identical", () => {
+  const before = TABLE.replace("`x/doing.md`",
+    "<https://example.test/[x](api-validation-layer/task.md)> [real](api-validation-layer/task.md)")
+  assert.equal(setTaskArchiveLinks(before, "api-validation-layer"),
+    before.replace("[real](api-validation-layer/", "[real](_archive/api-validation-layer/"))
+})
+
+for (const comment of ["<!-->", "<!--->"]) {
+  test(`archive row rewrites retain a real link following ${comment}`, () => {
+    const before = TABLE.replace("`x/doing.md`", `Text ${comment} [real](api-validation-layer/task.md)`)
+    assert.equal(setTaskArchiveLinks(before, "api-validation-layer"),
+      before.replace("[real](api-validation-layer/", "[real](_archive/api-validation-layer/"))
+  })
+}
+
 function git(dir, ...args) {
   const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
