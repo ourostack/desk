@@ -121,8 +121,8 @@ for (const mode of ["identity", "cleanup-noop"]) {
     }, renameSync(from, to) {
       fs.renameSync(from, to)
       if (to.startsWith(f.root) && to.endsWith("superpowers-7.0.0.md")) published = true
-    }, lstatSync(file) {
-      const stat = fs.lstatSync(file)
+    }, lstatSync(file, ...args) {
+      const stat = fs.lstatSync(file, ...args)
       return mode === "identity" && published && file === candidate ? { ...stat, ...otherFile(stat), isDirectory: () => true } : stat
     }, rmSync(file, ...args) {
       if (mode === "cleanup-noop" && file === candidate) return

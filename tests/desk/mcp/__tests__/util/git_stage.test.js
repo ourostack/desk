@@ -9,9 +9,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
-import * as os from "node:os"
+import { unlinkSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { mkTempRoot } from "../_temp_roots.js"
 import {
   isGitRepository,
   hasUnstagedWork,
@@ -20,10 +21,11 @@ import {
   commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
+  YIELD_ENV,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
 async function mkTempRepo() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-git-stage-test-"))
+  const root = await mkTempRoot("desk-git-stage-test-")
   git(root, ["init", "-q"])
   git(root, ["config", "user.email", "test@example.com"])
   git(root, ["config", "user.name", "Test"])
@@ -55,7 +57,7 @@ test("isGitRepository is true inside a Git work tree and false otherwise", async
   const root = await mkTempRepo()
   assert.equal(isGitRepository(root, spawnSync), true)
 
-  const plain = await fs.mkdtemp(path.join(os.tmpdir(), "desk-git-stage-test-plain-"))
+  const plain = await mkTempRoot("desk-git-stage-test-plain-")
   assert.equal(isGitRepository(plain, spawnSync), false)
 })
 
@@ -63,6 +65,27 @@ test("isGitRepository fails safe to false when the spawned command throws", asyn
   const root = await mkTempRepo()
   const throwing = () => { throw new Error("spawn ENOENT") }
   assert.equal(isGitRepository(root, throwing), false)
+})
+
+test("a read-only repository observation retries a transient lock with the same bounded command", () => {
+  const before = process.env[YIELD_ENV]
+  delete process.env[YIELD_ENV]
+  try {
+    let dispatches = 0
+    const found = isGitRepository("/owned-read-probe", (command, args, options) => {
+      assert.equal(command, "git")
+      assert.deepEqual(args, ["-C", "/owned-read-probe", "rev-parse", "--is-inside-work-tree"])
+      assert.deepEqual(options, { windowsHide: true, encoding: "utf8", timeout: 10_000 })
+      return ++dispatches === 1
+        ? { status: 128, stdout: "", stderr: "fatal: cannot lock ref during owned read" }
+        : { status: 0, stdout: "true\n", stderr: "" }
+    })
+    assert.equal(found, true)
+    assert.equal(dispatches, 2)
+  } finally {
+    if (before === undefined) delete process.env[YIELD_ENV]
+    else process.env[YIELD_ENV] = before
+  }
 })
 
 test("hasUnstagedWork is true for an untracked file and for an unstaged edit, false once committed", async () => {
@@ -253,4 +276,64 @@ test("a Git that cannot answer the branch question, or answers with no output, i
   assert.equal(commitBranchRefusal(root, () => null, null), null)
   assert.equal(commitBranchRefusal(root, () => ({ status: 128, stdout: "", stderr: "fatal" }), null), null)
   assert.match(commitBranchRefusal(root, () => ({ status: 0, stdout: null }), null), /detached HEAD/u)
+})
+
+for (const indexed of [false, true]) test(`a ${indexed ? "temporary-index" : "path"} commit with a lock-shaped failure is dispatched only once`, async t => {
+  const root = await mkTempRepo()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  let dispatches = 0
+  const spawn = (command, args, options) => {
+    if (args[2] !== "commit") return spawnSync(command, args, options)
+    dispatches++
+    if (dispatches === 1) {
+      const applied = spawnSync(command, args, options)
+      assert.equal(applied.status, 0, applied.stderr)
+    }
+    return { status: 1, stdout: "", stderr: "cannot lock ref after hook" }
+  }
+  const result = indexed
+    ? commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+    : commitPaths(root, ["a.txt"], "save", spawn)
+  assert.equal(result.ok, false)
+  assert.equal(dispatches, 1)
+  assert.equal(commitCount(root), 1)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n")
+})
+
+test("a stage response with a lock-shaped failure is dispatched only once", async t => {
+  const root = await mkTempRepo()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  let dispatches = 0
+  const result = stagePaths(root, ["a.txt"], (command, args, options) => {
+    const actual = spawnSync(command, args, options)
+    if (args[2] !== "add") return actual
+    dispatches++
+    assert.equal(actual.status, 0, actual.stderr)
+    return { status: 128, stdout: "", stderr: "fatal: Unable to create 'owned.lock': File exists" }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(dispatches, 1)
+  assert.equal(git(root, ["show", ":a.txt"]), "one\n")
+})
+
+test("staging waits for an observed index lock before its single mutation dispatch", async t => {
+  const root = await mkTempRepo()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  const lock = path.join(root, ".git", "index.lock")
+  await fs.writeFile(lock, "")
+  let probes = 0, stages = 0
+  const result = stagePaths(root, ["a.txt"], (command, args, options) => {
+    if (args.includes("--git-path") && ++probes === 3) unlinkSync(lock)
+    if (args[2] === "add") stages++
+    return spawnSync(command, args, options)
+  })
+  assert.equal(result.ok, true)
+  assert.equal(probes, 3)
+  assert.equal(stages, 1)
+  assert.equal(git(root, ["show", ":a.txt"]), "one\n")
 })
