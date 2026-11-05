@@ -169,7 +169,7 @@ function readProfileFile(file) {
   try {
     var before = fs.lstatSync(file, { bigint: true });
     if (!singleFile(before)) throw copyPolicyError();
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     var opened = fs.fstatSync(fd, { bigint: true });
     if (!sameFile(before, opened)) throw copyPolicyError();
     bytes = fs.readFileSync(fd);

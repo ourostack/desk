@@ -459,6 +459,219 @@ test("actual process options changed after open refuse native work but preserve 
   assert.ok(native.calls.some(call => call[0] === "context.close"))
 })
 
+test("authenticated debug aliases malformed runtime and driver versions refuse before launch", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  for (const [key, value] of [["PWDEBUG", "1"], ["npm_config_pwdebug", "inspect"], ["npm_package_config_pwdebug", "1"]]) {
+    const native = fakeDriver()
+    const controller = web.createController({ ...options, env: { ...options.env, [key]: value }, authDriver: native.driver })
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(native.calls.length, 0)
+  }
+  for (const runtime of [null, { execArgv: [], inspectorActive: "unknown" }, { execArgv: [1], inspectorActive: false }]) {
+    const native = fakeDriver()
+    const result = await web.createController({ ...options, authDriver: native.driver, runtimeStateReader: () => runtime })
+      .call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(native.calls.length, 0)
+  }
+  for (const driver of [{ version: "0", chromium: {} }, { version: web.PLAYWRIGHT_VERSION }, { version: web.PLAYWRIGHT_VERSION, chromium: {} }]) {
+    const result = await web.createController({ ...options, authDriver: driver })
+      .call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_DRIVER_REFUSED/u)
+  }
+  for (const disabled of ["0", "false"]) {
+    const controller = web.createController({ ...options, env: { ...options.env, PWDEBUG: disabled },
+      runtimeStateReader: () => ({ execArgv: ["--test", "--test-name-pattern=synthetic"], inspectorActive: false }) })
+    assert.equal((await controller.call("browser_context", { action: "open", browser: "mine" })).isError, false)
+    await controller.closeAll()
+  }
+  assert.deepEqual(fs.readdirSync(tmp), [])
+})
+
+test("the default runtime reader reports actual process settings without changing flags", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, runtimeStateReader: undefined })
+  assert.deepEqual(controller.settings.runtimeStateReader(), {
+    execArgv: process.execArgv,
+    inspectorActive: Boolean(require("node:inspector").url()),
+  })
+})
+
+test("managed native package loading uses only an owned synthetic versioned module", async () => {
+  const { options, profiles, installDir } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const moduleDir = path.join(installDir, "node_modules", "playwright-core")
+  fs.writeFileSync(path.join(moduleDir, "package.json"), JSON.stringify({ version: web.PLAYWRIGHT_VERSION, main: "index.cjs" }))
+  fs.writeFileSync(path.join(moduleDir, "index.cjs"), `
+    module.exports = { chromium: { launchPersistentContext: async () => ({
+      pages: () => [], close: async () => {}
+    }) } }
+  `)
+  const controller = web.createController({ ...options, authDriver: undefined })
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, false, text(result))
+  } finally { await controller.closeAll() }
+})
+
+test("Local State destination and descriptor-close failures refuse an authenticated copy", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "source")
+  makeProfile(source)
+  const originalWrite = fs.writeFileSync
+  fs.writeFileSync = (file, ...args) => {
+    if (String(file) === path.join(root, "dest-write", "Local State")) throw new Error(PASSWORD)
+    return originalWrite(file, ...args)
+  }
+  try { assert.throws(() => web.copyProfile(source, path.join(root, "dest-write")), /COPY_DESTINATION_FAILED/u) }
+  finally { fs.writeFileSync = originalWrite }
+  const originalClose = fs.closeSync
+  for (const readable of [true, false]) {
+    const originalRead = fs.readFileSync
+    fs.closeSync = fd => { originalClose(fd); throw new Error(PASSWORD) }
+    if (!readable) fs.readFileSync = () => { throw new Error(PASSWORD) }
+    try { assert.throws(() => web.copyProfile(source, path.join(root, `dest-close-${readable}`)), /COPY_SOURCE_POLICY/u) }
+    finally { fs.closeSync = originalClose; fs.readFileSync = originalRead }
+  }
+})
+
+test("an unqualified Network source directory refuses instead of returning a partial copy", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "source")
+  makeProfile(source)
+  const network = path.join(source, "Profile 1", "Network")
+  const original = fs.lstatSync
+  fs.lstatSync = (file, ...args) => {
+    const stat = original(file, ...args)
+    return String(file) === network ? { isDirectory: () => false } : stat
+  }
+  try { assert.throws(() => web.copyProfile(source, path.join(root, "dest")), /COPY_SOURCE_POLICY/u) }
+  finally { fs.lstatSync = original }
+})
+
+test("owned legacy metadata cannot grant authenticated cleanup authority or erase stale copies", async () => {
+  const { options, tmp } = await setup()
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open" }))
+  const ownerFile = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+  const original = fs.readFileSync(ownerFile, "utf8")
+  fs.writeFileSync(ownerFile, JSON.stringify({ browser: "mine", profilePolicy: 2, transport: "auth-api", pid: process.pid }))
+  try {
+    assert.equal((await controller.call("browser_context", { action: "close", contextId: opened.contextId })).isError, true)
+  } finally { fs.writeFileSync(ownerFile, original); await controller.closeAll() }
+  const missingTmp = path.join(tmp, "absent")
+  assert.equal(await web.createController({ ...options, tmpDir: missingTmp }).sweep(), undefined)
+})
+
+test("opaque non-object failures are reported without exception coercion", async () => {
+  const { options } = await setup()
+  const result = await web.createController({ ...options, exists: () => { throw "fake-native-text" } })
+    .call("browser_context", { action: "open" })
+  assert.match(text(result), /BROWSER_INTERNAL_FAILURE/u)
+  assert.equal(text(result).includes("fake-native-text"), false)
+})
+
+test("process-table commands and parsing are qualified through an owned fake exec callback", async () => {
+  const childProcess = require("node:child_process")
+  const original = childProcess.execFile
+  const calls = []
+  let ended = 0
+  let fail = false
+  childProcess.execFile = (file, args, options, callback) => {
+    calls.push({ file, args, options })
+    queueMicrotask(() => callback(fail ? new Error(PASSWORD) : null, "42420001 1 2026-01-01\ninvalid\n42420002 42420001 2026-01-02\r\n"))
+    return { stdin: { end() { ended++ } } }
+  }
+  try {
+    for (const [platform, env] of [["linux", {}], ["win32", {}], ["win32", { windir: "C:\\Synthetic" }], ["win32", { SystemRoot: "C:\\Owned" }]]) {
+      assert.deepEqual(await web.readProcessTable(platform, env), [
+        { pid: 42420001, ppid: 1, start: "2026-01-01" },
+        { pid: 42420002, ppid: 42420001, start: "2026-01-02" },
+      ])
+    }
+    fail = true
+    assert.equal(await web.readProcessTable("linux", {}), null)
+    assert.equal(calls[0].file, "ps")
+    assert.equal(calls[1].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    assert.ok(calls[2].file.startsWith("C:\\Synthetic\\"))
+    assert.ok(calls[3].file.startsWith("C:\\Owned\\"))
+    assert.equal(ended, 5)
+    assert.ok(calls.every(call => call.options.windowsHide === true))
+    fail = false
+    const { options } = await setup()
+    const controller = web.createController({ ...options, processTable: undefined })
+    assert.equal((await controller.settings.processTable()).length, 2)
+    assert.equal(ended, 6)
+  } finally { childProcess.execFile = original }
+})
+
+test("printed synthetic process identities are recorded without a daemon or host enumeration", async () => {
+  for (const table of [null, [], [{ pid: 42420001, ppid: 1, start: "2026-01-01" }]]) {
+    const { options, cliDir, tmp } = await setup()
+    const cli = path.join(cliDir, "cli.js")
+    fs.appendFileSync(cli, '\nif (verb === "open") process.stdout.write("### Browser desk opened with pid 42420001.\\n")\n')
+    const controller = web.createController({ ...options, processTable: async () => table })
+    try {
+      const opened = json(await controller.call("browser_context", { action: "open" }))
+      const file = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+      const owner = JSON.parse(fs.readFileSync(file, "utf8"))
+      assert.deepEqual(owner.processes, table?.length ? [{ pid: 42420001, start: "2026-01-01" }] : undefined)
+      owner.processes = []
+      fs.writeFileSync(file, JSON.stringify(owner))
+    } finally { await controller.closeAll() }
+  }
+})
+
+test("legacy cleanup uses only qualified synthetic process rows and an owned fake signal function", async () => {
+  const originalKill = process.kill
+  const originalNow = Date.now
+  const row = { pid: 42420001, ppid: 1, start: "2026-01-01" }
+  const signals = []
+  process.kill = (pid, signal) => {
+    assert.equal(pid, row.pid)
+    assert.equal(signal, "SIGKILL")
+    signals.push([pid, signal])
+    throw new Error(PASSWORD)
+  }
+  try {
+    for (const mode of ["unreadable", "gone", "exits", "stays"]) {
+      const { options, tmp } = await setup()
+      let reads = 0
+      let clock = 0
+      const controller = web.createController({ ...options, exitWaitMs: 1,
+        processTable: async () => {
+          reads++
+          if (mode === "stays") clock = 2
+          return mode === "unreadable" ? null : mode === "gone" || (mode === "exits" && reads > 1) ? [] : [row]
+        } })
+      const opened = json(await controller.call("browser_context", { action: "open" }))
+      const file = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+      const owner = JSON.parse(fs.readFileSync(file, "utf8"))
+      owner.processes = [{ pid: row.pid, start: row.start }]
+      fs.writeFileSync(file, JSON.stringify(owner))
+      let result
+      Date.now = () => clock
+      try { result = await controller.call("browser_context", { action: "close", contextId: opened.contextId }) }
+      finally { Date.now = originalNow }
+      assert.equal(result.isError, false, text(result))
+      assert.equal(fs.existsSync(path.dirname(file)), false)
+    }
+    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
+  } finally { process.kill = originalKill; Date.now = originalNow }
+})
+
+test("startup keeps a fresh context whose own process is still alive", async () => {
+  const { options, tmp } = await setup()
+  const dir = path.join(tmp, "desk-browser-11111111-1111-4111-8111-111111111111")
+  fs.mkdirSync(dir)
+  fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ browser: "fresh", pid: process.pid }))
+  const controller = web.createController(options)
+  await controller.sweep()
+  assert.equal(fs.existsSync(dir), true)
+})
+
 test("a partial destination write fails the authenticated copy before native launch", async () => {
   const { options, profiles, tmp } = await setup()
   makeProfile(path.join(profiles, "edge"))

@@ -138,13 +138,13 @@ function prepare(packet, scope, frameId, nextRef) {
   ["parentIndex", "nodeName", "nodeValue", "backendNodeId", "attributes"].forEach(function (key) {
     requireTrue(Array.isArray(table[key]) && table[key].length === count);
   });
-  function sparse(field, boolean) {
+  function sparse(field) {
     requireTrue(field && Array.isArray(field.index));
-    if (!boolean) requireTrue(Array.isArray(field.value) && field.index.length === field.value.length);
+    requireTrue(Array.isArray(field.value) && field.index.length === field.value.length);
     var result = new Map();
     field.index.forEach(function (index, offset) {
       requireTrue(integer(index, 0, count - 1) && !result.has(index));
-      result.set(index, boolean ? true : text(field.value[offset]));
+      result.set(index, text(field.value[offset]));
     });
     return result;
   }
