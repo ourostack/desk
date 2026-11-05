@@ -36,6 +36,7 @@ function fixture(t) {
 }
 
 test("a check that stages a file mid-run produces a Desk problem: index-drift block, without accusing the check of it", async (t) => {
+  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
