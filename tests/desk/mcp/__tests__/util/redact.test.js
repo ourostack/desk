@@ -78,7 +78,8 @@ test("the startup line redacts a credential-like segment of the bound root", () 
   assert.ok(unavailable.includes(REDACTED_SEGMENT))
 })
 
-test("the Desk boot line redacts every check's credential-like segments", async () => {
+test("the Desk boot line redacts every check's credential-like segments", async (t) => {
+  t.mock.method(performance, "now", () => 0)
   const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
   const line = await runBootChecks({
     ...quiet,
@@ -94,12 +95,15 @@ test("the Desk boot line redacts every check's credential-like segments", async 
   )
 })
 
-test("the Desk boot line is withheld, never shown unredacted, when the redaction cannot load", async () => {
+test("the Desk boot line is withheld, never shown unredacted, when the redaction cannot load", async (t) => {
+  t.mock.method(performance, "now", () => 0)
+  let redactionAttempted = false
   const line = await runBootChecks({
     launchRepair: async () => {}, launch: async () => {}, record: async () => {},
-    loadRedaction: async () => { throw new Error("missing") },
+    loadRedaction: async () => { redactionAttempted = true; throw new Error("missing") },
     checks: [{ id: "a", budgetMs: 100, run: async () => ({ line: `/w/${PASSWORD_FOLDER}` }) }],
   })
+  assert.equal(redactionAttempted, true, "withholding must exercise the redaction failure, not an exhausted check budget")
   assert.equal(line, "")
 })
 
