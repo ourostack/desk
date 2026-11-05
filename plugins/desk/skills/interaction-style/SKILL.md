@@ -175,7 +175,7 @@ The first sentence of every response is what's actionable or decided. Status rec
 
 ### An update is your last message
 
-When the operator asks for an update, the whole update is your last message. Text written between tool calls can fold into the host's collapsed working view, where the operator never sees it. Gather everything first, then write one message, with no tool calls after it, that covers all of their work in flight: every product and lane, the pull requests, the machines the work runs on, and what needs them. An update is never only the one thing you were last looking at.
+When the operator asks for an update, the whole update is your last message. Text written between tool calls can fold into the host's collapsed working view, where the operator never sees it. Gather everything first, then write one message, with no tool calls after it, that covers all of their work in flight: every product and lane, the pull requests, the machines the work runs on, and what needs them. An update is never only the one thing you were last looking at. If children you launched are still running, record the handoff that `work-orchestration` ("Waiting for children") requires before that message, so their results still reach an owner.
 
 ### No trailing offers
 
