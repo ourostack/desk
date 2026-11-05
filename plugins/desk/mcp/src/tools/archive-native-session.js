@@ -3,6 +3,7 @@ import { spawn as spawnChild } from "node:child_process"
 import { promises as fs, readFileSync } from "node:fs"
 import { createHash, randomBytes } from "node:crypto"
 import path from "node:path"
+import { NATIVE_STAGES, NATIVE_STAGE_MAX_US, nativeStageTraceEnabled, recordNativeStageSummary } from "./native-stage-context.js"
 
 const PROGRAM = `
 $ErrorActionPreference = 'Stop'
@@ -301,6 +302,26 @@ exit 4
 const hash = bytes => createHash("sha256").update(bytes).digest("hex")
 const helperSha256 = hash(readFileSync(new URL(import.meta.url)))
 const programSha256 = hash(PROGRAM)
+
+// Opt-in #581 diagnostic variant: PROGRAM plus five marker lines at fixed anchors. It is a different program with its own hash.
+const STAGE_PRELUDE = `$script:stageT0 = [Diagnostics.Stopwatch]::GetTimestamp()
+function Stage([string]$name) { [Console]::WriteLine('DESK_STAGE ' + $name + ' ' + $PID + ' ' + [long](([Diagnostics.Stopwatch]::GetTimestamp() - $script:stageT0) * 1000000 / [Diagnostics.Stopwatch]::Frequency)); [Console]::Out.Flush() }
+Stage 'start'`
+const STAGE_ANCHORS = [
+  ["  $native = $type.CreateType()\n", "after", "compiled"],
+  ["  $phase = 'capture'\n", "before", "verified"],
+  ["  $baseline = Read-Entry $request.source 'baseline'\n", "before", "request_read"],
+  ["  Emit @{ state = 'captured'", "before", "baseline_done"],
+]
+export function buildStageProgram(program = PROGRAM) {
+  let out = program
+  for (const [anchor, where, stage] of STAGE_ANCHORS) {
+    if (out.split(anchor).length !== 2) throw new Error("stage anchor unavailable")
+    const marker = `  Stage '${stage}'\n`
+    out = out.replace(anchor, () => where === "after" ? anchor + marker : marker + anchor)
+  }
+  return `\n${STAGE_PRELUDE}${out}`
+}
 const roles = ["baseline", "admitted", "held", "current"]
 const methods = ["CreateFileW", "GetFileInformationByHandleEx", "GetVolumeInformationByHandleW", "SetFileInformationByHandle", "CloseHandle"]
 const phases = ["setup", "capture", "admit", "delete_open", "held_validate", "current_open", "current_validate", "rename", "close"]
@@ -328,8 +349,10 @@ export async function openArchiveHandleSession({ source, destination }, {
     samples: { baseline: null, admitted: null, held: null, current: null }, comparisons: {}, nativeComparisons: {},
     rename: null, handles: { confirmedDisposed: false }, archiveMove: state,
     events: [], protocolIssues: [], droppedEvents: 0, stdoutBytes: 0, stderrBytes: 0, exit: null, close: null }
+  const stageTrace = nativeStageTraceEnabled(env)
   const salt = randomBytes(32)
-  let mode = "opening", child, pending = "", captured, ready, result, issueError, operationError, operationErrorReported = false, retirePromise
+  let spawnedNs = 0n
+  let program = PROGRAM, mode = "opening", child, pending = "", captured, ready, result, issueError, operationError, operationErrorReported = false, retirePromise
   const raw = { baseline: null, admitted: null, held: null, current: null }
   let waiting, closeResolve
   const closed = new Promise(resolve => { closeResolve = resolve })
@@ -338,6 +361,17 @@ export async function openArchiveHandleSession({ source, destination }, {
     if (receipt.events.length < 128) receipt.events.push({ type, sequence: receipt.events.length + 1,
       monotonicNs: process.hrtime.bigint().toString() })
     else { receipt.droppedEvents++; issue("events_oversized") }
+  }
+  // Opt-in diagnostic line: "DESK_STAGE <stage> <pid> <microseconds>". Plain text keeps PROGRAM free of double quotes.
+  function stageLine(line) {
+    const match = /^DESK_STAGE ([a-z_]{1,16}) (\d{1,10}) (\d{1,9})$/u.exec(line)
+    if (!match || mode !== "opening" || captured) throw problem("unexpected stage")
+    const us = Number(match[3]), last = receipt.nativeStages.at(-1)
+    if (match[1] !== NATIVE_STAGES[receipt.nativeStages.length] || Number(match[2]) !== child.pid ||
+        us > NATIVE_STAGE_MAX_US || last && us < last.nativeUs) throw problem("invalid stage")
+    const wrapperUs = Number((process.hrtime.bigint() - spawnedNs) / 1000n)
+    if (wrapperUs > NATIVE_STAGE_MAX_US) throw problem("invalid stage")
+    receipt.nativeStages.push({ stage: match[1], nativeUs: us, wrapperUs })
   }
   function attach(error) {
     if (error !== null && (typeof error === "object" || typeof error === "function") && Object.isExtensible(error)) {
@@ -395,6 +429,7 @@ export async function openArchiveHandleSession({ source, destination }, {
   function response(item) {
     try {
       if (item?.state === "captured" && mode === "opening" && !captured) {
+        if (stageTrace && receipt.nativeStages.length !== NATIVE_STAGES.length) throw problem("incomplete diagnostic stages")
         if (!uint(child.pid) || child.pid === 0 || item.pid !== child.pid || !version(item.powershell) || !version(item.runtime) ||
             item.edition !== "Desktop" || item.architecture !== "AMD64" || item.compiler !== "reflection_emit_in_process" ||
             !Array.isArray(item.metadata) || item.metadata.length !== 5 ||
@@ -408,7 +443,7 @@ export async function openArchiveHandleSession({ source, destination }, {
         if (!raw.baseline.valid || item.baseline.closeSuccess !== null) throw problem("unsupported captured source")
         captured = true
         receipt.capturedValidated = true
-        receipt.executedProgramSha256 = programSha256
+        receipt.executedProgramSha256 = hash(program)
         receipt.runtime = { powershell: item.powershell, runtime: item.runtime, edition: "Desktop", architecture: "AMD64",
           compiler: "reflection_emit_in_process" }
         receipt.layout = expected
@@ -557,6 +592,7 @@ export async function openArchiveHandleSession({ source, destination }, {
       receipt.uncertain = state.movement === "unconfirmed" || state.retirement !== "confirmed" || !receipt.handles.confirmedDisposed
       receipt.settled = true
       event("session_settled")
+      if (stageTrace) recordNativeStageSummary(snapshot())
       mode = "closed"
       if (failure) { receipt.cleanupFailure = true; throw attach(failure) }
       return state
@@ -585,8 +621,15 @@ export async function openArchiveHandleSession({ source, destination }, {
     await validateDestinationParent(true)
     const systemRoot = env.SystemRoot || env.SYSTEMROOT
     if (!systemRoot) throw problem("system runtime unavailable")
+    if (stageTrace) {
+      try { program = buildStageProgram() } catch { throw problem("diagnostic program unavailable") }
+      receipt.programVariant = "stage_diag"
+      receipt.executedProgramSha256 = hash(program)
+      receipt.nativeStages = []
+    }
+    spawnedNs = process.hrtime.bigint()
     try { child = spawn(path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PROGRAM],
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", program],
       { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env }) } catch { throw problem("spawn unavailable") }
     receipt.childPid = child.pid ?? null
     child.on("spawn", () => event("native_spawn"))
@@ -602,6 +645,10 @@ export async function openArchiveHandleSession({ source, destination }, {
         const newline = pending.indexOf("\n")
         if (newline < 0) break
         const line = pending.slice(0, newline).trim(); pending = pending.slice(newline + 1)
+        if (stageTrace && line.startsWith("DESK_STAGE ")) {
+          try { stageLine(line) } catch { issue("invalid_or_unexpected_protocol") }
+          continue
+        }
         let item
         try { item = JSON.parse(line) } catch { issue("malformed_json"); continue }
         response(item)
