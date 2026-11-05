@@ -323,7 +323,7 @@ test("production runtime dependency pack is committed at the current canonical p
 
   assert.deepEqual(
     expectations.map((expectation) => expectation.target),
-    ["darwin-arm64-node-127", "linux-x64-node-127", "win32-x64-node-137"],
+    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137"],
   )
   for (const expectation of expectations) {
     const expectedPackDir = path.join(
@@ -357,6 +357,51 @@ test("production runtime dependency pack is committed at the current canonical p
     const verification = generatedArtifacts.verifyPublishedRuntimeDependencyPack({ expectation })
     assert.deepEqual(verification.errors, [])
     assert.equal(verification.ok, true)
+  }
+})
+
+test("current shipped pack loads current source and the card persistence tools", async () => {
+  const { importRuntimeServer } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
+  const tempDir = mkdtempSync(path.join(tmpdir(), "desk-production-server-"))
+  try {
+    const server = await importRuntimeServer({
+      mcpRoot,
+      runtimeCacheDir: path.join(tempDir, "runtime"),
+    })
+    assert.equal(server._deskRuntime.target, `${process.platform}-${process.arch}-node-${process.versions.modules}`)
+    assert.equal(server._deskRuntime.loaded_from_source_mirror, true)
+    const mirroredPackage = loadJson(path.join(server._deskRuntime.source_mirror_path, "package.json"))
+    assert.equal(mirroredPackage.version, loadJson(packageJsonPath).version)
+    const native = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { createRequire } from "node:module"
+      import path from "node:path"
+      const require = createRequire(path.join(process.argv[1], "package.json"))
+      const Database = require("better-sqlite3")
+      const sqliteVec = require("sqlite-vec")
+      const db = new Database(":memory:")
+      try {
+        sqliteVec.load(db)
+        const row = db.prepare("select vec_version() as version").get()
+        if (typeof row.version !== "string" || row.version.length === 0) {
+          throw new Error("committed pack did not load sqlite-vec")
+        }
+        console.log("committed native pack loaded on " + process.platform + "-" + process.arch + "-node-" + process.versions.modules)
+      } finally {
+        db.close()
+      }
+    `, server._deskRuntime.runtime_cache_dir], {
+      cwd: tempDir,
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    assert.equal(native.status, 0, native.stderr || native.error?.message)
+    assert.equal(native.stderr, "")
+    assert.match(native.stdout, /committed native pack loaded on/u)
+    for (const name of ["desk_save", "task_focus", "task_signoff", "task_move", "track_rename"]) {
+      assert.equal(typeof server.TOOL_IMPLS[name], "function", `${name} must come from the current source`)
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
   }
 })
 
@@ -414,6 +459,7 @@ test("generated artifact freshness script verifies the production runtime depend
   assert.equal(result.stderr, "")
   assert.match(result.stdout, /Desk generated artifacts verified for /u)
   assert.match(result.stdout, /darwin-arm64-node-127/u)
+  assert.match(result.stdout, /darwin-arm64-node-137/u)
   assert.match(result.stdout, /linux-x64-node-127/u)
   assert.match(result.stdout, /win32-x64-node-137/u)
 })
@@ -477,13 +523,15 @@ test("generated artifact verification uses explicit published targets instead of
     generatedArtifacts.publishedRuntimePackTargets(),
     [
       { platform: "darwin", arch: "arm64", nodeAbi: "127" },
+      { platform: "darwin", arch: "arm64", nodeAbi: "137" },
       { platform: "linux", arch: "x64", nodeAbi: "127" },
       { platform: "win32", arch: "x64", nodeAbi: "137" },
     ],
   )
   assert.equal(expectations[0].target, "darwin-arm64-node-127")
-  assert.equal(expectations[1].target, "linux-x64-node-127")
-  assert.equal(expectations[2].target, "win32-x64-node-137")
+  assert.equal(expectations[1].target, "darwin-arm64-node-137")
+  assert.equal(expectations[2].target, "linux-x64-node-127")
+  assert.equal(expectations[3].target, "win32-x64-node-137")
   assert.deepEqual(platformOptionExpectations.map((expectation) => expectation.target), ["linux-arm64-node-127"])
   assert.equal(linuxHostExpectation.target, "linux-x64-node-127")
   assert.deepEqual(explicitTargetExpectations.map((expectation) => expectation.target), ["linux-x64-node-127"])
@@ -501,11 +549,12 @@ test("generated artifact verification uses explicit published targets instead of
   assert.equal(result.ok, true)
   assert.deepEqual(
     result.expectations.map((expectation) => expectation.target),
-    ["darwin-arm64-node-127", "linux-x64-node-127", "win32-x64-node-137"],
+    ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137"],
   )
   assert.deepEqual(result.errors, [])
   assert.match(stdout.join(""), /Desk generated artifacts verified for /u)
   assert.match(stdout.join(""), /darwin-arm64-node-127/u)
+  assert.match(stdout.join(""), /darwin-arm64-node-137/u)
   assert.match(stdout.join(""), /linux-x64-node-127/u)
   assert.match(stdout.join(""), /win32-x64-node-137/u)
   assert.equal(stderr.join(""), "")
@@ -743,11 +792,18 @@ test("CI checks committed generated artifacts before rebuilding runtime dependen
   })
 })
 
-// The macOS ARM64 pack is produced on the maintainer's own host, but the Linux and Windows packs are
-// host-bound artifacts this repository can only obtain from a native runner. Until CI produces them
+// These host-bound artifacts need a native runner. Until CI produces them
 // independently of the main gate, a release can publish a version whose committed artifact set can
 // never be completed, which is exactly how 1.4.0-alpha.4 first shipped.
 const hostedNativePackLanes = Object.freeze([
+  Object.freeze({
+    target: "darwin-arm64-node-137",
+    runnerPrefix: "macos",
+    nodeVersion: "24.18.0",
+    platform: "darwin",
+    arch: "arm64",
+    nodeAbi: "137",
+  }),
   Object.freeze({
     target: "linux-x64-node-127",
     runnerPrefix: "ubuntu",
@@ -909,7 +965,7 @@ test("a hosted native lane produces every host-bound runtime pack target without
   const laneJobNames = new Set(
     hostedNativePackLanes.flatMap((lane) => matrixEntriesForTarget(jobs, lane.target).map(({ name }) => name)),
   )
-  assert.equal(laneJobNames.size, 1, "both host-bound targets belong to one maintained native-pack matrix job")
+  assert.equal(laneJobNames.size, 1, "host-bound targets belong to one maintained native-pack matrix job")
 
   // The main gate still builds a pack for whatever host it runs on, after it has verified the committed
   // artifact set. That build is a smoke check, so it must stay behind the verifier and must never publish

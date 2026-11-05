@@ -728,6 +728,13 @@ jobs:
             console.log(`packed native code loaded on ${process.platform}-${process.arch} node-${process.versions.modules}: sqlite-vec ${version}`);
           '
 
+      - name: Load the committed pack with current source and card persistence tools
+        shell: bash
+        run: >-
+          node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test
+          --test-name-pattern="current shipped pack loads"
+          tests/desk/mcp/__tests__/runtime/production_runtime_pack.test.js
+
       - name: Retain the verified native runtime dependency pack
         uses: actions/upload-artifact@v4
         with:
