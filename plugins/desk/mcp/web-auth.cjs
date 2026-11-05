@@ -210,8 +210,29 @@ function prepare(packet, scope, frameId, nextRef) {
   textarea.forEach(function (value) { if (value) secrets.add(value); });
   rows.forEach(function (row) { if (row.opaque && row.value && !row.excluded) secrets.add(row.value); });
   function scrub(value) {
-    secrets.forEach(function (secret) { value = value.split(secret).join("[redacted]"); });
-    return value;
+    var matches = [];
+    secrets.forEach(function (secret) {
+      var index = value.indexOf(secret);
+      while (index !== -1) {
+        requireTrue(matches.length < 200000, "AUTH_OUTPUT_TOO_LARGE");
+        matches.push([index, index + secret.length]);
+        index = value.indexOf(secret, index + 1);
+      }
+    });
+    if (!matches.length) return value;
+    matches.sort(function (a, b) { return a[0] - b[0] || b[1] - a[1]; });
+    var result = "";
+    var copied = 0;
+    var start = matches[0][0];
+    var end = matches[0][1];
+    matches.slice(1).forEach(function (match) {
+      if (match[0] <= end) { end = Math.max(end, match[1]); return; }
+      result += value.slice(copied, start) + "[redacted]";
+      copied = end;
+      start = match[0];
+      end = match[1];
+    });
+    return result + value.slice(copied, start) + "[redacted]" + value.slice(end);
   }
   var targets = [];
   function render(row) {

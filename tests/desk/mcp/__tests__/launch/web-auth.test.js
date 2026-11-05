@@ -23,6 +23,27 @@ function adapterFor(native, root, timeout = 5000) {
   return auth.create(native.context, root, timeout, () => {})
 }
 
+function overlappingValueSnapshot(values, label) {
+  const packet = nativeSnapshot({ value: values[0] })
+  const table = packet.documents[0].nodes
+  const s = text => { packet.strings.push(text); return packet.strings.length - 1 }
+  table.attributes[3][3] = s(label)
+  table.parentIndex.push(2)
+  table.nodeType.push(1)
+  table.nodeName.push(table.nodeName[3])
+  table.nodeValue.push(-1)
+  table.backendNodeId.push(105)
+  table.attributes.push([s("type"), s("password")])
+  table.inputValue.index.push(4)
+  table.inputValue.value.push(s(values[1]))
+  const layout = packet.documents[0].layout
+  layout.nodeIndex.push(4)
+  layout.styles.push(layout.styles[2].slice())
+  layout.bounds.push([0, 0, 100, 20])
+  layout.text.push(-1)
+  return packet
+}
+
 function hookStageWrites(root, afterWrite) {
   const original = fs.promises.open
   fs.promises.open = async (...args) => {
@@ -91,6 +112,43 @@ test("control values are collected before earlier read-only labels and text are 
   packet.documents[0].layout.nodeIndex = [1, 2, 3, 4, 5]
   packet.documents[0].layout.styles = [1, 2, 3, 4, 5].map(() => css.slice())
   noPassword(sanitize(packet))
+})
+
+test("overlapping native values redact the union of original matches without rewriting placeholders", () => {
+  for (const { values, label, expected } of [
+    { values: ["a", "aSECRET"], label: "aSECRET", expected: "[redacted]" },
+    { values: ["aSECRET", "a"], label: "aSECRET", expected: "[redacted]" },
+    { values: ["abc", "bcd"], label: "abcd", expected: "[redacted]" },
+    { values: ["bcd", "abc"], label: "abcd", expected: "[redacted]" },
+    { values: ["aa", "a"], label: "aaa", expected: "[redacted]" },
+    { values: ["redacted", "secret"], label: "secret", expected: "[redacted]" },
+    { values: ["a", "aSECRET"], label: "aSECRET / aSECRET", expected: "[redacted] / [redacted]" },
+    { values: ["abc", "bcd"], label: "safe", expected: "safe" },
+  ]) {
+    const tree = sanitize(overlappingValueSnapshot(values, label))
+    assert.equal(tree.children[0].children[0].children[0].name, expected)
+  }
+})
+
+test("overlapping native values cannot leak suffixes into owned snapshot text or artifacts", async () => {
+  const root = await mkTempRoot("auth-overlap-artifact-")
+  const native = fakeDriver({ packet: overlappingValueSnapshot(["a", "aSECRET"], "aSECRET") })
+  const adapter = adapterFor(native, root)
+  try {
+    const result = await adapter.call(["snapshot", "--save"])
+    assert.equal(result.snapshot.children[0].children[0].children[0].name, "[redacted]")
+    assert.equal(JSON.stringify(result).includes("SECRET"), false)
+    assert.equal(result.text.includes("SECRET"), false)
+    const artifact = fs.readFileSync(result.artifact, "utf8")
+    assert.equal(artifact.includes("SECRET"), false)
+    assert.ok(artifact.includes("[redacted]"))
+  } finally { await adapter.close() }
+})
+
+test("overlap match budgets accept the boundary and refuse excess before rendering", () => {
+  const allowed = sanitize(overlappingValueSnapshot(["a", "z"], "a".repeat(200000)))
+  assert.equal(allowed.children[0].children[0].children[0].name, "[redacted]")
+  assert.throws(() => sanitize(overlappingValueSnapshot(["a", "z"], "a".repeat(200001))), /AUTH_OUTPUT_TOO_LARGE/u)
 })
 
 test("malformed native control and style fields refuse instead of guessing", () => {
