@@ -429,7 +429,7 @@ test("actual process options refuse authenticated open even when the supplied en
     if (String(file).startsWith(profiles)) sourceOpens++
     return original(file, ...args)
   }
-  process.env.NODE_OPTIONS = "--require fake-unqualified-preload.cjs"
+  process.env.NODE_OPTIONS = inheritedNodeOptions || "--require fake-unqualified-preload.cjs"
   try {
     const result = await controller.call("browser_context", { action: "open", browser: "mine" })
     assert.equal(result.isError, true)
