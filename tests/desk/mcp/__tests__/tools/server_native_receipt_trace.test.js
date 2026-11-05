@@ -200,7 +200,11 @@ test("default-off and opted-in dispatch retain exact MCP error; sink failure is 
   error.handleReceipt = snapshot()
   const lines = []
   server.TOOL_IMPLS.task_archive = async () => { throw error }
-  const expected = { content: [{ type: "text", text: '{"status":"error","tool":"task_archive","message":"original failure"}' }], isError: true }
+  const expected = { content: [{ type: "text", text: JSON.stringify({
+    status: "error", tool: "task_archive", message: "original failure",
+    effects: { status: "unknown", readback_required: true },
+    fix: "The tool failed unexpectedly and Desk is still serving. Read back the affected files, Git status, HEAD and last commit paths in the confirmed desk before another mutation. Do not resend an uncertain mutation or bypass an admission, authority or permission refusal.",
+  }) }], isError: true }
   try {
     assert.deepEqual(await server.callTool({ name: "task_archive", env: {}, traceRequestId: 4, traceWrite: line => lines.push(line) }), expected)
     assert.equal(lines.length, 0)
@@ -334,7 +338,11 @@ test("default stderr completion cannot replace the primary error or wait on back
   try {
     const result = await server.callTool({ name: "task_archive", env: controls, traceRequestId: 37 })
     assert.deepEqual(result, {
-      content: [{ type: "text", text: '{"status":"error","tool":"task_archive","message":"primary archive failure"}' }],
+      content: [{ type: "text", text: JSON.stringify({
+        status: "error", tool: "task_archive", message: "primary archive failure",
+        effects: { status: "unknown", readback_required: true },
+        fix: "The tool failed unexpectedly and Desk is still serving. Read back the affected files, Git status, HEAD and last commit paths in the confirmed desk before another mutation. Do not resend an uncertain mutation or bypass an admission, authority or permission refusal.",
+      }) }],
       isError: true,
     })
     assert.equal(lines.length, 1)
