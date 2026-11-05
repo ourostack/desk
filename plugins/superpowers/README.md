@@ -20,6 +20,8 @@ Guard journal transitions recheck the captured directory and previous journal by
 
 The guard journal is bound to its original regular single-link file identity, not merely equal bytes. Existing transition, readback, cleanup-report and removal admissions reject symlinks, hardlink aliases and replacement files. Transition writes use an admitted non-following descriptor where supported; initial/rearm creation is exclusive. A substituted path remains untouched with `UNKNOWN` recovery.
 
+[Journal admission](../../scripts/superpowers-hook-compat.cjs#L93-L143) acquires native BigInt path and descriptor stats before comparing exact inode/device IDs and nanosecond creation times. Those exact values belong to the in-memory authority record; persisted journal, recovery and provenance formats are unchanged. This corrects deterministic numeric precision loss, not a verified explanation of the separate Windows failure tracked in [#616](https://github.com/ourostack/desk/issues/616).
+
 The shipped Superpowers version includes downstream packaging releases and is not the upstream payload version stated above. Owned fake-hook tests cover source declarations and copied-package paths; they do not establish native Windows qualification or successful real installed startup.
 
 With Desk, invoke `desk:using-superpowers-with-desk` before using these skills. That contract binds plans, progress, authority, and the terminal endpoint to Desk; it does not change the upstream payload. A successful hook transport probe is not proof of engineering-method consumption, background inheritance, or complete host qualification.
