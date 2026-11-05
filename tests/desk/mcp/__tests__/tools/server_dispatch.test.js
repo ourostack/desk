@@ -6,7 +6,10 @@ import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
+import { PassThrough } from "node:stream"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { startFrontDoor } from "../../../../../plugins/desk/mcp/src/runtime/front-door.js"
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../factory/_private_state_helpers.js"
@@ -143,6 +146,121 @@ test("server.callTool surfaces tool errors as isError with structured body", asy
   const body = parseResult(res)
   assert.equal(body.status, "error")
   assert.match(body.message, /does not exist/)
+  assert.deepEqual(body.effects, { status: "unknown", readback_required: true })
+  assert.doesNotMatch(body.fix, /Retry the call/u)
+})
+
+test("server.callTool preserves a real desk_save partial write without advising blind retry", async t => {
+  const root = await mkTempDeskRoot()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  const open = fs.open
+  t.mock.method(fs, "open", async (file, ...args) => {
+    if (file === path.join(root, "later.md")) throw new Error("owned later write failure")
+    return open(file, ...args)
+  })
+  const result = await callTool({
+    deskRoot: root, name: "desk_save",
+    input: { files: [{ path: "notes.md", content: "applied\n" }, { path: "later.md", content: "later\n" }], message: "save" },
+  })
+  assert.equal(result.isError, true)
+  assert.deepEqual(parseResult(result).effects, {
+    status: "partial", applied_paths: ["notes.md"], uncertain_paths: ["later.md"], readback_required: true,
+  })
+  assert.doesNotMatch(parseResult(result).fix, /Retry the call/u)
+  assert.equal(await fs.readFile(path.join(root, "notes.md"), "utf8"), "applied\n")
+  await assert.rejects(fs.stat(path.join(root, "later.md")), { code: "ENOENT" })
+})
+
+test("server.callTool requires readback for returned failures and preserves refusal and success responses", async () => {
+  const original = TOOL_IMPLS.desk_save
+  try {
+    for (const result of [
+      { status: "updated", commit: { status: "failed", reason: "commit failed" } },
+      { status: "failed", effects: { status: "partial", applied_paths: ["notes.md"], readback_required: true } },
+      { status: "failed", effects: { status: "partial", applied_paths: ["notes.md"], uncertain_paths: ["later.md"], operation: "owned write" } },
+      { status: "failed", commit: { status: "failed", effects: {
+        status: "unknown", readback_required: true,
+        readback: { head_before: null, head_after: null, attribution: "unverified" },
+      } } },
+      { status: "refused", code: "authority" },
+      { status: "committed" },
+    ]) {
+      TOOL_IMPLS.desk_save = async () => result
+      const body = parseResult(await callTool({ deskRoot: await mkTempDeskRoot(), name: "desk_save", input: {} }))
+      if (result.status === "refused" || result.status === "committed") assert.deepEqual(body, result)
+      else {
+        assert.deepEqual(body.effects, { ...(result.effects ?? result.commit?.effects ?? { status: "unknown" }), readback_required: true })
+        assert.match(body.fix, /Read back/u)
+        assert.doesNotMatch(body.fix, /Retry the call/u)
+      }
+    }
+  } finally {
+    TOOL_IMPLS.desk_save = original
+  }
+})
+
+for (const frontDoor of [false, true]) test(`an actual lost desk_save commit response retains both effect receipts through ${frontDoor ? "stdio" : "server"} dispatch`, async t => {
+  const root = await mkTempDeskRoot()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  const git = (...args) => {
+    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  git("init", "-q")
+  git("config", "user.name", "Test")
+  git("config", "user.email", "test@example.com")
+  await fs.writeFile(path.join(root, "notes.md"), "before\n")
+  git("add", "notes.md")
+  git("commit", "-qm", "seed")
+  const before = git("rev-parse", "HEAD")
+  await fs.writeFile(path.join(root, "unrelated.md"), "outside staged bytes\n")
+  git("add", "unrelated.md")
+  const index = git("ls-files", "-s", "--", "unrelated.md")
+  const original = TOOL_IMPLS.desk_save
+  let commits = 0
+  TOOL_IMPLS.desk_save = args => original({
+    ...args,
+    schedulePush: () => assert.fail("uncertain commit must not push"),
+    spawnGit(command, gitArgs, options) {
+      const result = spawnSync(command, gitArgs, options)
+      if (gitArgs[2] !== "commit") return result
+      commits++
+      assert.equal(result.status, 0, result.stderr)
+      return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("lost response"), { code: "ETIMEDOUT" }) }
+    },
+  })
+  let response
+  const values = { files: [{ path: "notes.md", content: "after\n" }], message: "save" }
+  try {
+    if (frontDoor) {
+      const input = new PassThrough(), output = new PassThrough()
+      let wire = ""
+      output.on("data", chunk => { wire += chunk.toString("utf8") })
+      const door = startFrontDoor({
+        input, output, callTool: ({ name, input: toolInput, signal }) => callTool({ deskRoot: root, name, input: toolInput, signal }),
+      })
+      input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_save", arguments: values } })}\n`)
+      await door.closed
+      response = JSON.parse(wire).result
+    } else {
+      response = await callTool({ deskRoot: root, name: "desk_save", input: values })
+    }
+  } finally {
+    TOOL_IMPLS.desk_save = original
+  }
+  const body = parseResult(response)
+  assert.equal(body.status, "failed")
+  assert.equal(commits, 1)
+  assert.deepEqual(body.effects, { status: "partial", applied_paths: ["notes.md"], readback_required: true })
+  assert.deepEqual(body.commit.effects, {
+    status: "unknown", readback_required: true,
+    readback: { head_before: before, head_after: git("rev-parse", "HEAD"), attribution: "unverified" },
+  })
+  assert.doesNotMatch(body.fix, /Retry the call/u)
+  assert.equal(git("show", "HEAD:notes.md"), "after")
+  assert.equal(git("show", "--format=", "--name-only", "HEAD"), "notes.md")
+  assert.equal(git("ls-files", "-s", "--", "unrelated.md"), index)
 })
 
 test("server.callTool routes desk_thread to the real implementation", async () => {

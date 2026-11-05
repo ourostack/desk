@@ -21,6 +21,10 @@ import {
   commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
+  repositoryState,
+  unstagedWorkState,
+  stagedChanges,
+  gitFailure,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
 async function mkTempRepo() {
@@ -163,13 +167,21 @@ test("every git call is bounded by a ~10s timeout so a hung hook or lock can nev
 test("stagePaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
   const root = await mkTempRepo()
   const result = stagePaths(root, ["a.txt"], etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+  assert.deepEqual(result, {
+    ok: false, stderr: "timeout", effects: { status: "unknown", readback_required: true },
+  })
 })
 
 test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
   const root = await mkTempRepo()
   const result = commitPaths(root, ["a.txt"], "message", etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+  assert.deepEqual(result, {
+    ok: false, stderr: "timeout",
+    effects: {
+      status: "unknown", readback_required: true,
+      readback: { head_before: null, head_after: null, attribution: "unverified" },
+    },
+  })
 })
 
 // Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
@@ -314,4 +326,94 @@ test("staging waits for an observed index lock before its single mutation dispat
   assert.equal(probes, 3)
   assert.equal(stages, 1)
   assert.equal(git(root, ["show", ":a.txt"]), "one\n")
+})
+
+test("repository observations distinguish non-Git directories from failed reads", async () => {
+  const root = await mkTempRepo()
+  assert.deepEqual(repositoryState(root, spawnSync), { status: "git" })
+  const plain = await mkTempRoot("desk-git-stage-plain-")
+  assert.deepEqual(repositoryState(plain, spawnSync), { status: "not_git" })
+  assert.deepEqual(repositoryState(root, () => { throw new Error("owned spawn failure") }), {
+    status: "failed", reason: "owned spawn failure",
+  })
+  assert.deepEqual(repositoryState(root, () => ({ status: 128, stdout: "", stderr: "owned Git read failure" })), {
+    status: "failed", reason: "owned Git read failure",
+  })
+})
+
+test("partial stdout with subprocess errors cannot confirm repository or index state", () => {
+  const failed = stdout => () => ({
+    status: 0, stdout, stderr: "",
+    error: Object.assign(new Error("lost subprocess result"), { code: "ETIMEDOUT" }),
+  })
+  assert.equal(repositoryState("/owned", failed("false\n")).status, "failed")
+  assert.equal(unstagedWorkState("/owned", ["a.txt"], failed("")).status, "failed")
+  assert.equal(hasUnstagedWork("/owned", ["a.txt"], failed("")), true)
+  assert.equal(stagedChanges("/owned", [], failed("")), null)
+  assert.equal(indexEntries("/owned", [], failed("")), null)
+})
+
+test("unstaged observations distinguish absent changes, changes and failed reads", async () => {
+  const root = await mkTempRepo()
+  assert.deepEqual(unstagedWorkState(root, ["a.txt"], spawnSync), { status: "unchanged" })
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  assert.deepEqual(unstagedWorkState(root, ["a.txt"], spawnSync), { status: "changed" })
+  git(root, ["add", "a.txt"])
+  assert.deepEqual(unstagedWorkState(root, ["a.txt"], spawnSync), { status: "unchanged" })
+  assert.deepEqual(unstagedWorkState(root, ["a.txt"], () => ({ status: 128, stdout: "", stderr: "owned diff failure" })), {
+    status: "failed", reason: "owned diff failure",
+  })
+})
+
+test("a failed HEAD observation cannot seed an empty temporary index or commit", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  git(root, ["commit", "-qm", "seed"])
+  const before = git(root, ["rev-parse", "HEAD"])
+  const index = git(root, ["ls-files", "-s"])
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const mutations = []
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", (command, args, options) => {
+    if (args[2] === "rev-parse" && args.includes("--verify")) return { status: 128, stdout: "", stderr: "owned HEAD read failure" }
+    if (["read-tree", "update-index", "commit"].includes(args[2])) mutations.push(args[2])
+    return spawnSync(command, args, options)
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /HEAD/u)
+  assert.deepEqual(mutations, [])
+  assert.equal(git(root, ["rev-parse", "HEAD"]), before)
+  assert.equal(git(root, ["ls-files", "-s"]), index)
+})
+
+for (const indexed of [false, true]) test(`failed ${indexed ? "temporary-index" : "path"} commit retains HEAD observations without attributing the effect`, async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  git(root, ["commit", "-qm", "seed"])
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "a.txt"])
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  let dispatches = 0
+  const spawn = (command, args, options) => {
+    const result = spawnSync(command, args, options)
+    if (args[2] !== "commit") return result
+    dispatches++
+    assert.equal(result.status, 0, result.stderr)
+    return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("lost commit response"), { code: "ETIMEDOUT" }) }
+  }
+  const result = indexed
+    ? commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+    : commitPaths(root, ["a.txt"], "save", spawn)
+  assert.equal(result.ok, false)
+  assert.equal(result.stderr, "timeout")
+  assert.equal(dispatches, 1)
+  assert.deepEqual(result.effects, {
+    status: "unknown", readback_required: true,
+    readback: { head_before: before, head_after: git(root, ["rev-parse", "HEAD"]).trim(), attribution: "unverified" },
+  })
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+  assert.equal(commitCount(root), 2)
+  assert.deepEqual(gitFailure(result), { status: "failed", reason: "timeout", effects: result.effects })
 })

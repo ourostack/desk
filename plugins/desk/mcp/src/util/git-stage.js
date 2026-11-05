@@ -90,6 +90,46 @@ function timedOut(result) {
   return Boolean(result.error) && result.error.code === "ETIMEDOUT"
 }
 
+function observedHead(root, spawnGit) {
+  try {
+    const result = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+    if (result?.status === 0 && !result.error && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(result.stdout?.trim() ?? ""))
+      return result.stdout.trim()
+  } catch {
+    // A failed readback remains unknown, not evidence that a commit is absent.
+  }
+  return null
+}
+
+function mutationResult(result, effects) {
+  if (result.status === 0 && !result.error) return { ok: true, stderr: result.stderr }
+  return {
+    ok: false,
+    stderr: timedOut(result) ? "timeout" : result.stderr || result.error?.code || "Git mutation failed",
+    effects: { status: "unknown", readback_required: true, ...effects },
+  }
+}
+
+/** Failure fields shared by persistence callers; successful responses stay unchanged. */
+export function gitFailure(result) {
+  return { status: "failed", reason: result.stderr, ...(result.effects ? { effects: result.effects } : {}) }
+}
+
+/** Distinguishes a confirmed plain directory from a failed repository observation. */
+export function repositoryState(root, spawnGit) {
+  let result
+  try {
+    result = run(spawnGit, root, ["rev-parse", "--is-inside-work-tree"])
+  } catch (error) {
+    return { status: "failed", reason: error?.message ?? String(error) }
+  }
+  if (!result?.error && result?.status === 0 && result.stdout?.trim() === "true") return { status: "git" }
+  if (!result?.error && result?.status === 0 && result.stdout?.trim() === "false") return { status: "not_git" }
+  if (!result?.error && result?.status === 128 && /fatal: not a git repository(?: \(or any of the parent directories\))?:/iu.test(result.stderr ?? ""))
+    return { status: "not_git" }
+  return { status: "failed", reason: result?.stderr || result?.error?.code || "Git repository inspection failed" }
+}
+
 /** True when `root` is inside a Git work tree. A failing or missing `git` means no. */
 export function isGitRepository(root, spawnGit) {
   let result
@@ -108,14 +148,21 @@ export function isGitRepository(root, spawnGit) {
  * as unstaged work, so a caller refusing on it fails safe.
  */
 export function hasUnstagedWork(root, relPaths, spawnGit) {
+  return unstagedWorkState(root, relPaths, spawnGit).status !== "unchanged"
+}
+
+/** A failed observation is not permission to stage a path. */
+export function unstagedWorkState(root, relPaths, spawnGit) {
   for (const args of [
     ["diff", "--name-only", "--", ...relPaths],
     ["ls-files", "--others", "--exclude-standard", "--", ...relPaths],
   ]) {
     const result = run(spawnGit, root, args)
-    if (result.status !== 0 || result.stdout.trim() !== "") return true
+    if (result.status !== 0 || result.error)
+      return { status: "failed", reason: result.stderr || result.error?.code || "Git unstaged inspection failed" }
+    if (result.stdout.trim() !== "") return { status: "changed" }
   }
-  return false
+  return { status: "unchanged" }
 }
 
 /**
@@ -133,7 +180,7 @@ export function hasUnmergedPath(root, relPaths, spawnGit) {
  */
 export function stagedChanges(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["diff", "--cached", "-M", "--name-status", "-z", "--", ...relPaths])
-  if (result.status !== 0) return null
+  if (result.status !== 0 || result.error) return null
   const fields = result.stdout.split("\0")
   const changes = []
   for (let i = 0; i < fields.length && fields[i] !== ""; ) {
@@ -148,7 +195,7 @@ export function stagedChanges(root, relPaths, spawnGit) {
 /** The index entries at exactly `relPaths`: `[{ mode, sha, stage, path }]`, or `null` when Git fails. A path the index does not hold has no entry. */
 export function indexEntries(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["ls-files", "-s", "-z", "--", ...relPaths])
-  if (result.status !== 0) return null
+  if (result.status !== 0 || result.error) return null
   return result.stdout.split("\0").filter(Boolean).map((record) => {
     const [meta, entryPath] = record.split("\t")
     const [mode, sha, stage] = meta.split(" ")
@@ -159,7 +206,7 @@ export function indexEntries(root, relPaths, spawnGit) {
 /**
  * Commits exactly what the index holds at `relPaths` (`entries`, from `indexEntries` for the same paths), never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
  * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
- * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
+ * staged, and a later edit to a file in the working tree can never ride along. A dispatched commit failure retains uncertain effects and observed HEADs.
  */
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
@@ -167,19 +214,23 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
-    const hasHead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"]).status === 0
-    const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
-    if (seed.status !== 0) return { ok: false, stderr: seed.stderr }
+    const head = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+    if (head.error || ![0, 1].includes(head.status))
+      return { ok: false, stderr: `HEAD could not be inspected: ${head.stderr || head.error?.code || head.status}` }
+    const seed = run(spawnGit, root, head.status === 0 ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
+    if (seed.status !== 0 || seed.error) return { ok: false, stderr: seed.stderr || seed.error?.code || "Git index seed failed" }
     const held = new Set(entries.map((entry) => entry.path))
     const lines = [
       ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}\0`),
       ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${"0".repeat(40)}\t${p}\0`),
     ]
     const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
-    if (update.status !== 0) return { ok: false, stderr: update.stderr }
+    if (update.status !== 0 || update.error) return { ok: false, stderr: update.stderr || update.error?.code || "Git index update failed" }
+    const before = observedHead(root, spawnGit)
     const result = run(spawnGit, root, ["commit", "-m", message], { env })
-    if (timedOut(result)) return { ok: false, stderr: "timeout" }
-    return { ok: result.status === 0, stderr: result.stderr }
+    return mutationResult(result, result.status === 0 && !result.error ? undefined : {
+      readback: { head_before: before, head_after: observedHead(root, spawnGit), attribution: "unverified" },
+    })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -187,8 +238,8 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
 
 /**
  * `git add` exactly `relPaths` (relative to `root`); `all: true` adds `-A`, so a deletion in the working tree is staged too,
- * still only at those paths. Returns `{ ok, stderr }`; never throws on a Git failure. A call that runs past `GIT_TIMEOUT_MS` is
- * killed and reported as `{ ok: false, stderr: "timeout" }`.
+ * still only at those paths. Returns `{ ok, stderr, effects? }`; a dispatched failure retains uncertain effects.
+ * A call that runs past `GIT_TIMEOUT_MS` is killed and reports `stderr: "timeout"`.
  */
 export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false } = {}) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
@@ -198,8 +249,7 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
     while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
   }
   const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
-  if (timedOut(result)) return { ok: false, stderr: "timeout" }
-  return { ok: result.status === 0, stderr: result.stderr }
+  return mutationResult(result)
 }
 
 /**
@@ -207,16 +257,17 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
  * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
  * paths this call commits, so a path another process staged in the same
  * index in the meantime is left staged and untouched, not swept into this
- * commit. Returns `{ ok, stderr }`; never throws on a Git failure. A call
- * that runs past `GIT_TIMEOUT_MS` (a hung commit hook, most often) is killed
- * and reported as `{ ok: false, stderr: "timeout" }`.
+ * commit. Returns `{ ok, stderr, effects? }`; a dispatched failure retains uncertain effects and observed HEADs.
+ * A call that runs past `GIT_TIMEOUT_MS` (a hung commit hook, most often) is killed and reports `stderr: "timeout"`.
  */
 export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
+  const before = observedHead(root, spawnGit)
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
-  if (timedOut(result)) return { ok: false, stderr: "timeout" }
-  return { ok: result.status === 0, stderr: result.stderr }
+  return mutationResult(result, result.status === 0 && !result.error ? undefined : {
+    readback: { head_before: before, head_after: observedHead(root, spawnGit), attribution: "unverified" },
+  })
 }

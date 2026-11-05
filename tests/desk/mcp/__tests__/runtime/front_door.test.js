@@ -173,3 +173,72 @@ test("the default handshake hook is optional", async () => {
   input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`)
   await door.closed
 })
+
+test("exceptions permit retry only for declared reads, not uncertain mutations or dispatch", async () => {
+  const { lines, input, door, send } = serve({ callTool: () => { throw new Error("response lost") } })
+  for (const name of ["desk_search", "desk_save", "desk_doctor", "improvement_next", "unknown"]) {
+    send({ id: name, method: "tools/call", params: { name } })
+  }
+  input.end()
+  await door.closed
+  assert.equal(lines.length, 5)
+  for (const line of lines) {
+    const body = JSON.parse(line.result.content[0].text)
+    if (line.id === "desk_search") assert.match(body.fix, /Retry the call/u)
+    else {
+      assert.doesNotMatch(body.fix, /Retry the call/u)
+      assert.deepEqual(body.effects, { status: "unknown", readback_required: true })
+      assert.match(body.fix, /Read back/u)
+    }
+  }
+})
+
+test("a real desk_save partial write survives front-door exception rendering", async t => {
+  const { promises: fs } = await import("node:fs")
+  const path = await import("node:path")
+  const { desk_save } = await import("../../../../../plugins/desk/mcp/src/tools/desk-save.js")
+  const { mkTempRoot } = await import("../_temp_roots.js")
+  const root = await mkTempRoot("front-door-partial-write-")
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  const open = fs.open
+  t.mock.method(fs, "open", async (file, ...args) => {
+    if (file === path.join(root, "later.md")) throw new Error("owned later write failure")
+    return open(file, ...args)
+  })
+  const { lines, input, door, send } = serve({
+    callTool: ({ input: values }) => desk_save({ deskRoot: root, input: values }),
+  })
+  send({ id: 1, method: "tools/call", params: {
+    name: "desk_save",
+    arguments: { files: [{ path: "notes.md", content: "applied\n" }, { path: "later.md", content: "later\n" }], message: "save" },
+  } })
+  input.end()
+  await door.closed
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0].result.isError, true)
+  const body = JSON.parse(lines[0].result.content[0].text)
+  assert.deepEqual(body.effects, {
+    status: "partial", applied_paths: ["notes.md"], uncertain_paths: ["later.md"], readback_required: true,
+  })
+  assert.doesNotMatch(body.fix, /Retry the call/u)
+  assert.equal(await fs.readFile(path.join(root, "notes.md"), "utf8"), "applied\n")
+  await assert.rejects(fs.stat(path.join(root, "later.md")), { code: "ENOENT" })
+})
+
+test("partial and unknown exception receipts retain metadata while normalizing readback advice", async () => {
+  const receipts = [
+    { status: "partial", applied_paths: ["notes.md"], uncertain_paths: ["later.md"], operation: "owned write" },
+    { status: "unknown", readback_required: false, operation: "owned commit", readback: { head_after: null } },
+  ]
+  for (const mutation of receipts) {
+    const { lines, input, door, send } = serve({
+      callTool: () => { throw Object.assign(new Error("owned response lost"), { mutation }) },
+    })
+    send({ id: 1, method: "tools/call", params: { name: "desk_save" } })
+    input.end()
+    await door.closed
+    const body = JSON.parse(lines[0].result.content[0].text)
+    assert.deepEqual(body.effects, { ...mutation, readback_required: true })
+    assert.doesNotMatch(body.fix, /Retry the call/u)
+  }
+})

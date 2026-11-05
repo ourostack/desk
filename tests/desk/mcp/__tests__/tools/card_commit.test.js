@@ -266,27 +266,44 @@ test("a lock-shaped commit failure is returned without redispatch for people and
   const lockError = { status: 128, stdout: "", stderr: "fatal: Unable to create '/desk/.git/index.lock': File exists.\n" }
   const script = (failures) => {
     let commits = 0
+    const reads = []
     const spawn = (cmd, args) => {
       if (args.includes("symbolic-ref")) return { status: 0, stdout: "main\n", stderr: "" }
+      if (args[2] === "rev-parse") {
+        assert.deepEqual(args.slice(2), ["rev-parse", "--verify", "-q", "HEAD"])
+        reads.push(args.slice(2))
+        return { status: 1, stdout: "", stderr: "" }
+      }
+      assert.equal(args[2], "commit")
       commits += 1
       return commits <= failures ? lockError : { status: 0, stdout: "", stderr: "" }
     }
-    return { spawn, commits: () => commits }
+    return { spawn, commits: () => commits, reads: () => reads }
+  }
+  const failed = {
+    ok: false, stderr: lockError.stderr,
+    effects: {
+      status: "unknown", readback_required: true,
+      readback: { head_before: null, head_after: null, attribution: "unverified" },
+    },
   }
   const person = script(2)
-  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), { ok: false, stderr: lockError.stderr })
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), failed)
   assert.equal(person.commits(), 1)
+  assert.equal(person.reads().length, 2)
   const held = script(Infinity)
-  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), { ok: false, stderr: lockError.stderr })
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), failed)
   assert.equal(held.commits(), 1)
+  assert.equal(held.reads().length, 2)
   const background = script(2)
   const before = process.env[YIELD_ENV]
   process.env[YIELD_ENV] = "1"
   try {
-    assert.equal(commitPaths("/desk", ["a.md"], "m", background.spawn).ok, false)
+    assert.deepEqual(commitPaths("/desk", ["a.md"], "m", background.spawn), failed)
   } finally {
     if (before === undefined) delete process.env[YIELD_ENV]
     else process.env[YIELD_ENV] = before
   }
   assert.equal(background.commits(), 1)
+  assert.equal(background.reads().length, 2)
 })

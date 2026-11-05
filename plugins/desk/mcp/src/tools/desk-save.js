@@ -23,7 +23,7 @@ import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
-import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
+import { repositoryState, hasUnstagedWork, unstagedWorkState, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths, gitFailure } from "../util/git-stage.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
@@ -127,20 +127,49 @@ async function checkFiles(deskRoot, person, effectiveRoot, files) {
     if (existing !== undefined && !existing.isFile()) throw refuse("what is there is not a file")
     const leads = pathRefusal(path.relative(realRoot, resolved).split(path.sep).join("/"))
     if (leads !== null) throw refuse(`it leads through a symbolic link to a path where ${leads}`)
-    checked.push({ absolute, content })
+    checked.push({ absolute, relativePath, content })
   }
   return checked
 }
 
+function writeFailure(error, appliedPaths, uncertainPaths) {
+  const mutation = error !== null && typeof error === "object" ? error.mutation : undefined
+  const retained = mutation !== null && typeof mutation === "object" && !Array.isArray(mutation) ? mutation : {}
+  const message = error !== null && typeof error === "object" && typeof error.message === "string" ? error.message : String(error)
+  const failure = new Error(message, { cause: error })
+  if (error !== null && typeof error === "object" && typeof error.code === "string") failure.code = error.code
+  const applied = [...new Set([
+    ...appliedPaths,
+    ...(Array.isArray(retained.applied_paths) ? retained.applied_paths.filter((p) => typeof p === "string") : []),
+  ])]
+  failure.mutation = {
+    ...retained,
+    status: applied.length > 0 ? "partial" : "unknown",
+    applied_paths: applied,
+    ...(uncertainPaths === undefined ? {} : { uncertain_paths: [...new Set([
+      ...uncertainPaths,
+      ...(Array.isArray(retained.uncertain_paths) ? retained.uncertain_paths.filter((p) => typeof p === "string") : []),
+    ])] }),
+    readback_required: true,
+  }
+  return failure
+}
+
 // O_NOFOLLOW: a symbolic link put at the target after the check fails the open instead of being written through.
 async function writeFiles(checked) {
-  for (const { absolute, content } of checked) {
-    await fs.mkdir(path.dirname(absolute), { recursive: true })
-    const handle = await fs.open(absolute, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644)
+  const applied = []
+  for (const { absolute, relativePath, content } of checked) {
     try {
-      await handle.writeFile(content, "utf8")
-    } finally {
-      await handle.close()
+      await fs.mkdir(path.dirname(absolute), { recursive: true })
+      const handle = await fs.open(absolute, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644)
+      try {
+        await handle.writeFile(content, "utf8")
+      } finally {
+        await handle.close()
+      }
+      applied.push(relativePath)
+    } catch (error) {
+      throw writeFailure(error, applied, [relativePath])
     }
   }
 }
@@ -169,22 +198,19 @@ async function writeFiles(checked) {
  * `files` (refused with `tidy: true`) are written before staging and join `paths` in the commit. Each path must be
  * relative, with no `..`, `.git`, a leading `.state/` or `.github/workflows/` (any case), no live task card, no Git
  * pathspec pattern characters, content of at most 1 MiB, no symbolic link at the target, and must lead, through the
- * real path of its deepest existing folder, inside the desk and the write prefix. Any failure refuses the whole call
- * before a byte is written.
+ * real path of its deepest existing folder, inside the desk and the write prefix. Validation refuses before any write.
+ * A later write failure retains completed writes and names the uncertain path; it does not roll back.
  *
  * Stages exactly `paths` (`git add -A -- <paths>`, never repo-wide) and commits them with `message`, `git commit -- <paths>`,
  * never `-a`. A deletion or rename already staged at a listed path (`git rm`, `git mv`) is committed too; a staged rename with only
  * one of its two paths listed is refused (throws), naming the other path to add. When none of `paths`
  * holds an unstaged change, an untracked file or a staged change — a path that was never actually written — desk_save
  * reports `nothing_to_commit` without staging or committing anything, so a
- * caller's typo or stale path never becomes an empty commit. A stage or
- * commit failure for paths that do hold real changes is reported the same
- * way, via `commit: { status: "failed", reason }`, distinguishing "nothing
- * to commit" as a Git-level failure from the benign case above. On a
- * non-Git desk, or when the desk root isn't a Git repository, there is
- * nothing desk_save can do, so it reports `nothing_to_commit` too.
+ * caller's typo or stale path never becomes an empty commit. Failed inspection, staging or commit returns
+ * `status: "failed"` with a failed `commit`; uncertain mutation effects require readback before another dispatch.
+ * A confirmed non-Git desk returns `nothing_to_commit`.
  *
- * Returns: { status: "committed" | "nothing_to_commit", commit?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
+ * Returns: { status: "committed" | "nothing_to_commit" | "failed", commit?, effects?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
  * its short sha as `desk_commit` (left out when Git cannot say) and `desk_pushed: false`, because the push is scheduled, not yet done.
  */
 function tidyTrailer(message) {
@@ -224,7 +250,26 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     paths.push(...files.map((file) => file.path).filter((p) => !paths.includes(p)))
   }
 
-  if (!isGitRepository(deskRoot, spawnGit)) {
+  try {
+    return commitSave({ deskRoot, paths, files, message, tidy, spawnGit, schedulePush })
+  } catch (error) {
+    if (files.length === 0) throw error
+    throw writeFailure(error, files.map((file) => file.path))
+  }
+}
+
+function commitSave({ deskRoot, paths, files, message, tidy, spawnGit, schedulePush }) {
+  const failed = (commit) => ({
+    status: "failed", commit,
+    ...(files.length > 0 ? {
+      effects: { status: "partial", applied_paths: files.map((file) => file.path), readback_required: true },
+    } : {}),
+  })
+  const repository = repositoryState(deskRoot, spawnGit)
+  if (repository.status === "failed") {
+    return failed({ status: "failed", reason: repository.reason })
+  }
+  if (repository.status === "not_git") {
     return { status: "nothing_to_commit" }
   }
 
@@ -233,9 +278,16 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   // No unstaged change, no untracked file and no staged change at any of these paths means there is nothing here to commit:
   // most often a path that was never actually written. Checking this before staging means a caller's typo never becomes an
   // empty commit. A deletion or rename already staged with `git rm` or `git mv` is a change to commit (issue #414).
-  const unstaged = paths.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
-  if (unstaged.length === 0 && (stagedChanges(deskRoot, paths, spawnGit)?.length ?? 0) === 0) {
-    return { status: "nothing_to_commit" }
+  const unstaged = []
+  for (const p of paths) {
+    const state = unstagedWorkState(deskRoot, [p], spawnGit)
+    if (state.status === "failed") return failed({ status: "failed", reason: `git could not inspect unstaged changes: ${state.reason}` })
+    if (state.status === "changed") unstaged.push(p)
+  }
+  if (unstaged.length === 0) {
+    const staged = stagedChanges(deskRoot, paths, spawnGit)
+    if (staged === null) return failed({ status: "failed", reason: "git could not list the staged changes" })
+    if (staged.length === 0) return { status: "nothing_to_commit" }
   }
 
   // Only the listed paths that hold unstaged work are staged: the old side of a `git rm` or `git mv` is neither on disk nor in
@@ -243,13 +295,13 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   if (unstaged.length > 0) {
     const staged = stagePaths(deskRoot, unstaged, spawnGit, undefined, { all: true })
     if (!staged.ok) {
-      return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+      return failed(gitFailure(staged))
     }
   }
   // A staged move committed by one side only keeps both files (the new path listed) or deletes the file on the remote while its
   // content stays staged here (the old path listed), so both paths must be listed, as a tidy requires.
   const everything = stagedChanges(deskRoot, [], spawnGit)
-  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  if (everything === null) return failed({ status: "failed", reason: "git could not list the staged changes" })
   const listed = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
   const covered = (p) => listed.some((rel) => rel === "" || p === rel || p.startsWith(`${rel}/`))
   for (const change of everything) {
@@ -260,7 +312,7 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   }
   const committed = commitPaths(deskRoot, paths, message, spawnGit)
   if (!committed.ok) {
-    return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
+    return failed(gitFailure(committed))
   }
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = headSha(deskRoot, spawnGit)
@@ -292,14 +344,19 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
     throw new Error("desk_save: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves")
   }
   // Only the paths that hold unstaged work are staged. The old side of a move `git mv` already staged is neither on disk nor in the index, and `git add` refuses the whole call for one such path.
-  const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
+  const unstaged = []
+  for (const p of others) {
+    const state = unstagedWorkState(deskRoot, [p], spawnGit)
+    if (state.status === "failed") return { status: "failed", commit: { status: "failed", reason: `git could not inspect unstaged changes: ${state.reason}` } }
+    if (state.status === "changed") unstaged.push(p)
+  }
   if (unstaged.length > 0) {
     const staged = stagePaths(deskRoot, unstaged, spawnGit)
-    if (!staged.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+    if (!staged.ok) return { status: "failed", commit: gitFailure(staged) }
   }
   const listed = new Set(rels)
   const everything = stagedChanges(deskRoot, [], spawnGit)
-  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  if (everything === null) return { status: "failed", commit: { status: "failed", reason: "git could not list the staged changes" } }
   for (const change of everything) {
     const missing = change.paths.filter((p) => !listed.has(p))
     if (change.paths.length === 2 && missing.length === 1) {
@@ -315,12 +372,12 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
     }
   }
   const entries = indexEntries(deskRoot, rels, spawnGit)
-  if (entries === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not read the index" } }
+  if (entries === null) return { status: "failed", commit: { status: "failed", reason: "git could not read the index" } }
   if (entries.filter((entry) => isCard(entry.path)).some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
     throw new Error("desk_save: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
   }
   const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
-  if (!committed.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
+  if (!committed.ok) return { status: "failed", commit: gitFailure(committed) }
   schedulePush({ root: deskRoot })
   return { status: "committed" }
 }
