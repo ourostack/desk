@@ -87,7 +87,7 @@ function filesNaming(version, files, root = repoRoot) {
 // upstream version separately, tests derive the shipped version instead of hard-coding it, and changelog fragments,
 // including the one each refresh adds, are history the Desk release folds into the changelog.
 function superpowersSurfaces(version, files, root = repoRoot) {
-  return filesNaming(version, files, root).filter((file) => (
+  return filesNaming(version, files.map((file) => file.split(path.sep).join("/")), root).filter((file) => (
     file !== "plugins/desk/CHANGELOG.md"
     && !file.startsWith(`${FRAGMENT_DIR}/`)
     && file !== "plugins/superpowers/README.md"
