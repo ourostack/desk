@@ -828,7 +828,7 @@ function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = {
-  checks, factoryCheck, labelsCheck, andonCheck, deskHealthCheck, unsavedWorkCheck, workspaceTidyCheck, improvementCheck,
+  checks, factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck,
   runBootChecks, startFactory, boundRoot, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
   main,

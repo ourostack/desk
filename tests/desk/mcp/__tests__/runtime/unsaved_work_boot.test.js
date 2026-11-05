@@ -10,6 +10,39 @@ import { liveInspectionChildren, readInspectionGit } from "../../../../../plugin
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const modulePath = "../../../../../plugins/desk/mcp/src/runtime/unsaved-work.js"
 
+test("Windows index metadata uses creation time and Git's synthetic device and inode fields", async () => {
+  const { metadataMatches } = await import(modulePath)
+  const entry = { mode: "100644", stat: [1700000000n, 123456700n, 1700000020n, 765432100n, 0n, 0n, 0n, 0n, 8n] }
+  const current = {
+    birthtimeNs: 1700000000123456700n, ctimeNs: 1700000010000000000n, mtimeNs: 1700000020765432100n,
+    dev: 123n, ino: 10414574139658612n, uid: 0n, gid: 0n, size: 8n,
+    isFile: () => true, isSymbolicLink: () => false,
+  }
+  assert.equal(metadataMatches(entry, current, "win32"), true)
+  for (const changed of [
+    { birthtimeNs: current.birthtimeNs + 100n },
+    { mtimeNs: current.mtimeNs + 100n },
+    { size: 9n },
+    { isFile: () => false },
+  ]) assert.equal(metadataMatches(entry, { ...current, ...changed }, "win32"), false)
+  assert.equal(metadataMatches(entry, current, "linux"), false, "native Unix identity must not use Windows normalization")
+})
+
+test("Unix index metadata retains nanoseconds and the native file identity", async () => {
+  const { metadataMatches } = await import(modulePath)
+  const entry = { mode: "100644", stat: [1700000000n, 123456789n, 1700000020n, 765432109n, 123n, 456n, 501n, 20n, 8n] }
+  const current = {
+    ctimeNs: 1700000000123456789n, mtimeNs: 1700000020765432109n,
+    dev: 123n, ino: 456n, uid: 501n, gid: 20n, size: 8n,
+    isFile: () => true, isSymbolicLink: () => false,
+  }
+  assert.equal(metadataMatches(entry, current, "linux"), true)
+  for (const changed of [
+    { ctimeNs: current.ctimeNs + 1n }, { mtimeNs: current.mtimeNs + 1n },
+    { dev: 124n }, { ino: 457n }, { uid: 502n }, { gid: 21n }, { size: 9n },
+  ]) assert.equal(metadataMatches(entry, { ...current, ...changed }, "linux"), false)
+})
+
 async function fixture(t, { remote = true } = {}) {
   const root = await mkTempRoot("desk-unsaved-work-")
   t.diagnostic(`owned fixture: ${root}`)
@@ -49,7 +82,8 @@ async function inspect(desk, options = {}) {
 
 test("dirty shared checkout warns without exposing filenames, branches or paths", async (t) => {
   const f = await fixture(t)
-  await fs.writeFile(path.join(f.desk, "private-document\nname"), "private")
+  const filename = process.platform === "win32" ? "private-document name" : "private-document\nname"
+  await fs.writeFile(path.join(f.desk, filename), "private")
   const before = git(f.desk, "status", "--porcelain=v2", "--branch")
   const index = await fs.readFile(path.join(f.desk, ".git", "index"))
   const output = await line(f)
@@ -58,7 +92,7 @@ test("dirty shared checkout warns without exposing filenames, branches or paths"
   assert.doesNotMatch(output, /private|member|fixture|Land it|no PR|lost/)
   assert.equal(git(f.desk, "status", "--porcelain=v2", "--branch"), before)
   assert.deepEqual(await fs.readFile(path.join(f.desk, ".git", "index")), index)
-  await fs.unlink(path.join(f.desk, "private-document\nname"))
+  await fs.unlink(path.join(f.desk, filename))
   assert.equal(await line(f), "")
 })
 
@@ -127,6 +161,7 @@ test("missing and corrupt linked worktrees report incomplete coverage without ra
   await fs.rm(missing, { recursive: true })
   const corrupt = path.join(f.root, "private-corrupt")
   git(f.desk, "worktree", "add", "-b", "corrupt", corrupt)
+  await fs.chmod(path.join(corrupt, ".git"), 0o600)
   await fs.writeFile(path.join(corrupt, ".git"), "invalid private gitdir")
   const output = await line(f)
   assert.match(output, /2 checkouts could not be inspected/)
@@ -362,13 +397,16 @@ test("process filters never start and metadata-only changes are not called uncom
   const script = path.join(f.root, "process-filter.cjs")
   await fs.writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed"); process.exit(1)\n`)
   git(f.desk, "config", "filter.marker.process", `"${process.execPath}" "${script}"`)
-  // Only metadata changes; a content comparison would find the original bytes.
+  // Establish the filter marker before changing metadata: status can refresh the index.
   await fs.utimes(file, new Date("2020-01-01"), new Date("2020-01-01"))
   try { git(f.desk, "status", "--porcelain=v2") } catch { /* the deliberately incomplete process protocol can fail */ }
   assert.equal(await fs.readFile(marker, "utf8"), "executed")
   await fs.unlink(marker)
+  await fs.utimes(file, new Date("2019-01-01"), new Date("2019-01-01"))
+  const index = await fs.readFile(path.join(f.desk, ".git", "index"))
   const output = await line(f)
   await assert.rejects(fs.stat(marker), { code: "ENOENT" })
+  assert.deepEqual(await fs.readFile(path.join(f.desk, ".git", "index")), index)
   assert.match(output, /content not compared/)
   assert.doesNotMatch(output, /uncommitted entries/)
 })

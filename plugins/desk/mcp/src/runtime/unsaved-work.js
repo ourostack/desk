@@ -6,7 +6,7 @@ import { nativeGitPath, samePath, insidePath } from "./native-path.js"
 
 const SHA = /^[0-9a-f]{40,64}$/u
 const INCOMPLETE = "unsaved-work: inspection incomplete; local publication state unknown."
-export const UNSAVED_WORK_BUDGET_LINE = "unsaved-work: not checked (boot budget exhausted); local publication state unknown."
+const UNSAVED_WORK_BUDGET_LINE = "unsaved-work: not checked (boot budget exhausted); local publication state unknown."
 
 function worktreePaths(raw) {
   const entries = raw.split("\0\0").filter(Boolean)
@@ -42,12 +42,14 @@ function indexEntries(raw) {
   return entries
 }
 
-function metadataMatches(entry, current) {
+export function metadataMatches(entry, current, platform = process.platform) {
   const small = (value) => BigInt.asUintN(32, value)
+  // Git for Windows records creation time as ctime and zeroes dev/ino/uid/gid.
+  const ctime = platform === "win32" ? current.birthtimeNs : current.ctimeNs
   const values = [
-    current.ctimeNs / 1_000_000_000n, current.ctimeNs % 1_000_000_000n,
+    ctime / 1_000_000_000n, ctime % 1_000_000_000n,
     current.mtimeNs / 1_000_000_000n, current.mtimeNs % 1_000_000_000n,
-    current.dev, current.ino, current.uid, current.gid, current.size,
+    ...(platform === "win32" ? [0n, 0n, 0n, 0n] : [current.dev, current.ino, current.uid, current.gid]), current.size,
   ]
   const typeMatches = entry.mode === "120000" ? current.isSymbolicLink() : current.isFile()
   return typeMatches && values.every((value, i) => small(value) === entry.stat[i])
