@@ -91,8 +91,8 @@ function sameDirectory(file, identity, io = fs) {
 }
 
 function journalIdentity(stat) {
-  if (!stat.isFile() || stat.nlink !== 1) throw new Error("guard journal must be a regular single-link file");
-  return { ino: stat.ino, dev: stat.dev, mode: stat.mode & 0o777, birthtimeMs: stat.birthtimeMs };
+  if (!stat.isFile() || stat.nlink !== 1n) throw new Error("guard journal must be a regular single-link file");
+  return { ino: stat.ino.toString(), dev: stat.dev.toString(), mode: Number(stat.mode & 0o777n), birthtimeNs: stat.birthtimeNs.toString() };
 }
 
 function admitJournalStat(stat, expected) {
@@ -104,13 +104,13 @@ function admitJournalStat(stat, expected) {
 }
 
 function readOwnedJournal(file, expected, io = fs) {
-  admitJournalStat(io.lstatSync(file), expected);
+  admitJournalStat(io.lstatSync(file, { bigint: true }), expected);
   const fd = io.openSync(file, io.constants.O_RDONLY | (io.constants.O_NOFOLLOW ?? 0));
   try {
-    const identity = admitJournalStat(io.fstatSync(fd), expected);
+    const identity = admitJournalStat(io.fstatSync(fd, { bigint: true }), expected);
     const content = io.readFileSync(fd);
-    admitJournalStat(io.lstatSync(file), identity);
-    admitJournalStat(io.fstatSync(fd), identity);
+    admitJournalStat(io.lstatSync(file, { bigint: true }), identity);
+    admitJournalStat(io.fstatSync(fd, { bigint: true }), identity);
     return { content, identity };
   } finally {
     io.closeSync(fd);
@@ -125,8 +125,8 @@ function writeOwnedJournal(file, expected, previous, next, initial, io = fs) {
     | (initial ? io.constants.O_CREAT | io.constants.O_EXCL : 0);
   const fd = io.openSync(file, flags, 0o600);
   try {
-    const identity = admitJournalStat(io.fstatSync(fd), initial ? null : expected);
-    admitJournalStat(io.lstatSync(file), identity);
+    const identity = admitJournalStat(io.fstatSync(fd, { bigint: true }), initial ? null : expected);
+    admitJournalStat(io.lstatSync(file, { bigint: true }), identity);
     if (!initial && !io.readFileSync(fd).equals(previous)) throw new Error("guard journal descriptor bytes changed");
     io.ftruncateSync(fd, 0);
     // Positional writes do not depend on the prior descriptor read offset.
@@ -136,8 +136,8 @@ function writeOwnedJournal(file, expected, previous, next, initial, io = fs) {
       if (written <= 0) throw new Error("guard journal write made no progress");
       offset += written;
     }
-    admitJournalStat(io.fstatSync(fd), identity);
-    admitJournalStat(io.lstatSync(file), identity);
+    admitJournalStat(io.fstatSync(fd, { bigint: true }), identity);
+    admitJournalStat(io.lstatSync(file, { bigint: true }), identity);
     if (!readOwnedJournal(file, identity, io).content.equals(next)) throw new Error("guard journal qualified readback changed");
     return identity;
   } finally {
