@@ -11,7 +11,7 @@
 // `commit: { status: "failed", reason }` on the result, omitted entirely on
 // a normal, silent success or on a non-Git desk.
 
-import { promises as fs } from "node:fs"
+import { promises as fs, constants as FS } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
@@ -40,7 +40,8 @@ import { assertCodeRepoEvidence, prRepoVerdict, recordedRepos } from "./done-evi
 import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
-import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
+import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure,
+  archiveHasGit, prepareArchiveAggregate, archiveMarkerState, ARCHIVE_LIMITS } from "./archive-state.js"
 import { appendProgressNote, localDate, replaceNextStep, replaceSection } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
@@ -206,19 +207,69 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
  * `jobId` was hashed over, so a caller building a link or a request from
  * this task uses that birth track/slug too, not the one it was asked about.
  */
-async function taskJob({ deskRoot, person, track, slug }) {
+async function taskJob({ deskRoot, person, track, slug, noGit = null }) {
   const root = await fs.realpath(deskRoot)
   const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
-  const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-  const birth = resolveJobIdentity({ deskRoot: root, personPrefix: prefix, track, slug })
+  if (noGit && (!Number.isFinite(noGit.deadline) ||
+    await archiveHasGit(personPrefix(root, person), noGit.deadline)))
+    throw new Error("task_archive: original noGit lineage admission changed")
+  const deskRemote = (noGit ? null : readDeskRemote({ deskRoot: root })) || `local:${root}`
+  const birth = noGit ? { track, slug } : resolveJobIdentity({ deskRoot: root, personPrefix: prefix, track, slug })
   return { root, prefix, deskRemote, track: birth.track, slug: birth.slug, job: jobId({ deskRemote, personPrefix: prefix, track: birth.track, slug: birth.slug }) }
 }
 
-async function requestTaskFinalize({ deskRoot, env, identity }) {
+async function observeArchiveFactoryCall(handoff, helper, deskRoot, identity, beforeEffect, work) {
+  try { await beforeEffect() } catch (error) {
+    handoff.blockedBefore = { helper, at: Date.now(), reason: error.message }
+    handoff.status = handoff.attempts.length ? "unknown" : "not_dispatched"
+    throw error
+  }
+  const at = Date.now()
+  if (handoff.deadline !== null && at >= handoff.deadline) {
+    const error = new Error("task_archive: terminal handoff admission deadline expired")
+    error.archiveTerminalPending = true
+    handoff.blockedBefore = { helper, at, reason: error.message }
+    handoff.status = handoff.attempts.length ? "unknown" : "not_dispatched"
+    throw error
+  }
+  const attempt = { helper, state: "in_flight", attemptedAt: at, originalDeadline: handoff.deadline,
+    lineage: { deskRoot, root: identity?.root ?? null, job: identity?.job ?? null, personPrefix: identity?.prefix ?? null },
+    effectState: "not_transactionally_observed" }
+  handoff.attempts.push(attempt); handoff.status = "in_flight"
+  let primary, failed = false, result
+  try { result = await work(); attempt.state = "returned"; attempt.result = result }
+  catch (error) {
+    failed = true; primary = error; attempt.state = "failed"
+    attempt.error = { name: error?.name, code: error?.code, message: error?.message ?? String(error) }
+  }
+  attempt.settledAt = Date.now()
+  attempt.late = handoff.deadline !== null && attempt.settledAt >= handoff.deadline
+  try { await beforeEffect() } catch (barrier) {
+    attempt.postBarrier = { at: Date.now(), reason: barrier?.message ?? String(barrier), late: attempt.late }
+    attempt.effectState = "unknown_or_partial"; handoff.status = "unknown"
+    const error = barrier !== null && typeof barrier === "object" && Object.isExtensible(barrier)
+      ? barrier : new Error("task_archive: accepted terminal helper effects are unqualified", { cause: barrier })
+    error.archiveTerminalPending = true
+    if (failed) error.terminalPrimaryError = primary
+    throw error
+  }
+  handoff.status = handoff.attempts.some(item => item.state === "failed") ? "failed" : "returned"
+  if (failed) throw primary
+  return result
+}
+
+async function requestTaskFinalize({ deskRoot, env, identity, beforeEffect, terminalHandoff }) {
   try {
-    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    await requestFinalize(env, { job: identity.job, deskRoot: identity.root })
-  } catch {
+    if (terminalHandoff && !identity) throw new Error("archive terminal job identity unavailable")
+    const call = (helper, work) => terminalHandoff
+      ? observeArchiveFactoryCall(terminalHandoff, helper, deskRoot, identity, beforeEffect, work) : work()
+    if (!terminalHandoff && beforeEffect) await beforeEffect()
+    const root = await call("factoryStateRoot.finalize", () => factoryStateRoot(env, { create: false, deskRoot }))
+    if (!terminalHandoff && beforeEffect) await beforeEffect()
+    if (root === null) return
+    await call("requestFinalize", () => requestFinalize(env, { job: identity.job, deskRoot: identity.root }))
+  } catch (error) {
+    if (error.archiveMarkerPending || error.archiveTerminalPending) throw error
     console.error("desk_factory: finalize_request_deferred")
   }
 }
@@ -241,11 +292,18 @@ const requestTaskReturnSync = async ({ deskRoot, person, track, slug, env, final
 // can never block or reopen the task. `done` never waits for it, and briefs
 // are prepared later, off this path, by the session-start hook's
 // `evaluate --pending` (`evaluatePending` in factory/evaluate-run.js).
-async function requestTaskEvaluation({ deskRoot, env, identity }) {
+async function requestTaskEvaluation({ deskRoot, env, identity, beforeEffect, terminalHandoff }) {
   try {
-    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    await requestEvaluation(env, { job: identity.job, deskRoot: identity.root })
-  } catch {
+    if (terminalHandoff && !identity) throw new Error("archive terminal job identity unavailable")
+    const call = (helper, work) => terminalHandoff
+      ? observeArchiveFactoryCall(terminalHandoff, helper, deskRoot, identity, beforeEffect, work) : work()
+    if (!terminalHandoff && beforeEffect) await beforeEffect()
+    const root = await call("factoryStateRoot.evaluation", () => factoryStateRoot(env, { create: false, deskRoot }))
+    if (!terminalHandoff && beforeEffect) await beforeEffect()
+    if (root === null) return
+    await call("requestEvaluation", () => requestEvaluation(env, { job: identity.job, deskRoot: identity.root }))
+  } catch (error) {
+    if (error.archiveMarkerPending || error.archiveTerminalPending) throw error
     console.error("desk_factory: evaluation_request_deferred")
   }
 }
@@ -259,18 +317,21 @@ async function requestTaskEvaluation({ deskRoot, env, identity }) {
 // resolved once here (it never differs between the two calls) and handed to
 // both; if resolving it throws, both calls still degrade the same way each
 // would have on its own, so both deferred messages are logged below.
-async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status }) {
-  const identity = await taskJobOrNull({ deskRoot, person, track, slug })
-  await requestTaskFinalize({ deskRoot, env, identity })
-  if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
+async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status, beforeEffect, terminalHandoff, noGit = false }) {
+  const identity = await taskJobOrNull({ deskRoot, person, track, slug, noGit })
+  if (beforeEffect) await beforeEffect()
+  await requestTaskFinalize({ deskRoot, env, identity, beforeEffect, terminalHandoff })
+  if (beforeEffect) await beforeEffect()
+  if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity, beforeEffect, terminalHandoff })
+  if (beforeEffect) await beforeEffect()
 }
 
 // The task's factory report answer, `{ link }` or `{ link: null, reason? }` (`local-status.js` `factoryReportLink`): asked on the
 // transition to `done`, and on any later update of a card that records why it has no link. A link is deterministic, so done never waits
 // for delivery, and nothing here can fail the task operation: a job identity that cannot be read is the reason `job_identity_unavailable`.
-async function factoryReportFor({ deskRoot, person, track, slug, env }) {
+async function factoryReportFor({ deskRoot, person, track, slug, env, noGit = false }) {
   try {
-    const { root, prefix, deskRemote, track: birthTrack, slug: birthSlug } = await taskJob({ deskRoot, person, track, slug })
+    const { root, prefix, deskRemote, track: birthTrack, slug: birthSlug } = await taskJob({ deskRoot, person, track, slug, noGit })
     return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track: birthTrack, slug: birthSlug })
   } catch {
     return { link: null, reason: "job_identity_unavailable" }
@@ -385,9 +446,13 @@ function pendingDeliveryAnswer(data, slug) {
 }
 
 // The status of the card a delegated step points at (`task:<track>/<slug>`), live or archived; null when there is no readable card.
-const cardStatusIn = (deskRoot, person) => async (track, slug) => {
+const cardStatusIn = (deskRoot, person, originalCard) => async (track, slug) => {
   for (const segments of [[track, slug, "task.md"], [track, "_archive", slug, "task.md"]]) {
     const file = await resolveWriteTarget({ deskRoot, person, segments })
+    if (originalCard && file === originalCard.file) {
+      const bytes = await originalCard.read()
+      return bytes === null ? null : String(parseMarkdownText(bytes.toString("utf8"), file).data.status ?? "unknown")
+    }
     if (!(await pathExists(file))) continue
     try {
       return String((await readMarkdown(file)).data.status ?? "unknown")
@@ -408,18 +473,18 @@ const NO_DERIVATION = Object.freeze({ changes: new Map(), notes: [], why: new Ma
 
 // A card's steps with their states derived from their pull requests and delegated cards (nothing derived when the body has no readable, non-empty table).
 // `mode` is "close" when the call moves the card to done (every step with a PR is read again).
-async function refreshSteps(body, { deskRoot, person, env, fetchFn, mode }) {
+async function refreshSteps(body, { deskRoot, person, env, fetchFn, mode, originalCard }) {
   const read = readSteps(body)
   if (read.rows === undefined || read.rows.length === 0) return { derived: NO_DERIVATION }
-  return { derived: await deriveSteps(read.rows, { env, fetchFn, mode, cardStatus: cardStatusIn(deskRoot, person) }) }
+  return { derived: await deriveSteps(read.rows, { env, fetchFn, mode, cardStatus: cardStatusIn(deskRoot, person, originalCard) }) }
 }
 
 // The derived cells written into a card file in place, leaving its frontmatter bytes alone; true when a cell changed.
-async function writeDerivedCells(filePath, derived) {
+async function writeDerivedCells(filePath, derived, beforeWrite) {
   const raw = await fs.readFile(filePath, "utf8")
   const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(raw)
   const { body, written } = setDerived(raw.slice(head.length), derived.changes)
-  if (written.length > 0) await writeFileAtomic(filePath, head + body)
+  if (written.length > 0) await writeFileAtomic(filePath, head + body, { beforeWrite })
   return written.length > 0
 }
 
@@ -1254,7 +1319,7 @@ async function archivedTaskStatus(archivedFile) {
 // called for it, which is the one tool path that reaches an archived card; `factory reconcile` counts such cards (`report_link_unavailable`).
 // Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
 // `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
-async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush }) {
+async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush, beforeEffect }) {
   let existing, before
   try {
     before = await fs.readFile(archivedFile, "utf8")
@@ -1264,29 +1329,36 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
   }
   const { data } = existing
   if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
+  await beforeEffect?.()
   const report = await factoryReportFor({ deskRoot, person, track, slug, env })
   const fields = reportFields(report)
+  await beforeEffect?.()
   // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
   if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
   let publication
   try {
     publication = await prepareArchivedCardPublication({
-      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit,
+      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit, beforeEffect,
     })
     await publication.assertBefore()
+    await beforeEffect?.()
   } catch (error) {
+    if (error.archiveMarkerPending) throw error
     return { commit: { status: "failed", reason: error.message } }
   }
   const expected = patchedCardText(before, existing, fields)
   let commit, patched = false
   try {
-    await patchMarkdownFrontmatter(publication.file, fields)
+    await patchMarkdownFrontmatter(publication.file, fields, { beforeWrite: beforeEffect })
     patched = true
+    await beforeEffect?.()
     search?.noteChange(relPath(deskRoot, archivedFile))
     commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
   } catch (error) {
+    if (error.archiveMarkerPending) throw error
     commit = { status: "failed", reason: error.message }
   }
+  await beforeEffect?.()
   if (commit === undefined && publication.git !== null) schedulePush({ root: deskRoot })
   if (commit === undefined) return reportResult(report, true)
   const actual = await publication.retainedTarget()
@@ -1349,6 +1421,7 @@ function withArchiveFocus(statusContext, target, result) {
  * Returns: { status: "archived" | "already_archived" | "archive_pending", path, commit? }
  */
 export async function task_archive({ deskRoot, input, person = null, search, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive, openArchiveMove = openArchiveMoveDefault }) {
+  const archiveEnteredAt = Date.now()
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1383,214 +1456,496 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   const srcFile = await target([track, slug, "task.md"])
   const archiveDir = await target([track, "_archive", slug])
   const archivedFile = await target([track, "_archive", slug, "task.md"])
+  let markerBindings, markerDeadline
+  const terminalHandoff = { status: "not_dispatched", enteredAt: archiveEnteredAt, deadline: null,
+    internalDeadlineSupported: false, attempts: [] }
+  const markerPending = state => withArchiveFocus(statusContext, { track, slug }, {
+    ...archivePendingAnswer(relPath(deskRoot, state.placement === "source" ? srcFile : archivedFile),
+      { status: "unknown", reason: "unqualified_original_map", placement: state.placement ?? "unverified" }),
+    terminal_handoff: terminalHandoff,
+    next_action: "Keep the original folder and unfinished-operation marker intact. Do not replay the move, adopt the current bytes as the original map, or remove the marker.",
+  })
+  const markerRefusal = (observation, primary = observation) => ({
+    ...observation.archiveMarkerPending,
+    publication: { ...observation.archiveMarkerPending.publication,
+      ...(primary.fmWrite ? { file_write: primary.fmWrite } : {}),
+      ...(primary.terminalPrimaryError ? { primary_error: primary.terminalPrimaryError.message } :
+        primary === observation ? {} : { primary_error: primary.message }) },
+  })
+  const checkMarkers = async () => {
+    const state = await archiveMarkerState({ effectiveRoot, srcDir, archiveDir,
+      deadline: markerDeadline, expected: markerBindings })
+    if (state.state !== "absent") {
+      if (terminalHandoff.attempts.length) terminalHandoff.status = "unknown"
+      const error = new Error("task_archive: unqualified_original_map")
+      error.archiveMarkerObservation = state
+      error.archiveMarkerPending = markerPending(state)
+      throw error
+    }
+    markerBindings ??= state.bindings
+  }
+  const terminalSync = status => requestTaskTerminalSync({ deskRoot, person, track, slug, env, status,
+    beforeEffect: checkMarkers, terminalHandoff, noGit: aggregateRoute ? { deadline: markerDeadline } : null })
+  try { await checkMarkers() } catch (error) {
+    if (error.archiveMarkerObservation?.reason === "archive_marker_unsafe_ancestry") {
+      await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+      throw error
+    }
+    if (error.archiveMarkerPending) return markerRefusal(error)
+    throw error
+  }
+  let aggregateRoute = ["darwin", "linux"].includes(process.platform) && moveArchive === undefined &&
+    openArchiveMove === openArchiveMoveDefault && !(await archiveHasGit(effectiveRoot, archiveEnteredAt + 30000))
+  if (aggregateRoute) {
+    let card
+    try { card = await fs.lstat(srcFile) } catch (error) { if (error.code !== "ENOENT") throw error }
+    if (card?.isSymbolicLink()) {
+      await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+      aggregateRoute = false
+    }
+  }
+  if (aggregateRoute) markerDeadline = archiveEnteredAt + 30000
+  terminalHandoff.deadline = markerDeadline ?? null
 
   const srcExists = await pathExists(srcDir)
   const dstExists = await pathExists(archiveDir)
   let relocated = false
   let retainedStatus = null
   let sourceCardBytes = null
-
-  if (!srcExists && dstExists) {
-    retainedStatus = await archivedTaskStatus(archivedFile)
-    const publication = await archivePublicationState({ effectiveRoot, srcDir, archiveDir, spawnGit })
-    if (publication.status === "pending" && (retainedStatus === null || TERMINAL_STATUSES.has(retainedStatus))) {
-      relocated = true
-      if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
-    } else if (publication.status === "pending" || publication.status === "unknown") {
-      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
-    } else {
-      const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
-      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
-        ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
-          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
-      })
-      let pending = null
-      try {
-        pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
-      } catch {
-        // Missing or unreadable legacy cards retain the existing idempotent archive result.
+  let cardObservation = null
+  const cardVersion = stat => Object.fromEntries(["dev", "ino", "mode", "nlink", "size", "mtimeNs", "ctimeNs"]
+    .map(key => [key, String(stat[key])]))
+  const cardParents = new Map()
+  const readOriginalCard = async () => {
+    const deadline = archiveEnteredAt + 30000
+    const check = () => {
+      if (Date.now() >= deadline) throw Object.assign(new Error("task_archive: original card observation deadline expired"),
+        { code: "archive_deadline" })
+    }
+    const step = async work => { check(); const result = await work(); check(); return result }
+    const root = await step(() => fs.realpath(effectiveRoot))
+    const physical = path.join(root, path.relative(effectiveRoot, srcFile))
+    const suffix = path.relative(root, physical)
+    if (path.isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${path.sep}`))
+      throw new Error("task_archive: original card ancestry leaves its effective root")
+    let cursor = root
+    for (const part of ["", ...path.relative(root, path.dirname(physical)).split(path.sep).filter(Boolean)]) {
+      if (part) cursor = path.join(cursor, part)
+      const stat = await step(() => fs.lstat(cursor, { bigint: true }))
+      const identity = `${stat.dev}:${stat.ino}:${stat.mode}`
+      if (!stat.isDirectory() || stat.isSymbolicLink() || cardParents.has(cursor) && cardParents.get(cursor) !== identity)
+        throw new Error("task_archive: original card ancestry changed or is unsafe")
+      cardParents.set(cursor, identity)
+    }
+    let named
+    try { named = await step(() => fs.lstat(physical, { bigint: true })) }
+    catch (error) { if (error.code !== "ENOENT") throw error }
+    if (cardObservation?.state === "absent") {
+      if (named) throw new Error("task_archive: original absent card appeared")
+      return null
+    }
+    if (!named) {
+      if (cardObservation) throw new Error("task_archive: original completion card disappeared")
+      cardObservation = { state: "absent" }; return null
+    }
+    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1n)
+      throw new Error("task_archive: original completion card must be an unaliased regular file")
+    const version = cardObservation?.version ?? cardVersion(named)
+    if (JSON.stringify(cardVersion(named)) !== JSON.stringify(version))
+      throw new Error("task_archive: original completion card version changed before read")
+    if (named.size > BigInt(ARCHIVE_LIMITS.documentBytes))
+      throw Object.assign(new Error("task_archive: original completion card exceeds its byte bound"), { code: "archive_limit" })
+    check()
+    const handle = await fs.open(physical, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK)
+    let primary
+    try {
+      check()
+      const opened = await step(() => handle.stat({ bigint: true }))
+      if (JSON.stringify(cardVersion(opened)) !== JSON.stringify(version))
+        throw new Error("task_archive: original completion card descriptor differs before read")
+      const buffer = Buffer.alloc(65536), chunks = [], size = Number(named.size)
+      let position = 0
+      for (;;) {
+        const { bytesRead } = await step(() => handle.read(buffer, 0, Math.min(buffer.length, size - position + 1), position))
+        if (!Number.isSafeInteger(bytesRead) || bytesRead < 0 || position + bytesRead > size)
+          throw new Error("task_archive: original completion card size changed while reading")
+        if (!bytesRead) {
+          if (position !== size) throw new Error("task_archive: original completion card ended early")
+          break
+        }
+        chunks.push(Buffer.from(buffer.subarray(0, bytesRead))); position += bytesRead
       }
+      const bytes = Buffer.concat(chunks, position)
+      const after = await step(() => handle.stat({ bigint: true })), current = await step(() => fs.lstat(physical, { bigint: true }))
+      if (JSON.stringify(cardVersion(after)) !== JSON.stringify(version) ||
+        JSON.stringify(cardVersion(current)) !== JSON.stringify(version) ||
+        cardObservation && !bytes.equals(cardObservation.bytes))
+        throw new Error("task_archive: original completion card changed while reading")
+      for (const [parent, identity] of cardParents) {
+        const stat = await step(() => fs.lstat(parent, { bigint: true }))
+        if (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}:${stat.mode}` !== identity)
+          throw new Error("task_archive: original card ancestry changed while reading")
+      }
+      await checkMarkers()
+      cardObservation ??= { state: "present", bytes: Buffer.from(bytes), mode: Number(named.mode & 0o777n), version }
+      return bytes
+    } catch (error) { primary = error; throw error }
+    finally {
+      try { await handle.close() } catch (error) {
+        if (!primary) throw error
+        console.error("desk_archive: original_card_close_unqualified")
+      }
+      if (!primary) check()
+    }
+  }
+
+  try {
+    if (!srcExists && dstExists) {
+      retainedStatus = await archivedTaskStatus(archivedFile)
+      const publication = await archivePublicationState({ effectiveRoot, srcDir, archiveDir, spawnGit })
+      await checkMarkers()
+      if (publication.status === "pending" && (retainedStatus === null || TERMINAL_STATUSES.has(retainedStatus))) {
+        relocated = true
+        if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
+      } else if (publication.status === "pending" || publication.status === "unknown") {
+        await checkMarkers()
+        await terminalSync(retainedStatus)
+        await checkMarkers()
+        return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
+      } else {
+        const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush,
+          beforeEffect: checkMarkers })
+        await checkMarkers()
+        if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
+          ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
+            refilled.publication ?? { status: "pending", reason: refilled.commit.reason }, refilled.commit),
+        })
+        let pending = null
+        try {
+          pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
+        } catch {
+          // Missing or unreadable legacy cards retain the existing idempotent archive result.
+        }
+        await checkMarkers()
+        search?.noteChange(relPath(deskRoot, srcDir))
+        search?.noteChange(relPath(deskRoot, archiveDir))
+        await terminalSync(retainedStatus)
+        await checkMarkers()
+        return withArchiveFocus(statusContext, { track, slug }, {
+          status: "already_archived",
+          path: relPath(deskRoot, archivedFile),
+          terminal_handoff: terminalHandoff,
+          ...refilled,
+          ...pending,
+        })
+      }
+    }
+    if (!srcExists && !dstExists) {
+      throw new Error(
+        `task_archive: task does not exist at ${relPath(deskRoot, srcDir)}`,
+      )
+    }
+    if (srcExists && dstExists) {
+      throw new Error(
+        `task_archive: archive destination already exists at ${relPath(
+          deskRoot,
+          archiveDir,
+        )} but source ${relPath(deskRoot, srcDir)} also exists`,
+      )
+    }
+
+    // Decide, before touching the filesystem, whether this archive would
+    // itself carry a completion claim -- a bump from a non-terminal status --
+    // and validate `evidence`/`outcome` for it up front, the same
+    // "refuse before the card is touched" discipline task_update's own
+    // assertDoneEvidence keeps (invented-completion finding). A card already
+    // terminal, or no card at all, makes no completion claim and needs
+    // neither.
+    let archiveBump = null
+    let hasCard
+    if (!relocated && aggregateRoute) {
+      sourceCardBytes = await readOriginalCard()
+      hasCard = sourceCardBytes !== null
+    } else hasCard = await pathExists(srcFile)
+    if (hasCard) {
+      if (!cardObservation) sourceCardBytes = await fs.readFile(srcFile)
+      const sourceCard = parseMarkdownText(sourceCardBytes.toString("utf8"), srcFile)
+      if (!TERMINAL_STATUSES.has(sourceCard.data.status)) {
+        if (outcome === "cancelled") {
+          archiveBump = { status: "cancelled" }
+        } else {
+          // The steps are refreshed from GitHub first; the check then runs against the card as it is after that wait, so a row added meanwhile counts.
+          const refresh = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn, mode: "close",
+            originalCard: cardObservation ? { file: srcFile, read: readOriginalCard } : undefined })
+          let live
+          if (cardObservation) {
+            const bytes = await readOriginalCard()
+            live = parseMarkdownText(bytes.toString("utf8"), srcFile)
+          } else live = await readMarkdown(srcFile)
+          const steps = stepsView(applyRefresh(live.content, refresh.derived).body, refresh)
+          await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
+          archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows) }, derived: refresh.derived }
+        }
+        // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
+        // with the folder untouched, never after a move it would leave unpatched and uncommitted.
+        archiveBump.updated = nowIso()
+        try {
+          archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
+        } catch (error) {
+          throw new Error(`task_archive: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
+        }
+      }
+    }
+
+    if (cardObservation) await readOriginalCard()
+    else if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
+      throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
+    if (!relocated && !aggregateRoute) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+    const trackFile = await target([track, "track.md"])
+    let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
+    await checkMarkers()
+    if (!relocated && aggregateRoute) {
+      let finalStatus = null, cardBody = "", delivered = null, report = null
+      const aggregateDeadline = archiveEnteredAt + 30000
+      const aggregate = await prepareArchiveAggregate({ effectiveRoot, srcDir, archiveDir, slug, trackFile,
+        cardObservation,
+        deadline: aggregateDeadline, evidenceDeadline: archiveEnteredAt + 40000, status: archiveBump?.status,
+        composeCard: async (raw) => {
+          const existing = parseMarkdownText(raw, srcFile)
+          finalStatus = existing.data.status; cardBody = existing.content
+          delivered = pendingDeliveryAnswer(existing.data, slug)
+          const fields = {}
+          if (archiveBump) {
+            Object.assign(fields, { status: archiveBump.status, updated: archiveBump.updated, ...archiveBump.record })
+            finalStatus = archiveBump.status
+            if (archiveBump.status === "done") {
+              fields.evidence = { ...archiveBump.evidence, recorded_at: archiveBump.updated }
+              delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
+              report = await factoryReportFor({ deskRoot, person, track, slug, env, noGit: { deadline: aggregateDeadline } })
+            }
+          }
+          if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable"))
+            report = await factoryReportFor({ deskRoot, person, track, slug, env, noGit: { deadline: aggregateDeadline } })
+          if (report !== null) Object.assign(fields, reportFields(report))
+          let expected = Object.keys(fields).length ? patchedCardText(raw, existing, fields) : raw
+          if (archiveBump?.derived !== undefined) {
+            const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(expected)
+            const derived = setDerived(expected.slice(head.length), archiveBump.derived.changes)
+            if (derived.written.length) expected = head + derived.body
+          }
+          return expected
+        } })
+      let session, primary, notificationAttempted = false
+      const notify = () => {
+        notificationAttempted = true
+        if (aggregate.moved || aggregate.receipt.effects.some(item => item.kind === "move")) {
+          search?.noteChange(relPath(deskRoot, srcDir)); search?.noteChange(relPath(deskRoot, archiveDir))
+        }
+        for (const effect of aggregate.receipt.effects) if (effect.kind === "replace") {
+          search?.noteChange(relPath(deskRoot, path.join(effectiveRoot, path.relative(aggregate.root, effect.file))))
+        }
+      }
+      try {
+        session = await openArchiveMove({ source: srcDir, destination: archiveDir, aggregate })
+        await session.admit()
+        await withCreatedDirs(path.dirname(archiveDir), async () => {
+          await session.move(() => aggregate.assertCurrent())
+          await session.applyFiles()
+        }, {
+          create: (directory, recordMade) => session.create(path.join(aggregate.root, path.relative(effectiveRoot, directory)),
+            created => recordMade(path.join(effectiveRoot, path.relative(aggregate.root, created)))),
+          remove: directory => session.remove(path.join(aggregate.root, path.relative(effectiveRoot, directory))),
+          shouldCleanup: error => !session.retain && !error.aggregateRetain,
+        })
+        notify()
+        await session.close()
+        markerBindings = { ...markerBindings, source: null, destination: markerBindings.source }
+        await checkMarkers()
+        if (Date.now() < aggregate.deadline) await terminalSync(finalStatus)
+        else console.error("desk_factory: archive_terminal_requests_deferred_deadline")
+        await checkMarkers()
+        const result = { status: "archived", path: relPath(deskRoot, archivedFile), terminal_handoff: terminalHandoff,
+          archive_coverage: { scope: "effective_person_root", excluded_storage: [".git", "node_modules"],
+            concurrent_editors_excluded: false } }
+        if (delivered !== null) Object.assign(result, delivered)
+        Object.assign(result, reportResult(report, archiveBump?.status !== "done"),
+          cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
+        return withArchiveFocus(statusContext, { track, slug }, result)
+      } catch (error) {
+        primary = error
+        try { if (session) await session.close(error); else await aggregate.close() }
+        catch (closeError) { aggregate.receipt.closeFailure = closeError.message }
+        if (!notificationAttempted) try { notify() } catch (notifyError) { aggregate.receipt.notificationFailure = notifyError.message }
+        if (!aggregate.receipt.effects.length) throw error
+        const attemptedMove = aggregate.receipt.effects.some(item => item.kind === "move")
+        return withArchiveFocus(statusContext, { track, slug }, { ...archivePendingAnswer(
+          relPath(deskRoot, attemptedMove ? archivedFile : srcFile),
+          { status: "unknown", reason: error.archiveMarkerPending ? "unqualified_original_map" : error.message,
+            phase: aggregate.receipt.phase,
+            placement: aggregate.moved ? "retained" : attemptedMove ? "unknown" : "source",
+            ...(error.terminalPrimaryError ? { primary_error: error.terminalPrimaryError.message } : {}),
+            effects: aggregate.receipt }), terminal_handoff: terminalHandoff })
+      } finally {
+        if (!session) try { await aggregate.close() } catch (error) {
+          if (primary) aggregate.receipt.closeFailure ??= error.message
+          else throw error
+        }
+      }
+    }
+    let prepared, moveSession, sessionClosed = false, sessionRetirement
+    const closeSession = async () => {
+      if (!moveSession || sessionClosed) return
+      sessionClosed = true
+      sessionRetirement = await moveSession.close()
+    }
+    const attachCleanup = error => {
+      if (Object.isExtensible(error)) {
+        try { error.native_close_failure = "archive native cleanup unconfirmed" } catch { /* Preserve the first error. */ }
+      }
+    }
+    let moved = relocated
+    let published = false
+    try {
+      if (!relocated && moveArchive === undefined)
+        moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
+      try {
+        prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit,
+          relocated, beforeEffect: checkMarkers })
+        await checkMarkers()
+        trackPlan = prepared.trackPlan
+      } catch (error) {
+        if (!relocated) throw error
+        await checkMarkers()
+        await terminalSync(retainedStatus)
+        return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
+          status: "unknown", reason: error.message,
+        }))
+      }
+      await checkMarkers()
+      await withCreatedDirs(path.dirname(archiveDir), async () => {
+        if (relocated) { await prepared.atUse(); await checkMarkers() }
+        else {
+          if (moveSession) {
+            await moveSession.admit()
+            await checkMarkers()
+            await moveSession.move(async () => { await prepared.atUse(); await checkMarkers() })
+          } else await moveArchive(srcDir, archiveDir, async () => { await prepared.atUse(); await checkMarkers() })
+          moved = true
+          await closeSession()
+        }
+      }, {
+        beforeCreate: checkMarkers,
+        shouldCleanup(error) {
+          if (error.archiveMove?.released && error.archiveMove.retirement !== "confirmed") {
+            error.created_parents = "retained_until_native_retirement_resolved"
+            return false
+          }
+          return true
+        },
+      })
+      await prepared.afterMove()
+      if (!relocated) markerBindings = { ...markerBindings, source: null, destination: markerBindings.source }
+      await checkMarkers()
       search?.noteChange(relPath(deskRoot, srcDir))
       search?.noteChange(relPath(deskRoot, archiveDir))
-      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, {
-        status: "already_archived",
-        path: relPath(deskRoot, archivedFile),
-        ...refilled,
-        ...pending,
-      })
-    }
-  }
-  if (!srcExists && !dstExists) {
-    throw new Error(
-      `task_archive: task does not exist at ${relPath(deskRoot, srcDir)}`,
-    )
-  }
-  if (srcExists && dstExists) {
-    throw new Error(
-      `task_archive: archive destination already exists at ${relPath(
-        deskRoot,
-        archiveDir,
-      )} but source ${relPath(deskRoot, srcDir)} also exists`,
-    )
-  }
 
-  // Decide, before touching the filesystem, whether this archive would
-  // itself carry a completion claim -- a bump from a non-terminal status --
-  // and validate `evidence`/`outcome` for it up front, the same
-  // "refuse before the card is touched" discipline task_update's own
-  // assertDoneEvidence keeps (invented-completion finding). A card already
-  // terminal, or no card at all, makes no completion claim and needs
-  // neither.
-  let archiveBump = null
-  if (await pathExists(srcFile)) {
-    sourceCardBytes = await fs.readFile(srcFile)
-    const sourceCard = parseMarkdownText(sourceCardBytes.toString("utf8"), srcFile)
-    if (!TERMINAL_STATUSES.has(sourceCard.data.status)) {
-      if (outcome === "cancelled") {
-        archiveBump = { status: "cancelled" }
-      } else {
-        // The steps are refreshed from GitHub first; the check then runs against the card as it is after that wait, so a row added meanwhile counts.
-        const refresh = await refreshSteps(sourceCard.content, { deskRoot, person, env, fetchFn, mode: "close" })
-        const live = await readMarkdown(srcFile)
-        const steps = stepsView(applyRefresh(live.content, refresh.derived).body, refresh)
-        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: live.data.repos, existingRepos: live.data.repos, created: live.data.created, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME, env, fetchFn, steps })
-        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: steps === null ? evidence.ref : stepsRef(steps.rows) }, derived: refresh.derived }
-      }
-      // The record the bump writes is worked out here, before the folder moves: a card whose record cannot be read refuses the archive
-      // with the folder untouched, never after a move it would leave unpatched and uncommitted.
-      archiveBump.updated = nowIso()
-      try {
-        archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
-      } catch (error) {
-        throw new Error(`task_archive: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
-      }
-    }
-  }
-
-  if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
-    throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
-  if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
-  const trackFile = await target([track, "track.md"])
-  let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
-  let prepared, moveSession, sessionClosed = false
-  const closeSession = async () => {
-    if (!moveSession || sessionClosed) return
-    sessionClosed = true
-    await moveSession.close()
-  }
-  const attachCleanup = error => {
-    if (Object.isExtensible(error)) {
-      try { error.native_close_failure = "archive native cleanup unconfirmed" } catch { /* Preserve the first error. */ }
-    }
-  }
-  let moved = relocated
-  let published = false
-  try {
-    if (!relocated && moveArchive === undefined)
-      moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
-    try {
-      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
-      trackPlan = prepared.trackPlan
-    } catch (error) {
-      if (!relocated) throw error
-      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
-        status: "unknown", reason: error.message,
-      }))
-    }
-    await withCreatedDirs(path.dirname(archiveDir), async () => {
-      if (relocated) await prepared.atUse()
-      else {
-        if (moveSession) {
-          await moveSession.admit()
-          await moveSession.move(() => prepared.atUse())
-        } else await moveArchive(srcDir, archiveDir, () => prepared.atUse())
-        moved = true
-        await closeSession()
-      }
-    }, {
-      shouldCleanup(error) {
-        if (error.archiveMove?.released && error.archiveMove.retirement !== "confirmed") {
-          error.created_parents = "retained_until_native_retirement_resolved"
-          return false
+      const filePath = await target([track, "_archive", slug, "task.md"])
+      let finalStatus = null
+      let cardBody = ""
+      let delivered = null
+      let report = null
+      if (await pathExists(filePath)) {
+        if (sourceCardBytes === null || !(await fs.readFile(filePath)).equals(sourceCardBytes))
+          throw new Error("task_archive: card changed after admission; outside edits were retained")
+        const raw = sourceCardBytes.toString("utf8"), existing = parseMarkdownText(raw, filePath)
+        finalStatus = existing.data.status
+        cardBody = existing.content
+        delivered = pendingDeliveryAnswer(existing.data, slug)
+        const patchFields = {}
+        if (archiveBump) {
+          const { updated } = archiveBump
+          Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
+          if (archiveBump.status === "done") {
+            patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
+            delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
+            report = await factoryReportFor({ deskRoot, person, track, slug, env })
+          }
+          finalStatus = archiveBump.status
         }
-        return true
-      },
-    })
-    await prepared.afterMove()
-    search?.noteChange(relPath(deskRoot, srcDir))
-    search?.noteChange(relPath(deskRoot, archiveDir))
-
-    const filePath = await target([track, "_archive", slug, "task.md"])
-    let finalStatus = null
-    let cardBody = ""
-    let delivered = null
-    let report = null
-    if (await pathExists(filePath)) {
-      if (sourceCardBytes === null || !(await fs.readFile(filePath)).equals(sourceCardBytes))
-        throw new Error("task_archive: card changed after admission; outside edits were retained")
-      const raw = sourceCardBytes.toString("utf8"), existing = parseMarkdownText(raw, filePath)
-      finalStatus = existing.data.status
-      cardBody = existing.content
-      delivered = pendingDeliveryAnswer(existing.data, slug)
-      const patchFields = {}
-      if (archiveBump) {
-        const { updated } = archiveBump
-        Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
-        if (archiveBump.status === "done") {
-          patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
-          delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
+        if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable"))
           report = await factoryReportFor({ deskRoot, person, track, slug, env })
-        }
-        finalStatus = archiveBump.status
-      }
-      if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable"))
-        report = await factoryReportFor({ deskRoot, person, track, slug, env })
-      if (report !== null) Object.assign(patchFields, reportFields(report))
-      let expected = raw
-      if (Object.keys(patchFields).length > 0) {
-        expected = patchedCardText(expected, existing, patchFields)
-        await patchMarkdownFrontmatter(filePath, patchFields)
-        search?.noteChange(relPath(deskRoot, filePath))
-      }
-      if (archiveBump?.derived !== undefined) {
-        const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(expected)
-        const derived = setDerived(expected.slice(head.length), archiveBump.derived.changes)
-        if (derived.written.length > 0) expected = head + derived.body
-        if (await writeDerivedCells(filePath, archiveBump.derived))
+        if (report !== null) Object.assign(patchFields, reportFields(report))
+        let expected = raw
+        if (Object.keys(patchFields).length > 0) {
+          expected = patchedCardText(expected, existing, patchFields)
+          await checkMarkers()
+          await patchMarkdownFrontmatter(filePath, patchFields, { beforeWrite: checkMarkers })
           search?.noteChange(relPath(deskRoot, filePath))
+        }
+        if (archiveBump?.derived !== undefined) {
+          const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(expected)
+          const derived = setDerived(expected.slice(head.length), archiveBump.derived.changes)
+          if (derived.written.length > 0) expected = head + derived.body
+          await checkMarkers()
+          if (await writeDerivedCells(filePath, archiveBump.derived, checkMarkers))
+            search?.noteChange(relPath(deskRoot, filePath))
+        }
+        await prepared.cardWritten(expected)
       }
-      await prepared.cardWritten(expected)
+      if (trackPlan) {
+        await prepared.assertTrack()
+        await checkMarkers()
+        await writeFileAtomic(trackPlan.file, trackPlan.after, { beforeWrite: checkMarkers })
+        search?.noteChange(relPath(deskRoot, trackPlan.file))
+      }
+      await checkMarkers()
+      const commit = await prepared.publish(`task_archive: ${track}/${slug}`)
+      published = prepared.git !== null && commit === undefined
+      await checkMarkers()
+      if (published) schedulePush({ root: deskRoot })
+      await terminalSync(finalStatus)
+      await checkMarkers()
+      const result = commit
+        ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason }, commit)
+        : { status: "archived", path: relPath(deskRoot, filePath) }
+      if (!commit) {
+        if (delivered !== null) Object.assign(result, delivered)
+        Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
+      }
+      Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
+      result.terminal_handoff = terminalHandoff
+      return withArchiveFocus(statusContext, { track, slug }, result)
+    } catch (error) {
+      try { await closeSession() } catch { attachCleanup(error) }
+      if (error.archiveMarkerObservation?.state === "unverified" && !error.archiveTerminalPending) {
+        error.archiveMarkerRejected = true
+        if (sessionRetirement !== undefined && error.archiveMove === undefined) error.archiveMove = sessionRetirement
+      }
+      if (error.archiveMarkerPending || error.archiveTerminalPending || !prepared || !Object.isExtensible(error)) throw error
+      throw await qualifyArchiveFailure(error, {
+        effectiveRoot, srcDir, archiveDir, sourceIdentity: prepared.snapshot.get("").identity, moved, published,
+      })
+    } finally {
+      // Success and error paths already attempted close; also cover an early return.
+      await closeSession()
     }
-    if (trackPlan) {
-      await prepared.assertTrack()
-      await writeFileAtomic(trackPlan.file, trackPlan.after)
-      search?.noteChange(relPath(deskRoot, trackPlan.file))
-    }
-    const commit = await prepared.publish(`task_archive: ${track}/${slug}`)
-    published = prepared.git !== null && commit === undefined
-    if (published) schedulePush({ root: deskRoot })
-    await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
-    const result = commit
-      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason })
-      : { status: "archived", path: relPath(deskRoot, filePath) }
-    if (!commit) {
-      if (delivered !== null) Object.assign(result, delivered)
-      Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
-    }
-    Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
-    return withArchiveFocus(statusContext, { track, slug }, result)
   } catch (error) {
-    try { await closeSession() } catch { attachCleanup(error) }
-    if (!prepared || !Object.isExtensible(error)) throw error
-    throw await qualifyArchiveFailure(error, {
-      effectiveRoot, srcDir, archiveDir, sourceIdentity: prepared.snapshot.get("").identity, moved, published,
+    if (error.archiveMarkerRejected) throw error
+    if (error.archiveMarkerPending) return markerRefusal(error)
+    if (error.archiveTerminalPending) return withArchiveFocus(statusContext, { track, slug }, {
+      ...archivePendingAnswer(relPath(deskRoot, archivedFile), { status: "unknown", reason: error.message }),
+      terminal_handoff: terminalHandoff,
     })
-  } finally {
-    // Success and error paths already attempted close; also cover an early return.
-    await closeSession()
+    if (markerDeadline !== undefined && Date.now() >= markerDeadline) throw error
+    try { await checkMarkers() } catch (observationError) {
+      if (observationError.archiveMarkerPending) {
+        if (observationError.archiveMarkerObservation?.state === "present") return markerRefusal(observationError, error)
+        if (Object.isExtensible(error)) error.archiveMarkerRecheck = observationError.archiveMarkerObservation
+        throw error
+      }
+      console.error("desk_archive: secondary_marker_observation_result_unavailable")
+    }
+    throw error
   }
 }
 
