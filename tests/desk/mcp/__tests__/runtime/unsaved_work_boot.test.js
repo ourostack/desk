@@ -10,17 +10,21 @@ import { liveInspectionChildren, readInspectionGit } from "../../../../../plugin
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const modulePath = "../../../../../plugins/desk/mcp/src/runtime/unsaved-work.js"
 
-async function metadataObservation(t, index, platform) {
+async function metadataObservation(t, index, platform, { inventory: inventoryFor, reply } = {}) {
   const root = await mkTempRoot("desk-unsaved-metadata-")
   await fs.mkdir(path.join(root, "_meta"))
   await fs.mkdir(path.join(root, "desks"))
   await fs.writeFile(path.join(root, "_meta", "crew.json"), "{}")
   const oid = "a".repeat(40)
-  const inventory = `worktree ${root}\0HEAD ${oid}\0branch refs/heads/main\0\0`
+  const inventory = inventoryFor ? inventoryFor(root, oid) : `worktree ${root}\0HEAD ${oid}\0branch refs/heads/main\0\0`
   const lstat = fs.lstat
   let current
-  t.mock.method(fs, "lstat", (file, options) => file === path.join(root, "tracked") ? Promise.resolve(current) : lstat(file, options))
+  t.mock.method(fs, "lstat", (file, options) => file === path.join(root, "tracked")
+    ? current instanceof Error ? Promise.reject(current) : Promise.resolve(current)
+    : lstat(file, options))
   const git = async (_cwd, args) => {
+    const replacement = await reply?.(args)
+    if (replacement !== undefined) return replacement
     if (args.includes("worktree")) return { ok: true, stdout: inventory }
     if (args.includes("rev-parse")) return { ok: true, stdout: oid }
     if (args.includes("--stage")) return { ok: true, stdout: index }
@@ -29,9 +33,9 @@ async function metadataObservation(t, index, platform) {
     if (args.includes("rev-list")) return { ok: true, stdout: "0" }
     throw new Error(`unexpected inspection command: ${args.join(" ")}`)
   }
-  return async (stat) => {
+  return async (stat, options = {}) => {
     current = stat
-    return inspect(root, { git, platform })
+    return inspect(root, { git, platform, ...options })
   }
 }
 
@@ -63,6 +67,67 @@ test("Unix index metadata retains nanoseconds and the native file identity", asy
     { ctimeNs: current.ctimeNs + 1n }, { mtimeNs: current.mtimeNs + 1n },
     { dev: 124n }, { ino: 457n }, { uid: 502n }, { gid: 21n }, { size: 9n },
   ]) assert.match(await observe({ ...current, ...changed }), /1 tracked entries need review \(content not compared\)/)
+})
+
+const syntheticIndex = ({ mode = "100644", stage = "0", name = "tracked", flags = "0" } = {}) =>
+  `${mode} ${"a".repeat(40)} ${stage}\t${name}\0  ctime: 1:0\n  mtime: 1:0\n  dev: 0\tino: 0\n  uid: 0\tgid: 0\n  size: 8\tflags: ${flags}\n`
+const syntheticStat = {
+  ctimeNs: 1_000_000_000n, mtimeNs: 1_000_000_000n,
+  dev: 0n, ino: 0n, uid: 0n, gid: 0n, size: 8n,
+  isFile: () => true, isSymbolicLink: () => false,
+}
+
+for (const scenario of [
+  { name: "empty worktree inventory", inventory: () => "", expected: /inspection incomplete/ },
+  { name: "invalid worktree head", inventory: (root) => `worktree ${root}\0HEAD private-invalid\0\0`, expected: /inspection incomplete/ },
+  { name: "malformed index header", index: "private-invalid\0", expected: /1 checkout could not be inspected/ },
+  { name: "malformed index stat", index: `100644 ${"a".repeat(40)} 0\ttracked\0private-invalid`, expected: /1 checkout could not be inspected/ },
+  { name: "staged unborn index", inventory: (root) => `worktree ${root}\0HEAD ${"0".repeat(40)}\0branch refs/heads/main\0\0`, expected: /1 uncommitted entries/ },
+  { name: "failed staged comparison", reply: (args) => args.includes("diff") ? { ok: false } : undefined, expected: /1 checkout could not be inspected/ },
+  { name: "failed untracked inventory", reply: (args) => args.includes("--others") ? { ok: false } : undefined, expected: /1 checkout could not be inspected/ },
+  { name: "unmerged index stage", index: syntheticIndex({ stage: "1" }), expected: /1 uncommitted entries/ },
+  { name: "index path outside checkout", index: syntheticIndex({ name: "../private-secret" }), expected: /1 checkout could not be inspected/ },
+  { name: "missing tracked path", error: "ENOENT", expected: /1 tracked entries need review/ },
+  { name: "tracked parent no longer a directory", error: "ENOTDIR", expected: /1 tracked entries need review/ },
+  { name: "unreadable tracked metadata", error: "EACCES", expected: /1 checkout could not be inspected/ },
+  { name: "failed upstream lookup", reply: (args) => args.includes("for-each-ref") ? { ok: false } : undefined, expected: /1 checkout could not be inspected/ },
+  { name: "upstream without tracking annotation", reply: (args) => args.includes("for-each-ref") ? { ok: true, stdout: "refs/remotes/origin/main" } : undefined, expected: /^$/ },
+  { name: "failed ancestry count", reply: (args) => args.includes("rev-list") ? { ok: false } : undefined, expected: /1 checkout could not be inspected/ },
+  { name: "invalid ancestry count", reply: (args) => args.includes("rev-list") ? { ok: true, stdout: "private-invalid" } : undefined, expected: /1 checkout could not be inspected/ },
+  { name: "matching tracked symlink", index: syntheticIndex({ mode: "120000" }), stat: { ...syntheticStat, isFile: () => false, isSymbolicLink: () => true }, expected: /^$/ },
+  { name: "tracked symlink replaced by regular file", index: syntheticIndex({ mode: "120000" }), expected: /1 tracked entries need review/ },
+]) {
+  test(`publication inspection handles ${scenario.name} without leaking raw evidence`, async (t) => {
+    t.mock.method(performance, "now", () => 0)
+    const observe = await metadataObservation(t, scenario.index ?? syntheticIndex(), "linux", scenario)
+    const stat = scenario.error ? Object.assign(new Error("private-secret"), { code: scenario.error }) : scenario.stat ?? syntheticStat
+    const output = await observe(stat)
+    assert.match(output, scenario.expected)
+    assert.doesNotMatch(output, /private|secret|invalid/, "only privacy-safe counts or unknown coverage reach the line")
+  })
+}
+
+test("expiry while reading the index entries refuses publication counts", async (t) => {
+  let now = 0
+  t.mock.method(performance, "now", () => now)
+  const observe = await metadataObservation(t, syntheticIndex(), "linux", {
+    reply: (args) => { if (args.includes("--others")) now = 100 },
+  })
+  const output = await observe(syntheticStat, { deadline: 100 })
+  assert.match(output, /budget exhausted.*unknown/)
+  assert.doesNotMatch(output, /publication review|uncommitted entries/)
+})
+
+test("multiple synthetic worktrees report plural publication and omitted counts", async (t) => {
+  t.mock.method(performance, "now", () => 0)
+  const inventory = (root, oid) => [root, path.join(root, "linked-one"), path.join(root, "linked-two")]
+    .map((place) => `worktree ${place}\0HEAD ${oid}\0branch refs/heads/main\0\0`).join("")
+  const dirty = await metadataObservation(t, "", "linux", {
+    inventory, reply: (args) => args.includes("--others") ? { ok: true, stdout: "private-secret\0" } : undefined,
+  })
+  assert.match(await dirty(syntheticStat, { maxWorktrees: 2 }), /1 checkout not inspected \(limit\); 2 checkouts need publication review; 2 uncommitted entries/)
+  const omitted = await metadataObservation(t, "", "linux", { inventory })
+  assert.match(await omitted(syntheticStat, { maxWorktrees: 1 }), /2 checkouts not inspected \(limit\)/)
 })
 
 async function fixture(t, { remote = true } = {}) {
@@ -294,6 +359,7 @@ test("registry timeout terminates its real blocked inspection child", { skip: pr
   const started = performance.now()
   const output = await line(f, {
     totalBudgetMs: 300, checkBudgets: { "unsaved-work": 60 },
+    spawnGit: () => ({ status: 0, stdout: "", stderr: "" }),
     unsavedWorkGit: (cwd, args, options) => {
       pending = readInspectionGit(cwd, ["-c", `include.path=${fifo}`, ...args], options)
       return pending

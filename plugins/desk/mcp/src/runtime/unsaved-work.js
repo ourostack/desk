@@ -120,7 +120,7 @@ export async function inspectUnsavedWork({ deskRoot, deadline, signal, git = rea
             const track = rawTrack?.trim() ?? ""
             noUpstream = !upstream
             upstreamUnknown = Boolean(upstream) && track === "[gone]"
-            ahead = Number(/\bahead (\d+)/u.exec(track ?? "")?.[1] ?? 0)
+            ahead = Number(/\bahead (\d+)/u.exec(track)?.[1] ?? 0)
           }
           let unmerged = 0
           const unknown = mainOid === null && state.oid !== "(initial)"
