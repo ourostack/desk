@@ -127,3 +127,13 @@ If a real capture would expose private messages, identities, customer data or se
 Label the inline capture `Synthetic-data capture` and state what it demonstrates and what it does not: for example, “Synthetic-data capture: the changed renderer with made-up entries; does not verify private account integration.” Keep test/log evidence for behavior outside that scope. A drawing, AI-generated mock, reconstructed screenshot or screenshot of a different implementation is not proof of the running product. A synthetic render cannot prove a private live run, installed state, merge or rollout.
 
 If neither a safe bounded capture nor a real synthetic-data render is possible, record the reason and the strongest safe alternative, but do not call the visual claim verified. PR creation and readiness remain subject to [`pr-surface-hygiene` PSH-010](../pr-surface-hygiene/SKILL.md#psh-010--visual-proof-blocks-creation-and-readiness); a visible change stays blocked rather than acquiring a false `No visual change` reason.
+
+## Delivery receipt
+
+The `Delivered:` line of an accept-or-send-back delivery (`using-desk`, "Delivery and sign-off") is a receipt the operator can accept from. Keep the three literal lines; put in `Delivered:`, in the operator's terms:
+
+1. **Acceptance checks.** Each check the operator would want, with its result (pass or fail) and its proof: a bounded capture of the real, live result where it is visible, otherwise a primary-source link. A terminal success line is not proof.
+2. **What to look at.** The one or two things the operator should check to decide.
+3. **What is not covered.** Anything open, failed or unverified; say "nothing" when nothing is.
+
+A substantial delivery publishes the receipt as a page and links it from `Delivered:`; a small one carries it inline. Never include secrets or private content.
