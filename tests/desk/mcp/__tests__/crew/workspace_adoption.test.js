@@ -63,19 +63,35 @@ function run(args, options = {}) {
   return result
 }
 
-// Link-refusal cases need real symbolic links. Where the platform cannot create them (for example Windows without the symlink privilege) they are skipped with this reason instead of running against a plain file.
+// Link-refusal cases need real symbolic links, both from the OS and from Git's checkout. Only an explicit "not supported / not permitted" answer skips them,
+// with its reason; any other error, or a result that is not a link, fails the suite rather than reading as a supported skip.
+const UNSUPPORTED_CODES = new Set(["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"])
 const NO_SYMLINKS = (() => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "crew-symlink-probe-"))
   try {
-    symlinkSync("target", path.join(dir, "link"), "file")
-    return lstatSync(path.join(dir, "link")).isSymbolicLink() ? false : "symbolic link creation produced a plain file"
-  } catch (error) {
-    return `symbolic links cannot be created here (${error.code ?? error.message})`
+    try {
+      symlinkSync("target", path.join(dir, "link"), "file")
+    } catch (error) {
+      if (UNSUPPORTED_CODES.has(error.code)) return `the OS refuses symbolic links here (${error.code})`
+      throw error
+    }
+    assert.ok(lstatSync(path.join(dir, "link")).isSymbolicLink(), "a created symbolic link must read back as a link")
+    // Git must also check a committed link out as a link when told to, as the fixtures' clones are.
+    const origin = path.join(dir, "origin")
+    run(["init", "-q", "-b", "main", origin])
+    symlinkSync("target", path.join(origin, "link"))
+    run(["-C", origin, "-c", "core.symlinks=true", "add", "link"])
+    run(["-C", origin, "-c", "user.email=o@example.com", "-c", "user.name=O", "commit", "-q", "-m", "link"])
+    run(["clone", "-q", "-c", "core.symlinks=true", origin, path.join(dir, "clone")])
+    return lstatSync(path.join(dir, "clone", "link")).isSymbolicLink() ? false : "Git checks committed links out as plain files here even with core.symlinks=true"
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })()
 const linkTest = { skip: NO_SYMLINKS }
+
+// Link fixtures' own clones set this explicitly; nothing shared or global is written.
+const enableLinks = (clone) => run(["-C", clone, "config", "core.symlinks", "true"])
 
 function makeLink(target, at) {
   symlinkSync(target, at)
@@ -84,6 +100,7 @@ function makeLink(target, at) {
 
 // Stages a link in a teammate's clone and proves git records it as a link (mode 120000), not as a copy.
 function stageLink(dir, target, relative) {
+  enableLinks(dir)
   makeLink(target, path.join(dir, relative))
   run(["-C", dir, "add", "-A"])
   assert.match(run(["-C", dir, "ls-files", "-s", "--", relative], { encoding: "utf8" }).stdout, /^120000 /u)
@@ -255,12 +272,14 @@ test("a working-tree file replaced by a link is refused", linkTest, async () => 
 test("committed links are refused", linkTest, async () => {
   const link = await withDesk()
   teammateSync(link, (dir) => stageLink(dir, "../../README.md", `${DESK}/link.md`))
+  enableLinks(link.clone)
   git(link.clone, ["pull", "-q", "--ff-only", link.bare, "main"])
   assert.ok(lstatSync(path.join(link.clone, DESK, "link.md")).isSymbolicLink())
   assert.match((await joinWorkspace(join(link, { adoptExisting: git(link.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/link\.md is not a regular file; adoption never follows links/u)
 
   const folderLink = await withDesk()
   teammateSync(folderLink, (dir) => stageLink(dir, "../_shared", `${DESK}/shared`))
+  enableLinks(folderLink.clone)
   git(folderLink.clone, ["pull", "-q", "--ff-only", folderLink.bare, "main"])
   assert.match((await joinWorkspace(join(folderLink, { adoptExisting: git(folderLink.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/shared is not a regular file/u)
 })
@@ -585,7 +604,9 @@ test("a desk that is a link to a folder is refused", linkTest, async () => {
     run(["-C", dir, "rm", "-rq", DESK])
     stageLink(dir, "../_shared", DESK)
   })
+  enableLinks(repo.clone)
   git(repo.clone, ["pull", "-q", "--ff-only", repo.bare, "main"])
+  assert.ok(lstatSync(path.join(repo.clone, DESK)).isSymbolicLink())
   const result = await joinWorkspace(join(repo, { adoptExisting: git(repo.clone, ["rev-parse", "HEAD"]) }))
   assert.equal(result.state, "refused")
   assert.match(result.message, /desks\/newbie is not a regular directory; adoption never follows links/u)
