@@ -5,9 +5,11 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, promises as fs, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { pathToFileURL } from "node:url"
 import { CIT_SHAPED, bareGit, fakeGh, git, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
 import { joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
@@ -24,7 +26,7 @@ async function startWorkspaceFixture() {
   const started = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: { repo: "acme/team-tooling" }, founder: { alias: "test-founder", identity: "test-founder-placeholder" } })
   assert.equal(started.state, "published", started.message)
   const clone = path.join(repo.base, "member")
-  spawnSync("git", ["clone", "-q", repo.bare, clone])
+  run(["clone", "-q", repo.bare, clone])
   git(clone, ["config", "user.email", "new@example.com"])
   git(clone, ["config", "user.name", "New Member"])
   git(clone, ["remote", "set-url", "origin", "https://github.com/acme/team.git"])
@@ -47,11 +49,44 @@ const previewOf = async (repo, extra = {}) => (await joinWorkspace(join(repo, ex
 // A change straight onto main in the bare repository, as a teammate's would be (synchronously, so it can sit inside a hook).
 function teammateSync(repo, change, message = "teammate change") {
   const other = path.join(repo.base, `racer-${Math.random().toString(36).slice(2, 8)}`)
-  spawnSync("git", ["clone", "-q", repo.bare, other])
+  run(["clone", "-q", repo.bare, other])
   change(other)
   git(other, ["add", "-A"])
   git(other, ["-c", "user.email=o@example.com", "-c", "user.name=O", "commit", "-q", "--allow-empty", "-m", message])
   git(other, ["push", "-q", "origin", "main"])
+}
+
+// Every fixture git call must succeed; a failed one would silently test a different condition.
+function run(args, options = {}) {
+  const result = spawnSync("git", args, options)
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr?.toString() ?? result.error?.message}`)
+  return result
+}
+
+// Link-refusal cases need real symbolic links. Where the platform cannot create them (for example Windows without the symlink privilege) they are skipped with this reason instead of running against a plain file.
+const NO_SYMLINKS = (() => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "crew-symlink-probe-"))
+  try {
+    symlinkSync("target", path.join(dir, "link"), "file")
+    return lstatSync(path.join(dir, "link")).isSymbolicLink() ? false : "symbolic link creation produced a plain file"
+  } catch (error) {
+    return `symbolic links cannot be created here (${error.code ?? error.message})`
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})()
+const linkTest = { skip: NO_SYMLINKS }
+
+function makeLink(target, at) {
+  symlinkSync(target, at)
+  assert.ok(lstatSync(at).isSymbolicLink(), `${at} must be a symbolic link`)
+}
+
+// Stages a link in a teammate's clone and proves git records it as a link (mode 120000), not as a copy.
+function stageLink(dir, target, relative) {
+  makeLink(target, path.join(dir, relative))
+  run(["-C", dir, "add", "-A"])
+  assert.match(run(["-C", dir, "ls-files", "-s", "--", relative], { encoding: "utf8" }).stdout, /^120000 /u)
 }
 
 const writeIn = (dir, name, text) => {
@@ -80,10 +115,10 @@ test("adoption preview and apply: existing files stay byte for byte, only missin
   assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), revision)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 
-  const before = Object.fromEntries(Object.keys(MINE).map((file) => [file, spawnSync("git", ["--git-dir", repo.bare, "show", `main:${file}`]).stdout]))
+  const before = Object.fromEntries(Object.keys(MINE).map((file) => [file, run(["--git-dir", repo.bare, "show", `main:${file}`]).stdout]))
   const result = await joinWorkspace(join(repo, { adoptExisting: revision, apply: true }))
   assert.equal(result.state, "joined", result.message)
-  for (const [file, bytes] of Object.entries(before)) assert.deepEqual(spawnSync("git", ["--git-dir", repo.bare, "show", `main:${file}`]).stdout, bytes, file)
+  for (const [file, bytes] of Object.entries(before)) assert.deepEqual(run(["--git-dir", repo.bare, "show", `main:${file}`]).stdout, bytes, file)
   assert.deepEqual(Buffer.from(await fs.readFile(path.join(repo.clone, `${DESK}/blob.bin`))), MINE[`${DESK}/blob.bin`])
   assert.equal(onMain(repo.bare, `${DESK}/README.md`), onMain(repo.bare, "desks/_template/README.md").replaceAll("{{alias}}", "newbie"))
   assert.ok(onMain(repo.bare, `${DESK}/_meta/friction.md`) !== null)
@@ -177,11 +212,13 @@ test("conflicting reservations and pending claims block adoption, and say what t
   git(unverifiable.clone, ["pull", "-q", "--ff-only", unverifiable.bare, "main"])
   const unclear = await joinWorkspace(join(unverifiable, { adoptExisting: git(unverifiable.clone, ["rev-parse", "HEAD"]) }))
   assert.match(unclear.message, /has an unverifiable pending adoption claim; reconcile that claim first/u)
+})
 
+test("a registry that is a link is never followed", linkTest, async () => {
   const registry = await withDesk()
   const lnk = path.join(registry.clone, "_meta", "desks.md")
   await fs.rename(lnk, `${lnk}.real`)
-  await fs.symlink(`${lnk}.real`, lnk)
+  makeLink(`${lnk}.real`, lnk)
   assert.match((await joinWorkspace(join(registry, { adoptExisting: git(registry.clone, ["rev-parse", "HEAD"]) }))).message, /adoption never follows registry links/u)
 })
 
@@ -205,25 +242,30 @@ test("the clone and the reviewed tree must be clean and plain: uncommitted, igno
   writeFileSync(path.join(dirty.clone, DESK, "untracked.md"), "x")
   assert.match((await joinWorkspace(join(dirty, { adoptExisting: revision }))).message, /uncommitted changes|untracked or ignored files outside the reviewed commit/u)
   await fs.rm(path.join(dirty.clone, DESK, "untracked.md"))
+})
 
+test("a working-tree file replaced by a link is refused", linkTest, async () => {
   const linked = await withDesk()
   const target = path.join(linked.clone, DESK, "AGENTS.md")
   await fs.rm(target)
-  await fs.symlink(path.join(linked.clone, "README.md"), target)
+  makeLink(path.join(linked.clone, "README.md"), target)
   assert.match((await joinWorkspace(join(linked, { adoptExisting: git(linked.clone, ["rev-parse", "HEAD"]) }))).message, /is not a regular file; adoption never follows links|uncommitted changes/u)
 })
 
-test("committed links and collisions with template paths are refused", async () => {
+test("committed links are refused", linkTest, async () => {
   const link = await withDesk()
-  teammateSync(link, (dir) => spawnSync("ln", ["-s", "../../README.md", path.join(dir, DESK, "link.md")]))
+  teammateSync(link, (dir) => stageLink(dir, "../../README.md", `${DESK}/link.md`))
   git(link.clone, ["pull", "-q", "--ff-only", link.bare, "main"])
+  assert.ok(lstatSync(path.join(link.clone, DESK, "link.md")).isSymbolicLink())
   assert.match((await joinWorkspace(join(link, { adoptExisting: git(link.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/link\.md is not a regular file; adoption never follows links/u)
 
   const folderLink = await withDesk()
-  teammateSync(folderLink, (dir) => spawnSync("ln", ["-s", "../_shared", path.join(dir, DESK, "shared")]))
+  teammateSync(folderLink, (dir) => stageLink(dir, "../_shared", `${DESK}/shared`))
   git(folderLink.clone, ["pull", "-q", "--ff-only", folderLink.bare, "main"])
   assert.match((await joinWorkspace(join(folderLink, { adoptExisting: git(folderLink.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/shared is not a regular file/u)
+})
 
+test("collisions with template paths and ignored files are refused", async () => {
   const file = await withDesk({ [`${DESK}/_meta`]: "a file where the template has a folder\n" })
   assert.match((await joinWorkspace(join(file, { adoptExisting: git(file.clone, ["rev-parse", "HEAD"]) }))).message, /desks\/newbie\/_meta collides with a template directory/u)
 
@@ -305,7 +347,7 @@ test("a teammate's push while the desk is being adopted: rebuilt on the new main
   assert.ok(onMain(harmless.bare, "desks/other/AGENTS.md") !== null)
 
   const gone = await withDesk()
-  const vanished = await joinWorkspace(join(gone, { adoptExisting: git(gone.clone, ["rev-parse", "HEAD"]), apply: true, spawnGit: racePush(gone, (dir) => spawnSync("git", ["-C", dir, "rm", "-rq", DESK])) }))
+  const vanished = await joinWorkspace(join(gone, { adoptExisting: git(gone.clone, ["rev-parse", "HEAD"]), apply: true, spawnGit: racePush(gone, (dir) => run(["-C", dir, "rm", "-rq", DESK])) }))
   assert.equal(vanished.state, "failed")
   assert.equal(vanished.stage, "desk")
   assert.match(vanished.reason, /desks\/newbie\/ changed since the adoption preview; preview again/u)
@@ -340,7 +382,7 @@ test("while the roster row is landing: a changed desk, template, reservation or 
       const answer = await gh(args, options)
       if (args[1] === "create" && !raced) {
         raced = true
-        if (files === null) teammateSync(repo, (dir) => spawnSync("git", ["-C", dir, "rm", "-q", "_meta/desks.md"]))
+        if (files === null) teammateSync(repo, (dir) => run(["-C", dir, "rm", "-q", "_meta/desks.md"]))
         else await pushFromElsewhere(repo, files(repo))
       }
       return answer
@@ -422,7 +464,7 @@ test("account verification: the account that can push must also be the member, o
 // A shallow clone of the team repository, as a member's machine may hold one.
 function shallowOf(repo, { origin = "https://github.com/acme/team.git" } = {}) {
   const clone = path.join(repo.base, `shallow-${Math.random().toString(36).slice(2, 8)}`)
-  spawnSync("git", ["clone", "-q", "--depth", "1", `file://${repo.bare}`, clone])
+  run(["clone", "-q", "--depth", "1", pathToFileURL(repo.bare).href, clone])
   git(clone, ["config", "user.email", "new@example.com"])
   git(clone, ["config", "user.name", "New Member"])
   git(clone, ["remote", "set-url", "origin", origin])
@@ -537,11 +579,11 @@ test("a short roster row, a roster that does not exist yet and a stale pull-requ
   assert.equal(fake.state.head, `crew/join-newbie-${(NOW() + 1).toString(36)}`)
 })
 
-test("a desk that is a link to a folder is refused", async () => {
+test("a desk that is a link to a folder is refused", linkTest, async () => {
   const repo = await withDesk()
   teammateSync(repo, (dir) => {
-    spawnSync("git", ["-C", dir, "rm", "-rq", DESK])
-    spawnSync("ln", ["-s", "../_shared", path.join(dir, DESK)])
+    run(["-C", dir, "rm", "-rq", DESK])
+    stageLink(dir, "../_shared", DESK)
   })
   git(repo.clone, ["pull", "-q", "--ff-only", repo.bare, "main"])
   const result = await joinWorkspace(join(repo, { adoptExisting: git(repo.clone, ["rev-parse", "HEAD"]) }))
