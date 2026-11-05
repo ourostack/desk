@@ -265,7 +265,7 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
   assert.deepEqual(deskPlugin.dependencies, [
     {
       name: "superpowers",
-      version: "^6.3.0",
+      version: "^7.0.1",
     },
     {
       name: "plain-language",
@@ -515,7 +515,7 @@ test("Claude packaging validation rejects missing Superpowers dependency and sta
   staleDependencyRange.deskPlugin.dependencies[0].version = "^2.0.0"
   assert.deepEqual(
     validateClaudePackagingContract(staleDependencyRange),
-    ["Claude Superpowers dependency range must be ^6.3.0"],
+    ["Claude Superpowers dependency range must be ^7.0.1"],
   )
 
   const staleProviderVersion = clone(currentClaudePackagingInput())
