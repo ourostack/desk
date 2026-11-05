@@ -52,26 +52,6 @@ test("Superpowers wrapper reaches an owned hook without hanging in the batch pre
   assert.equal(result.stderr, "")
 })
 
-test("diagnostic only: instrumented Bash entry stages, not cold-run qualification", { skip: process.env.SUPERPOWERS_HOOK_STAGE_DIAGNOSTIC !== "1" }, (t) => {
-  const owned = fixture(t)
-  writeFileSync(path.join(owned.hooks, "probe"), 'printf "hook reached\\n"\n')
-  const trace = path.join(owned.root, "bash-stages.log")
-  const startup = path.join(owned.root, "bash-stage-probe")
-  writeFileSync(startup, 'SUPERPOWERS_TEST_STAGE=$((SUPERPOWERS_TEST_STAGE + 1))\nexport SUPERPOWERS_TEST_STAGE\nprintf "entry-%s\\t%s\\t%s\\n" "$SUPERPOWERS_TEST_STAGE" "$BASH_VERSION" "${EPOCHREALTIME:-unavailable}" >> "$SUPERPOWERS_TEST_TRACE"\n')
-  try {
-    const result = run(bash, [owned.wrapper, "probe"], {
-      cwd: owned.root,
-      env: { ...process.env, BASH_ENV: startup.replaceAll("\\", "/"), SUPERPOWERS_TEST_STAGE: "0", SUPERPOWERS_TEST_TRACE: trace.replaceAll("\\", "/") },
-    })
-    assert.equal(result.status, 0)
-    assert.equal(result.stdout, "hook reached\n")
-    assert.equal(result.stderr, "")
-    assert.deepEqual(readFileSync(trace, "utf8").trim().split("\n").map((line) => line.split("\t")[0]), ["entry-1", "entry-2", "entry-3"])
-  } finally {
-    t.diagnostic(existsSync(trace) ? `Bash entry stages:\n${readFileSync(trace, "utf8")}` : "No Bash entry stage recorded before the unchanged deadline.")
-  }
-})
-
 test("Superpowers wrapper preserves spaced, empty and literal shell arguments", (t) => {
   const owned = fixture(t)
   writeFileSync(path.join(owned.hooks, "probe"), 'printf "<%s>\\n" "$@"\n')
