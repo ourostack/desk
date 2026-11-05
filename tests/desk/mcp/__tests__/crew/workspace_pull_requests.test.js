@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 
 const NOW = () => 1767225600000
@@ -32,7 +32,7 @@ async function started() {
   return repo
 }
 
-const headOf = (repo, branch) => git(repo.bare, ["rev-parse", `refs/heads/${branch}`])
+const headOf = (repo, branch) => bareGit(repo.bare, ["rev-parse", `refs/heads/${branch}`])
 const creates = (fake) => fake.calls.filter((args) => args[0] === "pr" && args[1] === "create")
 const merged = (fake) => fake.calls.filter((args) => args[0] === "pr" && args[1] === "merge").map((args) => args[2])
 const rosterWith = (repo, alias, identity) => `${onMain(repo.bare, "_meta/desks.md")}| ${alias} | ${identity} | desks/${alias} | acme/team | crew | desks/${alias} |\n`
@@ -147,7 +147,7 @@ test("success is reported only once the default branch holds the result, not bec
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: git(bare, ["rev-parse", "main"]) } }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: bareGit(bare, ["rev-parse", "main"]) } }) }),
   })
   const repo = await teamRepo(CIT_SHAPED)
   const start = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: hollow(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
@@ -172,7 +172,7 @@ test("success is reported only once the default branch holds the result, not bec
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: git(team.bare, ["rev-parse", "main"]) } }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: bareGit(team.bare, ["rev-parse", "main"]) } }) }),
   })
   const gone = await joinWorkspace({ repo: memberClone(team, "eve").clone, spawnGit: team.spawnGit, gh: emptied.gh, identity: "eve_example", alias: "eve", wait: noWait, now: NOW, apply: true })
   assert.equal(gone.stage, "verify")
@@ -190,7 +190,7 @@ test("success is reported only once the default branch holds the result, not bec
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: git(swapped.bare, ["rev-parse", "main"]) } }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: bareGit(swapped.bare, ["rev-parse", "main"]) } }) }),
   })
   const changed = await startWorkspace({ repo: swapped.clone, spawnGit: swapped.spawnGit, gh: swap.gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
   assert.equal(changed.stage, "verify")

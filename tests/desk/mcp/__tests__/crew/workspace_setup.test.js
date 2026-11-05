@@ -9,7 +9,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo, toBare } from "./_fixtures.js"
+import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo, toBare } from "./_fixtures.js"
 import { crewStatus, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { crewWorkspace, readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
@@ -49,7 +49,7 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
   const result = await startWorkspace(startCit(repo, { apply: true, gh }))
   assert.equal(result.state, "published", result.message)
   assert.equal(result.pr, PR)
-  assert.equal(result.commit, git(repo.bare, ["rev-parse", "main"]))
+  assert.equal(result.commit, bareGit(repo.bare, ["rev-parse", "main"]))
   assert.match(result.message, /^Started: this repository is now a dual-repo Crew workspace\. The change merged in https:\/\/github\.com\/acme\/team\/pull\/12\./u)
   // Nothing that was there moved or changed, except AGENTS.md, which only grew at its end.
   for (const [file, content] of before) {
@@ -236,7 +236,7 @@ test("a conflict rebuilds the branch on the new main and merges; GitHub still wo
   const { gh, state } = fakeGh(repo.bare, {
     view: (current) => {
       views += 1
-      if (current.merged) return { code: 0, stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } }) }
+      if (current.merged) return { code: 0, stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } }) }
       return { code: 0, stdout: JSON.stringify({ state: "OPEN", mergeable: views === 1 ? "UNKNOWN" : "CONFLICTING", mergeStateStatus: "DIRTY" }) }
     },
   })
