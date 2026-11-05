@@ -574,6 +574,12 @@ jobs:
             platform: darwin
             arch: arm64
             node_abi: "127"
+          - target: darwin-arm64-node-137
+            runner: macos-latest
+            node: "24.18.0"
+            platform: darwin
+            arch: arm64
+            node_abi: "137"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
