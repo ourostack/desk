@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.61 — 2026-11-05
+
+`task_archive` can retry an interrupted staged relocation without manual unstaging when the archive exactly matches the source in HEAD and its track-link update is unchanged. Unrelated staged work stays staged; altered or partially staged archives and destinations already occupied in HEAD remain pending. A timeout after a successful commit is reconciled without a duplicate commit. The original cause of a commit timeout still needs separate diagnosis ([recovery contract](mcp/README.md#tools-exposed-24)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.60 — 2026-11-04
+
+A coordinator no longer reports that a child went idle or that things are quiet. [`work-orchestration`](skills/work-orchestration/SKILL.md) now says: when a child goes quiet as expected, say nothing; when it should still be working, find out why, fix it and report what was wrong and what you did. Every update to the operator carries real progress on work in flight, or a decision only they can make.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.59 — 2026-11-04
 
 Recover legacy Resources tables through `task_update` with an explicit [`resource.migrate` column mapping](skills/task-card-format/SKILL.md#resources-worktrees-and-branches-you-create), instead of instructions to edit a protected table by hand. The checked write preserves inventory, ownership, dispositions, extra cells and surrounding prose, rejects ambiguous or malformed tables without writing, and supports repeat calls without another migration.
