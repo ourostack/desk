@@ -98,6 +98,10 @@ function github({
       assert.equal(ref, candidate);
       return topLevel;
     },
+    tree() {
+      return new Map(["skills/example/SKILL.md", ...Object.keys(files)]
+        .map((file) => [file, { type: "blob", mode: "100644" }]));
+    },
     file(_repository, sourcePath, ref) {
       assert.equal(ref, candidate);
       if (Object.hasOwn(files, sourcePath)) return Buffer.from(files[sourcePath]);
@@ -112,6 +116,37 @@ function github({
   assert.equal(result.classification, "current");
   assert.equal(result.tracking.strategy, "default-branch");
   assert.deepEqual(result.changed_paths, []);
+}
+
+{
+  const locked = source();
+  locked.files.push({
+    sourcePath: "skills/example/retired.md",
+    generatedPath: "plugins/example/skills/example/retired.md",
+    sha256: hash("retired"),
+  });
+  const client = github({ candidate: candidateCommit });
+  client.tree = createGitHubClient(() => ({
+    status: 0, stderr: "",
+    stdout: JSON.stringify({ truncated: false, tree: [
+      { path: "skills", type: "tree", mode: "040000" },
+      { path: "skills/example", type: "tree", mode: "040000" },
+      { path: "skills/example/SKILL.md", type: "blob", mode: "100644" },
+      { path: "skills/example/references", type: "tree", mode: "040000" },
+      { path: "skills/example/references/replacement.md", type: "blob", mode: "100644" },
+      { path: "skills/unselected", type: "tree", mode: "040000" },
+      { path: "skills/unselected/SKILL.md", type: "blob", mode: "100644" },
+    ] }),
+  })).tree;
+  client.file = (_repository, sourcePath) => {
+    assert.notEqual(sourcePath, "skills/example/retired.md", "removed paths must not be fetched");
+    return Buffer.from(sourcePath.endsWith("replacement.md") ? "replacement" : "locked");
+  };
+  const result = inspectSource(locked, client);
+  assert.equal(result.classification, "needs-human-approval");
+  assert.deepEqual(result.added_paths, ["skills/example/references/replacement.md"]);
+  assert.deepEqual(result.removed_paths, ["skills/example/retired.md"]);
+  assert.deepEqual(result.changed_paths, ["skills/example/references/replacement.md", "skills/example/retired.md"]);
 }
 
 {
@@ -474,6 +509,8 @@ assert.throws(
     value = [];
   } else if (endpoint === "repos/owner/repo/commits/main") {
     value = { sha: locked };
+  } else if (endpoint === "repos/owner/repo/git/trees/" + locked + "?recursive=1") {
+    value = { truncated: false, tree: [{ path: "skills/example/SKILL.md", type: "blob", mode: "100644" }] };
   } else if (endpoint.startsWith("repos/owner/repo/contents/skills/example/SKILL.md?ref=")) {
     value = { type: "file", encoding: "base64", content: Buffer.from("locked").toString("base64") };
   } else {
