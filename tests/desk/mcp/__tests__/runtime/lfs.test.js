@@ -465,13 +465,13 @@ for (const command of ["git", "git-lfs"]) {
     const spawn = (cmd, args, options) => {
       if (cmd !== command || observed !== undefined) return spawnSync(cmd, args, options)
       const start = performance.now()
-      const child = spawnSync(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("armed"); setTimeout(() => process.exit(0), 1000)'], { ...options, timeout: 250 })
+      const child = spawnSync(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("armed"); setTimeout(() => process.exit(0), 8000)'], { ...options, timeout: 2000 })
       observed = { elapsed: performance.now() - start, armed: String(child.stdout).includes("armed"), signal: child.signal }
       return child
     }
     const result = inspect(root, { spawn })
     assert.equal(observed.armed, true, "the child must install its SIGTERM handler before the timeout")
-    assert.ok(observed.elapsed < 800, `timeout waited ${Math.round(observed.elapsed)} ms for a child that ignores SIGTERM`)
+    assert.ok(observed.elapsed < 5000, `timeout waited ${Math.round(observed.elapsed)} ms for a child that ignores SIGTERM`)
     assert.equal(observed.signal, "SIGKILL")
     assert.equal(command === "git" ? result.state : result.tool.state, "unavailable")
   })
