@@ -71,6 +71,8 @@ Eligible whole-session Copilot sources whose raw logs are gone can supply a boun
 - `friction_add`, `lesson_add`
 - `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside this session's write prefix (`desks/<alias>/` in a shared workspace), or the call is refused
 
+After `task_archive` returns `archive_pending`, keep the archived folder and index intact and follow its named repair action before retrying the same track and slug. Retry can publish an exact staged relocation when source HEAD still holds the task, the source index is empty, the archive index and working bytes match that source, and any track-link update matches the update derived from track HEAD. Changed card/report bytes, partial staging, outside track edits and destinations already occupied in HEAD remain pending; do not unstage them to force recovery. A timeout can also occur after the commit takes effect, so retry checks publication before attempting another commit. This recovery does not diagnose or remove the original timeout ([implementation](src/tools/archive-state.js), [qualification](../../../tests/desk/mcp/__tests__/tools/archive_staged_retry.test.js)).
+
 **Teammate notes (Crew):**
 - `note_leave` — leave another member of a shared workspace a dated, attributed note: one new file in `desks/<them>/_inbox/`, written through a pull request the tool merges at once; refused for someone not on the roster and for an exact duplicate
 - `note_ack` — the recipient marks a note in their own inbox acknowledged once the operator has seen it; the file stays, and session start stops listing it. Session start lists the open notes, oldest first, at most five

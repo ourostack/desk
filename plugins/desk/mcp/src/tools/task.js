@@ -1324,9 +1324,7 @@ function withArchiveFocus(statusContext, target, result) {
  * Bumps a non-terminal task to `done` or `cancelled` (see below) as part of
  * the same call.
  *
- * An already-published archive is idempotent. An interrupted relocation
- * reconciles only unchanged source HEAD/index and exact relocated bytes;
- * anything unqualified returns `archive_pending`, never publication success.
+ * An already-published archive is idempotent. An interrupted relocation reconciles unchanged source HEAD/index or an exact staged source-to-destination mapping against source HEAD, with exact relocated bytes and a qualified track-link update. Anything unqualified returns `archive_pending`, never publication success.
  *
  * Evidence gate on the archive bump (the invented-completion finding): a
  * card already in a terminal status (`done` or `cancelled`) archives as-is,
@@ -1474,7 +1472,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
     throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
-  const trackPlan = await archiveTrackPlan(await target([track, "track.md"]), slug, archiveBump?.status ?? null)
+  const trackFile = await target([track, "track.md"])
+  let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
   let prepared, moveSession, sessionClosed = false
   const closeSession = async () => {
     if (!moveSession || sessionClosed) return
@@ -1492,7 +1491,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
     try {
-      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated })
+      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
+      trackPlan = prepared.trackPlan
     } catch (error) {
       if (!relocated) throw error
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })

@@ -5,6 +5,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { isPathContained } from "../util/paths.js"
 import { indexEntries, stagePaths, commitIndexPaths } from "../util/git-stage.js"
+import { setTaskArchiveLinks } from "./track-row.js"
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.mode & 0o170000n}`
@@ -119,9 +120,9 @@ function indexMatches(entries, expected) {
   return entries !== null && entries.length === expected.size && entries.every((entry) =>
     entry.stage === "0" && expected.get(entry.path)?.sha === entry.sha && expected.get(entry.path)?.mode === entry.mode)
 }
-function publishExpected(git, paths, expected, message) {
+function publishExpected(git, paths, expected, message, stagingPaths = paths) {
   assertGitState(git)
-  const staged = stagePaths(git.root, paths, git.spawnGit)
+  const staged = stagePaths(git.root, stagingPaths, git.spawnGit)
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
   let entries = indexEntries(git.root, paths, git.spawnGit)
   const normalStage = new Map([...expected].map(([file, entry]) => [file, { sha: entry.stageSha, mode: entry.stageMode }]))
@@ -166,36 +167,44 @@ async function ancestry(boundary, destination) {
   } }
 }
 
-export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated = false }) {
+export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated = false }) {
   const snapshot = await tree(relocated ? archiveDir : srcDir)
   const fence = await ancestry(effectiveRoot, archiveDir)
   const git = await gitContext(effectiveRoot, spawnGit)
   let track = null
-  if (trackPlan) {
-    const stat = await fs.lstat(trackPlan.file, { bigint: true })
-    if (!stat.isFile()) throw new Error("task_archive: a track link update requires a regular track card")
-    track = { ...trackPlan, identity: identity(stat), mode: Number(stat.mode & 0o777n) }
-  }
   let tracked = []
   let originals = new Map()
+  let sourceIndex = new Map()
+  let destinationIndex = new Map()
+  let stagedRelocation = false
+  let recoveredTrack = false
   let trackEntry = null
   if (git) {
-    destinationVacant(git, archiveDir)
     const source = gitPath(git, srcDir)
+    const destination = gitPath(git, archiveDir)
     const card = gitPath(git, srcFile)
     const entries = indexEntries(git.root, [source], spawnGit)
     if (entries === null || entries.some((entry) => entry.stage !== "0" || entry.mode === "160000"))
       throw new Error("task_archive: source index conflicts/submodules cannot be admitted; nothing was moved")
     const baseline = new Map(headEntries(git, srcDir).map((entry) => [entry.path, entry]))
-    tracked = entries.map((entry) => entry.path)
-    originals = new Map(entries.map((entry) => [entry.path, entry]))
+    sourceIndex = new Map(entries.map((entry) => [entry.path, entry]))
+    if (relocated && entries.length === 0 && baseline.size > 0) {
+      destinationIndex = new Map([...baseline].map(([file, entry]) =>
+        [`${destination}${file.slice(source.length)}`, entry]))
+      if (headEntries(git, archiveDir).length ||
+          !indexMatches(indexEntries(git.root, [destination], spawnGit), destinationIndex))
+        throw new Error("task_archive: the interrupted staged move does not exactly match the source HEAD; preserve the index and archive before retrying")
+      stagedRelocation = true
+    } else destinationVacant(git, archiveDir)
+    originals = stagedRelocation ? baseline : sourceIndex
+    tracked = [...originals.keys()]
     for (const [name, entry] of snapshot) {
       if (entry.kind !== "directory" && name !== "task.md" && !originals.has(`${source}/${name}`))
         throw new Error("task_archive: an untracked companion is not implicitly owned; nothing was moved")
     }
     if (relocated) {
-      if (entries.length === 0 || entries.length !== baseline.size ||
-          entries.some((entry) => baseline.get(entry.path)?.sha !== entry.sha || baseline.get(entry.path)?.mode !== entry.mode))
+      if (!stagedRelocation && (entries.length === 0 || entries.length !== baseline.size ||
+          entries.some((entry) => baseline.get(entry.path)?.sha !== entry.sha || baseline.get(entry.path)?.mode !== entry.mode)))
         throw new Error("task_archive: the interrupted move has no unchanged source HEAD/index to reconcile")
       for (const [key, entry] of snapshot) {
         if (entry.kind === "directory") continue
@@ -208,7 +217,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       if ([...baseline.keys()].some((file) => !snapshot.has(file.slice(source.length + 1))))
         throw new Error("task_archive: the interrupted move is missing a tracked source file")
     }
-    for (const entry of entries) {
+    for (const entry of originals.values()) {
       if (entry.path === card) continue
       const previous = baseline.get(entry.path)
       const key = entry.path.slice(source.length + 1)
@@ -227,7 +236,33 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       if (changes.some((file) => file !== card))
         throw new Error("task_archive: dirty, staged, or untracked companion bytes cannot be adopted; nothing was moved")
     }
-    if (track && [
+    if (stagedRelocation && trackFile) {
+      const key = gitPath(git, trackFile)
+      const held = headEntries(git, trackFile)
+      if (held.length === 1 && ["100644", "100755"].includes(held[0].mode)) {
+        const before = readGit(git.root, ["show", `${git.head}:${key}`], spawnGit)
+        const after = setTaskArchiveLinks(before, slug)
+        if (after !== null) {
+          const stat = await fs.lstat(trackFile)
+          const expected = { mode: held[0].mode, sha: cleanHash(git, trackFile, Buffer.from(after)), path: key, stage: "0" }
+          if (!stat.isFile() || gitMode({ kind: "file", mode: stat.mode & 0o777 }, held[0], git) !== held[0].mode ||
+              await fs.readFile(trackFile, "utf8") !== after ||
+              !indexMatches(indexEntries(git.root, [key], spawnGit), new Map([[key, expected]])))
+            throw new Error("task_archive: the interrupted track link update differs from its source HEAD; outside edits were retained")
+          trackPlan = { file: trackFile, before: after, after }
+          trackEntry = expected
+          recoveredTrack = true
+        }
+      }
+    }
+  }
+  if (trackPlan) {
+    const stat = await fs.lstat(trackPlan.file, { bigint: true })
+    if (!stat.isFile()) throw new Error("task_archive: a track link update requires a regular track card")
+    track = { ...trackPlan, identity: identity(stat), mode: Number(stat.mode & 0o777n) }
+  }
+  if (git) {
+    if (track && !recoveredTrack && [
       ["diff", "--name-only", "--", gitPath(git, track.file)],
       ["diff", "--cached", "--name-only", "--", gitPath(git, track.file)],
       ["ls-files", "--others", "--", gitPath(git, track.file)],
@@ -237,6 +272,8 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       const held = indexEntries(git.root, [gitPath(git, track.file)], spawnGit)
       if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
         throw new Error("task_archive: the track's regular Git file state could not be qualified")
+      if (recoveredTrack && !indexMatches(held, new Map([[trackEntry.path, trackEntry]])))
+        throw new Error("task_archive: interrupted track index changed during preflight; outside staged bytes were retained")
       trackEntry = held[0]
     }
   }
@@ -247,11 +284,20 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       throw new Error("task_archive: the track changed after preflight; outside edits were retained")
   }
   function assertSourceIndex() {
-    if (!indexMatches(indexEntries(git.root, [gitPath(git, srcDir)], spawnGit), originals))
+    if (!indexMatches(indexEntries(git.root, [gitPath(git, srcDir)], spawnGit), sourceIndex))
       throw new Error("task_archive: source index changed after preflight; outside staged bytes were retained")
   }
+  function assertDestinationIndex() {
+    if (!stagedRelocation) return destinationVacant(git, archiveDir)
+    if (headEntries(git, archiveDir).length ||
+        !indexMatches(indexEntries(git.root, [gitPath(git, archiveDir)], spawnGit), destinationIndex))
+      throw new Error("task_archive: interrupted destination index changed after preflight; outside staged bytes were retained")
+    if (track && !indexMatches(indexEntries(git.root, [gitPath(git, track.file)], spawnGit),
+      new Map([[trackEntry.path, trackEntry]])))
+      throw new Error("task_archive: interrupted track index changed after preflight; outside staged bytes were retained")
+  }
   return {
-    git, snapshot, fence,
+    git, snapshot, fence, trackPlan,
     async atUse() {
       await fence.assert()
       await assertTrack()
@@ -260,7 +306,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       if (await present(relocated ? srcDir : archiveDir))
         throw new Error("task_archive: the other archive path appeared before publication")
       if (git) {
-        destinationVacant(git, archiveDir)
+        assertDestinationIndex()
         assertSourceIndex()
         assertGitState(git)
       }
@@ -287,7 +333,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
           !(await fs.readFile(track.file)).equals(Buffer.from(track.after))))
         throw new Error("task_archive: track changed before publication")
       if (!git) return undefined
-      destinationVacant(git, archiveDir)
+      assertDestinationIndex()
       assertSourceIndex()
       if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed before publication")
       const expected = new Map()
@@ -297,9 +343,10 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         if (entry.kind === "directory") continue
         const mode = gitMode(entry, originals.get(`${source}/${name}`), git)
         const sha = blobHash(git, path.join(archiveDir, name), entry.bytes, mode)
-        expected.set(`${destination}/${name}`, { sha, mode,
-          stageSha: entry.kind === "file" && mode === "120000" ? cleanHash(git, path.join(archiveDir, name), entry.bytes) : sha,
-          stageMode: entry.kind === "link" ? "120000" : git.fileMode && entry.mode & 0o100 ? "100755" : "100644" })
+        const key = `${destination}/${name}`
+        const stageMode = gitMode(entry, destinationIndex.get(key), git)
+        expected.set(key, { sha, mode, stageMode,
+          stageSha: stageMode === mode ? sha : blobHash(git, path.join(archiveDir, name), entry.bytes, stageMode) })
       }
       if (track) {
         const bytes = Buffer.from(track.after)
@@ -307,7 +354,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         expected.set(gitPath(git, track.file), { sha, mode, stageSha: sha, stageMode: mode })
       }
       const paths = [...new Set([...tracked, ...expected.keys()])]
-      return publishExpected(git, paths, expected, message)
+      return publishExpected(git, paths, expected, message, stagedRelocation ? [...expected.keys()] : paths)
     },
   }
 }
