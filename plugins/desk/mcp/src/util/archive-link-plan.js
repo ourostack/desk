@@ -183,12 +183,6 @@ export function planArchiveLinks({ sourcePrefix, destinationPrefix, scopePrefix 
     let cursor = 0
     let after = ""
     for (const patch of patches) {
-      if (patch.start < cursor) {
-        refuse("overlapping_destination_spans", { start: patch.start })
-        after = before
-        cursor = before.length
-        break
-      }
       after += before.slice(cursor, patch.start) + patch.replacement
       cursor = patch.end
     }

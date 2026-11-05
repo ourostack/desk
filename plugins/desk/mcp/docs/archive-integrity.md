@@ -40,6 +40,9 @@ closure. Confirmed unlink and absence immediately retain the known
 `final_complete` filesystem phase, even if a later observation fails. Unknown
 unlink, partial IO or descriptor closure stays pending; there is no replay,
 foreign cleanup or age-based clearing.
+The aggregate owner always attempts descriptor settlement, including when a
+move session cannot be opened; cleanup does not depend on session initialization.
+An earlier operation error remains primary if settlement also fails.
 
 Factory terminal work is separately observed at its existing top-level
 handoff. A known marker at the last gate prevents a new call. An already

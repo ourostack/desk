@@ -596,7 +596,7 @@ function indexMatches(entries, expected) {
   return entries !== null && entries.length === expected.size && entries.every((entry) =>
     entry.stage === "0" && expected.get(entry.path)?.sha === entry.sha && expected.get(entry.path)?.mode === entry.mode)
 }
-async function publishExpected(git, paths, expected, message, stagingPaths = paths, beforeEffect) {
+async function publishExpected(git, paths, expected, message, stagingPaths, beforeEffect) {
   if (beforeEffect) await beforeEffect()
   assertGitState(git)
   const staged = stagePaths(git.root, stagingPaths, git.spawnGit)

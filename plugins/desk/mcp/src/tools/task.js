@@ -297,9 +297,7 @@ async function requestTaskEvaluation({ deskRoot, env, identity, beforeEffect, te
     if (terminalHandoff && !identity) throw new Error("archive terminal job identity unavailable")
     const call = (helper, work) => terminalHandoff
       ? observeArchiveFactoryCall(terminalHandoff, helper, deskRoot, identity, beforeEffect, work) : work()
-    if (!terminalHandoff && beforeEffect) await beforeEffect()
     const root = await call("factoryStateRoot.evaluation", () => factoryStateRoot(env, { create: false, deskRoot }))
-    if (!terminalHandoff && beforeEffect) await beforeEffect()
     if (root === null) return
     await call("requestEvaluation", () => requestEvaluation(env, { job: identity.job, deskRoot: identity.root }))
   } catch (error) {
@@ -1735,7 +1733,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
           }
           return expected
         } })
-      let session, primary, notificationAttempted = false
+      let primary, notificationAttempted = false
       const notify = () => {
         notificationAttempted = true
         if (aggregate.moved || aggregate.receipt.effects.some(item => item.kind === "move")) {
@@ -1746,47 +1744,52 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
         }
       }
       try {
-        session = await openArchiveMove({ source: srcDir, destination: archiveDir, aggregate })
-        await session.admit()
-        await withCreatedDirs(path.dirname(archiveDir), async () => {
-          await session.move(() => aggregate.assertCurrent())
-          await session.applyFiles()
-        }, {
-          create: (directory, recordMade) => session.create(path.join(aggregate.root, path.relative(effectiveRoot, directory)),
-            created => recordMade(path.join(effectiveRoot, path.relative(aggregate.root, created)))),
-          remove: directory => session.remove(path.join(aggregate.root, path.relative(effectiveRoot, directory))),
-          shouldCleanup: error => !session.retain && !error.aggregateRetain,
-        })
-        notify()
-        await session.close()
-        markerBindings = { ...markerBindings, source: null, destination: markerBindings.source }
-        await checkMarkers()
-        if (Date.now() < aggregate.deadline) await terminalSync(finalStatus)
-        else console.error("desk_factory: archive_terminal_requests_deferred_deadline")
-        await checkMarkers()
-        const result = { status: "archived", path: relPath(deskRoot, archivedFile), terminal_handoff: terminalHandoff,
-          archive_coverage: { scope: "effective_person_root", excluded_storage: [".git", "node_modules"],
-            concurrent_editors_excluded: false } }
-        if (delivered !== null) Object.assign(result, delivered)
-        Object.assign(result, reportResult(report, archiveBump?.status !== "done"),
-          cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
-        return withArchiveFocus(statusContext, { track, slug }, result)
+        const session = await openArchiveMove({ source: srcDir, destination: archiveDir, aggregate })
+        try {
+          await session.admit()
+          await withCreatedDirs(path.dirname(archiveDir), async () => {
+            await session.move(() => aggregate.assertCurrent())
+            await session.applyFiles()
+          }, {
+            create: (directory, recordMade) => session.create(path.join(aggregate.root, path.relative(effectiveRoot, directory)),
+              created => recordMade(path.join(effectiveRoot, path.relative(aggregate.root, created)))),
+            remove: directory => session.remove(path.join(aggregate.root, path.relative(effectiveRoot, directory))),
+            shouldCleanup: error => !session.retain && !error.aggregateRetain,
+          })
+          notify()
+          await session.close()
+          markerBindings = { ...markerBindings, source: null, destination: markerBindings.source }
+          await checkMarkers()
+          if (Date.now() < aggregate.deadline) await terminalSync(finalStatus)
+          else console.error("desk_factory: archive_terminal_requests_deferred_deadline")
+          await checkMarkers()
+          const result = { status: "archived", path: relPath(deskRoot, archivedFile), terminal_handoff: terminalHandoff,
+            archive_coverage: { scope: "effective_person_root", excluded_storage: [".git", "node_modules"],
+              concurrent_editors_excluded: false } }
+          if (delivered !== null) Object.assign(result, delivered)
+          Object.assign(result, reportResult(report, archiveBump?.status !== "done"),
+            cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
+          return withArchiveFocus(statusContext, { track, slug }, result)
+        } catch (error) {
+          primary = error
+          try { await session.close(error) }
+          catch (closeError) { aggregate.receipt.closeFailure = closeError.message }
+          if (!notificationAttempted) try { notify() } catch (notifyError) { aggregate.receipt.notificationFailure = notifyError.message }
+          if (!aggregate.receipt.effects.length) throw error
+          const attemptedMove = aggregate.receipt.effects.some(item => item.kind === "move")
+          return withArchiveFocus(statusContext, { track, slug }, { ...archivePendingAnswer(
+            relPath(deskRoot, attemptedMove ? archivedFile : srcFile),
+            { status: "unknown", reason: error.archiveMarkerPending ? "unqualified_original_map" : error.message,
+              phase: aggregate.receipt.phase,
+              placement: aggregate.moved ? "retained" : attemptedMove ? "unknown" : "source",
+              ...(error.terminalPrimaryError ? { primary_error: error.terminalPrimaryError.message } : {}),
+              effects: aggregate.receipt }), terminal_handoff: terminalHandoff })
+        }
       } catch (error) {
         primary = error
-        try { if (session) await session.close(error); else await aggregate.close() }
-        catch (closeError) { aggregate.receipt.closeFailure = closeError.message }
-        if (!notificationAttempted) try { notify() } catch (notifyError) { aggregate.receipt.notificationFailure = notifyError.message }
-        if (!aggregate.receipt.effects.length) throw error
-        const attemptedMove = aggregate.receipt.effects.some(item => item.kind === "move")
-        return withArchiveFocus(statusContext, { track, slug }, { ...archivePendingAnswer(
-          relPath(deskRoot, attemptedMove ? archivedFile : srcFile),
-          { status: "unknown", reason: error.archiveMarkerPending ? "unqualified_original_map" : error.message,
-            phase: aggregate.receipt.phase,
-            placement: aggregate.moved ? "retained" : attemptedMove ? "unknown" : "source",
-            ...(error.terminalPrimaryError ? { primary_error: error.terminalPrimaryError.message } : {}),
-            effects: aggregate.receipt }), terminal_handoff: terminalHandoff })
+        throw error
       } finally {
-        if (!session) try { await aggregate.close() } catch (error) {
+        try { await aggregate.close() } catch (error) {
           if (primary) aggregate.receipt.closeFailure ??= error.message
           else throw error
         }

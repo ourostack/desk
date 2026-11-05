@@ -1794,13 +1794,17 @@ test("late informational failure preserves actual Final-complete phase after con
   assert.equal(Object.hasOwn(result, "factory_report"), false)
 })
 for (const kind of ["Finalize", "Evaluation"]) {
-  portableTest(`boundary model only: legacy task-local ${kind} post-await guard prevents the next dispatch`, async () => {
+  portableTest(`boundary model only: ${kind === "Evaluation" ? "owned" : "legacy"} task-local ${kind} post-await guard prevents the next dispatch`, async () => {
     const f = await fixture(), file = path.join(f.root, `UNEXPECTED_${kind}_REQUEST`)
     const source = await fs.readFile(new URL("../../../../../plugins/desk/mcp/src/tools/task.js", import.meta.url), "utf8")
     const expression = source.match(new RegExp(`async function requestTask${kind}\\([^]*?\\n\\}`, "u"))?.[0]
     assert.ok(expression)
     const original = Object.assign(new Error("unqualified_original_map"), { archiveMarkerPending: { status: "archive_pending" } })
-    const fn = vm.runInNewContext(`(${expression})`, {
+    const observation = kind === "Evaluation"
+      ? source.match(/async function observeArchiveFactoryCall\([^]*?\n\}/u)?.[0] : ""
+    if (kind === "Evaluation") assert.ok(observation)
+    const fn = vm.runInNewContext(kind === "Evaluation"
+      ? `(() => { ${observation}; return (${expression}) })()` : `(${expression})`, {
       factoryStateRoot: async () => {
         await fs.writeFile(path.join(f.root, "alpha/job/.desk-archive-operation.json"), "")
         return "synthetic opted-in state"
@@ -1813,7 +1817,15 @@ for (const kind of ["Finalize", "Evaluation"]) {
         archiveDir: path.join(f.root, "alpha/_archive/job") })
       if (state.state !== "absent") throw original
     }
-    await assert.rejects(fn({ deskRoot: f.root, env: {}, identity: { job: "synthetic" }, beforeEffect }), error => error === original)
+    const terminalHandoff = kind === "Evaluation" ? { deadline: null, attempts: [] } : undefined
+    await assert.rejects(fn({ deskRoot: f.root, env: {}, identity: { job: "synthetic" }, beforeEffect,
+      ...(kind === "Evaluation" ? { terminalHandoff } : {}) }), error => error === original)
+    if (kind === "Evaluation") {
+      assert.equal(terminalHandoff.status, "unknown")
+      assert.equal(terminalHandoff.attempts.length, 1)
+      assert.equal(terminalHandoff.attempts[0].helper, "factoryStateRoot.evaluation")
+      assert.equal(terminalHandoff.attempts[0].effectState, "unknown_or_partial")
+    }
     await assert.rejects(fs.lstat(file), { code: "ENOENT" })
   })
 }
