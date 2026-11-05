@@ -584,11 +584,35 @@ const majorReport = {
   });
   const treeRoute = (result = ok(tree())) => [`api repos/${repo}/git/trees/${sha}?recursive=1`, result];
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "superpowers-upstream-pending-"));
+  const fixtureModes = new Map([
+    [path.join(tempRoot, tool), 0o644],
+    [path.join(tempRoot, rawHook), 0o755],
+    [path.join(tempRoot, "plugins/superpowers/hooks/run-hook.cmd"), 0o644],
+  ]);
+  const originalLstatSync = fs.lstatSync;
+  const setMode = (file, mode) => {
+    assert.ok(fixtureModes.has(file), `undeclared mode fixture: ${file}`);
+    fs.chmodSync(file, mode);
+    fixtureModes.set(file, mode);
+  };
   try {
-    for (const [file, mode] of [[tool, 0o644], [rawHook, 0o755], ["plugins/superpowers/hooks/run-hook.cmd", 0o644]]) {
-      fs.mkdirSync(path.dirname(path.join(tempRoot, file)), { recursive: true });
-      fs.writeFileSync(path.join(tempRoot, file), "echo fixture\n");
-      fs.chmodSync(path.join(tempRoot, file), mode);
+    if (process.platform === "win32") {
+      // Windows chmod cannot set POSIX execute bits; supply only those bits for declared regular fixtures.
+      fs.lstatSync = (...args) => {
+        const stat = Reflect.apply(originalLstatSync, fs, args);
+        const mode = fixtureModes.get(args[0]);
+        if (mode !== undefined && stat?.isFile()) {
+          const mask = typeof stat.mode === "bigint" ? 0o111n : 0o111;
+          const executable = typeof stat.mode === "bigint" ? BigInt(mode & 0o111) : mode & 0o111;
+          stat.mode = (stat.mode & ~mask) | executable;
+        }
+        return stat;
+      };
+    }
+    for (const [file, mode] of fixtureModes) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "echo fixture\n");
+      setMode(file, mode);
     }
     const options = { repo, branch, base: "main", lock: freshLock, root: tempRoot, now: at };
     const sameRoutes = [openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(), openIssue];
@@ -602,11 +626,11 @@ const majorReport = {
     assert.match(held.message, /https:\/\/github\.com\/owner\/desk\/pull\/7 has carried this upstream payload for 23 days and is still not on main\. See https:\/\/github\.com\/owner\/desk\/issues\/4\./u);
 
     for (const [localMode, carriedMode] of [[0o644, "100755"], [0o755, "100644"]]) {
-      fs.chmodSync(path.join(tempRoot, tool), localMode);
+      setMode(path.join(tempRoot, tool), localMode);
       const modesMoved = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(ok(tree(carriedMode))), openIssue]);
       assert.equal(pending({ ...options, gh: modesMoved.gh }).rerun, true, "a selected executable-mode change must rerun the refresh");
     }
-    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+    setMode(path.join(tempRoot, tool), 0o644);
     assert.equal(same.calls[0].line, `pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt,headRefOid`);
     assert.ok(same.calls.some((call) => call.line === `api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=${sha}`), "read the lock at the observed pull-request head");
     assert.ok(same.calls.some((call) => call.line === `api repos/${repo}/git/trees/${sha}?recursive=1`), "read modes from the same head, not a moving branch");
@@ -649,7 +673,7 @@ const majorReport = {
     assert.throws(() => pending({ ...options, gh: fakeGh(sameRoutes).gh }), /regular file/u);
     fs.rmdirSync(path.join(tempRoot, tool));
     fs.writeFileSync(path.join(tempRoot, tool), "echo fixture\n");
-    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+    setMode(path.join(tempRoot, tool), 0o644);
 
     // The CLI emits a refusal output only after admission succeeds; unexpected failures leave no such output.
     const lockPath = path.join(tempRoot, "lock.json");
@@ -661,11 +685,11 @@ const majorReport = {
     assert.match(output, /^## Superpowers upstream refresh: pending\n/u);
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=false\n");
     fs.rmSync(outputPath);
-    fs.chmodSync(path.join(tempRoot, tool), 0o755);
+    setMode(path.join(tempRoot, tool), 0o755);
     assert.equal(main(argv, { run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n", "a mode-only change must reach the workflow's push/publish path");
     fs.rmSync(outputPath);
-    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+    setMode(path.join(tempRoot, tool), 0o644);
     const brokenTree = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(fail("HTTP 403")), openIssue]);
     assert.throws(() => main(argv, { run: brokenTree.run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), /HTTP 403/u);
     assert.equal(fs.existsSync(outputPath), false, "an unexpected gate failure must not write rerun=false");
@@ -673,6 +697,7 @@ const majorReport = {
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n");
     assert.throws(() => parseArgs(["pending", "--repo", repo]), /pending requires --branch, --base, --lock/u);
   } finally {
+    fs.lstatSync = originalLstatSync;
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
