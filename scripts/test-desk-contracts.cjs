@@ -1379,6 +1379,9 @@ contract("resuming a named task continues its recorded next step, plans live in 
   assert.match(skill, /never into the desk root/u);
   assert.match(skill, /Choose the execution method[^.]*yourself[^.]*not a question for the operator/u);
   assert.match(skill, /`writing-plans` is a skill that writes a plan file\. It is not the host's Plan mode/u);
+  // Superpowers 7 brainstorming decides where files go without asking and defaults to the code repository; the
+  // operator's preference, which upstream says overrides it, is the iteration folder.
+  assert.match(skill, /A brainstorming design doc goes in the same iteration folder as `design\.md`[^.]*\(no `docs\/superpowers\/specs\/` there\)/u);
 });
 contract("every write to an existing task card goes through task_update", () => {
   const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
