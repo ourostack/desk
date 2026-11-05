@@ -39,11 +39,20 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
   t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const snapshots = []
   const line = await runBootChecks({
     ...quiet,
     env,
+    // Real staging data, without a second wall-clock race; snapshot timeout behavior is tested separately.
+    spawnGit: (command, args) => {
+      assert.equal(args[1], repo)
+      const stdout = execFileSync(command, args, { env, encoding: "utf8" })
+      snapshots.push(stdout)
+      return { status: 0, stdout, stderr: "" }
+    },
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
   })
+  assert.deepEqual(snapshots, ["", "stray.txt\n"], "both snapshots must observe the fixture's real staging transition")
   assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
   assert.match(line, /stray\.txt/)
   assert.match(line, /it may have staged it, or another session may have staged it at the same time/)
