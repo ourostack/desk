@@ -515,3 +515,212 @@ test("GivenCliInspectAndInvalidArguments_WhenRun_UsesDocumentedExitAndJsonContra
   assert.equal(absent.status, 1)
   assert.equal(JSON.parse(absent.stdout).state, "not_git")
 })
+
+function withGit(root, override) {
+  return (cmd, args, options) => {
+    const sub = cmd === "git" ? args.slice(args.indexOf("-C") + 2).join(" ") : ""
+    const real = () => spawnSync(cmd, args, options)
+    return override(sub, real) ?? real()
+  }
+}
+
+test("GivenGitMetadataCommandsFail_WhenInspected_ReportsOnlyBoundedFindings", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const fail = { status: 2, stdout: Buffer.alloc(0) }
+  for (const command of ["config --null --get-regexp", "ls-files --stage -z", "ls-files --cached --ignored"]) {
+    const result = inspect(root, { spawn: withGit(root, (sub) => sub.startsWith(command) ? fail : undefined) })
+    assert.equal(result.state, "unavailable")
+    assert.equal(result.findings[0].code, "git_metadata_unavailable")
+  }
+  const unreadable = inspect(root, { spawn: withGit(root, (sub, real) => sub.startsWith("ls-files --stage") ? { status: 0, stdout: Buffer.concat([real().stdout, Buffer.from("not an entry\0")]) } : undefined) })
+  assert.ok(unreadable.findings.some((finding) => finding.code === "index_entry_unreadable"))
+})
+
+test("GivenAttributeAndBlobCommandsFail_WhenInspected_ReportsLimitedWithoutInference", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const fail = { status: 1, stdout: Buffer.alloc(0) }
+  const attributes = inspect(root, { spawn: withGit(root, (sub) => sub.startsWith("check-attr") ? fail : undefined) })
+  assert.ok(attributes.findings.some((finding) => finding.code === "attributes_unavailable"))
+  for (const command of ["cat-file -s", "cat-file blob"]) {
+    const result = inspect(root, { spawn: withGit(root, (sub) => sub.startsWith(command) ? fail : undefined) })
+    assert.equal(fileAt(result, "report.pdf").tracking, "unknown")
+  }
+})
+
+test("GivenInvalidDeclarationJsonAndUnreadablePaths_WhenInspected_ReportsRedactedUnknowns", async () => {
+  const root = await fixture({ ".claude-plugin/marketplace.json": "{not json", "report.pdf": pointer })
+  assert.ok(inspect(root).findings.some((finding) => finding.code === "package_declaration_invalid" && finding.path === ".claude-plugin/marketplace.json"))
+  const { openSync, lstatSync: lstat } = fs
+  const denied = () => Object.assign(new Error("denied"), { code: "EACCES" })
+  const patch = (name, fails) => {
+    const original = fs[name]
+    fs[name] = (file, ...args) => fails(String(file)) ? (() => { throw denied() })() : original(file, ...args)
+    syncBuiltinESMExports()
+  }
+  try {
+    patch("openSync", (file) => file.endsWith("marketplace.json"))
+    assert.ok(inspect(root).findings.some((finding) => finding.code === "package_declaration_unreadable"))
+    fs.openSync = openSync
+    let calls = 0
+    patch("lstatSync", (file) => path.basename(file) === path.basename(root) && ++calls > 1)
+    assert.notEqual(inspect(root).state, "inspected")
+  } finally {
+    fs.openSync = openSync
+    fs.lstatSync = lstat
+    syncBuiltinESMExports()
+  }
+})
+
+test("GivenCliImportedWithoutResolvableEntrypoint_WhenLoaded_DoesNotRun", async () => {
+  const cliUrl = JSON.stringify(new URL(`file://${cli.replaceAll("\\", "/")}`).href)
+  for (const script of [`import(${cliUrl})`, `process.argv[1] = "/nonexistent/lfs-entry.js"; import(${cliUrl})`]) {
+    const result = spawnSync(process.execPath, ["-e", script], { encoding: "utf8" })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, "")
+  }
+})
+
+function patched(target, name, wrap, run) {
+  const original = target[name]
+  target[name] = wrap(original)
+  syncBuiltinESMExports()
+  try {
+    return run()
+  } finally {
+    target[name] = original
+    syncBuiltinESMExports()
+  }
+}
+
+const denied = (code) => Object.assign(new Error(code), { code })
+
+test("GivenHooksPathVariants_WhenInspected_ReportsBoundedHookStates", async () => {
+  const root = await fixture({ "report.pdf": pointer, "hooks-dir/pre-push/keep": "x" })
+  for (const [value, state] of [["/outside-hooks", "not_checked_external"], ["hooks-dir", "unsafe_path"], [".", "unsafe_path"]]) {
+    git(root, "config", "core.hooksPath", value)
+    assert.equal(inspect(root).configuration.hooks.pre_push, state, value)
+  }
+  git(root, "config", "core.hooksPath", "hooks-dir")
+  const unreadable = patched(fs, "lstatSync", (original) => (file, ...args) => path.basename(String(file)) === "pre-push" ? (() => { throw denied("EACCES") })() : original(file, ...args), () => inspect(root))
+  assert.equal(unreadable.configuration.hooks.pre_push, "unreadable")
+})
+
+test("GivenPartialLfsFilterConfiguration_WhenInspected_ReportsCustomOrIncomplete", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  for (const [key, value] of [["required", "true"], ["clean", "git-lfs clean -- %f"], ["smudge", "git-lfs smudge -- %f"], ["process", "git-lfs filter-process"]]) {
+    git(root, "config", `filter.lfs.${key}`, value)
+    assert.equal(inspect(root).configuration.filters, "custom_or_incomplete", key)
+    if (key === "required") git(root, "config", "--unset", "filter.lfs.required")
+  }
+})
+
+test("GivenPackageDeclarationLocations_WhenInspected_ReportsEachRoot", async () => {
+  const root = await fixture({ "a/.claude-plugin/plugin.json": "{}", ".claude-plugin/plugin.json": "{}", "_meta/crew.json": JSON.stringify({ tooling: { path: "" } }), "report.pdf": pointer })
+  const roots = inspect(root).repository.package_roots
+  assert.ok(roots.includes("a") && roots.includes(""), roots.join(","))
+})
+
+test("GivenIndexModesAndMissingBlobInfo_WhenInspected_ReportsPerEntryStates", async () => {
+  const root = await fixture({ "report.pdf": pointer, "plain.txt": "a", "data.bin": Buffer.from([0, 1, 2]) })
+  const blobId = git(root, "rev-parse", "HEAD:plain.txt")
+  git(root, "update-index", "--add", "--cacheinfo", `100755,${blobId},tool.sh`)
+  git(root, "update-index", "--add", "--cacheinfo", `120000,${blobId},link`)
+  const result = inspect(root)
+  assert.equal(fileAt(result, "link").inspection, "non_regular_or_unmerged")
+  assert.equal(fileAt(result, "tool.sh").inspection, "inspected")
+  const fail = { status: 1, stdout: Buffer.alloc(0) }
+  const unknown = inspect(root, { spawn: withGit(root, (sub) => sub.startsWith("cat-file -s") ? fail : undefined) })
+  assert.equal(fileAt(unknown, "data.bin").format, "unknown_binary")
+  assert.equal(fileAt(unknown, "data.bin").tracking, "unknown")
+})
+
+test("GivenReportedRepositoryRootVariants_WhenInspected_ReadsOnlyWhatIsSafe", async () => {
+  const root = await fixture({ "report.pdf": pointer, "sub/keep": "x" })
+  const top = git(root, "rev-parse", "--show-toplevel")
+  const reporting = (reported, rewrite = (args) => args) => (cmd, args, options) => {
+    const real = (list) => spawnSync(cmd, list, options)
+    if (cmd !== "git") return real(args)
+    const list = rewrite(args)
+    return list.slice(list.indexOf("-C") + 2).join(" ") === "rev-parse --show-toplevel" ? { status: 0, stdout: reported } : real(list)
+  }
+  const dotdot = inspect(root, { spawn: reporting(`${top}/sub/..\n`) })
+  assert.equal(fileAt(dotdot, "report.pdf").materialization, "pointer")
+  const relative = inspect(root, { spawn: reporting("relative-root\n", (args) => args.map((arg) => arg === "relative-root" ? top : arg)) })
+  assert.ok(relative.findings.some((finding) => finding.code === "worktree_unsafe_path"))
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" })
+  let win32
+  try {
+    win32 = inspect(root)
+  } finally {
+    Object.defineProperty(process, "platform", platform)
+  }
+  assert.equal(fileAt(win32, "report.pdf").materialization, "pointer")
+})
+
+test("GivenGitAnswersWithoutBuffersOrCommonDir_WhenInspected_ReportsUnknownLocalObject", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const result = inspect(root, { spawn: withGit(root, (sub, real) => {
+    if (sub === "rev-parse --show-toplevel") return { status: 0, stdout: real().stdout.toString("utf8") }
+    if (sub.startsWith("config --null")) return { status: 1 }
+    if (sub === "rev-parse --git-common-dir") return { status: 1, stdout: Buffer.alloc(0) }
+    return undefined
+  }) })
+  assert.equal(fileAt(result, "report.pdf").local_object, "unknown")
+})
+
+test("GivenRepositoryPathIsAFile_WhenInspected_ReportsRepositoryUnavailable", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const result = inspect(path.join(root, "report.pdf"))
+  assert.equal(result.state, "not_git")
+  assert.equal(result.findings[0].code, "repository_unavailable")
+})
+
+test("GivenFilesystemRaces_WhenInspected_ReportsBoundedReadStates", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const grown = (stat) => Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { size: stat.size + 1 })
+  const codes = (result) => result.findings.map((finding) => finding.code)
+  for (const failing of [1, 2]) {
+    let calls = 0
+    const result = patched(fs, "fstatSync", (original) => (...args) => (++calls === failing ? grown(original(...args)) : original(...args)), () => inspect(root))
+    assert.ok(codes(result).includes("worktree_changed_during_read"), `fstat ${failing}`)
+  }
+  const empty = patched(fs, "readSync", () => () => 0, () => inspect(root))
+  assert.ok(codes(empty).includes("worktree_changed_during_read"))
+  let missing = 0
+  const absent = patched(fs, "lstatSync", (original) => (file, ...args) => path.basename(String(file)) === path.basename(root) && ++missing > 1 ? (() => { throw denied("ENOENT") })() : original(file, ...args), () => inspect(root))
+  assert.notEqual(absent.state, "inspected")
+  let realpaths = 0
+  const moved = patched(fs, "realpathSync", (original) => (file, ...args) => ++realpaths > 1 ? `${original(file, ...args)}${path.sep}moved` : original(file, ...args), () => inspect(root))
+  assert.notEqual(moved.state, "inspected")
+  const realNow = performance.now.bind(performance)
+  let jumped = false
+  const exhausted = patched(performance, "now", () => () => realNow() + (jumped ? 1e9 : 0), () => patched(fs, "fstatSync", (original) => (...args) => {
+    const stat = original(...args)
+    jumped = true
+    return stat
+  }, () => inspect(root)))
+  assert.ok(codes(exhausted).includes("worktree_not_checked_limit"))
+  assert.ok(codes(exhausted).includes("inspection_limit"))
+})
+
+test("GivenGitDeadlineExpiresBetweenCommands_WhenInspected_ReportsLimit", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const realNow = performance.now.bind(performance)
+  let jumped = false
+  const result = patched(performance, "now", () => () => realNow() + (jumped ? 1e9 : 0), () => inspect(root, {
+    spawn: withGit(root, (sub) => {
+      if (sub.startsWith("ls-files --stage")) jumped = true
+      return undefined
+    }),
+  }))
+  assert.notEqual(result.state, "not_git")
+  assert.ok(result.findings.length > 0, JSON.stringify(result.findings))
+})
+
+test("GivenCliInspectWithoutRepoArgument_WhenRunInRepository_InspectsCurrentDirectory", async () => {
+  const root = await fixture({ "report.pdf": pointer })
+  const result = spawnSync(process.execPath, [cli, "inspect"], { cwd: root, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).state, "inspected")
+})
