@@ -66,6 +66,20 @@ test("isGitRepository fails safe to false when the spawned command throws", asyn
   assert.equal(isGitRepository(root, throwing), false)
 })
 
+test("a read-only repository observation retries a transient lock with the same bounded command", () => {
+  let dispatches = 0
+  const found = isGitRepository("/owned-read-probe", (command, args, options) => {
+    assert.equal(command, "git")
+    assert.deepEqual(args, ["-C", "/owned-read-probe", "rev-parse", "--is-inside-work-tree"])
+    assert.deepEqual(options, { windowsHide: true, encoding: "utf8", timeout: 10_000 })
+    return ++dispatches === 1
+      ? { status: 128, stdout: "", stderr: "fatal: cannot lock ref during owned read" }
+      : { status: 0, stdout: "true\n", stderr: "" }
+  })
+  assert.equal(found, true)
+  assert.equal(dispatches, 2)
+})
+
 test("hasUnstagedWork is true for an untracked file and for an unstaged edit, false once committed", async () => {
   const root = await mkTempRepo()
   await fs.writeFile(path.join(root, "a.txt"), "one\n")
