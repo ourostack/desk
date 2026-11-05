@@ -121,6 +121,26 @@ test("legacy transport preserves its original failure when placement recheck is 
   assert.equal(await f.read("alpha/job/FOREIGN"), "not the admitted task\n")
   assert.equal(await f.read("alpha/job-retained/task.md"), f.files["alpha/job/task.md"])
 })
+test("legacy capture replacement rejects with the exact returned retirement state instead of pending", async () => {
+  const f = await fixture(), state = { released: false, closed: true, forced: false,
+    movement: "not_released", retirement: "confirmed" }
+  let closed = 0, admitted = 0
+  await assert.rejects(f.invoke({ openArchiveMove: async ({ source }) => {
+    await fs.rename(source, `${source}-original`)
+    await fs.mkdir(source)
+    await fs.writeFile(path.join(source, "task.md"), f.files["alpha/job/task.md"])
+    return { async admit() { admitted++; throw new Error("must stop before admission") },
+      async move() { throw new Error("must not move") }, async close() { closed++; return state } }
+  } }), error => {
+    assert.equal(error.archiveMarkerObservation.state, "unverified")
+    assert.deepEqual(error.archiveMove, state)
+    return true
+  })
+  assert.equal(closed, 1); assert.equal(admitted, 0)
+  assert.equal(await f.read("alpha/job/task.md"), f.files["alpha/job/task.md"])
+  assert.equal(await f.read("alpha/job-original/task.md"), f.files["alpha/job/task.md"])
+  await assert.rejects(fs.lstat(path.join(f.root, "alpha/_archive")), { code: "ENOENT" })
+})
 test("legacy source-directory symlink retains its explicit preflight rejection rather than a pending result", async () => {
   const f = await fixture()
   await fs.rename(path.join(f.root, "alpha/job"), path.join(f.root, "alpha/retained-job"))

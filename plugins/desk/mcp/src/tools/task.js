@@ -1784,11 +1784,11 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
         }
       }
     }
-    let prepared, moveSession, sessionClosed = false
+    let prepared, moveSession, sessionClosed = false, sessionRetirement
     const closeSession = async () => {
       if (!moveSession || sessionClosed) return
       sessionClosed = true
-      await moveSession.close()
+      sessionRetirement = await moveSession.close()
     }
     const attachCleanup = error => {
       if (Object.isExtensible(error)) {
@@ -1909,6 +1909,10 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       return withArchiveFocus(statusContext, { track, slug }, result)
     } catch (error) {
       try { await closeSession() } catch { attachCleanup(error) }
+      if (error.archiveMarkerObservation?.state === "unverified" && !error.archiveTerminalPending) {
+        error.archiveMarkerRejected = true
+        if (sessionRetirement !== undefined && error.archiveMove === undefined) error.archiveMove = sessionRetirement
+      }
       if (error.archiveMarkerPending || error.archiveTerminalPending || !prepared || !Object.isExtensible(error)) throw error
       throw await qualifyArchiveFailure(error, {
         effectiveRoot, srcDir, archiveDir, sourceIdentity: prepared.snapshot.get("").identity, moved, published,
@@ -1918,6 +1922,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       await closeSession()
     }
   } catch (error) {
+    if (error.archiveMarkerRejected) throw error
     if (error.archiveMarkerPending) return markerRefusal(error)
     if (error.archiveTerminalPending) return withArchiveFocus(statusContext, { track, slug }, {
       ...archivePendingAnswer(relPath(deskRoot, archivedFile), { status: "unknown", reason: error.message }),
