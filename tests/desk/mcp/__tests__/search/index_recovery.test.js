@@ -119,7 +119,7 @@ test("GivenIndexFailure_WhenFilesAreAddedOrDeleted_RecoveryUsesCurrentCorpusAndF
 
 test("GivenDeniedOrUnknownFailure_WhenSearchRuns_ItDoesNotFallBack", async (t) => {
   const { deskRoot, router, fail } = await fixture(t)
-  for (const code of ["EACCES", "EPERM", "ENOENT", "ENOTDIR", "SQLITE_AUTH", "SQLITE_PERM", "SQLITE_READONLY", "SQLITE_ERROR", "permission_denied", "artifact_tombstone_ledger_invalid"]) {
+  for (const code of ["EACCES", "EPERM", "ENOENT", "ENOTDIR", "SQLITE_AUTH", "SQLITE_PERM", "SQLITE_READONLY", "SQLITE_ERROR", "permission_denied", "artifact_tombstone_ledger_invalid", undefined]) {
     const error = fail(code)
     await assert.rejects(router.lexical({ deskRoot, query: "seedword" }), actual => actual === error)
   }
