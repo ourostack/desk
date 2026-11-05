@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_create } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+import { notCommitted } from "./_route_around.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -365,7 +366,7 @@ test("task_create reports a commit failure without losing the write", async () =
   })
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
@@ -382,7 +383,7 @@ test("task_create reports a staging failure without losing the write", async () 
     spawnGit,
   })
   assert.equal(result.status, "created", "the write itself is never lost to a staging failure")
-  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
 })
 

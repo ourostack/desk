@@ -29,6 +29,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
+import { commitFailureWords, heldFileRouteFor } from "../util/route-around.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { installedPlugins } from "./lesson-owners.js"
@@ -115,11 +116,12 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     const names = changes.map(([changed]) => path.basename(changed))
     const stage = git && names.length > 0 && !hasUnstagedWork(path.dirname(file), names, spawnGit)
     // The same lesson again (same words, same day) changes nothing: it is as committed as the files already are.
-    if (changes.length === 0) return { ...outcome, git, committed: git && !hasUnstagedWork(path.dirname(file), [path.basename(file), SHELF_FILE], spawnGit), commit: undefined, held: [where, shelfWhere] }
+    const message = `lesson_add: personal ${slugify(topic)}`
+    if (changes.length === 0) return { ...outcome, git, committed: git && !hasUnstagedWork(path.dirname(file), [path.basename(file), SHELF_FILE], spawnGit), commit: undefined, held: [where, shelfWhere], heldNames: [path.basename(file), SHELF_FILE], line, message }
     for (const [changed, , after] of changes) await fs.writeFile(changed, after, "utf8")
-    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
+    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, message, spawnGit) : undefined
     const changed = changes.map(([each]) => deskRelativePath(deskRoot, each))
-    return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed }
+    return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed, heldNames: names, line, message }
   })
   if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
   const changed = written.changed ?? []
@@ -128,7 +130,15 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   const unloaded = notLoaded(await personOf({ deskRoot, env, now: now ?? Date.now() }), prefix)
   const home = written.tier === "shelf" ? shelfWhere : where
   const uncommitted = written.git && !written.committed
-    ? `it is not committed (${written.commit === undefined ? `${written.held.join(" or ")} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
+    ? `it is not committed (${written.commit === undefined ? `${written.held.join(" or ")} already held changes from elsewhere, so Desk left it for you to commit without them; route_around says how` : commitFailureWords(written.commit)}), so other machines do not have it`
+    : null
+  // Every lesson that is not committed carries the way to finish it (#561, #623): the commit's own route, or, for a file
+  // that already held another session's edit, a commit of only this lesson from a temporary worktree.
+  const routeAround = written.git && !written.committed
+    ? written.commit?.route_around ?? heldFileRouteFor({
+      dir: path.dirname(file), names: written.heldNames, message: written.message, spawnGit,
+      change: `make the file hold the lesson line exactly as Desk wrote it here (${JSON.stringify(written.line)}), under the same topic`,
+    })
     : null
   const problems = [uncommitted, unloaded].filter((problem) => problem !== null)
   const topics = written.moved.map((moved) => moved.topic)
@@ -148,6 +158,7 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   }
   if (topics.length > 0) result.shelved = { path: shelfWhere, topics }
   if (written.commit !== undefined) result.commit = written.commit
+  if (routeAround !== null) result.route_around = routeAround
   return result
 }
 

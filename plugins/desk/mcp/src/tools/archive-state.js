@@ -5,6 +5,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { isPathContained } from "../util/paths.js"
 import { indexEntries, stagePaths, commitIndexPaths } from "../util/git-stage.js"
+import { commitFailure, commitRoute } from "../util/route-around.js"
 import { setTaskArchiveLinks } from "./track-row.js"
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
@@ -120,27 +121,38 @@ function indexMatches(entries, expected) {
   return entries !== null && entries.length === expected.size && entries.every((entry) =>
     entry.stage === "0" && expected.get(entry.path)?.sha === entry.sha && expected.get(entry.path)?.mode === entry.mode)
 }
+// Every failure here carries `route_around` (#561, #623): the commit of exactly these paths, finished by hand and read back.
+// A failure that found bytes Desk did not admit starts the route with a read of those differences, so another session's
+// edit is never committed as the archive's.
+function differsRoute(git, paths, message) {
+  const route = commitRoute({ root: git.root, paths, message, readback: "absent" })
+  route.steps.unshift({
+    step: "These paths changed after Desk admitted them. Read the differences first: continue only if every one is this archive's own change. If any is another session's edit, leave the files as they are and report it instead of committing.",
+    argv: ["git", "-C", git.root, "diff", "HEAD", "--", ...paths],
+  })
+  return route
+}
 function publishExpected(git, paths, expected, message, stagingPaths = paths) {
   assertGitState(git)
   const staged = stagePaths(git.root, stagingPaths, git.spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: git.root, paths, message, readback: "absent" }) }
   let entries = indexEntries(git.root, paths, git.spawnGit)
   const normalStage = new Map([...expected].map(([file, entry]) => [file, { sha: entry.stageSha, mode: entry.stageMode }]))
   if (!indexMatches(entries, normalStage))
-    return { status: "failed", reason: "staged archive differs from the admitted bytes; no commit was attempted" }
+    return { status: "failed", reason: "staged archive differs from the admitted bytes; no commit was attempted", route_around: differsRoute(git, paths, message) }
   const metadata = [...expected].filter(([, entry]) => entry.mode !== entry.stageMode || entry.sha !== entry.stageSha)
   if (metadata.length) {
     const input = metadata.map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}\0`).join("")
     const updated = git.spawnGit("git", ["-C", git.root, "update-index", "-z", "--index-info"],
       { windowsHide: true, encoding: "utf8", timeout: 10000, input })
-    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed" }
+    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed", route_around: commitRoute({ root: git.root, paths, message, readback: "absent" }) }
     entries = indexEntries(git.root, paths, git.spawnGit)
   }
   if (!indexMatches(entries, expected))
-    return { status: "failed", reason: "the admitted Git mode/type metadata could not be staged" }
+    return { status: "failed", reason: "the admitted Git mode/type metadata could not be staged", route_around: differsRoute(git, paths, message) }
   assertGitState(git)
   const committed = commitIndexPaths(git.root, paths, entries, message, git.spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : commitFailure({ root: git.root, paths, message, committed })
 }
 async function ancestry(boundary, destination) {
   const physical = await fs.realpath(boundary)
@@ -399,7 +411,7 @@ export async function prepareArchivedCardPublication({ effectiveRoot, file, befo
       if (git) assertGitState(git)
     },
     async publish(expected, message) {
-      if (!(await sameTarget(expected))) return { status: "failed", reason: "archived card changed during its report patch; no commit was attempted" }
+      if (!(await sameTarget(expected))) return { status: "failed", reason: "archived card changed during its report patch; no commit was attempted", route_around: git ? differsRoute(git, [key], message) : undefined }
       if (!git) return undefined
       const mode = gitMode({ kind: "file", mode: Number(stat.mode & 0o777n) }, previous, git)
       const sha = cleanHash(git, physical, Buffer.from(expected))

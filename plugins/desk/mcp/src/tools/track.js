@@ -14,6 +14,7 @@ import {
 import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { objectInput } from "../util/object-input.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { commitFailure, commitRoute } from "../util/route-around.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import {
   validateTrackName,
@@ -64,9 +65,9 @@ function stageAndCommitTrackCard(filePath, message, spawnGit) {
   const dir = path.dirname(filePath)
   const basename = path.basename(filePath)
   const staged = stagePaths(dir, [basename], spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: [basename], message, readback: "absent" }) }
   const committed = commitPaths(dir, [basename], message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : commitFailure({ root: dir, paths: [basename], message, committed })
 }
 
 /**

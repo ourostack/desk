@@ -27,6 +27,7 @@ import {
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { commitFailure } from "../util/route-around.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -190,7 +191,7 @@ function commitMove({ root, movedDirs, writtenFiles, message, spawnGit }) {
   if (!isGitRepository(root, spawnGit)) return undefined
   const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
   const committed = commitPaths(root, relPaths, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : commitFailure({ root, paths: relPaths, message, committed })
 }
 
 /**
