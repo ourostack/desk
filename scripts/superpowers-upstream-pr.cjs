@@ -14,6 +14,7 @@
 
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const path = require("node:path");
 
 const LABEL = "upstream-refresh";
 const MAJOR_LABEL = "superpowers-major";
@@ -339,11 +340,38 @@ function payload(lock) {
   return source ? JSON.stringify(source.files.map((file) => [file.sourcePath, file.sha256])) : null;
 }
 
-function pending({ gh, repo, branch, base, lock, now }) {
-  const [open] = gh.json(["pr", "list", "--repo", repo, "--head", branch, "--base", base, "--state", "open", "--json", "number,url,createdAt"], { list: true });
+function sameSelectedModes({ gh, repo, ref, lock, root }) {
+  const tree = gh.json(["api", `repos/${repo}/git/trees/${ref}?recursive=1`]);
+  if (tree?.truncated !== false || !Array.isArray(tree.tree)) {
+    throw new Error("Superpowers pending: refresh tree is malformed or incomplete");
+  }
+  const entries = new Map();
+  for (const entry of tree.tree) {
+    if (typeof entry?.path !== "string" || entry.path === "" || entries.has(entry.path)) {
+      throw new Error("Superpowers pending: refresh tree has malformed or duplicate paths");
+    }
+    entries.set(entry.path, entry);
+  }
+  const source = lock.sources.find((entry) => entry.id === "obra-superpowers");
+  const matches = source.files.map((file) => {
+    const rawPath = file.upstreamPath ?? file.generatedPath;
+    const carried = entries.get(rawPath);
+    if (carried?.type !== "blob" || !["100644", "100755"].includes(carried.mode)) {
+      throw new Error(`Superpowers pending: refresh tree has no regular-file mode for ${rawPath}`);
+    }
+    const local = fs.lstatSync(path.join(root, rawPath));
+    if (!local.isFile()) throw new Error(`Superpowers pending: local selected path is not a regular file: ${rawPath}`);
+    return ((local.mode & 0o111) !== 0) === (carried.mode === "100755");
+  });
+  return matches.every(Boolean);
+}
+
+function pending({ gh, repo, branch, base, lock, root, now }) {
+  const [open] = gh.json(["pr", "list", "--repo", repo, "--head", branch, "--base", base, "--state", "open", "--json", "number,url,createdAt,headRefOid"], { list: true });
   if (!open) return { rerun: true, outcome: "no-open-refresh", message: "No refresh pull request is open, so this run refreshes, pushes and runs CI." };
-  const carried = gh.json(["api", "-H", "Accept: application/vnd.github.raw+json", `repos/${repo}/contents/upstream-sources.lock.json?ref=${branch}`], { allowFailure: true });
-  if (carried === null || payload(carried) !== payload(lock)) {
+  if (!/^[a-f0-9]{40}$/u.test(open.headRefOid ?? "")) throw new Error("Superpowers pending: refresh pull request has no valid head");
+  const carried = gh.json(["api", "-H", "Accept: application/vnd.github.raw+json", `repos/${repo}/contents/upstream-sources.lock.json?ref=${open.headRefOid}`], { allowFailure: true });
+  if (carried === null || payload(carried) !== payload(lock) || !sameSelectedModes({ gh, repo, ref: open.headRefOid, lock, root })) {
     return { rerun: true, outcome: "upstream-moved", message: `${open.url} carries an older upstream payload, so this run refreshes it and runs CI.` };
   }
   const [issue] = gh.json(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--limit", "1", "--json", "number,url"], { list: true });
@@ -405,7 +433,7 @@ function main(argv = process.argv.slice(2), {
     if (env.GITHUB_OUTPUT) fs.appendFileSync(env.GITHUB_OUTPUT, lines.map(([key, value]) => `${key}=${value}\n`).join(""));
   };
   if (command === "pending") {
-    const result = pending({ gh, repo: options.repo, branch: options.branch, base: options.base, lock: JSON.parse(fs.readFileSync(options.lock, "utf8")), now });
+    const result = pending({ gh, repo: options.repo, branch: options.branch, base: options.base, lock: JSON.parse(fs.readFileSync(options.lock, "utf8")), root: path.dirname(path.resolve(options.lock)), now });
     output([["rerun", String(result.rerun)]]);
     if (!result.rerun) {
       const summary = summaryMarkdown(result);

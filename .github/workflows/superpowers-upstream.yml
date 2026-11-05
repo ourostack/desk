@@ -114,9 +114,9 @@ jobs:
             --repo "$REPO" --branch "$BRANCH" --base "$BASE" --sha "${{ steps.push.outputs.sha }}" \
             --report "$RUNNER_TEMP/refresh-report.json" --workflows "$CI_WORKFLOWS" --run-url "$RUN_URL"
 
-      # The pending check and the publish step report through their own issue; this covers every other failure.
+      # An intentional pending refusal needs no duplicate issue; unexpected gate failures still need reporting.
       - name: File an issue when the refresh itself fails
-        if: failure() && steps.gate.outcome != 'failure' && steps.publish.outputs.issue == ''
+        if: failure() && steps.gate.outputs.rerun != 'false' && steps.publish.outputs.issue == ''
         run: |
           set -euo pipefail
           if ! gh label list --repo "$REPO" --search upstream-refresh --json name --jq '.[].name' | grep -qx upstream-refresh; then

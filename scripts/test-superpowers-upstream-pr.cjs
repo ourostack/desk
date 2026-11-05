@@ -561,42 +561,114 @@ const majorReport = {
 }
 
 {
-  // The daily check costs one API read when the open refresh already carries this payload: it does not push or
-  // rerun CI, and it fails the run because the refresh is still not on main.
-  const freshLock = { sources: [{ id: "obra-superpowers", commit: "c".repeat(40), files: [{ sourcePath: "skills/a/SKILL.md", sha256: "1".repeat(64) }] }] };
+  // Equal selected bytes and executable modes deduplicate even when unselected upstream content moved.
+  const rawHook = "plugins/superpowers/hooks/upstream/run-hook.cmd";
+  const tool = "plugins/superpowers/skills/a/tool.sh";
+  const freshLock = { sources: [{ id: "obra-superpowers", commit: "c".repeat(40), files: [
+    { sourcePath: "skills/a/tool.sh", generatedPath: tool, sha256: "1".repeat(64) },
+    { sourcePath: "hooks/run-hook.cmd", generatedPath: "plugins/superpowers/hooks/run-hook.cmd", upstreamPath: rawHook, sha256: "2".repeat(64) },
+  ] }] };
   const branchLock = (files) => ok({ sources: [{ id: "obra-superpowers", commit: "d".repeat(40), files }] });
-  const lockRoute = (result) => [`api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=${branch}`, result];
-  const openPull = [`pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt`, ok([{ number: 7, url: "https://github.com/owner/desk/pull/7", createdAt: "2026-10-12T07:40:00Z" }])];
+  const lockRoute = (result) => [`api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=`, result];
+  const openPull = [`pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt`, ok([{ number: 7, url: "https://github.com/owner/desk/pull/7", createdAt: "2026-10-12T07:40:00Z", headRefOid: sha }])];
   const openIssue = [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, ok([{ number: 4, url: "https://github.com/owner/desk/issues/4" }])];
   const at = () => Date.parse("2026-11-05T07:30:00Z");
-
-  const none = fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]);
-  assert.deepEqual(pending({ gh: none.gh, repo, branch, base: "main", lock: freshLock, now: at }), { rerun: true, outcome: "no-open-refresh", message: "No refresh pull request is open, so this run refreshes, pushes and runs CI." });
-
-  const same = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), openIssue]);
-  const held = pending({ gh: same.gh, repo, branch, base: "main", lock: freshLock, now: at });
-  assert.equal(held.rerun, false);
-  assert.equal(held.outcome, "pending");
-  assert.match(held.message, /https:\/\/github\.com\/owner\/desk\/pull\/7 has carried this upstream payload for 23 days and is still not on main\. See https:\/\/github\.com\/owner\/desk\/issues\/4\./u);
-
-  const moved = fakeGh([openPull, lockRoute(branchLock([{ sourcePath: "skills/a/SKILL.md", sha256: "2".repeat(64) }]))]);
-  assert.equal(pending({ gh: moved.gh, repo, branch, base: "main", lock: freshLock, now: at }).rerun, true);
-
-  const unreadable = fakeGh([openPull, lockRoute(fail("HTTP 404"))]);
-  assert.equal(pending({ gh: unreadable.gh, repo, branch, base: "main", lock: freshLock, now: at }).rerun, true);
-
-  // As a command it writes rerun for the workflow and exits 1 only for a held, undelivered refresh.
+  const tree = (toolMode = "100644") => ({
+    sha: "b".repeat(40), url: `https://api.github.com/repos/${repo}/git/trees/${"b".repeat(40)}`, truncated: false,
+    tree: [
+      { path: tool, mode: toolMode, type: "blob", sha: "e".repeat(40), size: 12 },
+      { path: rawHook, mode: "100755", type: "blob", sha: "f".repeat(40), size: 12 },
+      { path: "plugins/superpowers/hooks/run-hook.cmd", mode: "100644", type: "blob", sha: "b".repeat(40), size: 20 },
+      { path: "README.md", mode: "100755", type: "blob", sha: "d".repeat(40), size: 100 },
+    ],
+  });
+  const treeRoute = (result = ok(tree())) => [`api repos/${repo}/git/trees/${sha}?recursive=1`, result];
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "superpowers-upstream-pending-"));
   try {
+    for (const [file, mode] of [[tool, 0o644], [rawHook, 0o755], ["plugins/superpowers/hooks/run-hook.cmd", 0o644]]) {
+      fs.mkdirSync(path.dirname(path.join(tempRoot, file)), { recursive: true });
+      fs.writeFileSync(path.join(tempRoot, file), "echo fixture\n");
+      fs.chmodSync(path.join(tempRoot, file), mode);
+    }
+    const options = { repo, branch, base: "main", lock: freshLock, root: tempRoot, now: at };
+    const sameRoutes = [openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(), openIssue];
+    const none = fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]);
+    assert.deepEqual(pending({ ...options, gh: none.gh }), { rerun: true, outcome: "no-open-refresh", message: "No refresh pull request is open, so this run refreshes, pushes and runs CI." });
+
+    const same = fakeGh(sameRoutes);
+    const held = pending({ ...options, gh: same.gh });
+    assert.equal(held.rerun, false);
+    assert.equal(held.outcome, "pending");
+    assert.match(held.message, /https:\/\/github\.com\/owner\/desk\/pull\/7 has carried this upstream payload for 23 days and is still not on main\. See https:\/\/github\.com\/owner\/desk\/issues\/4\./u);
+
+    for (const [localMode, carriedMode] of [[0o644, "100755"], [0o755, "100644"]]) {
+      fs.chmodSync(path.join(tempRoot, tool), localMode);
+      const modesMoved = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(ok(tree(carriedMode))), openIssue]);
+      assert.equal(pending({ ...options, gh: modesMoved.gh }).rerun, true, "a selected executable-mode change must rerun the refresh");
+    }
+    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+    assert.equal(same.calls[0].line, `pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt,headRefOid`);
+    assert.ok(same.calls.some((call) => call.line === `api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=${sha}`), "read the lock at the observed pull-request head");
+    assert.ok(same.calls.some((call) => call.line === `api repos/${repo}/git/trees/${sha}?recursive=1`), "read modes from the same head, not a moving branch");
+
+    const movedFiles = freshLock.sources[0].files.map((file, index) => index === 0 ? { ...file, sha256: "3".repeat(64) } : file);
+    const moved = fakeGh([openPull, lockRoute(branchLock(movedFiles))]);
+    assert.equal(pending({ ...options, gh: moved.gh }).rerun, true);
+
+    const unreadable = fakeGh([openPull, lockRoute(fail("HTTP 404"))]);
+    assert.equal(pending({ ...options, gh: unreadable.gh }).rerun, true);
+
+    for (const [name, result, error] of [
+      ["API refusal", fail("HTTP 403"), /gh api repos\/owner\/desk\/git\/trees\/.* failed: HTTP 403/u],
+      ["empty output", ok(""), /returned no JSON/u],
+      ["invalid JSON", ok("<html>"), /returned invalid JSON/u],
+      ["missing tree", ok({}), /refresh tree/u],
+      ["null response", ok("null"), /refresh tree/u],
+      ["truncated tree", ok({ ...tree(), truncated: true }), /refresh tree/u],
+      ["invalid truncation flag", ok({ ...tree(), truncated: "false" }), /refresh tree/u],
+      ["invalid entries", ok({ ...tree(), tree: {} }), /refresh tree/u],
+      ["null entry", ok({ ...tree(), tree: [null] }), /refresh tree/u],
+      ["empty path", ok({ ...tree(), tree: [{ path: "" }] }), /refresh tree/u],
+      ["duplicate path", ok({ ...tree(), tree: [...tree().tree, tree().tree[0]] }), /refresh tree/u],
+      ["missing selected path", ok({ ...tree(), tree: tree().tree.slice(1) }), /regular.file mode/u],
+      ["missing mode", ok({ ...tree(), tree: tree().tree.map((entry) => ({ ...entry, mode: undefined })) }), /regular.file mode/u],
+      ["invalid mode", ok(tree("100600")), /regular.file mode/u],
+      ["symlink mode", ok(tree("120000")), /regular.file mode/u],
+      ["invalid entry type", ok({ ...tree(), tree: tree().tree.map((entry) => ({ ...entry, type: "tree" })) }), /regular.file mode/u],
+      ["bad evidence after a mode change", ok({ ...tree(), tree: tree("100755").tree.map((entry) => entry.path === rawHook ? { ...entry, mode: "invalid" } : entry) }), /regular.file mode/u],
+    ]) {
+      const broken = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(result), openIssue]);
+      assert.throws(() => pending({ ...options, gh: broken.gh }), error, name);
+    }
+
+    const noHead = fakeGh([[openPull[0], ok([{ number: 7, url: "https://github.com/owner/desk/pull/7", createdAt: "2026-10-12T07:40:00Z" }])]]);
+    assert.throws(() => pending({ ...options, gh: noHead.gh }), /refresh pull request.*head/u);
+    fs.rmSync(path.join(tempRoot, tool));
+    assert.throws(() => pending({ ...options, gh: fakeGh(sameRoutes).gh }), /ENOENT/u);
+    fs.mkdirSync(path.join(tempRoot, tool));
+    assert.throws(() => pending({ ...options, gh: fakeGh(sameRoutes).gh }), /regular file/u);
+    fs.rmdirSync(path.join(tempRoot, tool));
+    fs.writeFileSync(path.join(tempRoot, tool), "echo fixture\n");
+    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+
+    // The CLI emits a refusal output only after admission succeeds; unexpected failures leave no such output.
     const lockPath = path.join(tempRoot, "lock.json");
     const outputPath = path.join(tempRoot, "output.txt");
     fs.writeFileSync(lockPath, JSON.stringify(freshLock));
     let output = "";
     const argv = ["pending", "--repo", repo, "--branch", branch, "--base", "main", "--lock", lockPath];
-    assert.equal(main(argv, { run: fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), openIssue]).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write(value) { output += value; } }, now: at }), 1);
+    assert.equal(main(argv, { run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write(value) { output += value; } }, now: at }), 1);
     assert.match(output, /^## Superpowers upstream refresh: pending\n/u);
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=false\n");
     fs.rmSync(outputPath);
+    fs.chmodSync(path.join(tempRoot, tool), 0o755);
+    assert.equal(main(argv, { run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n", "a mode-only change must reach the workflow's push/publish path");
+    fs.rmSync(outputPath);
+    fs.chmodSync(path.join(tempRoot, tool), 0o644);
+    const brokenTree = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(fail("HTTP 403")), openIssue]);
+    assert.throws(() => main(argv, { run: brokenTree.run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), /HTTP 403/u);
+    assert.equal(fs.existsSync(outputPath), false, "an unexpected gate failure must not write rerun=false");
     assert.equal(main(argv, { run: fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
     assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n");
     assert.throws(() => parseArgs(["pending", "--repo", repo]), /pending requires --branch, --base, --lock/u);

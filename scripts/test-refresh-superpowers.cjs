@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
+const { runInNewContext } = require("node:vm");
 
 const {
   SUPERPOWERS_VERSION_FILES,
@@ -136,9 +137,23 @@ function superpowersSurfaces(version, files, root = repoRoot) {
   for (const step of ["Commit and push the refresh branch", "Open the pull request, run CI and merge on green"]) {
     assert.match(workflow, new RegExp(`- name: ${step}\\n {8}if: steps\\.refresh\\.outputs\\.changed == 'true' && steps\\.gate\\.outputs\\.rerun != 'false'\\n`, "u"), step);
   }
-  // A publish that filed its own issue, or a pending check, is not reported twice.
+  // Only an intentional pending refusal or an already reported failure suppresses the fallback.
   assert.match(workflow, /\n {8}id: publish\n/u);
-  assert.match(workflow, /if: failure\(\) && steps\.gate\.outcome != 'failure' && steps\.publish\.outputs\.issue == ''\n/u);
+  const failureCondition = /- name: File an issue when the refresh itself fails\n {8}if: ([^\n]+)/u.exec(workflow)?.[1];
+  assert.ok(failureCondition, "the refresh must retain its generic failure reporter");
+  for (const [name, failed, outcome, rerun, issue, expected] of [
+    ["successful run", false, "success", "true", "", false],
+    ["intentional pending refusal", true, "failure", "false", "", false],
+    ["unexpected gate failure", true, "failure", "", "", true],
+    ["failure before the gate", true, "skipped", "", "", true],
+    ["publish already reported", true, "success", "true", "https://github.com/owner/desk/issues/4", false],
+    ["unreported publish failure", true, "success", "true", "", true],
+  ]) {
+    assert.equal(runInNewContext(failureCondition, {
+      failure: () => failed,
+      steps: { gate: { outcome, outputs: { rerun } }, publish: { outputs: { issue } } },
+    }), expected, name);
+  }
   for (const required of [
     /\n {2}schedule:\n {4}- cron: "[^"]+"\n/u,
     /\n {2}workflow_dispatch:\n/u,
