@@ -213,6 +213,8 @@ export function createSearchEngine(options) {
       } finally {
         refreshing = null
       }
+      // A failure arriving during a tolerant refresh requires a strict read before any caller can use that index.
+      if (dirty && indexFailure !== null) return refresh()
       embedInBackground()
     })()
     return refreshing
@@ -220,8 +222,6 @@ export function createSearchEngine(options) {
 
   async function current() {
     if (!built || dirty || watcherFailed) await refresh()
-    // A failure arriving during a tolerant refresh requires a strict read before that index can answer.
-    while (dirty && indexFailure !== null) await refresh()
   }
 
   function ensureModel() {

@@ -326,7 +326,7 @@ test("GivenRecovery_WhenAbortedDuringFinalRankingRead_ItDoesNotAdmitResults", as
 })
 
 test("GivenRefreshOverlapsIndexFailure_WhenItsCorpusIsDenied_ItCannotClearNewerFailure", async (t) => {
-  for (const stage of ["planning", "discovery"]) {
+  for (const stage of ["planning", "discovery", "reindex"]) {
     await t.test(stage, async (st) => {
       const { deskRoot, engine, router } = await fixture(st)
       let releaseSearch
@@ -356,7 +356,7 @@ test("GivenRefreshOverlapsIndexFailure_WhenItsCorpusIsDenied_ItCannotClearNewerF
         return readFile.call(this, file, ...args)
       })
       st.mock.method(fs, "stat", async function (file, ...args) {
-        if (stage === "discovery" && file === target) {
+        if (stage !== "planning" && file === target) {
           refreshReached()
           await refreshGate
         }
@@ -375,10 +375,10 @@ test("GivenRefreshOverlapsIndexFailure_WhenItsCorpusIsDenied_ItCannotClearNewerF
       await searching
       engine.noteChange("marker.txt")
       engine.noteChange("work/one/task.md")
-      const newer = router.lexical({ query: "seedword" }).then(
+      const newer = (stage === "reindex" ? engine.reindex() : router.lexical({ query: "seedword" })).then(
         result => ({ result }), error => ({ error }),
       )
-      if (stage === "discovery") await refreshing
+      if (stage !== "planning") await refreshing
       releaseSearch()
       await assert.rejects(older, error => error === denied)
       releaseRefresh()
