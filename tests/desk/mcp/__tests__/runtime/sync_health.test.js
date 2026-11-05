@@ -97,14 +97,15 @@ test("a recorded sync outcome never throws when the state folder is unwritable",
   assert.doesNotThrow(() => recordFetchOk({ root, env: unwritable, at: new Date().toISOString() }))
 })
 
-test("a successful push clears a failed-pull record: the remote is reachable again", async () => {
+test("a successful push preserves a failed-pull record: reachability is not incoming synchronization", async () => {
   const { root } = await mkDeskWithOrigin()
   recordPullOutcome({ root, env, result: { state: "unresolved", reason: "pull_rebase_failed", cause: "unreachable" } })
   await fs.writeFile(path.join(root, "more.md"), "more\n")
   git(root, ["add", "--", "more.md"])
   git(root, ["commit", "-q", "-m", "more"])
+  const incoming = readSyncStatus({ root, env }).last_pull
   assert.deepEqual(await runPushWorker({ root, env, clock: instantClock }), { result: "ok" })
-  assert.equal(readSyncStatus({ root, env }).last_pull, null)
+  assert.deepEqual(readSyncStatus({ root, env }).last_pull, incoming)
 })
 
 const ready = {
