@@ -48,7 +48,8 @@ export async function archiveMarkerState({ effectiveRoot, srcDir, archiveDir, de
           if (error.code !== "ENOENT") throw error
           observed.push({ path: cursor, absent: true }); missing = true; break
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe marker ancestry")
+        if (!stat.isDirectory() || stat.isSymbolicLink())
+          throw aggregateFault("archive_marker_unsafe_ancestry", "unsafe marker ancestry")
         observed.push({ path: cursor, version: aggregateVersion(stat), absent: false })
         directory = stat
       }

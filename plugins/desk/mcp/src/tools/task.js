@@ -1478,6 +1478,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (state.state !== "absent") {
       if (terminalHandoff.attempts.length) terminalHandoff.status = "unknown"
       const error = new Error("task_archive: unqualified_original_map")
+      error.archiveMarkerObservation = state
       error.archiveMarkerPending = markerPending(state)
       throw error
     }
@@ -1486,6 +1487,10 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   const terminalSync = status => requestTaskTerminalSync({ deskRoot, person, track, slug, env, status,
     beforeEffect: checkMarkers, terminalHandoff, noGit: aggregateRoute ? { deadline: markerDeadline } : null })
   try { await checkMarkers() } catch (error) {
+    if (error.archiveMarkerObservation?.reason === "archive_marker_unsafe_ancestry") {
+      await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+      throw error
+    }
     if (error.archiveMarkerPending) return markerRefusal(error)
     throw error
   }
@@ -1920,7 +1925,11 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     })
     if (markerDeadline !== undefined && Date.now() >= markerDeadline) throw error
     try { await checkMarkers() } catch (observationError) {
-      if (observationError.archiveMarkerPending) return markerRefusal(observationError, error)
+      if (observationError.archiveMarkerPending) {
+        if (observationError.archiveMarkerObservation?.state === "present") return markerRefusal(observationError, error)
+        if (Object.isExtensible(error)) error.archiveMarkerRecheck = observationError.archiveMarkerObservation
+        throw error
+      }
       console.error("desk_archive: secondary_marker_observation_result_unavailable")
     }
     throw error

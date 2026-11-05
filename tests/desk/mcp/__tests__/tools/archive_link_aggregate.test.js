@@ -1,3 +1,4 @@
+import { archiveFencedExecFileSync } from "./_archive_source_fence.mjs"
 import "../_isolated_env.mjs"
 import { test, after } from "node:test"
 import assert from "node:assert/strict"
@@ -17,6 +18,7 @@ import { parseMarkdownText, patchMarkdownFrontmatter, writeMarkdown, writeFileAt
 const roots = []
 const plans = new Set()
 const initialFencedExecFileSync = cp.execFileSync
+assert.equal(initialFencedExecFileSync, archiveFencedExecFileSync)
 after(async () => {
   for (const plan of plans) try { await plan.close() } catch (error) {
     assert.ok(plan.receipt.descriptors.every(entry => entry.closed), `fixture FD not closed: ${error.message}`)
@@ -106,6 +108,44 @@ async function movedSession(f, dependencies = {}, options) {
   await session.create(path.dirname(plan.destination), () => {})
   await session.move(() => plan.assertCurrent())
   return { plan, session }
+}
+test("legacy transport preserves its original failure when placement recheck is uncertain without a marker", async () => {
+  const f = await fixture(), original = new Error("owned transport refused after original source changed")
+  await assert.rejects(f.invoke({ moveArchive: async (source, destination, beforeMove) => {
+    await beforeMove()
+    await fs.rename(source, `${source}-retained`)
+    await fs.mkdir(source)
+    await fs.writeFile(path.join(source, "FOREIGN"), "not the admitted task\n")
+    throw original
+  } }), error => error === original)
+  assert.equal(await f.read("alpha/job/FOREIGN"), "not the admitted task\n")
+  assert.equal(await f.read("alpha/job-retained/task.md"), f.files["alpha/job/task.md"])
+})
+test("legacy source-directory symlink retains its explicit preflight rejection rather than a pending result", async () => {
+  const f = await fixture()
+  await fs.rename(path.join(f.root, "alpha/job"), path.join(f.root, "alpha/retained-job"))
+  await fs.symlink("retained-job", path.join(f.root, "alpha/job"))
+  await assert.rejects(f.invoke({ moveArchive: async () => { throw new Error("must not dispatch") } }),
+    /source directory symlink/u)
+  assert.equal(await f.read("alpha/retained-job/task.md"), f.files["alpha/job/task.md"])
+})
+for (const shape of ["track alias", "nested destination"]) {
+  test(`legacy ${shape} keeps its metadata rejection and exact source bytes`, async () => {
+    const f = await fixture(), track = path.join(f.root, "alpha"), source = path.join(track, "job")
+    await fs.rename(path.join(source, "task.md"), path.join(source, "card.md"))
+    await fs.symlink("card.md", path.join(source, "task.md"))
+    let actual = "alpha/job/card.md"
+    if (shape === "track alias") {
+      await fs.rename(track, path.join(f.root, "retained-track"))
+      await fs.symlink("retained-track", track); actual = "retained-track/job/card.md"
+      await fs.unlink(path.join(source, "task.md"))
+      await fs.symlink(path.join(f.root, actual), path.join(source, "task.md"))
+    } else await fs.symlink("job", path.join(track, "_archive"))
+    await assert.rejects(f.invoke({ moveArchive: () => { throw new Error("transport must not dispatch") } }),
+      shape === "track alias" ? /symlink would change referent/u : /archive destination cannot be inside source/u)
+    assert.equal(await f.read(actual), f.files["alpha/job/task.md"])
+    assert.deepEqual(f.changes, [])
+  })
 }
 for (const target of ["peer", "PR"]) {
   test(`AGI11 original close reaching D forbids subsequent ${target} evidence dispatch`, async t => {
@@ -765,7 +805,7 @@ async function syntheticFactoryState(f, work, context) {
   let refusals = 0
   assert.equal(saved, initialFencedExecFileSync)
   assert.equal(namedExecFileSync, saved)
-  assert.equal(saved.toString(), "() => refuse(name)", "the saved function must be the reviewed refusal, not an original native delegate")
+  assert.equal(saved, archiveFencedExecFileSync, "the saved function must be this worker's source refusal")
   const output = "SYNTHETIC_ACL_NO_NATIVE_PROOF\n"
   const provenance = { qualification: "synthetic_ACL_not_native_platform_proof", root: stateHome,
     dev: String(identity.dev), ino: String(identity.ino), calls: acl, restored: false }
