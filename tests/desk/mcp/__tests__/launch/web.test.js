@@ -1,7 +1,7 @@
 // Desk's browser (plugins/desk/mcp/web.cjs): fresh or mine, through the Playwright CLI.
 // Most tests drive a fake CLI and a fake npm placed where the real ones go, so they run everywhere without a browser.
 // With DESK_BROWSER_REAL=1 the last tests install the real playwright-core and drive a real Edge or Chrome.
-import { test } from "node:test"
+import { afterEach, beforeEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
@@ -23,6 +23,19 @@ const webFile = path.join(repoRoot, "plugins", "desk", "mcp", "web.cjs")
 const web = require(webFile)
 const catalog = require(path.join(repoRoot, "plugins", "desk", "mcp", "web-catalog.json"))
 const sourceOnly = process.env.DESK_BROWSER_SOURCE_ONLY === "1"
+
+// Authenticated tests use a fake driver/runtime, not a credential-bearing host.
+// Coverage stays loaded; only its forwarded environment is scoped out of each
+// synthetic case, which explicitly supplies unqualified options when testing refusal.
+let inheritedNodeOptions
+beforeEach(() => {
+  inheritedNodeOptions = process.env.NODE_OPTIONS
+  delete process.env.NODE_OPTIONS
+})
+afterEach(() => {
+  if (inheritedNodeOptions === undefined) delete process.env.NODE_OPTIONS
+  else process.env.NODE_OPTIONS = inheritedNodeOptions
+})
 
 const FAKE_CLI = `
 const fs = require("fs"), path = require("path")
@@ -403,6 +416,47 @@ test("authenticated runtime admission rejects environment preloads and active in
       assert.deepEqual(fs.readdirSync(tmp), [])
     } finally { fs.openSync = original; await controller.closeAll() }
   }
+})
+
+test("actual process options refuse authenticated open even when the supplied environment is clean", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const original = fs.openSync
+  let sourceOpens = 0
+  fs.openSync = (file, ...args) => {
+    if (String(file).startsWith(profiles)) sourceOpens++
+    return original(file, ...args)
+  }
+  process.env.NODE_OPTIONS = "--require fake-unqualified-preload.cjs"
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(sourceOpens, 0)
+    assert.equal(native.calls.length, 0)
+    assert.deepEqual(fs.readdirSync(tmp), [])
+  } finally { fs.openSync = original; await controller.closeAll() }
+})
+
+test("actual process options changed after open refuse native work but preserve owned close", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(opened.isError, false, text(opened))
+  const { contextId } = json(opened)
+  const before = native.calls.length
+  process.env.NODE_OPTIONS = "--import fake-unqualified-preload.mjs"
+  try {
+    const result = await controller.call("browser_command", { contextId, args: ["snapshot", "--save"] })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_RUNTIME_POLICY_REFUSED/u)
+    assert.equal(native.calls.length, before)
+  } finally { await controller.closeAll() }
+  assert.ok(native.calls.some(call => call[0] === "context.close"))
 })
 
 test("a partial destination write fails the authenticated copy before native launch", async () => {
