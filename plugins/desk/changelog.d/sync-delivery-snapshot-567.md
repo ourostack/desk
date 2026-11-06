@@ -1,0 +1,1 @@
+Delivering Desk's commits no longer acknowledges a commit made while the fetch ran (#567): the commits it counts as delivered are bounded to the head it captured and pushed, so a commit that arrived at that moment stays owed and the next push worker delivers it instead of suppressing it as already delivered.
