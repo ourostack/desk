@@ -851,6 +851,84 @@ test("#632: hooks that together stay inside the one 10 s budget commit", async (
   assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
 })
 
+// The one 10 s budget is the whole commit's: the reads after the branch update and the read-back after a failure are inside it too. One step
+// spends the rest of the budget ("ran": it runs for real and the clock moves to the end; "cut": it is cut off at the end). The double records
+// every call that reaches Git and whether it was given time past the end. No call may be, the branch is moved at most once, and an answer the
+// budget left unread is unknown, never absent or committed.
+function spendsTheBudget(t, spends) {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() })
+  const end = Date.now() + 10_000
+  const calls = []
+  const toEnd = () => t.mock.timers.tick(Math.max(0, end - Date.now()))
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    calls.push({ verb: verb.join(" "), past: Date.now() + options.timeout > end })
+    const how = spends(verb)
+    if (how === "cut") {
+      toEnd()
+      return cutOff()
+    }
+    const answer = spawnSync(command, args, options)
+    if (how === "ran") toEnd()
+    return answer
+  }
+  const past = () => calls.filter((call) => call.past).map((call) => call.verb)
+  const dispatched = (start) => calls.filter((call) => call.verb.startsWith(start)).length
+  return { spawn, past, dispatched }
+}
+const hookNamed = (name) => (verb) => verb[0] === "hook" && verb.at(-1) === name
+
+test("#632: a post-commit hook that spends the rest of the budget: HEAD is not read past the budget, and the commit is unknown, never committed", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (hookNamed("post-commit")(verb) ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n", "the commit stands; only reading it back was left undone")
+})
+
+test("#632: a branch update that spends the rest of the budget is dispatched once and is unknown: nothing is read and no hook is run past the budget", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "update-ref" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0, "the post-commit hook is not run once the budget has ended")
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /could not be read back inside the commit's time budget/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a pre-commit hook cut off at the end of the budget is unknown, never absent: it may still be running, and the read-back is not run past the budget", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (hookNamed("pre-commit")(verb) ? "cut" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("commit-tree") + budget.dispatched("update-ref"), 0)
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /pre-commit hook was cut off/u)
+})
+
+test("#632: a commit made as the budget ends does not move the branch, and is unknown, never absent: the read-back is not run past the budget", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "commit-tree" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 0, "the branch is not moved once the budget has ended")
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out before the branch was moved/u)
+})
+
 // What a plain git commit did that the commit keeps.
 function hookIn(root, name, script) {
   const hooks = path.resolve(root, git(root, ["rev-parse", "--git-path", "hooks"]).trim())
