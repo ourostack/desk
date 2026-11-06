@@ -187,11 +187,11 @@ function stageWrites({ root, files, spawnGit }) {
  * attaches to its result under `commit` only on failure, so a normal,
  * silent success stays byte-identical to today's response shape.
  */
-function commitMove({ root, movedDirs, writtenFiles, message, spawnGit }) {
+function commitMove({ root, movedDirs, writtenFiles, message, spawnGit, deskRoot = root }) {
   if (!isGitRepository(root, spawnGit)) return undefined
   const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
   const committed = commitPaths(root, relPaths, message, spawnGit)
-  return committed.ok ? undefined : commitFailure({ root, paths: relPaths, message, committed })
+  return committed.ok ? undefined : commitFailure({ root, paths: relPaths, message, committed, deskRoot })
 }
 
 /**
@@ -612,6 +612,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
     writtenFiles,
     message: `task_move: ${slug} → ${toTrack}`,
     spawnGit,
+    deskRoot,
   })
   if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
 
@@ -719,6 +720,7 @@ export async function track_rename({ deskRoot, input, person = null, search, spa
     writtenFiles: taskFiles,
     message: `track_rename: ${track} → ${to}`,
     spawnGit,
+    deskRoot,
   })
   if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
 

@@ -120,7 +120,7 @@ export async function taskSignoff({
   const stage = stagingAllowed(file, spawnGit)
   await patchMarkdownFrontmatter(file, { ...(refused ? { status: "processing" } : {}), updated: at.replace(/\.\d+Z$/u, "Z"), ...toFrontmatter(next) })
   const trackRow = refused ? await updateTrackRow({ filePath: file, slug, status: "processing", spawnGit }) : null
-  const commit = stage ? stageAndCommitCard(file, `task_signoff: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`) : undefined
+  const commit = stage ? stageAndCommitCard(file, `task_signoff: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`, deskRoot) : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
   const deskCommit = stage && !commit ? headSha(path.dirname(file), spawnGit) : null
   search?.noteChange(relPath(deskRoot, file))

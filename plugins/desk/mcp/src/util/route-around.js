@@ -47,9 +47,10 @@ function handCommit(root, paths, message, which) {
  * The route for a commit Desk could not finish: exactly `paths` (relative to `root`) with `message`. `readback` is the
  * commit's read-back (`absent` or `unknown`); `card` names a live task card (`<track>/<slug>`) that is `paths[0]`, which
  * the card guard lets in only through task_update, so the route commits it there instead of by hand (any other paths are
- * committed by hand after it, never together with it).
+ * committed by hand after it, never together with it). `deskRoot` is the root a successful call hands `schedulePush`; the
+ * publish step uses exactly it, never a nested `root`, because the push worker's lock and delivery state are keyed by it (R6).
  */
-export function commitRoute({ root, paths, message, readback = "unknown", card = null }) {
+export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root }) {
   const { committed_locally_when: local, published_when: published } = readbacks(root, paths)
   const commit = card === null
     ? [handCommit(root, paths, message, "these paths")]
@@ -68,7 +69,7 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
     steps: [
       { step: "Read back first. No output means these paths are already committed here: go straight to publishing.", argv: local.argv },
       ...commit,
-      { step: "Publish through Desk's push worker.", argv: publishArgv(root) },
+      { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
     ],
     committed_locally_when: local,
     published_when: published,
@@ -76,12 +77,12 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
 }
 
 /** The failure object a commit step returns: `failed` when the commit did not land, `unknown` when Desk cannot tell, always with its route. */
-export function commitFailure({ root, paths, message, committed, card = null }) {
+export function commitFailure({ root, paths, message, committed, card = null, deskRoot = root }) {
   const readback = committed.readback === "absent" ? "absent" : "unknown"
   return {
     status: readback === "absent" ? "failed" : "unknown",
     reason: committed.stderr,
-    route_around: commitRoute({ root, paths, message, readback, card }),
+    route_around: commitRoute({ root, paths, message, readback, card, deskRoot }),
   }
 }
 
@@ -95,7 +96,7 @@ export function commitFailure({ root, paths, message, committed, card = null }) 
  * `names` the file names, `branch` the checked-out branch, `head` HEAD's full hash, `worktree` an unused folder for the
  * temporary worktree, and `change` says in words what to make the same in the worktree's copies.
  */
-function heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree }) {
+function heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree, deskRoot }) {
   const tempBranch = `desk-route/${path.basename(worktree)}`
   const inWorktree = path.join(worktree, ...prefix.split("/").filter(Boolean))
   const files = names.join(" and ")
@@ -112,7 +113,7 @@ function heldFileRoute({ dir, prefix, names, message, branch, head, change, work
       { step: `Move ${branch} to that commit only if it still points where it did; this fails safely if anything moved, and then you start again from step 1 at the new HEAD.`, argv: ["git", "-C", dir, "update-ref", `refs/heads/${branch}`, tempBranch, head] },
       { step: "Point the index entries for these files at the new HEAD. The working tree keeps the other session's edit, still uncommitted.", argv: ["git", "-C", dir, "reset", "-q", "--", ...names] },
       { step: `Delete the folder ${worktree} (the temporary worktree from step 1, and nothing else), then let Git forget it and drop the temporary branch.`, argv: [["git", "-C", dir, "worktree", "prune"], ["git", "-C", dir, "branch", "-d", tempBranch]] },
-      { step: "Publish through Desk's push worker.", argv: publishArgv(dir) },
+      { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
     ],
     committed_locally_when: { argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names], expect: "shows only the other session's edit, never this change" },
     published_when: readbacks(dir, names).published_when,
@@ -137,14 +138,14 @@ function gitLine(spawnGit, dir, args) {
  * The temporary worktree goes beside the repository, in a folder named for this call. When Git cannot say (a detached or
  * unborn HEAD), the route says what to do in words and still never commits the held files whole.
  */
-export function heldFileRouteFor({ dir, names, message, change, spawnGit }) {
+export function heldFileRouteFor({ dir, names, message, change, spawnGit, deskRoot = dir }) {
   const top = gitLine(spawnGit, dir, ["rev-parse", "--show-toplevel"])
   const prefix = gitLine(spawnGit, dir, ["rev-parse", "--show-prefix"])
   const branch = gitLine(spawnGit, dir, ["symbolic-ref", "--short", "-q", "HEAD"])
   const head = gitLine(spawnGit, dir, ["rev-parse", "--verify", "-q", "HEAD"])
   if (top && prefix !== null && branch && head) {
     const worktree = `${path.resolve(top)}.desk-route-${randomBytes(4).toString("hex")}`
-    return heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree })
+    return heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree, deskRoot })
   }
   const files = names.join(" and ")
   return {
@@ -152,7 +153,7 @@ export function heldFileRouteFor({ dir, names, message, change, spawnGit }) {
     steps: [
       { step: "Read back what the files hold that is not committed.", argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names] },
       { step: `Make a temporary worktree at the commit the checkout's branch points to, ${change} in its copies and nothing else, commit exactly those files with the message "${message}", move the branch to that commit only if it has not moved (git update-ref with the old value), then reset the index entries for the files here.` },
-      { step: "Publish through Desk's push worker.", argv: publishArgv(dir) },
+      { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
     ],
     committed_locally_when: { argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names], expect: "shows only the other session's edit, never this change" },
     never: `Never commit ${files} whole: that publishes the other session's edit as this change.`,
