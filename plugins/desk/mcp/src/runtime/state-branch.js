@@ -90,30 +90,31 @@ export async function inspectStateBranch({ root, branch, git = runGit, exists = 
 }
 
 /**
- * The rule for a desk with no state branch configured (a configured one is judged by `inspectStateBranch`): HEAD must not be detached, and when the remote names a default branch (`origin/HEAD`) HEAD must be on it.
- * With no such remote, any named branch is allowed, so a `master` desk, a fetched-but-not-cloned remote and a local-only desk all pass. `ok` is also true outside a Git checkout.
+ * Without a configured state branch, accept the named branch observed at admission and require it before later writes.
+ * Branch eligibility does not grant write authority. `ok` is also true outside a Git checkout.
  */
-export async function inspectWriteBranch({ root, branch, git }) {
+export async function inspectWriteBranch({ root, branch, sessionBranch = null, git }) {
   if (isStateBranchName(branch)) return { ok: true }
   const located = await git({ cwd: root, args: ["rev-parse", "--show-toplevel"] })
-  if (!located.ok) return { ok: true }
+  if (!located.ok) return sessionBranch === null ? { ok: true } : { ok: false, kind: "unverified", expected: sessionBranch }
   const toplevel = located.stdout.split(/\r?\n/u)[0]
   const head = await git({ cwd: toplevel, args: ["symbolic-ref", "--quiet", "--short", "HEAD"] })
   if (!head.ok) return { ok: false, kind: "detached", found: null, expected: null }
-  const remote = await git({ cwd: toplevel, args: ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"] })
-  const expected = remote.ok && remote.stdout.startsWith("origin/") ? remote.stdout.slice("origin/".length) : null
-  if (expected === null || head.stdout === expected) return { ok: true }
-  return { ok: false, kind: "other_branch", found: head.stdout, expected }
+  if (sessionBranch === null || head.stdout === sessionBranch) return { ok: true, found: head.stdout }
+  return { ok: false, kind: "other_branch", found: head.stdout, expected: sessionBranch }
 }
 
 /** The degraded answer for a refused write from `inspectWriteBranch`, with a fix the agent can act on. */
 export function writeBranchProblem(inspection) {
+  if (inspection.kind === "unverified") {
+    return { code: "write_branch_unverified", fix: `Git could not verify this session's branch ${inspection.expected}, so Desk wrote nothing. Restore Git access to the admitted checkout, then retry.` }
+  }
   if (inspection.kind === "detached") {
     return { code: "write_branch_detached", fix: "The desk checkout is on a detached HEAD, so Desk wrote nothing. Switch it to a branch (git switch <branch>), then retry." }
   }
   return {
     code: "write_branch_mismatch",
-    fix: `The desk checkout is on branch ${inspection.found}, but the remote's default branch is ${inspection.expected}, so Desk wrote nothing. Switch back with git switch ${inspection.expected}, then retry.`,
+    fix: `The desk checkout is on branch ${inspection.found}, but this session was admitted on ${inspection.expected}, so Desk wrote nothing. Switch back with git switch ${inspection.expected}, then retry. Start a new session if the branch change was intentional.`,
   }
 }
 
