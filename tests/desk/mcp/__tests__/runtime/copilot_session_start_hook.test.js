@@ -70,6 +70,15 @@ test("every Copilot session is told to act as Desk's worker unless it was starte
   assert.doesNotMatch(context, /^name: using-desk$/mu)
 })
 
+test("startup explains intentional question blocking without manufacturing a human approval wait", () => {
+  const { context } = start({ sessionId: "sess-question-policy", cwd: ROOT, source: "new" }, "question-policy")
+  assert.match(context, /Forms disrupt conversation/u)
+  assert.match(context, /obscure whether judgment, permission or execution is needed/u)
+  assert.match(context, /A policy block is not missing approval/u)
+  assert.match(context, /Questions and blocked prompts/u)
+  assert.doesNotMatch(context, /whatever its own description says|Desk does not change question settings/u)
+})
+
 test("every Desk session disables explicitly enabled native memory and injects the versioned prohibition", () => {
   const home = path.join(ROOT, "native-memory")
   mkdirSync(path.join(home, ".copilot"), { recursive: true })

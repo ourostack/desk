@@ -75,7 +75,8 @@ test("a focused drafting task returns the complete alignment reply contract", as
   }
   assert.match(result.alignment_note, /usable output, documentation and verification where applicable/u)
   assert.match(result.alignment_note, /routine defaults yourself/u)
-  assert.match(result.alignment_note, /normal chat, not question forms/u)
+  assert.match(result.alignment_note, /ordinary conversation where permitted, not a form/u)
+  assert.match(result.alignment_note, /policy-blocked question is not missing human approval/u)
   const { data } = await readFront(path.join(root, "tools", "folder-report", "task.md"))
   assert.equal(data.alignment_note, undefined, "the reply scaffold is not a second persisted agreement")
 })

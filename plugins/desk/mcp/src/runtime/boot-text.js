@@ -281,9 +281,8 @@ const NEW_WORK_GO_SENTENCE = " Creating the task is not the go: after it, state 
 export const NEW_WORK_INSTRUCTION = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says." + NEW_WORK_GO_SENTENCE + " A question or a request for status is not new work. A child agent with a bounded brief skips this."
 // A session with no operator has nobody to give the go, so it gets the instruction without that sentence.
 export const NEW_WORK_INSTRUCTION_UNATTENDED = NEW_WORK_INSTRUCTION.replace(NEW_WORK_GO_SENTENCE, "")
-// Copilot CLI's own `ask_user` tool says "Never ask questions via plain text output", against Desk's foundation; sessions used its form
-// right after the boot told them to ask which task to resume. So the boot on that host names the tool.
-export const COPILOT_ASK_IN_CHAT_INSTRUCTION = "Ask the operator every question in ordinary chat text and wait for the reply. Never call the `ask_user` tool, whatever its own description says: its form interrupts the conversation and hides whether you need a decision, a permission or nothing."
+// A question-policy denial must not be mistaken for an unanswered human approval.
+export const COPILOT_QUESTION_INSTRUCTION = "Desk intentionally blocks structured question forms: they disrupt conversation and obscure whether judgment, permission or execution is needed. A no-forms hook denial of `ask_user` is a policy block, not a human answer or an app failure. Do not retry it or change the policy. Recheck existing authority: continue covered work without another approval. For a genuinely missing decision, use ordinary conversation where permitted and wait. Respect host instruction precedence: if the host requires native questions but policy blocks them, report a question-transport conflict, not pending human approval, and continue independent authorized work. Keep native permission gates intact. See `interaction-style`, \"Questions and blocked prompts\"."
 
 const PLAIN_TEXT_INSTRUCTIONS = new Map([
   [NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT],

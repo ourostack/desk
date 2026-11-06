@@ -34,7 +34,7 @@ test("a known root skill success receives bounded source-owned intake context, n
     assert.deepEqual(Object.keys(result), ["additionalContext"])
     assert.ok(Buffer.byteLength(result.additionalContext) < 10000)
     for (const text of ["task", "Outcome", "Assumptions", "Recommended decisions", "Done means",
-      "before", "existing", "go", "normal chat", "using-superpowers-with-desk"])
+      "before", "existing", "go", "normal chat where permitted", "policy-blocked", "host instruction precedence", "using-superpowers-with-desk"])
       assert.ok(result.additionalContext.includes(text), text)
     assert.doesNotMatch(result.additionalContext, /run the boot|session-boot|task_signoff|accepted|permissionDecision/u)
     assert.equal(JSON.stringify(good), JSON.stringify(input(cwd)), "input and tool result stay untouched")

@@ -84,7 +84,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
+import { COPILOT_QUESTION_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
@@ -1250,7 +1250,7 @@ function buildInstructionItems(ctx) {
   // The named task's push routes. The text boot prints each route on its task instead, so these are `--json`-only.
   for (const line of pushLines(pushAccounts)) add(line, null)
   add(deferredToolsHint(agentHost))
-  if (agentHost === "copilot" && !noninteractive) add(COPILOT_ASK_IN_CHAT_INSTRUCTION)
+  if (agentHost === "copilot" && !noninteractive) add(COPILOT_QUESTION_INSTRUCTION)
   if (taskQuery !== null) {
     body.push(...namedTaskInstructions({ task, repoStateList, root, host, noninteractive, blocked: namedBlockers.length > 0 }))
   } else {
