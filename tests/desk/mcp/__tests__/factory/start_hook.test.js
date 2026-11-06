@@ -93,7 +93,9 @@ test("repairs start detached after every check has run, and a repair that cannot
   assert.deepEqual(events, [["check", "a"], ["check", "b"], ["check", "c"], ["repair", ["fails"]], ["repair", ["node", "x.js"]]])
 })
 
-test("a check that overruns its budget is skipped silently, but a check that throws is skipped, recorded and reported as a Desk problem: block; the rest still run", async () => {
+test("a check that overruns its budget is skipped silently, but a check that throws is skipped, recorded and reported as a Desk problem: block; the rest still run", async (t) => {
+  // This asserts skip, record and report semantics, not the registry total; a frozen clock keeps scheduling and filer work on a loaded runner from spending the 300ms total before "fine" runs. The slow check still overruns on its real 50ms timer.
+  t.mock.method(performance, "now", () => 0)
   const recorded = []
   let aborted = false
   const line = await runBootChecks({
