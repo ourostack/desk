@@ -278,6 +278,8 @@ test("a lock-shaped commit failure is returned without redispatch for people and
       if (args.includes("symbolic-ref")) return { status: 0, stdout: "main\n", stderr: "" }
       // The read-back (#561) reads HEAD before and after the commit; it has not moved, so the commit is absent.
       if (args.includes("rev-parse")) return { status: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" }
+      // What the commit is about to take is read before dispatch (R4); those reads succeed and are not dispatches.
+      if (args[2] !== "commit") return { status: 0, stdout: "", stderr: "" }
       commits += 1
       return commits <= failures ? lockError : { status: 0, stdout: "", stderr: "" }
     }

@@ -175,44 +175,68 @@ function nulList(result) {
   return String(result.stdout).split("\0").filter(Boolean)
 }
 
+/** The entries `commit`'s tree holds at `relPaths`, as sorted `mode sha\tpath` lines, or null when Git cannot say. */
+function treeEntries(root, commit, relPaths, spawnGit) {
+  const tree = run(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...relPaths])
+  if (tree?.status !== 0) return null
+  return nulList(tree).map((record) => {
+    const [meta, entryPath] = record.split("\t")
+    const [mode, , sha] = meta.split(" ")
+    return `${mode} ${sha}\t${entryPath}`
+  }).sort()
+}
+
+const entryLines = (entries) => entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}`).sort()
+const sameEntries = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
 /**
- * Whether a commit of exactly `relPaths` with `message` landed after HEAD was `before` (`""` for unborn): `committed` when a new commit on
- * HEAD has that message, changes only those paths and holds what this call meant (`holdsExpected(commit)`); `absent` when HEAD has not
- * moved or no new commit touches those paths; `unknown` otherwise, and whenever Git cannot answer. Reads only.
+ * Whether a commit of exactly `relPaths` with `message` landed after HEAD was `before` (`""` for unborn), and whether it is still in effect.
+ * `expected` is what this call meant to commit at `relPaths`, captured before it was dispatched (sorted `mode sha\tpath` lines; null when it
+ * could not be captured). Returns `{ readback, landed }`:
+ * - `committed`: a new commit on HEAD has that message, changes only those paths and holds `expected` there, and HEAD holds `expected` there now;
+ * - `absent`: HEAD has not moved, or no new commit touches those paths;
+ * - `unknown` otherwise, and whenever Git cannot answer. When our commit landed but HEAD no longer holds it, `landed` names both
+ *   (`{ commit, head }`): it happened, but it is not in effect, so nothing claims completion and nothing replays it. Reads only.
  */
-export function readBackCommit(root, relPaths, message, before, holdsExpected, spawnGit) {
-  if (before === null) return "unknown"
+export function readBackCommit(root, relPaths, message, before, expected, spawnGit) {
+  const unknown = { readback: "unknown" }
+  if (before === null) return unknown
   const after = headOf(root, spawnGit)
-  if (after === null) return "unknown"
-  if (after === before) return "absent"
-  if (after === "") return "unknown"
+  if (after === null) return unknown
+  if (after === before) return { readback: "absent" }
+  if (after === "") return unknown
   const listed = run(spawnGit, root, ["rev-list", `--max-count=${READBACK_LIMIT + 1}`, before === "" ? after : `${before}..${after}`])
-  if (listed?.status !== 0) return "unknown"
+  if (listed?.status !== 0) return unknown
   const commits = String(listed.stdout).split("\n").map((line) => line.trim()).filter(Boolean)
-  if (commits.length > READBACK_LIMIT) return "unknown"
+  if (commits.length > READBACK_LIMIT) return unknown
   let touched = false
   for (const commit of commits) {
     const ours = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit, "--", ...relPaths])
-    if (ours?.status !== 0) return "unknown"
+    if (ours?.status !== 0) return unknown
     const inside = nulList(ours).length
     if (inside === 0) continue
     touched = true
+    if (expected === null) return unknown
     const all = run(spawnGit, root, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit])
     const body = run(spawnGit, root, ["log", "-1", "--format=%B", commit])
-    if (all?.status !== 0 || body?.status !== 0) return "unknown"
+    if (all?.status !== 0 || body?.status !== 0) return unknown
     if (nulList(all).length !== inside || cleanMessage(body.stdout) !== cleanMessage(message)) continue
-    const holds = holdsExpected(commit)
-    if (holds === null) return "unknown"
-    if (holds) return "committed"
+    const held = treeEntries(root, commit, relPaths, spawnGit)
+    if (held === null) return unknown
+    if (!sameEntries(held, expected)) continue
+    const now = commit === after ? held : treeEntries(root, after, relPaths, spawnGit)
+    if (now === null) return unknown
+    return sameEntries(now, expected) ? { readback: "committed" } : { readback: "unknown", landed: { commit, head: after } }
   }
-  return touched ? "unknown" : "absent"
+  return touched ? unknown : { readback: "absent" }
 }
 
-// A failed commit call's answer: `ok` when the read-back finds it landed (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
-function afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit) {
+// A failed commit call's answer: `ok` when the read-back finds it landed and in effect (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
+function afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit) {
   const stderr = timedOut(result) ? "timeout" : result.stderr
-  const readback = readBackCommit(root, relPaths, message, before, holdsExpected, spawnGit)
-  return readback === "committed" ? { ok: true, stderr, readback } : { ok: false, stderr, readback }
+  const { readback, landed } = readBackCommit(root, relPaths, message, before, expected, spawnGit)
+  if (readback === "committed") return { ok: true, stderr, readback }
+  return landed ? { ok: false, stderr, readback, landed } : { ok: false, stderr, readback }
 }
 
 /**
@@ -240,17 +264,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
     const result = run(spawnGit, root, ["commit", "-m", message], { env })
     if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
     // What this call meant to commit is exactly `entries` at `relPaths`, and nothing at the paths the index did not hold.
-    const holdsExpected = (commit) => {
-      const tree = run(spawnGit, root, ["ls-tree", "-r", "-z", commit, "--", ...relPaths])
-      if (tree?.status !== 0) return null
-      const found = nulList(tree).map((record) => {
-        const [meta, entryPath] = record.split("\t")
-        const [mode, , sha] = meta.split(" ")
-        return `${mode} ${sha}\t${entryPath}`
-      }).sort()
-      return JSON.stringify(found) === JSON.stringify(entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}`).sort())
-    }
-    return afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit)
+    return afterFailedCommit(result, root, relPaths, message, before, entryLines(entries), spawnGit)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -274,6 +288,18 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
 }
 
 /**
+ * What `git commit -- <relPaths>` is about to commit, captured before it is dispatched (R4, 0972 on #625): the index entries at those paths, as sorted
+ * `mode sha\tpath` lines, when the working tree there matches the index (the case for every Desk caller, which stages first). Null when it does not or
+ * Git cannot say: then the commit would take working-tree bytes this read did not hash, so a read-back can never call it committed. Reads only.
+ */
+function capturedPaths(root, relPaths, spawnGit) {
+  const entries = indexEntries(root, relPaths, spawnGit)
+  if (entries === null || entries.some((entry) => entry.stage !== "0")) return null
+  const differs = run(spawnGit, root, ["diff", "--quiet", "--", ...relPaths])
+  return differs?.status === 0 ? entryLines(entries) : null
+}
+
+/**
  * `git commit` exactly `relPaths` (relative to `root`) with `message`, never
  * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
  * paths this call commits, so a path another process staged in the same
@@ -286,14 +312,10 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
   const before = headOf(root, spawnGit)
+  const expected = capturedPaths(root, relPaths, spawnGit)
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
   if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
-  // `git commit -- <paths>` commits the working tree at those paths, so what this call meant is what the working tree still holds there.
-  const holdsExpected = (commit) => {
-    const diff = run(spawnGit, root, ["diff", "--quiet", commit, "--", ...relPaths])
-    return diff?.status === 0 ? true : diff?.status === 1 ? false : null
-  }
-  return afterFailedCommit(result, root, relPaths, message, before, holdsExpected, spawnGit)
+  return afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit)
 }
