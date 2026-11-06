@@ -16,7 +16,7 @@ import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { bootFixtureEnv } from "../_boot_fixture.js"
-import { STORE, scratch } from "./_session_helpers.js"
+import { STORE, scratch as scratchSession } from "./_session_helpers.js"
 import { TOTAL_BUDGET_MS, andonCheck, checks, deskHealthCheck, factoryCheck, labelsCheck, launchCommand, recordSkipped, runBootChecks, startFactory } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 import { main as factoryStartMain, DEADLINE_MS as factoryDeadlineMs } from "../../../../../plugins/desk/hooks/factory-start.cjs"
@@ -33,7 +33,9 @@ const interactive = (env) => {
   for (const name of ["CI", "GITHUB_ACTIONS", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "DESK_FACTORY_HEADLESS"]) delete clean[name]
   return clean
 }
-const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
+// Every control here is an ordinary interactive start; the headless suppression has its own tests elsewhere.
+const scratch = (run) => scratchSession(({ env, ...rest }) => run({ ...rest, env: interactive(env) }))
+const quiet = { env: interactive(process.env), launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
 const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 
 // ---------------------------------------------------------------------------
