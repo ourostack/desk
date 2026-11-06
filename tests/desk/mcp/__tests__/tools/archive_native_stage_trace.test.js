@@ -230,6 +230,26 @@ test("collector reparses stage fields strictly and retains passed cases only in 
   assert.equal(trace.snapshot().records[0].receipt.nativeStages[0].extra, undefined)
 })
 
+test("the gate reads only own data properties of a plain object", () => {
+  for (const env of [null, undefined, "CI", 7, new Proxy({ ...GATE }, {})]) assert.equal(nativeStageTraceEnabled(env), false)
+  assert.equal(nativeStageTraceEnabled(Object.create(GATE)), false)
+})
+
+test("a stage line arriving beyond the wrapper bound is an invalid stage, not a recorded one", async () => {
+  const real = process.hrtime.bigint
+  let skewNs = 0n
+  const f = silentChild([stage("start", 10)], GATE)
+  const spawn = f.dependencies.spawn
+  f.dependencies.spawn = (...args) => { skewNs = 1_000n * 1_000_000_000n; return spawn(...args) }
+  process.hrtime.bigint = () => real() + skewNs
+  let error
+  try { error = await openArchiveHandleSession(pair, f.dependencies).then(() => null, e => e) }
+  finally { process.hrtime.bigint = real }
+  assert.ok(error)
+  assert.ok(error.handleReceipt.protocolIssues.includes("invalid_or_unexpected_protocol"))
+  assert.equal(error.handleReceipt.nativeStages.length, 0)
+})
+
 test("stage control reaches only the measured launch and needs the receipt trace", () => {
   const env = { CI: "true", GITHUB_ACTIONS: "true", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "1", DESK_BLACKBOX_NATIVE_STAGE_TRACE: "1" }
   assert.equal(mcp.nativeReceiptLaunch({ env: {} }, env).env.DESK_BLACKBOX_NATIVE_STAGE_TRACE, "1")
