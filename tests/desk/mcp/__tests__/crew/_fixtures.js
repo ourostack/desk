@@ -22,6 +22,8 @@ export function git(cwd, args, env = {}) {
   return result.stdout.trim()
 }
 
+export const bareGit = (bare, args, env = {}) => git(bare, ["--git-dir", bare, ...args], env)
+
 export const onMain = (bare, file) => {
   const result = spawnSync("git", ["--git-dir", bare, "show", `main:${file}`], { encoding: "utf8" })
   return result.status === 0 ? result.stdout : null

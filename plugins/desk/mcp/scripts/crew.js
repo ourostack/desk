@@ -5,11 +5,12 @@
 //   node crew.js start  --repo <clone> [--team <name>] [--founder <alias>=<identity>]
 //                       [--tooling-repo <owner/name> --tooling-path <dir> --tooling-plugin <name>
 //                        --tooling-ref <branch> --tooling-marketplace <name>] [--apply]
-//   node crew.js join   --repo <clone> --identity <login> --alias <alias> [--apply]
+//   node crew.js join   --repo <clone> --identity <login> --alias <alias> [--adopt-existing <reviewed-commit>] [--apply]
 //
 // `start` works on a new or an existing repository. With --tooling-repo the workspace is dual-repo (the team's plugin
 // lives in that separate repository); without it, a monorepo (the plugin, if any, in its own plugins/ folder).
-// Without --apply, start and join print their plan and change nothing. `--repo` defaults to the current folder.
+// Without --apply, no member or shared files change; join may fetch missing Git history for its preview.
+// `--repo` defaults to the current folder.
 // Exits 1 when the result is refused, failed or not a Git clone, and 2 for a usage error.
 
 import process from "node:process"
@@ -17,11 +18,11 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { crewStatus, joinWorkspace, startWorkspace } from "../src/crew/workspace.js"
 
-const VALUE_FLAGS = new Set(["repo", "identity", "alias", "team", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder"])
+const VALUE_FLAGS = new Set(["repo", "identity", "alias", "team", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder", "adopt-existing"])
 const ALLOWED = {
   status: ["repo", "identity"],
   start: ["repo", "team", "tooling-repo", "tooling-path", "tooling-plugin", "tooling-ref", "tooling-marketplace", "founder", "apply"],
-  join: ["repo", "identity", "alias", "apply"],
+  join: ["repo", "identity", "alias", "apply", "adopt-existing"],
 }
 const USAGE = "usage: crew.js <status|start|join> --repo <clone> [options]; see the comment at the top of crew.js"
 
@@ -65,7 +66,7 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
   let result
   // status also says what a Desk session started in the clone binds (`session`), the check a join runs before it delivers.
   if (action === "status") result = await engine.crewStatus({ repo, identity: options.identity, session: true })
-  else if (action === "join") result = await engine.joinWorkspace({ repo, identity: options.identity, alias: options.alias, apply: options.apply === true })
+  else if (action === "join") result = await engine.joinWorkspace({ repo, identity: options.identity, alias: options.alias, apply: options.apply === true, ...(options["adopt-existing"] === undefined ? {} : { adoptExisting: options["adopt-existing"] }) })
   else {
     result = await engine.startWorkspace({
       repo,

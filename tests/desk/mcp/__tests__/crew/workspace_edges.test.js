@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
-import { CIT_SHAPED, branches, fakeGh, git, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, bareGit, branches, fakeGh, git, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
@@ -47,7 +47,7 @@ test("with no wait given, the pause before asking again whether a queued pull re
     },
     view: () => {
       views += 1
-      const merged = { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } }
+      const merged = { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } }
       return { code: 0, stdout: JSON.stringify(views === 1 ? { state: "OPEN", mergeStateStatus: "CLEAN" } : merged), stderr: "" }
     },
   })
@@ -122,7 +122,7 @@ test("a merged pull request with no merge commit in GitHub's answer uses the fet
   const { gh } = fakeGh(repo.bare, { view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED" } : { state: "OPEN" }) }) })
   const result = await startWorkspace(adopt(repo, { apply: true, gh }))
   assert.equal(result.state, "published", result.message)
-  assert.equal(result.commit, git(repo.bare, ["rev-parse", "main"]))
+  assert.equal(result.commit, bareGit(repo.bare, ["rev-parse", "main"]))
 })
 
 test("a local branch already named like the change's branch: refused at the branch step, the clone untouched", async () => {
