@@ -250,6 +250,26 @@ test("a stage line arriving beyond the wrapper bound is an invalid stage, not a 
   assert.equal(error.handleReceipt.nativeStages.length, 0)
 })
 
+test("an unavailable stage program fails typed before any spawn, and only when the gate is on", async () => {
+  let builds = 0, spawns = 0
+  const throwing = () => { builds++; throw new Error("C:\\secret\\anchor") }
+  const on = silentChild([], GATE)
+  const onSpawn = on.dependencies.spawn
+  on.dependencies.spawn = (...a) => { spawns++; return onSpawn(...a) }
+  const error = await openArchiveHandleSession(pair, { ...on.dependencies, buildStageProgram: throwing }).then(() => null, e => e)
+  assert.ok(error)
+  assert.match(error.message, /diagnostic program unavailable/)
+  assert.doesNotMatch(error.message, /secret|anchor/)
+  assert.equal(builds, 1)
+  assert.equal(spawns, 0)
+  assert.equal(on.argv(), undefined)
+
+  const off = silentChild([], {})
+  off.dependencies.spawn = (...a) => { spawns++; return silentChild([], {}).dependencies.spawn(...a) }
+  await openArchiveHandleSession(pair, { ...off.dependencies, buildStageProgram: throwing }).catch(() => {})
+  assert.equal(builds, 1)
+})
+
 test("stage control reaches only the measured launch and needs the receipt trace", () => {
   const env = { CI: "true", GITHUB_ACTIONS: "true", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "1", DESK_BLACKBOX_NATIVE_STAGE_TRACE: "1" }
   assert.equal(mcp.nativeReceiptLaunch({ env: {} }, env).env.DESK_BLACKBOX_NATIVE_STAGE_TRACE, "1")

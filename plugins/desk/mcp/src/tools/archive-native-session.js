@@ -336,9 +336,11 @@ function supported(file) {
     throw problem("unsupported Windows path")
 }
 
+const defaultStageProgramBuilder = buildStageProgram
+
 export async function openArchiveHandleSession({ source, destination }, {
   platform = process.platform, arch = process.arch, env = process.env, realpath = fs.realpath, spawn = spawnChild,
-  setTimeout: startTimer = setTimeout, clearTimeout: stopTimer = clearTimeout,
+  setTimeout: startTimer = setTimeout, clearTimeout: stopTimer = clearTimeout, buildStageProgram: stageProgramBuilder = defaultStageProgramBuilder,
 } = {}) {
   const state = { released: false, closed: false, forced: false, movement: "not_released", retirement: "unconfirmed" }
   const receipt = { scope: "archive_native_preadmission_session", additionalNativeAdmission: true, nodeIdentityBridge: false,
@@ -622,7 +624,7 @@ export async function openArchiveHandleSession({ source, destination }, {
     const systemRoot = env.SystemRoot || env.SYSTEMROOT
     if (!systemRoot) throw problem("system runtime unavailable")
     if (stageTrace) {
-      try { program = buildStageProgram() } catch { throw problem("diagnostic program unavailable") }
+      try { program = stageProgramBuilder() } catch { throw problem("diagnostic program unavailable") }
       receipt.programVariant = "stage_diag"
       receipt.executedProgramSha256 = hash(program)
       receipt.nativeStages = []
