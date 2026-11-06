@@ -14,6 +14,7 @@ import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/to
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeCardCommitted } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
 import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { mkTempDeskRoot } from "./_helpers.js"
@@ -367,6 +368,31 @@ test("the route of a commit that did not land, run by hand, commits exactly the 
   assert.equal(remote.status, 0, remote.stderr)
   assert.match(remote.stdout, /onboarding hurts/u, "the remote holds the change")
   assert.match(git(root, ["status", "--porcelain"]), /\?\? unrelated\.txt/u, "nothing else was committed")
+})
+
+// 0972 #1 on ae1395e4: a move names folders, and the folder it moved from is gone. The route finishes the move, every leaf of
+// the old folder removed and the new one added, never a copy that keeps both.
+test("the route of a task move that did not land, run by hand, commits the move itself and publishes it, never a copy", async () => {
+  const { root, origin } = await repoWithOrigin()
+  await track_create({ deskRoot: root, input: { slug: "trip", title: "Trip", scope: SCOPE }, schedulePush: () => {} })
+  await task_create({ deskRoot: root, input: { track: "trip", slug: "old-name", title: "T" }, schedulePush: () => {} })
+  await fs.writeFile(path.join(root, "trip", "old-name", "notes.md"), "notes\n", "utf8")
+  git(root, ["add", "-A"])
+  git(root, ["commit", "-q", "-m", "fixture"])
+  const result = await task_move({ deskRoot: root, input: { track: "trip", slug: "old-name", to_slug: "new-name" }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
+  const route = result.commit.route_around
+  assertRoute(route)
+  const { code, first } = await followRoute(route)
+  assert.equal(code, 3, first[0].stdout)
+  const local = runArgv(route.committed_locally_when.argv)[0]
+  assert.equal(local.status, 0, local.stdout)
+  const tree = git(root, ["ls-tree", "-r", "--name-only", "HEAD", "--", "trip"]).split("\n").filter(Boolean)
+  assert.deepEqual(tree.filter((p) => p.includes("old-name")), [], "nothing is left at the old name")
+  assert.ok(tree.includes("trip/new-name/task.md") && tree.includes("trip/new-name/notes.md"), tree.join(" "))
+  assert.equal(git(root, ["status", "--porcelain"]), "", "the checkout agrees with HEAD")
+  for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
+  assert.notEqual(remoteShow(origin, "trip/old-name/task.md").status, 0, "the remote holds no copy at the old name")
+  assert.equal(remoteShow(origin, "trip/new-name/notes.md").stdout, "notes\n")
 })
 
 // R2 (0972 on #625): a clean status is no proof. The change was unstaged and its file removed after the failure: status is clean,

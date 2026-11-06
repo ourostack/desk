@@ -365,3 +365,59 @@ test("the command line answers unknown, exit 5, and changes nothing when the fin
   assert.match(answer.reason, /ENOENT/)
   assert.deepEqual(snapshot(root, ["notes.md"]), before, "HEAD, index and working tree are as they were")
 })
+
+// 0972 #1 on ae1395e4: a captured change at a folder is the folder's leaves. Desk saves and moves name folders, so the finish
+// removes every leaf HEAD holds under a captured path that the capture does not keep (a deleted or renamed file), and checks
+// the whole tree it built against the capture before the compare-and-swap.
+function docsRepo() {
+  const root = repo()
+  mkdirSync(path.join(root, "docs"), { recursive: true })
+  writeFileSync(path.join(root, "docs", "keep.md"), "keep\n")
+  writeFileSync(path.join(root, "docs", "old.md"), "old\n")
+  git(root, ["add", "docs"])
+  git(root, ["commit", "-q", "-m", "docs"])
+  return root
+}
+const leaves = (root, rev, paths) => git(root, ["ls-tree", "-r", "--name-only", rev, "--", ...paths]).split("\n").filter(Boolean)
+
+test("a captured folder with a deleted file is finished without that file: every leaf under the folder is reconciled", () => {
+  const root = docsRepo()
+  writeFileSync(path.join(root, "docs", "keep.md"), "kept, edited\n")
+  git(root, ["rm", "-q", "docs/old.md"])
+  const committed = capturedFailure(root, ["docs"], "tidy docs")
+  assert.deepEqual(committed.capture.expected.map((line) => line.split("\t")[1]), ["docs/keep.md"])
+  const done = finish(root, ["docs"], "tidy docs", committed, { commit: true })
+  assert.equal(done.state, "finished", done.reason)
+  assert.deepEqual(leaves(root, "HEAD", ["docs"]), ["docs/keep.md"], "the deleted file is gone from the commit")
+  assert.equal(git(root, ["show", "HEAD:docs/keep.md"]), "kept, edited\n")
+  assert.equal(finish(root, ["docs"], "tidy docs", committed).state, "committed", "the read-back agrees")
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]), "", "the shared index agrees with HEAD")
+})
+
+test("a captured folder with a renamed file is finished as the rename, never as a copy", () => {
+  const root = docsRepo()
+  git(root, ["mv", "docs/old.md", "docs/new.md"])
+  const committed = capturedFailure(root, ["docs"], "rename doc")
+  const done = finish(root, ["docs"], "rename doc", committed, { commit: true })
+  assert.equal(done.state, "finished", done.reason)
+  assert.deepEqual(leaves(root, "HEAD", ["docs"]), ["docs/keep.md", "docs/new.md"], "the old name is gone")
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]), "", "the shared index agrees with HEAD")
+})
+
+test("a private index that does not build exactly the captured tree is held before the compare-and-swap, and nothing moves", () => {
+  const root = docsRepo()
+  git(root, ["rm", "-q", "docs/old.md"])
+  const committed = capturedFailure(root, ["docs"], "tidy docs")
+  const before = snapshot(root, ["docs"])
+  // Git drops the removals it was given: the tree it builds still holds docs/old.md.
+  const lossy = (cmd, args, opts) => args[2] === "update-index" && opts?.input
+    ? spawnSync(cmd, args, { ...opts, input: opts.input.split("\0").filter((r) => r && !r.startsWith("0 ")).map((r) => `${r}\0`).join("") })
+    : spawnSync(cmd, args, opts)
+  const refs = []
+  const spy = (cmd, args, opts) => { if (args[2] === "update-ref" || args[2] === "hook") refs.push(args[2]); return lossy(cmd, args, opts) }
+  const answer = finish(root, ["docs"], "tidy docs", committed, { commit: true, spawnGit: spy })
+  assert.equal(answer.state, "held", answer.reason)
+  assert.match(answer.reason, /does not match the captured change/u)
+  assert.deepEqual(refs, [], "no hook ran and the branch was never dispatched")
+  assert.deepEqual(snapshot(root, ["docs"]), before)
+})

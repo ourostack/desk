@@ -104,9 +104,14 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     const { [TOOL_COMMIT_ENV]: _dropped, ...rest } = env
     const own = { ...rest, GIT_INDEX_FILE: path.join(dir, "index") }
     const kept = new Set(wanted.map((line) => line.split("\t")[1]))
+    // A captured path can be a folder (a save or a move names folders): every leaf HEAD holds under it that the capture does
+    // not keep is removed, so a deleted or renamed file does not survive from HEAD (0972 #1 on ae1395e4).
+    const headLeaves = head === "" ? [] : treeLines(spawnGit, root, head, paths)
+    if (headLeaves === null) return { state: "unknown", reason: "Git could not read HEAD's entries at these paths" }
+    const gone = [...new Set([...paths, ...headLeaves.map((line) => line.split("\t")[1])])].filter((p) => !kept.has(p))
     const lines = [
       ...wanted.map((line) => { const [meta, p] = line.split("\t"); return `${meta}\t${full(p)}\0` }),
-      ...paths.filter((p) => !kept.has(p)).map((p) => `0 ${ZERO}\t${full(p)}\0`),
+      ...gone.map((p) => `0 ${ZERO}\t${full(p)}\0`),
     ].join("")
     const seed = git(spawnGit, root, ["read-tree", head === "" ? "--empty" : head], { env: own })
     if (!seed.ok) return held(`nothing was committed: git read-tree failed: ${seed.stderr}`)
@@ -119,6 +124,10 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
       return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`)
     const tree = git(spawnGit, root, ["write-tree"], { env: own })
     if (!tree.ok) return held(`nothing was committed: git write-tree failed: ${tree.stderr}`)
+    // The whole tree built is checked against the capture before anything runs: exactly the captured entries at these paths,
+    // and HEAD's own entries everywhere else.
+    const built = builtAgainst({ spawnGit, root, head, tree: tree.stdout.trim(), paths, wanted, scope: paths.map(full) })
+    if (built !== null) return held(`nothing was committed: the tree built for the commit does not match the captured change (${built})`)
     // The hooks git commit runs, run by Git itself on the private index, in git commit's order and with its arguments.
     const hookEnv = { ...own, GIT_EDITOR: ":" }
     const hook = (name, ...args) => git(spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
@@ -162,6 +171,21 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+const inScope = (scope, name) => scope.some((p) => p === "." || name === p || name.startsWith(`${p}/`))
+
+/** null when `tree` holds exactly `wanted` at `paths` and HEAD's entries everywhere else; otherwise what differs. */
+function builtAgainst({ spawnGit, root, head, tree, paths, wanted, scope }) {
+  const atPaths = treeLines(spawnGit, root, tree, paths)
+  if (atPaths === null) return "Git could not read it"
+  if (!same(atPaths, wanted)) return "at the captured paths"
+  const changed = head === ""
+    ? git(spawnGit, root, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", tree])
+    : git(spawnGit, root, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", head, tree])
+  if (!changed.ok) return "Git could not compare it with HEAD"
+  const outside = changed.stdout.split("\0").filter(Boolean).filter((name) => !inScope(scope, name))
+  return outside.length === 0 ? null : `outside the captured paths: ${outside.join(", ")}`
 }
 
 /** Exit codes the route's steps branch on: done (committed or finished), ready (read-only run, nothing changed), held, unknown, bad usage. */
