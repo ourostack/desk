@@ -8,10 +8,8 @@
 // A route never commits whatever the paths hold now (R2, 0972 on #625): later bytes there may be another session's. When the
 // failure carries the change Desk captured before it dispatched (`capture`: the entries with their modes, the HEAD and the
 // branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
-// cannot qualify, and commits through a private index with a compare-and-set on the branch, never touching the shared index
-// or the working tree (R1, R3). Without a capture, a commit that surely did not land is finished through Desk's own guarded
-// tool once a read of the paths shows only this call's change; a commit Desk cannot classify gets reads only, and the
-// answer is to stop and report. Committed here and published to the remote are separate facts with separate read-backs.
+// cannot qualify, and commits through one plain git commit of a private index, never touching the shared index or the
+// working tree (R1, R3). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
 //
 // What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
 // card guard's override variable, a hard-coded remote or branch (the published read-back compares with the checkout's own
@@ -82,29 +80,18 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
       published_when,
     }
   }
+  // Without a capture nothing says which bytes at these paths are this call's (R2): a diff, a log line or a clean status is no
+  // proof, and later bytes may be another session's. The route reads, stops and says so; it never commits, saves, updates a
+  // card or publishes. The next write of the same thing commits it through the tool, with every protection the tool has.
   const look = { step: `Read what these paths hold beyond HEAD, and the last commit that touched them. ${READS_ONLY}`, argv: [["git", "-C", root, "diff", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%H %s", "--", ...paths]] }
-  const committed_locally_when = { argv: [["git", "-C", root, "diff", "--exit-code", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%s", "--", ...paths]], expect: `the first exits 0 and the second prints "${message}"` }
-  if (readback !== "absent") {
-    return {
-      summary: "Desk cannot tell whether its commit landed, and it could not capture the exact change before dispatching it, so no step can commit it safely. Read where the paths stand, change nothing, and report.",
-      steps: [look, { step: "Stop here: change nothing, and report what step 1 showed together with the tool's failure. If the diff is empty and the log shows this call's message, the commit is in; say so and publish through Desk's push worker.", argv: publishArgv(deskRoot) }],
-      committed_locally_when,
-      published_when,
-      held: true,
-    }
-  }
-  const tool = card === null
-    ? { step: `Only if step 1 shows nothing but this call's own change: commit exactly these paths through Desk's own guarded path, desk_save. If it shows anything else, stop, change nothing, and report it: it may be another session's edit.`, tool: "desk_save", arguments: { paths: deskPaths(root, deskRoot, paths), message } }
-    : {
-      step: `Only if step 1 shows nothing but this call's own change: call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then commit ${paths.slice(1).join(", ")} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""} If step 1 shows anything else, stop, change nothing, and report it.`,
-      tool: "task_update",
-      arguments: { track: card.split("/")[0], slug: card.split("/").slice(1).join("/"), note: "Committing the card change an earlier call left uncommitted." },
-    }
+  const what = card === null ? "the same write" : `a task_update for ${card}`
   return {
-    summary: "Desk's commit did not land. Finish it through Desk's own guarded path once a read shows only this call's change, publish, then read back the remote.",
-    steps: [look, tool, publish],
-    committed_locally_when,
-    published_when,
+    summary: readback === "absent"
+      ? "Desk's commit did not happen, and Desk could not capture the exact change, so no step here can commit it safely. Read where the paths stand, change nothing, and report."
+      : "Desk cannot tell whether its commit landed, and it could not capture the exact change before dispatching it, so no step here can commit it safely. Read where the paths stand, change nothing, and report.",
+    steps: [look, { step: `Stop here: change nothing, and report what step 1 showed together with the tool's failure. Whatever it shows is not proof that this call's change is or is not committed, and it may be another session's work. Once the tool's failure is fixed, ${what} commits the change through Desk, with every protection the tool has.` }],
+    committed_locally_when: { argv: [["git", "-C", root, "diff", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%H %s", "--", ...paths]], expect: "no read here proves this call's commit: Desk did not capture the change, so report what these show and let a person or the next write settle it" },
+    held: true,
   }
 }
 
