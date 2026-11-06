@@ -1,0 +1,281 @@
+TAP version 13
+# Subtest: ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+ok 1 - ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+  ---
+  duration_ms: 127.651459
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+ok 2 - ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 414.681291
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+ok 3 - ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 75.705792
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+ok 4 - ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 1174.990334
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+ok 5 - ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 38.138208
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+ok 6 - ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 75.482584
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+ok 7 - ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 83.38075
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+ok 8 - ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 83.640084
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+ok 9 - ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+  ---
+  duration_ms: 6.902084
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+ok 10 - ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+  ---
+  duration_ms: 1171.085209
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+not ok 11 - ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+  ---
+  duration_ms: 223.811667
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:75:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'committed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'committed'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:79:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 12 - ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 303.642583
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'storage_failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'storage_failed'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:105:18
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 13 - ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 159.272
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'ownership_unknown'
+    - 'qualified'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'qualified'
+  actual: 'ownership_unknown'
+  operator: 'strictEqual'
+  stack: |-
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:52:10)
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:93:15
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 14 - ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 391.287167
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'storage_failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'storage_failed'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:105:18
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 15 - ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 213.043916
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'storage_failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'storage_failed'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:105:18
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+not ok 16 - ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+  ---
+  duration_ms: 388.999833
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:119:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'storage_failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'storage_failed'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:130:16
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+ok 17 - ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+  ---
+  duration_ms: 238.330416
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+ok 18 - ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+  ---
+  duration_ms: 5.717792
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+ok 19 - ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+  ---
+  duration_ms: 19.793542
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_linkedRoleRefusesWithoutRepair
+ok 20 - ContributionStorage_linkedRoleRefusesWithoutRepair
+  ---
+  duration_ms: 17.541042
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_symlinkRoleRefusesWithoutRepair
+ok 21 - ContributionStorage_symlinkRoleRefusesWithoutRepair
+  ---
+  duration_ms: 37.513292
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_modeRoleRefusesWithoutRepair
+ok 22 - ContributionStorage_modeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 12.701833
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_too_largeRoleRefusesWithoutRepair
+ok 23 - ContributionStorage_too_largeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 24.915291
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+ok 24 - ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+  ---
+  duration_ms: 13.237875
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+ok 25 - ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+  ---
+  duration_ms: 9.231666
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+ok 26 - ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+  ---
+  duration_ms: 64.619917
+  type: 'test'
+  ...
+1..26
+# tests 26
+# suites 0
+# pass 20
+# fail 6
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6783.690542

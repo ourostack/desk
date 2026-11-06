@@ -1,0 +1,47 @@
+{
+  "scope": "Final pure Task2 FSC correction/receipts, Task1 unchanged; local immutable copies only, not Git/config/OS proof",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/contribution-schema.js.source",
+      "bytes": 21465,
+      "sha256": "8ea07bbf150535f1fbc67da5e4b971341c3659ae515d2dfb25e65c75d4e1e120"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/contribution_schema.test.js.source",
+      "bytes": 30950,
+      "sha256": "e4938fd85c7329479c73918da93d258eff4e609e4def5c22c21be1dbd5dc3219"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/docs/factory-contribution-schema.md",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/factory-contribution-schema.md.source",
+      "bytes": 7274,
+      "sha256": "3eef2a4f51ea9d71f4ea2f5f5cdae88a476cfba87c8c971948a6962e7a51456b"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-fenced-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/getter-red.txt",
+      "bytes": 24417,
+      "sha256": "5f1ca2d4a7d3616a745d7eb584237b43d45488ec0d749b8b77a691726a6eda74"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-preallocation-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/preallocation-red.txt",
+      "bytes": 2385,
+      "sha256": "8a330ec5c46d6fb7da3316a77534e009ca08e422a6c64f2c56e54747f22cb4bc"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-fenced-green-attempt1.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/getter-green.txt",
+      "bytes": 3342,
+      "sha256": "bbac4ff0acc84453bedc44a7158693937a20660346f82b0dcaf69ca2f1642200"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-final-fenced-coverage.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/final-combined-coverage.txt",
+      "bytes": 36153,
+      "sha256": "0733e78d5c73fa3e64f1c1efb2aa124d6f30c2915c7e63fb2f1c661139925bd7"
+    }
+  ]
+}

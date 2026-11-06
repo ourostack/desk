@@ -1,0 +1,60 @@
+TAP version 13
+# Subtest: FSC1_GivenExistingPayloadBudgetExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+not ok 1 - FSC1_GivenExistingPayloadBudgetExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+  ---
+  duration_ms: 6.626334
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:630:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    the existing change-set budget must be enforced before materializing byte copies
+    
+    16777217 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 16777217
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:638:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: FSC1_GivenExistingEnvelopeByteCapExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+not ok 2 - FSC1_GivenExistingEnvelopeByteCapExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+  ---
+  duration_ms: 1.932666
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:641:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    individual public byte caps must precede copying the captured payload
+    
+    4097 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 4097
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:649:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 57.916541

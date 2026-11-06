@@ -1,0 +1,448 @@
+import "../_isolated_env.mjs"
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { contextFacts, contextRecord } from "./_context_fixture.js"
+
+const api = await import("../../../../../plugins/desk/mcp/src/factory/contribution-schema.js").catch(error => {
+  if (error.code === "ERR_MODULE_NOT_FOUND") return {}
+  throw error
+})
+const required = () => assert.equal(typeof api.checkContributionIntake, "function", "the pure contribution-control contract is not implemented")
+const SESSION = "12345678-1234-4123-8123-123456789abc"
+const OTHER = "87654321-1234-4123-8123-123456789abc"
+const NONCE = "a".repeat(16)
+const BASE = "b".repeat(40)
+const BLOB = "c".repeat(40)
+const envelopePath = `contributions/${NONCE}.json`
+const factsPath = id => `facts/copilot-cli-${id}.json`
+const withdrawalPath = id => `withdrawals/copilot-cli-${id}.json`
+const bytes = value => `${JSON.stringify(value)}\n`
+const clone = value => structuredClone(value)
+const envelope = (sequence = 1, generation = 0) => ({
+  schema: "desk.factory.contribution/1", protocol: 1, sequence, policy_generation: generation,
+})
+const withdrawal = (id = SESSION) => ({
+  schema: "desk.factory.withdrawal/1", session: { host: "copilot-cli", id },
+  previous: { path: factsPath(id), blob: BLOB }, reason: "proof",
+})
+const withdrawalList = (records = []) => ({ state: "complete", base: BASE, records })
+const withdrawalFile = (id = SESSION) => ({ path: withdrawalPath(id), bytes: bytes(withdrawal(id)) })
+function fact(id = SESSION, host = "copilot-cli") {
+  const value = contextFacts()
+  value.session.id = id
+  value.session.host = host
+  return value
+}
+function world() {
+  required()
+  const proposedEnvelope = { path: envelopePath, bytes: bytes(envelope()) }
+  return {
+    capability: { state: "supported", value: { contribution_control: 1 } },
+    baseEnvelope: { state: "absent", base: BASE },
+    proposedEnvelope,
+    currentWithdrawals: withdrawalList(),
+    changes: [{ ...proposedEnvelope, status: "added" }, { path: factsPath(SESSION), status: "added", bytes: bytes(fact()) }],
+    verifiedLineage: { state: "verified", intake: NONCE, branch: `intake/${NONCE}`, base: BASE, actor: "fixture-owner",
+      currentPublic: { state: "complete", records: [] } },
+  }
+}
+function withdrawalWorld() {
+  const value = world()
+  value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope()) }
+  value.proposedEnvelope = { path: envelopePath, bytes: bytes(envelope(2, 1)) }
+  value.changes = [{ ...value.proposedEnvelope, status: "modified" },
+    { path: factsPath(SESSION), status: "removed", previousBlob: BLOB },
+    { ...withdrawalFile(), status: "added" }]
+  value.verifiedLineage.currentPublic.records = [{ path: factsPath(SESSION), blob: BLOB, actor: "fixture-owner" }]
+  return value
+}
+function refuses(answer, code) {
+  assert.equal(answer.ok, false, JSON.stringify(answer))
+  assert.ok(answer.errors.length > 0)
+  if (code) assert.ok(answer.errors.some(error => error.code === code), JSON.stringify(answer))
+  assert.ok(!JSON.stringify(answer).includes("PRIVATE_SENTINEL"))
+}
+
+test("GivenCanonicalClosedPublicRecords_WhenValidated_AcceptsWithoutChangingInputs", () => {
+  required()
+  const contribution = bytes(envelope())
+  const removed = bytes(withdrawal())
+  assert.deepEqual(api.validateContributionBytes(contribution), { ok: true, errors: [] })
+  assert.deepEqual(api.validateWithdrawalBytes(Buffer.from(removed)), { ok: true, errors: [] })
+  assert.equal(contribution, bytes(envelope()))
+  assert.equal(removed, bytes(withdrawal()))
+})
+
+for (const value of [null, 1, {}, new Uint8Array([1])]) {
+  test(`GivenNonByteInput${typeof value}_WhenValidated_RefusesExplicitly`, () => {
+    required()
+    refuses(api.validateContributionBytes(value), "type")
+    refuses(api.validateWithdrawalBytes(value), "type")
+  })
+}
+
+test("GivenDuplicateKeysNoncanonicalOrOversizedBytes_WhenValidated_RefusesWithoutEcho", () => {
+  required()
+  const duplicate = '{"schema":"PRIVATE_SENTINEL","schema":"desk.factory.contribution/1","protocol":1,"sequence":1,"policy_generation":0}'
+  refuses(api.validateContributionBytes(duplicate), "canonical")
+  refuses(api.validateWithdrawalBytes("{broken"), "json")
+  refuses(api.validateContributionBytes(JSON.stringify(envelope(), null, 2)), "canonical")
+  refuses(api.validateContributionBytes("é".repeat(2049)), "too_large")
+  refuses(api.validateWithdrawalBytes(" ".repeat(4097)), "too_large")
+})
+
+for (const value of [-1, 0, 0.5, Number.MAX_SAFE_INTEGER + 1, "1", null]) {
+  test(`GivenInvalidSequence${String(value)}_WhenValidated_Refuses`, () => {
+    required()
+    refuses(api.validateContributionBytes(bytes({ ...envelope(), sequence: value })))
+  })
+}
+
+test("GivenBoundarySafeIntegers_WhenValidated_AcceptsButDoesNotAuthorizeOverflow", () => {
+  required()
+  assert.equal(api.validateContributionBytes(bytes(envelope(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER))).ok, true)
+  refuses(api.validateContributionBytes(bytes(envelope(1, -1))))
+  refuses(api.validateContributionBytes(bytes({ ...envelope(), protocol: 2 })))
+  refuses(api.validateContributionBytes(bytes({ ...envelope(), schema: "desk.factory.contribution/2" })))
+  refuses(api.validateContributionBytes(bytes({ ...envelope(), PRIVATE_SENTINEL: true })), "unknown_key")
+})
+
+test("GivenWithdrawalPathIdentityOrPrivateFieldMismatch_WhenValidated_Refuses", () => {
+  required()
+  for (const value of [
+    { ...withdrawal(), reason: "PRIVATE_SENTINEL" },
+    { ...withdrawal(), account: "PRIVATE_SENTINEL" },
+    { ...withdrawal(), session: { host: "copilot-cli", id: "../PRIVATE_SENTINEL" } },
+    { ...withdrawal(), previous: { path: factsPath(OTHER), blob: BLOB } },
+    { ...withdrawal(), previous: { path: "../PRIVATE_SENTINEL", blob: BLOB } },
+    { ...withdrawal(), previous: { path: factsPath(SESSION), blob: "not-a-public-blob" } },
+  ]) refuses(api.validateWithdrawalBytes(bytes(value)))
+})
+
+test("GivenCompleteValidatedTombstones_WhenProjected_ReturnsOnlyPublicAliasSet", () => {
+  required()
+  const value = withdrawalList([withdrawalFile()])
+  const original = JSON.stringify(value)
+  const answer = api.withdrawnPublicSessions(value)
+  assert.equal(answer.ok, true)
+  assert.deepEqual([...answer.sessions], [SESSION])
+  assert.equal(JSON.stringify(value), original)
+  assert.equal(api.withdrawnPublicSessions(withdrawalList()).sessions.size, 0)
+})
+
+test("GivenUnknownMalformedDuplicateOrOversizedTombstones_WhenProjected_ReturnsNullNotPartialSet", () => {
+  required()
+  for (const value of [
+    null, {}, { state: "unknown" }, { state: "truncated", records: [] },
+    withdrawalList([withdrawalFile(), withdrawalFile()]),
+    withdrawalList([withdrawalFile(), { path: "withdrawals/PRIVATE_SENTINEL", bytes: "{}" }]),
+    withdrawalList(Array.from({ length: 501 }, withdrawalFile)),
+  ]) {
+    const answer = api.withdrawnPublicSessions(value)
+    refuses(answer)
+    assert.equal(answer.sessions, null)
+  }
+})
+
+test("GivenSupportedFirstDataIntake_WhenChecked_RequiresExactChangedEnvelopeAndLeavesInputsUntouched", () => {
+  const value = world()
+  const original = JSON.stringify(value)
+  const answer = api.checkContributionIntake(value)
+  assert.equal(answer.ok, true, JSON.stringify(answer))
+  assert.equal(answer.mode, "data")
+  assert.equal(JSON.stringify(value), original)
+  assert.equal(answer.authority, undefined, "a pure verdict must not mint a live authority/capability")
+})
+
+test("GivenAbsentOrUnknownCapability_WhenChecked_RemainsInertNotLegacySuccess", () => {
+  for (const capability of [{ state: "absent" }, { state: "unknown" }, { state: "supported", value: { contribution_control: 2 } }]) {
+    const value = world()
+    value.capability = capability
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenCurrentBase_WhenAdvancingSequenceExactlyOnce_AllowsNondecreasingPolicy", () => {
+  const value = world()
+  value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope(4, 2)) }
+  value.proposedEnvelope.bytes = bytes(envelope(5, 2))
+  value.changes[0] = { ...value.proposedEnvelope, status: "modified" }
+  assert.equal(api.checkContributionIntake(value).ok, true)
+  value.proposedEnvelope.bytes = bytes(envelope(5, 3))
+  value.changes[0] = { ...value.proposedEnvelope, status: "modified" }
+  assert.equal(api.checkContributionIntake(value).ok, true)
+})
+
+for (const next of [3, 4, 6]) {
+  test(`GivenBaseSequence4_WhenProposed${next}_RejectsDowngradeReplayOrSkippedSequence`, () => {
+    const value = world()
+    value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope(4, 2)) }
+    value.proposedEnvelope.bytes = bytes(envelope(next, 2))
+    value.changes[0] = { ...value.proposedEnvelope, status: "modified" }
+    refuses(api.checkContributionIntake(value), "sequence_changed")
+  })
+}
+
+test("GivenOverflowOrPolicyDowngrade_WhenChecked_Refuses", () => {
+  const value = world()
+  value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope(Number.MAX_SAFE_INTEGER, 2)) }
+  refuses(api.checkContributionIntake(value), "sequence_overflow")
+  value.baseEnvelope.bytes = bytes(envelope(1, 2))
+  value.proposedEnvelope.bytes = bytes(envelope(2, 1))
+  value.changes[0] = { ...value.proposedEnvelope, status: "modified" }
+  refuses(api.checkContributionIntake(value), "policy_downgrade")
+})
+
+test("GivenInheritedOrUnchangedEnvelope_WhenDataChanges_RejectsEvenClaimedMaintenance", () => {
+  const value = world()
+  value.maintenance = true
+  value.proposedEnvelope = null
+  value.changes = [value.changes[1]]
+  refuses(api.checkContributionIntake(value), "envelope_required")
+  const next = world()
+  next.maintenance = true
+  next.changes.shift()
+  refuses(api.checkContributionIntake(next), "envelope_required")
+})
+
+test("GivenCodeOnlyMaintenance_WhenChecked_DoesNotRequireADataEnvelope", () => {
+  const value = world()
+  value.proposedEnvelope = null
+  value.changes = [{ path: "site/src/example.js", status: "modified", bytes: "synthetic code, never executed" }]
+  assert.equal(api.checkContributionIntake(value).mode, "maintenance")
+  assert.equal(api.checkContributionIntake(value).ok, true)
+})
+
+test("GivenWrongNonceBranchOrBase_WhenChecked_Refuses", () => {
+  for (const drift of ["nonce", "branch", "base"]) {
+    const value = world()
+    if (drift === "nonce") value.proposedEnvelope.path = `contributions/${"f".repeat(16)}.json`
+    if (drift === "branch") value.verifiedLineage.branch = `intake/${"f".repeat(16)}`
+    if (drift === "base") value.currentWithdrawals.base = "f".repeat(40)
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenUnknownIncompleteOrAmbiguousInputs_WhenChecked_RefusesNotEmptySuccess", () => {
+  for (const mutate of [
+    v => { v.baseEnvelope = { state: "unknown" } },
+    v => { v.currentWithdrawals = { state: "unreadable" } },
+    v => { v.verifiedLineage.state = "unknown" },
+    v => { v.verifiedLineage.currentPublic.state = "truncated" },
+    v => { v.verifiedLineage.currentPublic.records = [{ path: factsPath(SESSION), blob: BLOB, actor: "fixture-owner" },
+      { path: factsPath(SESSION), blob: BLOB, actor: "fixture-owner" }] },
+    v => { v.verifiedLineage = { maintainer: true } },
+  ]) {
+    const value = world()
+    mutate(value)
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenOwnedAlreadyPublicWithdrawal_WhenChecked_RequiresExactRemovalAndProvenance", () => {
+  assert.equal(api.checkContributionIntake(withdrawalWorld()).ok, true)
+})
+
+test("GivenQueuedOnlyTarget_WhenPublicWithdrawalProposed_RefusesWithoutEmittingAlias", () => {
+  const value = withdrawalWorld()
+  value.verifiedLineage.currentPublic.records = []
+  const answer = api.checkContributionIntake(value)
+  refuses(answer, "withdrawal_not_public")
+  assert.ok(!JSON.stringify(answer).includes(SESSION))
+  assert.equal(answer.sessions, undefined)
+})
+
+test("GivenForeignChangedOrMissingPublicOwnership_WhenChecked_RefusesDeletion", () => {
+  for (const drift of ["actor", "blob", "lineage", "removal"]) {
+    const value = withdrawalWorld()
+    if (drift === "actor") value.verifiedLineage.currentPublic.records[0].actor = "foreign-fixture"
+    if (drift === "blob") value.verifiedLineage.currentPublic.records[0].blob = "f".repeat(40)
+    if (drift === "lineage") value.verifiedLineage.currentPublic.records = []
+    if (drift === "removal") value.changes.splice(1, 1)
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenAcceptedTombstone_WhenRemovedModifiedOrDuplicated_RefusesOrdinaryMutation", () => {
+  for (const status of ["removed", "modified", "added"]) {
+    const value = world()
+    value.currentWithdrawals = withdrawalList([withdrawalFile()])
+    value.changes = [value.changes[0], { ...withdrawalFile(), status }]
+    refuses(api.checkContributionIntake(value), "withdrawal_immutable")
+  }
+})
+
+test("GivenWithdrawnAlias_WhenFactsReappearUnderAnyHost_Refuses", () => {
+  for (const host of ["copilot-cli", "claude-code", "codex-cli"]) {
+    const value = world()
+    value.currentWithdrawals = withdrawalList([withdrawalFile()])
+    value.changes[1] = { path: `facts/${host}-${SESSION}.json`, status: "added", bytes: bytes(fact(SESSION, host)) }
+    refuses(api.checkContributionIntake(value), "session_withdrawn")
+  }
+})
+
+test("GivenWithdrawnAlias_WhenLabelsOrContextCiteIt_RefusesButKeepsLegitimateSiblingEligible", () => {
+  const value = world()
+  value.currentWithdrawals = withdrawalList([withdrawalFile()])
+  value.changes[1] = { path: `labels/${"1".repeat(32)}/${SESSION}.json`, status: "added", bytes: "{}" }
+  refuses(api.checkContributionIntake(value), "session_withdrawn")
+  const story = contextRecord(fact())
+  value.changes[1] = { path: `context/${story.job}.json`, status: "added", bytes: bytes(story) }
+  refuses(api.checkContributionIntake(value), "session_withdrawn")
+  value.changes[1] = { path: factsPath(OTHER), status: "added", bytes: bytes(fact(OTHER)) }
+  assert.equal(api.checkContributionIntake(value).ok, true)
+  const siblingStory = contextRecord(fact(OTHER))
+  value.changes[1] = { path: `context/${siblingStory.job}.json`, status: "added", bytes: bytes(siblingStory) }
+  assert.equal(api.checkContributionIntake(value).ok, true, "valid permitted sibling context must not be blanket-refused")
+})
+
+test("GivenDuplicatePathsUnsafePathsOrOversizedInput_WhenChecked_RefusesSafely", () => {
+  for (const mutate of [
+    v => { v.changes.push(clone(v.changes[1])) },
+    v => { v.changes[1].path = "../PRIVATE_SENTINEL" },
+    v => { v.changes[1].bytes = Buffer.alloc(16 * 1024 * 1024 + 1, 0x20) },
+    v => { v.changes = Array.from({ length: 501 }, () => clone(v.changes[1])) },
+  ]) {
+    const value = world()
+    mutate(value)
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenNullEmptyOrSparseContext_WhenChecked_RefusesWithoutThrowingOrReturningPartialData", () => {
+  required()
+  for (const input of [null, 1, [], {}]) refuses(api.checkContributionIntake(input), "type")
+  const value = world()
+  value.changes = new Array(1)
+  refuses(api.checkContributionIntake(value))
+  const list = withdrawalList(new Array(1))
+  assert.equal(api.withdrawnPublicSessions(list).sessions, null)
+})
+
+test("GivenEnvelopeOnlyExclusionAnnouncement_WhenChecked_RefusesExtraPublicNonce", () => {
+  const value = world()
+  value.changes = [value.changes[0]]
+  refuses(api.checkContributionIntake(value), "empty_contribution")
+})
+
+test("GivenNonRemovedDataWithoutBytes_WhenChecked_RefusesUnknownPayload", () => {
+  for (const path of [`capture/${NONCE}.json`, `labels/${"1".repeat(32)}/${OTHER}.json`]) {
+    const value = world()
+    value.changes[1] = { path, status: "added" }
+    refuses(api.checkContributionIntake(value), "type")
+  }
+})
+
+test("GivenMalformedLabelOrCapturePayload_WhenChecked_RefusesRatherThanCallingItEligible", () => {
+  for (const [path, code] of [
+    [`capture/${NONCE}.json`, "capture_invalid"],
+    [`labels/${"1".repeat(32)}/${OTHER}.json`, "labels_invalid"],
+  ]) {
+    const value = world()
+    value.changes[1] = { path, status: "added", bytes: "{}" }
+    refuses(api.checkContributionIntake(value), code)
+  }
+})
+
+test("GivenValidUnexcludedLabelOrCapture_WhenChecked_PreservesExistingSchemas", () => {
+  const value = world()
+  const labels = JSON.parse(readFileSync(new URL("./fixtures/labels-golden.json", import.meta.url), "utf8"))
+  value.changes[1] = { path: `labels/${labels.job}/${labels.session}.json`, status: "added", bytes: bytes(labels) }
+  assert.equal(api.checkContributionIntake(value).ok, true)
+  value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope()) }
+  value.proposedEnvelope = { path: envelopePath, bytes: bytes(envelope(2)) }
+  value.changes[0] = { ...value.proposedEnvelope, status: "modified" }
+  value.changes[1] = { path: `capture/${NONCE}.json`, status: "modified",
+    bytes: bytes({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {} }) }
+  value.verifiedLineage.currentPublic.records = [{ path: `capture/${NONCE}.json`, blob: BLOB, actor: "fixture-owner" }]
+  assert.equal(api.checkContributionIntake(value).ok, true)
+})
+
+test("GivenContextJobOrLabelSessionMismatch_WhenChecked_RefusesPathAlias", () => {
+  const value = world()
+  const story = contextRecord(fact())
+  value.changes[1] = { path: `context/${"f".repeat(32)}.json`, status: "added", bytes: bytes(story) }
+  refuses(api.checkContributionIntake(value), "job_mismatch")
+  const labels = JSON.parse(readFileSync(new URL("./fixtures/labels-golden.json", import.meta.url), "utf8"))
+  value.changes[1] = { path: `labels/${labels.job}/${OTHER}.json`, status: "added", bytes: bytes(labels) }
+  refuses(api.checkContributionIntake(value), "session_mismatch")
+})
+
+test("GivenReservedInvalidRootOrForeignCapture_WhenChecked_Refuses", () => {
+  for (const path of ["withdrawals", "facts/not-a-session.json", `capture/${"f".repeat(16)}.json`]) {
+    const value = world()
+    value.changes[1] = { path, status: "added", bytes: bytes({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {} }) }
+    refuses(api.checkContributionIntake(value))
+  }
+})
+
+test("GivenOrdinaryDataRemovalWithoutExactOwnerBlob_WhenChecked_RefusesDespiteNoNewTombstone", () => {
+  const value = world()
+  value.changes[1] = { path: factsPath(SESSION), status: "removed", previousBlob: BLOB }
+  refuses(api.checkContributionIntake(value), "ownership_unknown")
+  value.verifiedLineage.currentPublic.records = [{ path: factsPath(SESSION), blob: BLOB, actor: "foreign-fixture" }]
+  refuses(api.checkContributionIntake(value), "ownership_mismatch")
+})
+
+test("GivenReservedWithdrawalRootClaimedAsCodeMaintenance_WhenChecked_Refuses", () => {
+  const value = world()
+  value.proposedEnvelope = null
+  value.maintenance = true
+  value.changes = [{ path: "withdrawals", status: "removed" }]
+  refuses(api.checkContributionIntake(value), "path")
+})
+
+test("GivenCompleteTombstoneListAtCountLimit_WhenProjected_AcceptsLimitAndRejectsNext", () => {
+  required()
+  const records = Array.from({ length: 501 }, (_, index) =>
+    withdrawalFile(`${index.toString(16).padStart(8, "0")}-1234-4123-8123-123456789abc`))
+  const allowed = api.withdrawnPublicSessions(withdrawalList(records.slice(0, 500)))
+  assert.equal(allowed.ok, true)
+  assert.equal(allowed.sessions.size, 500)
+  const over = api.withdrawnPublicSessions(withdrawalList(records))
+  refuses(over, "too_many")
+  assert.equal(over.sessions, null)
+})
+
+test("GivenFiveHundredDistinctChanges_WhenChecked_AcceptsBoundWithoutTruncation", () => {
+  const value = world()
+  const template = fact()
+  value.changes = [value.changes[0], ...Array.from({ length: 499 }, (_, index) => {
+    const data = clone(template)
+    data.session.id = `${index.toString(16).padStart(8, "0")}-1234-4123-8123-123456789abc`
+    return { path: factsPath(data.session.id), status: "added", bytes: bytes(data) }
+  })]
+  assert.equal(api.checkContributionIntake(value).ok, true)
+  value.changes.push({ path: "site/src/extra.js", status: "added", bytes: "" })
+  refuses(api.checkContributionIntake(value), "too_many")
+})
+
+test("GivenExactAggregateByteBudget_WhenChecked_AcceptsLimitAndRejectsOneExtraByte", () => {
+  const value = world()
+  value.proposedEnvelope = null
+  value.changes = [{ path: "site/src/example.js", status: "modified", bytes: Buffer.alloc(16 * 1024 * 1024, 0x20) }]
+  assert.equal(api.checkContributionIntake(value).ok, true)
+  value.changes[0].bytes = Buffer.alloc(16 * 1024 * 1024 + 1, 0x20)
+  refuses(api.checkContributionIntake(value), "too_large")
+})
+
+test("GivenOnlyEmptyCaptureForFirstIntake_WhenChecked_RefusesNewPublicNonce", () => {
+  const value = world()
+  value.changes[1] = { path: `capture/${NONCE}.json`, status: "added",
+    bytes: bytes({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {} }) }
+  const result = api.checkContributionIntake(value)
+  refuses(result, "empty_contribution")
+  assert.ok(!JSON.stringify(result).includes(NONCE))
+})
+
+test("GivenExistingCaptureOwnedByForeignActor_WhenChecked_RefusesEvenWithMatchingNonce", () => {
+  const value = world()
+  value.baseEnvelope = { state: "present", base: BASE, path: envelopePath, bytes: bytes(envelope()) }
+  value.proposedEnvelope = { path: envelopePath, bytes: bytes(envelope(2)) }
+  value.changes = [{ ...value.proposedEnvelope, status: "modified" },
+    { path: `capture/${NONCE}.json`, status: "modified",
+      bytes: bytes({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {} }) }]
+  value.verifiedLineage.currentPublic.records = [{ path: `capture/${NONCE}.json`, blob: BLOB, actor: "foreign-fixture" }]
+  refuses(api.checkContributionIntake(value), "ownership_mismatch")
+})

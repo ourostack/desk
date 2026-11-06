@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: AIX1_ExplicitPersonLineage_missing
+ok 1 - AIX1_ExplicitPersonLineage_missing
+  ---
+  duration_ms: 70.063125
+  type: 'test'
+  ...
+# Subtest: AIX1_ExplicitPersonLineage_root
+ok 2 - AIX1_ExplicitPersonLineage_root
+  ---
+  duration_ms: 89.945
+  type: 'test'
+  ...
+# Subtest: AIX1_ExplicitPersonLineage_member
+ok 3 - AIX1_ExplicitPersonLineage_member
+  ---
+  duration_ms: 71.340833
+  type: 'test'
+  ...
+# Subtest: AIX2_SecondSameOwnerIntent_UnchangedGenerationRefusesBeforeImages
+ok 4 - AIX2_SecondSameOwnerIntent_UnchangedGenerationRefusesBeforeImages
+  ---
+  duration_ms: 1959.18425
+  type: 'test'
+  ...
+# Subtest: AIX2_SecondSameOwnerIntent_AdvancesBothGenerations
+ok 5 - AIX2_SecondSameOwnerIntent_AdvancesBothGenerations
+  ---
+  duration_ms: 3124.832167
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5381.025458

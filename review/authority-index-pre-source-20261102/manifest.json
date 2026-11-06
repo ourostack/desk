@@ -1,0 +1,102 @@
+{
+  "scope": "Pre-source exact local preservation; no source mutation/Git/ref refresh/remote persistence",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "path": "review/authority-index-pre-source-20261102/00-contribution-policy.js.source",
+      "sha256": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac",
+      "bytes": 17454
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "review/authority-index-pre-source-20261102/01-contribution-schema.js.source",
+      "sha256": "c26bf083ff721d0068299fb87da492b4a84635151bcc9c7a646c207bac430d1b",
+      "bytes": 21636
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/outbox.js",
+      "path": "review/authority-index-pre-source-20261102/02-outbox.js.source",
+      "sha256": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+      "bytes": 119881
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/flush.js",
+      "path": "review/authority-index-pre-source-20261102/03-flush.js.source",
+      "sha256": "21321963746883b8d73bd4987e33df15c779ce40a563622106230f9f2868e9ee",
+      "bytes": 103727
+    },
+    {
+      "source": "plugins/desk/mcp/scripts/factory.js",
+      "path": "review/authority-index-pre-source-20261102/04-factory.js.source",
+      "sha256": "f87cb467b55cccdbd973582a419f1c4f436d627759ed10bddcbb99a5d3e379a7",
+      "bytes": 40273
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "path": "review/authority-index-pre-source-20261102/05-contribution_policy.test.js.source",
+      "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804",
+      "bytes": 38279
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "review/authority-index-pre-source-20261102/06-contribution_schema.test.js.source",
+      "sha256": "7214396efc693332cec489fed1b1a543f316084201d95efd38489c75b970159d",
+      "bytes": 34837
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/factory_cli.test.js",
+      "path": "review/authority-index-pre-source-20261102/07-factory_cli.test.js.source",
+      "sha256": "f8cf6d4ff2c3573f76ea75f8440eefce2a27ce051340af7fc72ec0d6e0bc41b7",
+      "bytes": 80238
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/flush.test.js",
+      "path": "review/authority-index-pre-source-20261102/08-flush.test.js.source",
+      "sha256": "f9455810ce9f096f04c08ca2bfd584dac0ab9de6b021a84b8f8c31a3921972d8",
+      "bytes": 115939
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "path": "review/authority-index-pre-source-20261102/09-factory-contribution-schema.md.source",
+      "sha256": "4ddb4ad0164cf40d42330a05b038c18628ebbc92b24cf3e41e760bf715c5d6a2",
+      "bytes": 7842
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-integration-design-map-20261102.md",
+      "path": "review/authority-index-pre-source-20261102/10-proof-integration-design-map-20261102.md.source",
+      "sha256": "9fca637fc191295ca72ce4b818de57077f969ea3a1322eab099c88500f160447",
+      "bytes": 36501
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-integration-source-pins-20261102.json",
+      "path": "review/authority-index-pre-source-20261102/11-proof-integration-source-pins-20261102.json.source",
+      "sha256": "80f54ad31991b8847c50e4cb4f7f108d2ba5722054362b6898c45170e34b4544",
+      "bytes": 8389
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc2-source-review-v3-20261102.json",
+      "path": "review/authority-index-pre-source-20261102/12-proof-schema-task2-fsc2-source-review-v3-20261102.json.source",
+      "sha256": "43a5f572d8b5552275cae175e283017766ddaee58a311110ebf2c62909380c20",
+      "bytes": 9388
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc2-final-fenced-coverage.txt",
+      "path": "review/authority-index-pre-source-20261102/13-proof-schema-task2-fsc2-final-fenced-coverage.txt.source",
+      "sha256": "5de863fd9669487bad6a7e3ee23c0255d48ec46c19bcfb21a3de4ec5fc419438",
+      "bytes": 40182
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-fpi-source-review-v2-20261102.json",
+      "path": "review/authority-index-pre-source-20261102/14-proof-policy-task1-fpi-source-review-v2-20261102.json.source",
+      "sha256": "15745e85e2b29aa6a680c03757356c412761560c9b2cc71b73cb4e9241a3838b",
+      "bytes": 9928
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-fpi-fenced-full-coverage.txt",
+      "path": "review/authority-index-pre-source-20261102/15-proof-policy-task1-fpi-fenced-full-coverage.txt.source",
+      "sha256": "2c099a71293cbe09635cd468317a2fa1ea42ccad2cd5718b9c048119e4438ff3",
+      "bytes": 21019
+    }
+  ],
+  "grant_sha256": "b3439ab9ad5255e0f3d51de32de6d2f943d680a8ba70cc9478ef9dab3cf98833"
+}

@@ -1,0 +1,53 @@
+{
+  "scope": "Pure Task2 immutable source/receipt preservation; Task1 matched unchanged; not Git/config/OS-effect proof",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/contribution-schema.js.source",
+      "bytes": 14493,
+      "sha256": "35cd1396e5ffdccb31cc65bedd8db2744a315bd2b6428bf5928416f3cdf31922"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/contribution_schema.test.js.source",
+      "bytes": 21732,
+      "sha256": "e864f3a70d4d66d41776425275b16aefb0458d9548263e0b29f0bb2b2ffa4850"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/docs/factory-contribution-schema.md",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/factory-contribution-schema.md.source",
+      "bytes": 5474,
+      "sha256": "433f41d699866280d09cd4f89b8c0742ef4b7ca889a62c41c10893b24c0f1fa5"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fenced-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/initial-red.txt",
+      "bytes": 49838,
+      "sha256": "b5cd96fcfd4e913bb9855f29237f22f71a6ee1461d1fe60e182940010a5b2f78"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-boundaries-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/boundary-red.txt",
+      "bytes": 12093,
+      "sha256": "606a7d59071c35ac186e7752c4e37a473e6ef3b8812ac1b2974e755c3c373de1"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-reserved-root-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/reserved-root-red.txt",
+      "bytes": 1298,
+      "sha256": "8f345ab404cf472320fa1c6cb2a70b480e1a4f0fa12b738c81fefa826949d511"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-empty-capture-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/empty-capture-red.txt",
+      "bytes": 1286,
+      "sha256": "e37cffec90915b7e2437ff47785d8f39baa06b2538c754616e3b50dda11e6121"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-review2-fenced-coverage.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/combined-green-coverage.txt",
+      "bytes": 31139,
+      "sha256": "675d1438457c55355afe47de369027318866d1431698e51a3d27973ba1128d4f"
+    }
+  ]
+}

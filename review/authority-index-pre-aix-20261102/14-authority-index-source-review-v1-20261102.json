@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "status": "Bounded private authority/index prerequisite SOURCE candidate frozen for independent review; maintained/native compatibility remains held",
+  "authority": {
+    "design": "proof-integration-design-map-20261102-v2.md",
+    "design_sha256": "9fca637fc191295ca72ce4b818de57077f969ea3a1322eab099c88500f160447",
+    "design_bytes": 36501,
+    "grant": "578-authority-index-source-unit-go.txt",
+    "grant_sha256": "b3439ab9ad5255e0f3d51de32de6d2f943d680a8ba70cc9478ef9dab3cf98833",
+    "narrowing": "Parent accepted leaving outbox.js COMPLETELY unchanged. New checked-authority/index uses strict storage/transaction directly; historical inert single-file API remains separate. Original delegate replacement plan is superseded, not implemented.",
+    "documentation_correction": "Parent corrected the nonexistent proof-policy-doc assumption and authorized only existing plugins/desk/docs/factory-contribution-schema.md for related private contracts.",
+    "compatibility_admission": "Parent admitted only the two exact new CLI-negative and two exact new synthetic flush-lock cases. Listed maintained CLI/flush compatibility remains HELD, not skipped/passed.",
+    "boundary": "No producer/capture/context/label/transport/store/workflow/581 registration, native provider changes, live setup/activation/secret creation, remote operations or source publication"
+  },
+  "source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "recorded_branch": "user/arimendelow/factory-context-optional-card-20261027",
+    "recorded_head": "cdccc0de13501f210cf8f65f43752709a741f7f7",
+    "ref_qualification": "Earlier read-only local metadata, not fetched main or current Git/ref/index proof; no Git operation in this source unit",
+    "files": [
+      { "path": "plugins/desk/mcp/src/factory/contribution-storage.js", "bytes": 14450, "sha256": "95ff183ac9668b56ef30aeb93feec6ed628dbb67bd3b5b65774e245cf10e7004" },
+      { "path": "plugins/desk/mcp/src/factory/contribution-index.js", "bytes": 16560, "sha256": "276582964550ef191be4b8e2659e5734d0b206e56740ac7ac9ef5b5549cceea0" },
+      { "path": "plugins/desk/mcp/src/factory/contribution-authority.js", "bytes": 11721, "sha256": "1cd527bdcdda0b77789d6b99baa36633574634bf8649747b47eb3b8b79407fa9" },
+      { "path": "plugins/desk/mcp/src/factory/flush-lock.js", "bytes": 1391, "sha256": "90a32df4fbf33add0d84db0187e56eabe82899fb3125ce46b6e337981c8331d1" },
+      { "path": "plugins/desk/mcp/src/factory/contribution-policy.js", "bytes": 20572, "sha256": "69f520e890fa3395c4e07a27c2753d6c76109c94073c39241782b2326444dde3" },
+      { "path": "plugins/desk/mcp/src/factory/flush.js", "bytes": 102314, "sha256": "92c8ffb3fe1d4c7e14245d5fb31df508e55e78c2885c5cdfeaac0d45cb23c3ea" },
+      { "path": "plugins/desk/mcp/scripts/factory.js", "bytes": 42976, "sha256": "481f3596a2659120d344a1d274d6849dfbea6a21447b2f90bae456bfe20cc75e" },
+      { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 12524, "sha256": "b6e47e76fc242356e6a8944e50d21af516f65f9f1cb58754809c1778657314c5" }
+    ],
+    "tests": [
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_storage.test.js", "bytes": 8416, "sha256": "1ccebecbdb632f2656ce69609605dbf522c5164a07ca66cf961d358d6d8c8b10" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_index.test.js", "bytes": 21373, "sha256": "e1810d262c915148215a8050562ba5d82f109be84ed1589518e3c04d1c0ffcd7" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_authority.test.js", "bytes": 9200, "sha256": "33303f109725b69bd1658debc580076fd4db88b6390d812e67119a54c4ca1e84" },
+      { "path": "tests/desk/mcp/__tests__/factory/factory_cli.test.js", "bytes": 81445, "sha256": "68c2d6570208dcec73ee49c7a7de7963b54ed669ef37d64148edccdce952fccc" },
+      { "path": "tests/desk/mcp/__tests__/factory/flush.test.js", "bytes": 117594, "sha256": "58ad53ea02950d88a5987ce6d80a33b7b90704d2d01a765d4284381dfd160350" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js", "bytes": 38279, "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804", "change": "Unchanged historical inert test body, exercised against new policy generation" }
+    ],
+    "unchanged_outbox": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+    "unchanged_public_schema": "c26bf083ff721d0068299fb87da492b4a84635151bcc9c7a646c207bac430d1b",
+    "unchanged_public_schema_tests": "7214396efc693332cec489fed1b1a543f316084201d95efd38489c75b970159d",
+    "old_production_delta": "Only contribution-policy.js, flush.js lock extraction/imports and scripts/factory.js differ among the original 31 production pins. Other original production pins match.",
+    "static_extraction": "Acquire/release function bodies match the preserved original after removing comments/whitespace/export prefix. This is static equivalence only, not maintained full flush compatibility."
+  },
+  "preservation": {
+    "pre_source_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-pre-source-20261102/manifest.json",
+    "pre_source_manifest_sha256": "a1f9fab052132e0e3918fa50f1ad5e637ad2b67a425c1e4d1f88f62dc221f7b7",
+    "current_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-source-v1-20261102/manifest.json",
+    "current_manifest_sha256": "780f53ed42bbc1d5e5ea99ad82fb5f1c0c32b69deb7e4de3bfe3d66b0c530c35",
+    "contents": "Exact source/test/doc copies, selected primary RED/GREEN/coverage receipts and source delta; original accepted Task1/2/design/receipt generation preserved before edits",
+    "boundary": "Local immutable copies/readback only; not product staging, a commit/push or off-host backup. Other-owner cce sources/604 receipt are not this generation's proof."
+  },
+  "implementation": {
+    "strict_reads": "Existing-root-only, closed role set, owner/mode/no-follow/single-link held FD, bounded positional reads plus sentinel and final leaf/parent identity. Deadline before allocation/after awaited reads. No factoryStateRoot, repair, corrupt rename, secret creation or read-only lock.",
+    "authority": "Actual protected marker + derivation receipt + valid local facts correlate host/session/desk/person/store; existing consent/intake/key and sealed qualification are rechecked against held/current source file identities. Internally branded authority cannot be minted by JSON copy or caller flags.",
+    "qualification_limits": "Fixtures provision synthetic witnesses/keys. No real store/platform qualification is minted. Missing marker/person/source chain or delivery-only ambiguous evidence remains unavailable.",
+    "index": "Closed sealed index, staged transaction and receipt; exact predecessor/pending/after-image byte hashes, separate owner/intake generation and index revision. Existing receipt must correlate current index. No empty fallback from missing active witness.",
+    "transactions": "Existing flush.lock -> exact target derivation lock -> existing locks/contribution-policy.lock. Named image writes require existing safe parents and repeated source-owned admission; staged local operation precedes barrier/pair/final-index/receipt.",
+    "recovery": "Actual index and policy apply retry forward-complete only authenticated staged predecessor/after images and reuse one intent/generation. Final-index response loss does not rewrite owner images. Foreign/lost evidence refuses; no public replay or general auto-repair.",
+    "retention": "Existing exclusions cannot disappear through supplied after-images. Effect changes advance revision, not effective generations. Failed atomic writes may retain their own private temp files; no unrelated temp sweep or live retention qualification is claimed.",
+    "old_new_interfaces": "Historical inert fake-dependency policy remains separate on unchanged outbox API. New branded authority uses strict index/storage only. Failed checked reads stay unavailable; default policy without an adapter ignores caller trust flags and cannot select the new branch.",
+    "cli": "Explicit closed private-file plan/status/exclude handlers; read-only paths do not acquire write locks or reconcile. Default unsupported protection refuses before reading. Only CLI negative/error-channel behavior is directly qualified here; positive underlying authority/policy/index is tested independently in synthetic Linux fixtures.",
+    "unwired": "No ordinary producer/derive/capture/context/label/transport/store/pipeline/workflow/reader activation or registration"
+  },
+  "causal_evidence": [
+    { "log": "authority-storage-fenced-red-20261102.txt", "tests": 9, "failed": 9, "cause": "Missing strict-storage module" },
+    { "log": "authority-reader-fenced-red-20261102.txt", "tests": 9, "failed": 9, "cause": "Missing source-owned authority module" },
+    { "log": "authority-index-fenced-red-20261102.txt", "tests": 8, "failed": 8, "cause": "Missing authenticated index module" },
+    { "log": "authority-flush-lock-fenced-red-20261102.txt", "tests": 2, "failed": 2, "cause": "Missing extracted shared lock module" },
+    { "log": "authority-private-request-red-20261102.txt", "tests": 7, "failed": 7, "cause": "Missing strict private request reader" },
+    { "log": "authority-policy-interface-red-20261102.txt", "tests": 1, "failed": 1, "cause": "Existing policy did not consume branded real authority" },
+    { "log": "authority-cli-fenced-red-20261102.txt", "tests": 2, "failed": 2, "cause": "Missing private CLI handlers/dispatch" },
+    { "log": "authority-index-continued-causal-red-20261102.txt", "tests": 4, "passed": 2, "failed": 2, "cause": "Accepted exclusion erasure and unsafe-read exception before correction" },
+    { "log": "authority-index-multiowner-revocation-red-20261102.txt", "tests": 2, "failed": 2, "cause": "Second-owner qualification rejected; cached authority read accepted after consent revocation" },
+    { "log": "authority-core-and-policy-green4-20261102.txt", "tests": 43, "passed": 42, "failed": 1, "cause": "Policy retry could not complete its actual authenticated interrupted transaction" },
+    { "log": "authority-final-coherence-red-20261102.txt", "tests": 3, "failed": 3, "cause": "Final source-path identity not correlated, stale index receipt accepted for mutation, and snapshot deadline unsupported" },
+    { "log": "authority-final-coherence-green-20261102.txt", "tests": 3, "passed": 3, "failed": 0, "sha256": "7829838386afa78bc5ee3223b68cc619b8f09596cbd11ccee819e25c6763b9d7" }
+  ],
+  "other_failed_attempts_preserved": [
+    {
+      "log": "authority-index-storage-reader-green1-20261102.txt",
+      "failure": "Three module-load failures: Unexpected token export because a new storage hunk was accidentally inserted inside readContributionFiles. Not causal feature RED; corrected placement."
+    },
+    {
+      "log": "authority-index-storage-reader-green2-20261102.txt",
+      "tests": 26,
+      "passed": 20,
+      "failed": 6,
+      "names": [
+        "ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry",
+        "ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce",
+        "ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce",
+        "ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce",
+        "ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce",
+        "ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting"
+      ],
+      "cause": "Inference from the retained path_changed diagnostic and source comparison: directory identity included mutable child-directory link count. Parent identity now uses dev/inode/mode/owner; file single-link checks remain. Corrected actual synthetic runs pass, but no independent OS race trace is claimed."
+    },
+    { "log": "authority-index-initial-read-diagnostic-20261102.txt", "tests": 1, "failed": 1, "cause": "Intermediate index returned generic policy_unavailable" },
+    { "log": "authority-index-initial-read-diagnostic2-20261102.txt", "tests": 1, "failed": 1, "cause": "Explicit intermediate storage refusal path_changed identified parent-identity mismatch" }
+  ],
+  "final_validation": {
+    "core": {
+      "log": "authority-prerequisite-final-core-coverage-20261102.txt",
+      "sha256": "d155c89bd9b1f1ef72eb52ebbc433eeff53ea359ee2a00abdc3ad9341f06ea2a",
+      "tests": 114,
+      "passed": 114,
+      "failed": 0,
+      "skipped": 0,
+      "exit": 0,
+      "breakdown": { "new_storage": 12, "new_authority": 17, "new_index_and_checked_policy": 19, "unchanged_inert_policy_cases": 66 },
+      "tap_counting": "114 runner cases comprise 108 top-level tests plus six nested historical policy controls. The 48 new prerequisite cases are top-level; historical policy contributes 60 top-level plus six nested.",
+      "selection": [
+        "tests/desk/mcp/__tests__/factory/contribution_storage.test.js",
+        "tests/desk/mcp/__tests__/factory/contribution_authority.test.js",
+        "tests/desk/mcp/__tests__/factory/contribution_index.test.js",
+        "tests/desk/mcp/__tests__/factory/contribution_policy.test.js"
+      ]
+    },
+    "cli_and_lock": {
+      "log": "authority-prerequisite-final-cli-lock-coverage-20261102.txt",
+      "sha256": "c649057da0484214d5b39a9ff1194f5eb483d3077e935dc9d8025ab65f490b75",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "exit": 0,
+      "pattern": "^ContributionAuthority_(Cli|FlushLock)",
+      "files": [
+        "tests/desk/mcp/__tests__/factory/factory_cli.test.js",
+        "tests/desk/mcp/__tests__/factory/flush.test.js"
+      ],
+      "executed_names": [
+        "ContributionAuthority_CliClosedHandlersRejectIdentityFlagsBeforeAnyRead",
+        "ContributionAuthority_CliUnavailableProtectionIsExplicitFailureWithoutPayload",
+        "ContributionAuthority_FlushLockUsesExistingPhysicalPathAndPreservesForeignToken",
+        "ContributionAuthority_FlushLockRecoversStaleLockAndReleasesOnlyItsOwn"
+      ],
+      "qualification": "Other tests in these mixed files were NOT selected or claimed passed. Four-case proof is negative CLI plus direct synthetic lock behavior, not maintained CLI/flush compatibility."
+    },
+    "coverage": {
+      "core": {
+        "contribution-authority.js": [97.80, 84.38, 100],
+        "contribution-index.js": [97.40, 85.26, 100],
+        "contribution-policy.js": [97.14, 93.13, 100],
+        "contribution-storage.js": [94.51, 78.21, 95.65],
+        "flush-lock.js": [73.68, 50, 40]
+      },
+      "four_case_mixed_selection": {
+        "factory.js": [40.83, 61.76, 23.26],
+        "flush.js": [26.59, 100, 0],
+        "flush-lock.js": [94.74, 75, 40]
+      },
+      "order": "Line, branch, function percentages for the selected source-unit receipts only; not full changed-file100%CI or repository coverage"
+    }
+  },
+  "validation_boundary": {
+    "fence": "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+    "fence_sha256": "a19b5a09477b1c0b5a49b7061574936197e7afa40007973014f173ea58e4ce14",
+    "ordering": "Exact fence hash checked before each selected startup; fence FIRST --import, maintained _isolated_env.mjs SECOND, --experimental-test-isolation=none --test-concurrency=1",
+    "fixtures": "Owned synthetic Linux-mode FS, synthetic secrets/markers/local facts/qualification/index images, controlled FS metadata and interruption seams; no real transcript/session/secret/state/remote target",
+    "source_path_control": "Source-path replacement case uses controlled lstat identity in the actual source reader, with no product source rewrite; not an independent OS race trace.",
+    "real_config_guard": "UNQUALIFIED: fence returns explicit synthetic Git status128, configSnapshot null. No observed real-config stability claim; original53 withdrawal retained.",
+    "unexpected_native_calls": "No unexpected fence refusal surfaced in retained final selections; no independent OS absence trace or sandbox claim",
+    "maintained_flush_held": [
+      "flush without consent, with a declined store or without an account records a stable code and never runs gh",
+      "a live flush.lock makes a second flush return locked without touching status; a ten-minute-old lock is recovered",
+      "concurrent flushes: exactly one delivers and the other is locked",
+      "a lock replaced by another owner during a flush is left in place"
+    ],
+    "maintained_cli_held": "Existing requested-context, parseOptions/dispatch and other native-coupled maintained CLI compatibility. No broad file skip or false success was introduced.",
+    "hold_reason": "Inspected maintained scratch/setup uses factoryStateRoot/setConsent default Darwin protection, reaching native ACL execFileSync(/bin/ls), forbidden by exact a19b. Stopped before these selections, not after a paid/native reproduction. No platform override or ACL bypass added.",
+    "next_validation_gate": "Separately admitted actual compatibility route or an explicit source-only independent verdict retaining these exact open checks; no npm/Knip/Git/native/default full-suite command attempted"
+  },
+  "lean_reading": {
+    "concepts": ["poka-yoke", "jidoka", "flow"],
+    "meaning": "Missing/foreign authority and mixed generations stop explicitly; authenticated interruption completes one staged local intent instead of filing or requiring routine manual repair. Reuse the existing publisher lock without adding a publisher/scheduler. Full operational loop remains unwired."
+  },
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does this break a Lean principle or the terrarium?",
+    "Do actual strict authority reads, internal branding and repeated currentness checks prevent any genuine checked failure from selecting the historical unchecked inert path?",
+    "Do prepared/pending/final image and receipt correlations, exact lock paths and current source qualification make local retries idempotent while refusing lost/foreign evidence and public replay?",
+    "Are deadline/cap/FD/path/owner checks complete, and are unsupported native/default CLI/flush compatibility and unqualified operational paths explicitly retained?"
+  ],
+  "delivery_and_resources": {
+    "review_boundary": "Author candidate only; independent affected source/interface review pending. Old Task1/2 and archive604 acceptance/receipts do not qualify changed source.",
+    "current_resources": "Existing owned Desk checkout, preserved pre-source and current freeze directories, private task iteration receipts/mapped progress; no source child/helper/worktree/branch/service created",
+    "commands": "All own bounded commands completed",
+    "durability": "Local/uncommitted source and private task artifacts only; no canonical task-card update, commit/push/PR/publication/off-host backup claimed",
+    "still_open": [
+      "Independent source review of this generation",
+      "Maintained actual CLI/flush compatibility",
+      "Darwin/Windows native protection and installed consumer qualification",
+      "Actual store/actor/original-public-lineage adapter, activation/migration and live targets",
+      "Producer/capture/context/transport/store/reader integration and end-to-end issue578 delivery",
+      "Original nominated story's separate observer sign-in/output/publication gate"
+    ]
+  }
+}

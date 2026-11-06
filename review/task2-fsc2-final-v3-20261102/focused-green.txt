@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+ok 1 - FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 1.539
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+ok 2 - FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.124792
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 3 - FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 1.287375
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 4 - FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.398
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+ok 5 - FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.30275
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+ok 6 - FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.246166
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+ok 7 - FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.231625
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+ok 8 - FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.06725
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+ok 9 - FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.387916
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 10 - FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.428334
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 11 - FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 1.22875
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+ok 12 - FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.709959
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+ok 13 - FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.543208
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+ok 14 - FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.202291
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+ok 15 - FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+  ---
+  duration_ms: 0.584417
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+ok 16 - FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+  ---
+  duration_ms: 4.788
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+ok 17 - FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.100625
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAllocationTypeError_WhenCapturing_PropagatesUnrelatedFailure
+ok 18 - FSC2_GivenAllocationTypeError_WhenCapturing_PropagatesUnrelatedFailure
+  ---
+  duration_ms: 0.395416
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 74.005958

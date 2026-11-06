@@ -1,0 +1,414 @@
+TAP version 13
+# Subtest: FSC1_GivenChangingBaseBytesGetter_WhenChecked_RejectsWithoutExecutingIt
+not ok 1 - FSC1_GivenChangingBaseBytesGetter_WhenChecked_RejectsWithoutExecutingIt
+  ---
+  duration_ms: 7.897167
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:450:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    validation must never execute the sequence4-to-sequence1 getter
+    
+    2 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:459:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: FSC1_GivenPrivateThrowingbaseAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+not ok 2 - FSC1_GivenPrivateThrowingbaseAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.407292
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:464:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL getter must not execute"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL getter must not execute'
+  stack: |-
+    Object.get [as bytes] (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:475:33)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:160:71)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: FSC1_GivenPrivateThrowingproposedAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+not ok 3 - FSC1_GivenPrivateThrowingproposedAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.292084
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:464:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL getter must not execute"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL getter must not execute'
+  stack: |-
+    Object.get [as bytes] (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:475:33)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:192:77)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenPrivateThrowingpayloadAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+not ok 4 - FSC1_GivenPrivateThrowingpayloadAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.272333
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:464:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL getter must not execute"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL getter must not execute'
+  stack: |-
+    Object.get [as bytes] (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:475:33)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:174:16)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenPrivateThrowinglineageAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+not ok 5 - FSC1_GivenPrivateThrowinglineageAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.168833
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:464:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL getter must not execute"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL getter must not execute'
+  stack: |-
+    Object.get [as actor] (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:475:33)
+    lineageData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:104:40)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:147:19)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenPrivateThrowingrecordsAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+not ok 6 - FSC1_GivenPrivateThrowingrecordsAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.162958
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:464:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL getter must not execute"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL getter must not execute'
+  stack: |-
+    Object.get [as records] (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:475:33)
+    withdrawalRecords (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:78:28)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:149:23)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:477:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenChangingWithdrawalGetter_WhenBuildingSet_RejectsWithNullAndNoAccessorCall
+not ok 7 - FSC1_GivenChangingWithdrawalGetter_WhenBuildingSet_RejectsWithNullAndNoAccessorCall
+  ---
+  duration_ms: 1.106375
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:483:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    2 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:490:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenInheritedAccessorOrExecutableHook_WhenChecked_RejectsInertly
+not ok 8 - FSC1_GivenInheritedAccessorOrExecutableHook_WhenChecked_RejectsInertly
+  ---
+  duration_ms: 0.508291
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:495:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL inherited getter"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL inherited getter'
+  stack: |-
+    get maintenance (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:498:72)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:141:13)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:500:44
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:500:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:500:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenProxyOrArrayExecutionHook_WhenChecked_RejectsWithoutRunningTraps
+not ok 9 - FSC1_GivenProxyOrArrayExecutionHook_WhenChecked_RejectsWithoutRunningTraps
+  ---
+  duration_ms: 1.8035
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:510:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL proxy trap"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL proxy trap'
+  stack: |-
+    Object.getOwnPropertyDescriptor (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:513:52)
+    Proxy.hasOwn (<anonymous>)
+    Function.hasOwn (<anonymous>)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:22:32
+    Array.every (<anonymous>)
+    exact (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:22:12)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:140:8)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:517:44
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:517:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenBuffertoStringExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+not ok 10 - FSC1_GivenBuffertoStringExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.721583
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:528:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL Buffer hook"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL Buffer hook'
+  stack: |-
+    Buffer.get (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:533:33)
+    validateCanonicalBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/schema.js:934:61)
+    bytesGate (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:54:10)
+    Module.validateContributionBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:63:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenBuffertoJSONExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+not ok 11 - FSC1_GivenBuffertoJSONExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.250667
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:528:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"ok":true,"errors":[]}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    refuses (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:61:10)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:537:5)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenBufferutf8SliceExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+not ok 12 - FSC1_GivenBufferutf8SliceExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.085458
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:528:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "PRIVATE_SENTINEL Buffer hook"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'PRIVATE_SENTINEL Buffer hook'
+  stack: |-
+    Buffer.get (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:533:33)
+    Object.slice (node:buffer:640:37)
+    Buffer.toString (node:buffer:868:14)
+    validateCanonicalBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/schema.js:934:61)
+    bytesGate (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:54:10)
+    Module.validateContributionBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:63:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:12)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:535:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC1_GivenOrdinaryBuffersAndSharedDataReferences_WhenChecked_PreservesCoherentInputs
+ok 13 - FSC1_GivenOrdinaryBuffersAndSharedDataReferences_WhenChecked_PreservesCoherentInputs
+  ---
+  duration_ms: 1.245417
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenNonDataReferencesCyclesOrExcessDepth_WhenChecked_RefusesWithoutCloningCallbacks
+ok 14 - FSC1_GivenNonDataReferencesCyclesOrExcessDepth_WhenChecked_RefusesWithoutCloningCallbacks
+  ---
+  duration_ms: 2.2285
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 2
+# fail 12
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 101.4505

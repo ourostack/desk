@@ -1,0 +1,60 @@
+TAP version 13
+# Subtest: ContributionAuthority_FlushLockUsesExistingPhysicalPathAndPreservesForeignToken
+not ok 1 - ContributionAuthority_FlushLockUsesExistingPhysicalPathAndPreservesForeignToken
+  ---
+  duration_ms: 20.506125
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/flush.test.js:38:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    shared flush-lock module is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/flush.test.js:43:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: ContributionAuthority_FlushLockRecoversStaleLockAndReleasesOnlyItsOwn
+not ok 2 - ContributionAuthority_FlushLockRecoversStaleLockAndReleasesOnlyItsOwn
+  ---
+  duration_ms: 10.122333
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/flush.test.js:54:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    shared flush-lock module is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/flush.test.js:59:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 235.170667

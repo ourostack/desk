@@ -1,0 +1,122 @@
+TAP version 13
+# Subtest: AIX3_JournalEffectunknown_Currentwithdrawn
+not ok 1 - AIX3_JournalEffectunknown_Currentwithdrawn
+  ---
+  duration_ms: 3042.78575
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:410:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:424:14
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: AIX3_JournalEffectwithdrawn_Currentunknown
+not ok 2 - AIX3_JournalEffectwithdrawn_Currentunknown
+  ---
+  duration_ms: 3274.294959
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:410:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:424:14
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: AIX3_JournalEffectconflict_Currentwithdrawn
+not ok 3 - AIX3_JournalEffectconflict_Currentwithdrawn
+  ---
+  duration_ms: 3952.847542
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:410:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:424:14
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: AIX3_JournalEffectwithdrawn_Currentconflict
+not ok 4 - AIX3_JournalEffectwithdrawn_Currentconflict
+  ---
+  duration_ms: 9221.748
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:410:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:424:14
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: AIX3_JournalEffectunknown_Currentunknown
+ok 5 - AIX3_JournalEffectunknown_Currentunknown
+  ---
+  duration_ms: 7768.059667
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectconflict_Currentconflict
+ok 6 - AIX3_JournalEffectconflict_Currentconflict
+  ---
+  duration_ms: 7628.173416
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 2
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 34935.785833

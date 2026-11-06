@@ -1,0 +1,226 @@
+TAP version 13
+# Subtest: ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+not ok 1 - ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+  ---
+  duration_ms: 20.729375
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:67:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:68:19
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+not ok 2 - ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+  ---
+  duration_ms: 20.217333
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:75:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:76:19
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 3 - ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 13.754917
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:93:21
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 4 - ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 6.818791
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:93:21
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 5 - ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 3.36125
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:93:21
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+not ok 6 - ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 4.285375
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:92:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:93:21
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+not ok 7 - ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+  ---
+  duration_ms: 3.793667
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:119:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:120:19
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+not ok 8 - ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+  ---
+  duration_ms: 4.051542
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:140:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    authenticated contribution index is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    requireIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:15:35)
+    fixture (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:22:3)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:141:19
+    scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 0
+# fail 8
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 120.248541

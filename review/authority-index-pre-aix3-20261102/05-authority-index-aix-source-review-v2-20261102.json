@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "status": "AIX1/2 author corrections frozen; affected independent review pending, not accepted",
+  "prior_packet": "authority-index-source-review-v1-20261102.json",
+  "findings": "578-authority-index-source-v1-findings.txt",
+  "preserved_v1": {
+    "manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-pre-aix-20261102/manifest.json",
+    "sha256": "8ce3a02ef8247af5178b89e507b17c1726146957299b5ee1bb61abec37cc0a23",
+    "contents": "All14 source/test/doc pins, v1 packet, manifest and114+4 final receipts copied before changes; earlier failed histories retained in original v1 freeze"
+  },
+  "current_freeze": {
+    "manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-aix-source-v2-20261102/manifest.json",
+    "sha256": "7f958b0f405ffba9a1c10aa66069b0f1fa1bef09ba26482ab5cff293f26432df",
+    "boundary": "Local exact copies/readback only, not product staging or remote persistence"
+  },
+  "changed_files": [
+    { "path": "plugins/desk/mcp/src/factory/contribution-index.js", "bytes": 17158, "sha256": "63aa8622f1756882ee6e6794b35f0dd4b43e688ef8c6679dc6a17354a9c9d38a" },
+    { "path": "plugins/desk/mcp/src/factory/contribution-authority.js", "bytes": 11756, "sha256": "1d13c94e3e32212caea352e1d561d0f3070ba78eaa5286805f81835177792f3c" },
+    { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 12993, "sha256": "0007c392783a3384243e3bdd461e3c916c50f68894e70c6eedf3f807fe72800f" },
+    { "path": "tests/desk/mcp/__tests__/factory/contribution_index.test.js", "bytes": 24378, "sha256": "b1c495e2d8e5fafb85d39032382e3ddb01b361a9eb99f3dbaa6a0323995f70db" },
+    { "path": "tests/desk/mcp/__tests__/factory/contribution_authority.test.js", "bytes": 10781, "sha256": "63fbdff4ffb181beae0759b10bbbe6100bf692632e15f16f071e157dd78a5d31" }
+  ],
+  "unchanged": "Remaining9 v1 source/test/doc files match their v1 pins. Outbox remains67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1. No public schema or producer/store/581 change.",
+  "AIX1": {
+    "defect": "Missing optional legacy marker person_prefix defaulted to root and could produce branded authority",
+    "repair": "Require an own validated person_prefix equal to requested scope; explicit empty root remains valid",
+    "causal_fixture": "Omit person_prefix and recompute matching derivation receipt marker hash; authority formerly qualified, now ownership_unknown. Explicit root and member positives plus foreign-person refusals run actual reader. Status bytes unchanged; no transcript read or payload echo."
+  },
+  "AIX2": {
+    "defect": "New intent could retain old owner generation and therefore leave intake generation unchanged",
+    "repair": "Determine effective addition from old/new exclusion keys. Exactly one new key must equal intentId, with owner generation old+1 and intent generation equal to it, initial revision0/empty effects. Only existing-intent journal update permits unchanged generation and no added keys. Intake advances from newIntent, not numeric-generation guess.",
+    "causal_fixture": "Actual same-owner second session source chain and distinct second intent; unchanged generation formerly committed, now invalid_images before image/receipt writes with byte-identical index/transaction/owner pair. Generation+1 commits and exact retry does not increment again. Existing journal/multiowner/recovery/preservation controls retained."
+  },
+  "validation": {
+    "causal_red": { "log": "authority-aix-fenced-red-20261102.txt", "tests": 5, "passed": 3, "failed": 2, "sha256": "dff4471bbf4aba00d3488095a9def6b93f209e35e063dd4ebfd2acaafe8622a8" },
+    "causal_green": { "log": "authority-aix-fenced-green-20261102.txt", "tests": 5, "passed": 5, "failed": 0, "sha256": "5ec70e29b608f7c31110334060b001846998c777d0e2a85155b49c957daef379" },
+    "core": { "log": "authority-aix-core-coverage-20261102.txt", "tests": 119, "passed": 119, "failed": 0, "skipped": 0, "sha256": "14a1560c8a66f9bdf5d55b0b400ac506808dc6a84d719929f6732fa0a8cd9fe8" },
+    "four_exact_admitted_cases": { "log": "authority-aix-cli-lock-20261102.txt", "tests": 4, "passed": 4, "failed": 0, "skipped": 0, "pattern": "^ContributionAuthority_(Cli|FlushLock)", "sha256": "a2d193205fbe46db8ef225725d1f7487611f47ac7481737a5141cd005b884faf" },
+    "runner": "Unchanged exacta19b hash verified before startup; fence FIRST, maintained isolation SECOND, in-process one worker; same admitted core files and four named CLI-negative/lock cases as v1",
+    "coverage_line_branch_function": { "authority": [97.80, 85.16, 100], "index": [97.49, 85.93, 100] },
+    "limits": "Selected source-unit evidence only. Maintained-native CLI/flush compatibility remains HELD, not skipped/passed. RealconfigguardUNQUALIFIED(synthetic128), old53 withdrawal unchanged. No native/platform/installed/100CI/live/privacy/end-to-end or publication proof."
+  },
+  "lean": "Poka-yoke: missing person binding and effective policy changes can no longer read as established root authority/current generation in these causal controls. Full operational loop remains unwired.",
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does it break a Lean principle or the terrarium?",
+    "Do explicit person lineage and actual effective-intent delta correctly govern branding and owner/intake generation without changing valid journal/retry/multiowner behavior?"
+  ],
+  "resources": "Same owned checkout/task, no agents/helpers/worktrees; all bounded commands finished. Local/uncommitted, no canonical card update/commit/push/PR/activation. Push route remains arimendelow; no Git publication performed."
+}

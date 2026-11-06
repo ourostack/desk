@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "status": "Pure inert Task 2 subunit frozen for independent affected source review; not integrated or independently accepted",
+  "authority": {
+    "task1_acceptance": "578-task1-source-v2-disposition.txt",
+    "task1_acceptance_sha256": "8c017233f8b594473e01d26ba3a5ffa09c69ac04bbfc2fb7fdb7a3b13d369090",
+    "task2_reservation": "578-task2-schema-bounded-source-go.txt",
+    "task2_reservation_sha256": "b7fbcf994b1a6984bcb2f015e33e65353097bce80e521f6e11d7c07f0fc4d539",
+    "scope": "New contribution-schema.js, contribution_schema.test.js and directly related closed-schema documentation only",
+    "no_integration_authority": "No pipeline/CLI/trusted workflow/merge/build/reader/outbox/derive/capture/context/flush source change; no store protocol activation, live public tombstone/exclusion, CI, commit/push/PR or new writer/worktree/helper"
+  },
+  "source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "branch_previously_reconciled": "user/arimendelow/factory-context-optional-card-20261027",
+    "base_previously_reconciled": "cdccc0de13501f210cf8f65f43752709a741f7f7",
+    "git_refresh": "No Git probe performed in this pure subunit; refs above are recorded continuity, not a new remote-state claim",
+    "publication": "Local/uncommitted; nothing staged/committed/pushed by this work",
+    "immutable_copy_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pure-schema-20261102/manifest.json",
+    "files": [
+      { "path": "plugins/desk/mcp/src/factory/contribution-schema.js", "bytes": 14493, "sha256": "35cd1396e5ffdccb31cc65bedd8db2744a315bd2b6428bf5928416f3cdf31922" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js", "bytes": 21732, "sha256": "e864f3a70d4d66d41776425275b16aefb0458d9548263e0b29f0bb2b2ffa4850" },
+      { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 5474, "sha256": "433f41d699866280d09cd4f89b8c0742ef4b7ca889a62c41c10893b24c0f1fa5" }
+    ],
+    "task1_preserved_fingerprints_verified": {
+      "contribution-policy.js": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac",
+      "outbox.js": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+      "contribution_policy.test.js": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    }
+  },
+  "implemented_contracts": [
+    "Closed canonical contribution/withdrawal bytes; 4096-byte UTF-8 caps, duplicate/noncanonical/unknown-key/type/integer/protocol/path checks with fixed privacy-safe errors",
+    "Pure supplied-data contextual verdict: explicit capability and complete correlated base/lineage observations, bound intake nonce/branch, exact sequence increment, safe overflow refusal and nondecreasing policy generation",
+    "Actual changed envelope required; inherited envelope and claimed mixed-data maintenance do not bypass the data gate",
+    "Qualified supplied public path/blob/actor and same-intake matching removal required for public withdrawal; queued-only target cannot introduce a tombstone/alias",
+    "Accepted public tombstones immutable; facts under any host, labels and context citing the alias cannot be reintroduced",
+    "Validated tombstone Set only on complete success; unknown/truncated/malformed/duplicate/oversized input returns null, never empty success or a partial prefix",
+    "Foreign/changed/missing ownership refuses ordinary removals; descriptive maintainer-like metadata alone does not pass lineage validation",
+    "Existing public-data validators/path helpers reused; valid sibling facts/context and supported labels/capture remain eligible for their separate canonical checks",
+    "Envelope-only or new-empty-capture bootstrap cannot create a public nonce solely to announce an exclusion"
+  ],
+  "pure_boundary": {
+    "exports": [
+      "validateContributionBytes",
+      "validateWithdrawalBytes",
+      "checkContributionIntake",
+      "withdrawnPublicSessions"
+    ],
+    "inputs": "Explicit supplied DATA only: capability, base/proposed envelope, complete current withdrawals, changes and normalized verified-lineage observations",
+    "not_proved_by_ok": "A pure coherent verdict does not establish a live actor, public provenance/visibility, consent, store activation or permission to contribute/delete. Actual trusted adapter and canonical workflow integration remain unreserved.",
+    "side_effects": "No filesystem/network/secret lookup, live authority adapter registration, capability issuance, publisher or mutation is implemented in this module",
+    "compatibility": "Generic opt-in envelope impact is explicit. Absent/unknown capability does not mean legacy success. Actual stale-client rejection by the real store is NOT established by pure fixtures.",
+    "capture2": "Not implemented; current capture validation is reused only as supplied-data checking. Future eligible-population capture/2 remains separate reserved work."
+  },
+  "validation": {
+    "node": "v22.23.3",
+    "fence": {
+      "path": "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+      "sha256": "a19b5a09477b1c0b5a49b7061574936197e7afa40007973014f173ea58e4ce14",
+      "bytes": 2059,
+      "ordering": "Exact hash checked before each test startup; fence first --import, maintained isolation second; in-process/single worker",
+      "scope": "Builtin process-call fence/source ordering only, not OS sandbox/effect proof. Synthetic Git128 makes isolation configSnapshot null; real repository-config guard UNQUALIFIED, never reported unchanged.",
+      "owner_file": "Read-only reused, never edited"
+    },
+    "final_command_argv": [
+      "node",
+      "--import",
+      "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+      "--import",
+      "./tests/desk/mcp/__tests__/_isolated_env.mjs",
+      "--experimental-test-isolation=none",
+      "--experimental-test-coverage",
+      "--test-coverage-include=plugins/desk/mcp/src/factory/contribution-policy.js",
+      "--test-coverage-include=plugins/desk/mcp/src/factory/contribution-schema.js",
+      "--test-coverage-include=plugins/desk/mcp/src/factory/outbox.js",
+      "--test",
+      "--test-concurrency=1",
+      "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "tests/desk/mcp/__tests__/factory/contribution_schema.test.js"
+    ],
+    "red_evidence": [
+      { "log": "proof-schema-task2-fenced-red.txt", "sha256": "b5cd96fcfd4e913bb9855f29237f22f71a6ee1461d1fe60e182940010a5b2f78", "reason": "Actual missing pure-module contract assertions before production code existed" },
+      { "log": "proof-schema-task2-boundaries-red.txt", "sha256": "606a7d59071c35ac186e7752c4e37a473e6ef3b8812ac1b2974e755c3c373de1", "result": "39 passed/3 failed", "reason": "Missing/malformed data payload and path/body alias checks were wrongly eligible" },
+      { "log": "proof-schema-task2-reserved-root-red.txt", "sha256": "8f345ab404cf472320fa1c6cb2a70b480e1a4f0fa12b738c81fefa826949d511", "reason": "Reserved withdrawal root was wrongly classified as code-only maintenance" },
+      { "log": "proof-schema-task2-empty-capture-red.txt", "sha256": "e37cffec90915b7e2437ff47785d8f39baa06b2538c754616e3b50dda11e6121", "reason": "First envelope plus empty capture wrongly bootstrapped a new public nonce" }
+    ],
+    "green": {
+      "log": "proof-schema-task2-review2-fenced-coverage.txt",
+      "sha256": "675d1438457c55355afe47de369027318866d1431698e51a3d27973ba1128d4f",
+      "combined_tests": 114,
+      "passed": 114,
+      "failed": 0,
+      "skipped": 0,
+      "selection": "Accepted 66-case inert policy selection plus pure schema/verdict source tests, not the repository's complete suite"
+    },
+    "v8_coverage": {
+      "contribution_schema": { "line_percent": 100, "branch_percent": 92.74, "function_percent": 100 },
+      "preserved_contribution_policy": { "line_percent": 97.74, "branch_percent": 94.09, "function_percent": 100 },
+      "whole_outbox_in_this_selection": { "line_percent": 48.95, "branch_percent": 68.42, "function_percent": 10 },
+      "limit": "Not maintained full changed-file100% CI or whole repository/platform/end-to-end qualification"
+    },
+    "boundary_controls": "500 records/changes accepted, 501 refused; exact16MiB supplied change budget accepted, one extra byte refused; safe integer maximum validated but sequence overflow refused; complete empty versus unknown tombstone set distinguished",
+    "other_tools": "No npm/Knip/native/CI runner, OS/Git probe, dependency installation or package/lock changes",
+    "historical_53": "Original no-Git/no-native claim remains withdrawn; new receipts do not retroactively qualify that run",
+    "unexpected_forbidden_call": "None surfaced in retained selected receipts; no independent OS absence trace is claimed"
+  },
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does it break a Lean principle or the terrarium?",
+    "Do supplied lineage/capability data remain clearly distinct from real authenticated authority?",
+    "Can unknown input, inheritance, mixed maintenance, queued-only targets or changed/foreign blob data produce an inappropriate successful verdict?"
+  ],
+  "resources_and_next": {
+    "preservation": "Explicit immutable Task2 source/docs/receipt copies in existing checkout review/task2-pure-schema-20261102; accepted Task1 copies and prior53 history retained",
+    "staging": "Review directories and snapshots are NOT product files to stage; no source files were staged/committed/pushed by this work",
+    "runtime": "All own bounded test/metadata/preservation commands completed; no new writer, service/helper, branch, worktree or host",
+    "durability": "Local/uncommitted code and private desk evidence; no canonical task update, remote save or off-host backup claimed",
+    "next": "Independent affected SOURCE review of this pure subunit before any integration. Later exact repo/path/owner/hunk reservation is required for pipeline/CLI/workflow/store/reader/activation changes. Whole Factory outcome remains unfinished."
+  }
+}

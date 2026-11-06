@@ -1,0 +1,325 @@
+TAP version 13
+# Subtest: GivenCanonicalClosedPublicRecords_WhenValidated_AcceptsWithoutChangingInputs
+ok 1 - GivenCanonicalClosedPublicRecords_WhenValidated_AcceptsWithoutChangingInputs
+  ---
+  duration_ms: 1.612917
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 2 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.191833
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputnumber_WhenValidated_RefusesExplicitly
+ok 3 - GivenNonByteInputnumber_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.060417
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 4 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.052916
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 5 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.121292
+  type: 'test'
+  ...
+# Subtest: GivenDuplicateKeysNoncanonicalOrOversizedBytes_WhenValidated_RefusesWithoutEcho
+ok 6 - GivenDuplicateKeysNoncanonicalOrOversizedBytes_WhenValidated_RefusesWithoutEcho
+  ---
+  duration_ms: 0.219709
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence-1_WhenValidated_Refuses
+ok 7 - GivenInvalidSequence-1_WhenValidated_Refuses
+  ---
+  duration_ms: 0.18325
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence0_WhenValidated_Refuses
+ok 8 - GivenInvalidSequence0_WhenValidated_Refuses
+  ---
+  duration_ms: 0.057583
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence0.5_WhenValidated_Refuses
+ok 9 - GivenInvalidSequence0.5_WhenValidated_Refuses
+  ---
+  duration_ms: 0.514417
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence9007199254740992_WhenValidated_Refuses
+ok 10 - GivenInvalidSequence9007199254740992_WhenValidated_Refuses
+  ---
+  duration_ms: 0.420417
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence1_WhenValidated_Refuses
+ok 11 - GivenInvalidSequence1_WhenValidated_Refuses
+  ---
+  duration_ms: 0.128875
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequencenull_WhenValidated_Refuses
+ok 12 - GivenInvalidSequencenull_WhenValidated_Refuses
+  ---
+  duration_ms: 0.05275
+  type: 'test'
+  ...
+# Subtest: GivenBoundarySafeIntegers_WhenValidated_AcceptsButDoesNotAuthorizeOverflow
+ok 13 - GivenBoundarySafeIntegers_WhenValidated_AcceptsButDoesNotAuthorizeOverflow
+  ---
+  duration_ms: 0.100042
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawalPathIdentityOrPrivateFieldMismatch_WhenValidated_Refuses
+ok 14 - GivenWithdrawalPathIdentityOrPrivateFieldMismatch_WhenValidated_Refuses
+  ---
+  duration_ms: 0.246541
+  type: 'test'
+  ...
+# Subtest: GivenCompleteValidatedTombstones_WhenProjected_ReturnsOnlyPublicAliasSet
+ok 15 - GivenCompleteValidatedTombstones_WhenProjected_ReturnsOnlyPublicAliasSet
+  ---
+  duration_ms: 0.253875
+  type: 'test'
+  ...
+# Subtest: GivenUnknownMalformedDuplicateOrOversizedTombstones_WhenProjected_ReturnsNullNotPartialSet
+ok 16 - GivenUnknownMalformedDuplicateOrOversizedTombstones_WhenProjected_ReturnsNullNotPartialSet
+  ---
+  duration_ms: 0.565334
+  type: 'test'
+  ...
+# Subtest: GivenSupportedFirstDataIntake_WhenChecked_RequiresExactChangedEnvelopeAndLeavesInputsUntouched
+ok 17 - GivenSupportedFirstDataIntake_WhenChecked_RequiresExactChangedEnvelopeAndLeavesInputsUntouched
+  ---
+  duration_ms: 2.782958
+  type: 'test'
+  ...
+# Subtest: GivenAbsentOrUnknownCapability_WhenChecked_RemainsInertNotLegacySuccess
+ok 18 - GivenAbsentOrUnknownCapability_WhenChecked_RemainsInertNotLegacySuccess
+  ---
+  duration_ms: 0.346875
+  type: 'test'
+  ...
+# Subtest: GivenCurrentBase_WhenAdvancingSequenceExactlyOnce_AllowsNondecreasingPolicy
+ok 19 - GivenCurrentBase_WhenAdvancingSequenceExactlyOnce_AllowsNondecreasingPolicy
+  ---
+  duration_ms: 1.615709
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed3_RejectsDowngradeReplayOrSkippedSequence
+ok 20 - GivenBaseSequence4_WhenProposed3_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.177666
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed4_RejectsDowngradeReplayOrSkippedSequence
+ok 21 - GivenBaseSequence4_WhenProposed4_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.216041
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed6_RejectsDowngradeReplayOrSkippedSequence
+ok 22 - GivenBaseSequence4_WhenProposed6_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.131375
+  type: 'test'
+  ...
+# Subtest: GivenOverflowOrPolicyDowngrade_WhenChecked_Refuses
+ok 23 - GivenOverflowOrPolicyDowngrade_WhenChecked_Refuses
+  ---
+  duration_ms: 0.811792
+  type: 'test'
+  ...
+# Subtest: GivenInheritedOrUnchangedEnvelope_WhenDataChanges_RejectsEvenClaimedMaintenance
+ok 24 - GivenInheritedOrUnchangedEnvelope_WhenDataChanges_RejectsEvenClaimedMaintenance
+  ---
+  duration_ms: 0.353709
+  type: 'test'
+  ...
+# Subtest: GivenCodeOnlyMaintenance_WhenChecked_DoesNotRequireADataEnvelope
+ok 25 - GivenCodeOnlyMaintenance_WhenChecked_DoesNotRequireADataEnvelope
+  ---
+  duration_ms: 0.158167
+  type: 'test'
+  ...
+# Subtest: GivenWrongNonceBranchOrBase_WhenChecked_Refuses
+ok 26 - GivenWrongNonceBranchOrBase_WhenChecked_Refuses
+  ---
+  duration_ms: 0.288125
+  type: 'test'
+  ...
+# Subtest: GivenUnknownIncompleteOrAmbiguousInputs_WhenChecked_RefusesNotEmptySuccess
+ok 27 - GivenUnknownIncompleteOrAmbiguousInputs_WhenChecked_RefusesNotEmptySuccess
+  ---
+  duration_ms: 0.521667
+  type: 'test'
+  ...
+# Subtest: GivenOwnedAlreadyPublicWithdrawal_WhenChecked_RequiresExactRemovalAndProvenance
+ok 28 - GivenOwnedAlreadyPublicWithdrawal_WhenChecked_RequiresExactRemovalAndProvenance
+  ---
+  duration_ms: 0.218458
+  type: 'test'
+  ...
+# Subtest: GivenQueuedOnlyTarget_WhenPublicWithdrawalProposed_RefusesWithoutEmittingAlias
+ok 29 - GivenQueuedOnlyTarget_WhenPublicWithdrawalProposed_RefusesWithoutEmittingAlias
+  ---
+  duration_ms: 0.15375
+  type: 'test'
+  ...
+# Subtest: GivenForeignChangedOrMissingPublicOwnership_WhenChecked_RefusesDeletion
+ok 30 - GivenForeignChangedOrMissingPublicOwnership_WhenChecked_RefusesDeletion
+  ---
+  duration_ms: 0.433792
+  type: 'test'
+  ...
+# Subtest: GivenAcceptedTombstone_WhenRemovedModifiedOrDuplicated_RefusesOrdinaryMutation
+ok 31 - GivenAcceptedTombstone_WhenRemovedModifiedOrDuplicated_RefusesOrdinaryMutation
+  ---
+  duration_ms: 0.340042
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawnAlias_WhenFactsReappearUnderAnyHost_Refuses
+ok 32 - GivenWithdrawnAlias_WhenFactsReappearUnderAnyHost_Refuses
+  ---
+  duration_ms: 0.480084
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawnAlias_WhenLabelsOrContextCiteIt_RefusesButKeepsLegitimateSiblingEligible
+ok 33 - GivenWithdrawnAlias_WhenLabelsOrContextCiteIt_RefusesButKeepsLegitimateSiblingEligible
+  ---
+  duration_ms: 3.233208
+  type: 'test'
+  ...
+# Subtest: GivenDuplicatePathsUnsafePathsOrOversizedInput_WhenChecked_RefusesSafely
+ok 34 - GivenDuplicatePathsUnsafePathsOrOversizedInput_WhenChecked_RefusesSafely
+  ---
+  duration_ms: 2.792125
+  type: 'test'
+  ...
+# Subtest: GivenNullEmptyOrSparseContext_WhenChecked_RefusesWithoutThrowingOrReturningPartialData
+ok 35 - GivenNullEmptyOrSparseContext_WhenChecked_RefusesWithoutThrowingOrReturningPartialData
+  ---
+  duration_ms: 0.771209
+  type: 'test'
+  ...
+# Subtest: GivenEnvelopeOnlyExclusionAnnouncement_WhenChecked_RefusesExtraPublicNonce
+ok 36 - GivenEnvelopeOnlyExclusionAnnouncement_WhenChecked_RefusesExtraPublicNonce
+  ---
+  duration_ms: 0.546625
+  type: 'test'
+  ...
+# Subtest: GivenNonRemovedDataWithoutBytes_WhenChecked_RefusesUnknownPayload
+not ok 37 - GivenNonRemovedDataWithoutBytes_WhenChecked_RefusesUnknownPayload
+  ---
+  duration_ms: 0.739959
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:326:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"ok":true,"errors":[],"mode":"data"}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    refuses (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:61:10)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:330:5)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: GivenMalformedLabelOrCapturePayload_WhenChecked_RefusesRatherThanCallingItEligible
+not ok 38 - GivenMalformedLabelOrCapturePayload_WhenChecked_RefusesRatherThanCallingItEligible
+  ---
+  duration_ms: 0.253083
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:334:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"ok":true,"errors":[],"mode":"data"}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    refuses (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:61:10)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:341:5)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: GivenValidUnexcludedLabelOrCapture_WhenChecked_PreservesExistingSchemas
+ok 39 - GivenValidUnexcludedLabelOrCapture_WhenChecked_PreservesExistingSchemas
+  ---
+  duration_ms: 0.527458
+  type: 'test'
+  ...
+# Subtest: GivenContextJobOrLabelSessionMismatch_WhenChecked_RefusesPathAlias
+not ok 40 - GivenContextJobOrLabelSessionMismatch_WhenChecked_RefusesPathAlias
+  ---
+  duration_ms: 1.131625
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:355:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"ok":true,"errors":[],"mode":"data"}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    refuses (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:61:10)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:359:3)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: GivenReservedInvalidRootOrForeignCapture_WhenChecked_Refuses
+ok 41 - GivenReservedInvalidRootOrForeignCapture_WhenChecked_Refuses
+  ---
+  duration_ms: 0.978792
+  type: 'test'
+  ...
+# Subtest: GivenOrdinaryDataRemovalWithoutExactOwnerBlob_WhenChecked_RefusesDespiteNoNewTombstone
+ok 42 - GivenOrdinaryDataRemovalWithoutExactOwnerBlob_WhenChecked_RefusesDespiteNoNewTombstone
+  ---
+  duration_ms: 0.200042
+  type: 'test'
+  ...
+1..42
+# tests 42
+# suites 0
+# pass 39
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 98.204458

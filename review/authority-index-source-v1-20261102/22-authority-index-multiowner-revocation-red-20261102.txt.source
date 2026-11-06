@@ -1,0 +1,60 @@
+TAP version 13
+# Subtest: ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+not ok 1 - ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+  ---
+  duration_ms: 1324.142708
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:220:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'compatibility_unqualified'
+    - 'qualified'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'qualified'
+  actual: 'compatibility_unqualified'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:240:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+not ok 2 - ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+  ---
+  duration_ms: 34.907375
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:256:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'ready'
+    - 'unavailable'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'unavailable'
+  actual: 'ready'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:259:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1405.99225

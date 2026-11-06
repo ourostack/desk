@@ -1,0 +1,35 @@
+{
+  "scope": "Pre-FSC2 exact preservation before edits; local source/receipts, not Git or OS proof",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-schema.js",
+      "name": "contribution-schema.js.source",
+      "sha256": "8ea07bbf150535f1fbc67da5e4b971341c3659ae515d2dfb25e65c75d4e1e120",
+      "bytes": 21465
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "name": "contribution_schema.test.js.source",
+      "sha256": "e4938fd85c7329479c73918da93d258eff4e609e4def5c22c21be1dbd5dc3219",
+      "bytes": 30950
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "name": "factory-contribution-schema.md.source",
+      "sha256": "3eef2a4f51ea9d71f4ea2f5f5cdae88a476cfba87c8c971948a6962e7a51456b",
+      "bytes": 7274
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-final-fenced-coverage.txt",
+      "name": "prior-136-coverage.txt",
+      "sha256": "0733e78d5c73fa3e64f1c1efb2aa124d6f30c2915c7e63fb2f1c661139925bd7",
+      "bytes": 36153
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-source-review-v2-20261102.json",
+      "name": "prior-review-packet.json",
+      "sha256": "920f44d5143ccdc4787f5236b3d5b4a918462ab44f7ae928d7e7e6b151cd661f",
+      "bytes": 10272
+    }
+  ]
+}

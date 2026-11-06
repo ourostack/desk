@@ -84,7 +84,8 @@
 // Nothing here ever prints or logs the machine secret.
 
 import { randomBytes, createHash } from "node:crypto"
-import { promises as fsp, readFileSync } from "node:fs"
+import { constants, promises as fsp, readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -546,6 +547,81 @@ async function updateJsonLocked(root, file, fallback, mutate, options, isValid =
 function storeSlug(store) {
   requirePattern(store, PATTERNS.prRepo, "store")
   return store.replace("/", "__")
+}
+
+export const CONTRIBUTION_POLICY_MAX_BYTES = 1024 * 1024
+
+/** Strict, non-repairing reads for permanent contribution intent; damaged state never becomes an empty policy. */
+export async function readContributionPolicyFile(env, ownerScope, name, { platform = process.platform } = {}) {
+  requirePattern(ownerScope, /^[0-9a-f]{64}$/u, "ownerScope")
+  if (!["ledger", "activation"].includes(name)) fail("contribution", "invalid policy file")
+  if (!["linux", "darwin"].includes(platform)) throw new Error("contribution_platform_unqualified")
+  const home = resolveStateHome(env)
+  assertNotRealStateUnderTest(home, { env })
+  await assertOutsideGitWorkspace((await realpathExistingPrefix(home)).real, NAMING)
+  let cursor = home
+  const parents = []
+  for (const segment of ["", ...ROOT_SEGMENTS, "contribution-policy"]) {
+    if (segment) cursor = path.join(cursor, segment)
+    let stat
+    try { stat = await fsp.lstat(cursor) } catch (error) {
+      if (error.code === "ENOENT") return null
+      throw error
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & (segment === "" ? 0o022 : 0o077)) !== 0 ||
+        typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("contribution_path_unsafe")
+    if (platform === "darwin" && /^\s*\d+:/mu.test(execFileSync("/bin/ls", ["-ldeq", cursor], { encoding: "utf8", timeout: 5000, maxBuffer: 65536 })))
+      throw new Error("contribution_path_unsafe")
+    parents.push({ path: cursor, stat })
+  }
+  const file = path.join(cursor, `${ownerScope}${name === "activation" ? ".active" : ""}.json`)
+  let stat
+  try { stat = await fsp.lstat(file) } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || !Number.isSafeInteger(stat.size) ||
+      stat.size < 0 || stat.size > CONTRIBUTION_POLICY_MAX_BYTES ||
+      (stat.mode & 0o077) !== 0 || typeof process.getuid === "function" && stat.uid !== process.getuid())
+    throw new Error("contribution_file_unsafe")
+  if (platform === "darwin" && /^\s*\d+:/mu.test(execFileSync("/bin/ls", ["-ldeq", file], { encoding: "utf8", timeout: 5000, maxBuffer: 65536 })))
+    throw new Error("contribution_file_unsafe")
+  const handle = await fsp.open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.nlink !== 1) throw new Error("contribution_file_changed")
+    const buffer = Buffer.alloc(stat.size + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+      if (!Number.isSafeInteger(bytesRead) || bytesRead < 0 || bytesRead > buffer.length - length)
+        throw new Error("contribution_file_changed")
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    if (length !== stat.size) throw new Error("contribution_file_changed")
+    const bytes = buffer.subarray(0, length)
+    const after = await handle.stat()
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs)
+      throw new Error("contribution_file_changed")
+    for (const parent of parents) {
+      const current = await fsp.lstat(parent.path)
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== parent.stat.dev || current.ino !== parent.stat.ino ||
+          current.mode !== parent.stat.mode || current.uid !== parent.stat.uid) throw new Error("contribution_path_changed")
+    }
+    return bytes
+  } finally { await handle.close() }
+}
+
+/** Reuse the outbox's owner-only atomic writer. The policy caller owns its existing named transaction lock. */
+export async function writeContributionPolicyFile(env, ownerScope, name, value, { platform = process.platform, runner = undefined } = {}) {
+  requirePattern(ownerScope, /^[0-9a-f]{64}$/u, "ownerScope")
+  if (!["ledger", "activation"].includes(name)) fail("contribution", "invalid policy file")
+  const data = `${JSON.stringify(value)}\n`
+  if (Buffer.byteLength(data, "utf8") > CONTRIBUTION_POLICY_MAX_BYTES) throw new Error("contribution_file_too_large")
+  const root = await factoryStateRoot(env, { platform, runner })
+  await writeAtomic(root, path.join(root, "contribution-policy", `${ownerScope}${name === "activation" ? ".active" : ""}.json`), data,
+    { platform, env, runner })
 }
 
 /** `gitBlobSha(bytes) -> string`: `sha1("blob " + length + "\0" + bytes)`, matching `git hash-object`. */

@@ -1,0 +1,41 @@
+{
+  "scope": "Frozen corrected Task1 sources and admitted fenced receipts only; no OS sandbox/config proof",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-policy.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/contribution-policy.js.source",
+      "bytes": 17454,
+      "sha256": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/outbox.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/outbox.js.source",
+      "bytes": 119881,
+      "sha256": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/contribution_policy.test.js.source",
+      "bytes": 38279,
+      "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-fpi-fenced-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/causal-red.txt",
+      "bytes": 7767,
+      "sha256": "6633c7941056aac8c6e601f5330c914d3da4a30e1c40f39c27d1fa0fcf0840ee"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-fpi-fenced-green.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/causal-green.txt",
+      "bytes": 1947,
+      "sha256": "6a059431c2d92dfae49d6d92627fc7886392a31a9d12ca4cbe4166d8a405ddfb"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-fpi-fenced-full-coverage.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/full-unit-coverage.txt",
+      "bytes": 21019,
+      "sha256": "2c099a71293cbe09635cd468317a2fa1ea42ccad2cd5718b9c048119e4438ff3"
+    }
+  ]
+}

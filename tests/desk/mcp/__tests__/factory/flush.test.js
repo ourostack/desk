@@ -35,6 +35,40 @@ const sessionId = (n) => `${n.toString(16).padStart(8, "0")}-0000-4000-8000-${n.
 const nameOf = (n) => `claude-code-${sessionId(n)}.json`
 const DAY = 24 * 60 * 60 * 1000
 
+test("ContributionAuthority_FlushLockUsesExistingPhysicalPathAndPreservesForeignToken", () => scratch(async ({ base }) => {
+  const api = await import("../../../../../plugins/desk/mcp/src/factory/flush-lock.js").catch(error => {
+    if (error.code === "ERR_MODULE_NOT_FOUND") return {}
+    throw error
+  })
+  assert.equal(typeof api.acquireLock, "function", "shared flush-lock module is missing")
+  const root = path.join(base, "synthetic-lock-root")
+  await fs.mkdir(root, { mode: 0o700 })
+  const first = await api.acquireLock(root)
+  assert.equal(first.file, path.join(root, "flush.lock"))
+  assert.equal(await api.acquireLock(root), null)
+  await fs.writeFile(first.file, JSON.stringify({ token: "foreign-owner" }), { mode: 0o600 })
+  await api.releaseLock(first)
+  assert.equal(JSON.parse(await fs.readFile(first.file)).token, "foreign-owner")
+}))
+
+test("ContributionAuthority_FlushLockRecoversStaleLockAndReleasesOnlyItsOwn", () => scratch(async ({ base }) => {
+  const api = await import("../../../../../plugins/desk/mcp/src/factory/flush-lock.js").catch(error => {
+    if (error.code === "ERR_MODULE_NOT_FOUND") return {}
+    throw error
+  })
+  assert.equal(typeof api.acquireLock, "function", "shared flush-lock module is missing")
+  const root = path.join(base, "synthetic-lock-root")
+  await fs.mkdir(root, { mode: 0o700 })
+  const file = path.join(root, "flush.lock")
+  await fs.writeFile(file, "old lock", { mode: 0o600 })
+  const old = new Date(Date.now() - 11 * 60 * 1000)
+  await fs.utimes(file, old, old)
+  const own = await api.acquireLock(root)
+  assert.ok(own)
+  await api.releaseLock(own)
+  assert.equal(existsSync(file), false)
+}))
+
 function localFacts(n, patch = {}) {
   const value = structuredClone(GOLDEN)
   value.session.id = sessionId(n)

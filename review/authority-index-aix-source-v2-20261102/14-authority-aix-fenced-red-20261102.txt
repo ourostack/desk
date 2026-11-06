@@ -1,0 +1,78 @@
+TAP version 13
+# Subtest: AIX1_ExplicitPersonLineage_missing
+not ok 1 - AIX1_ExplicitPersonLineage_missing
+  ---
+  duration_ms: 55.237958
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_authority.test.js:151:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'qualified'
+    - 'ownership_unknown'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'ownership_unknown'
+  actual: 'qualified'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_authority.test.js:166:12
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: AIX1_ExplicitPersonLineage_root
+ok 2 - AIX1_ExplicitPersonLineage_root
+  ---
+  duration_ms: 50.672584
+  type: 'test'
+  ...
+# Subtest: AIX1_ExplicitPersonLineage_member
+ok 3 - AIX1_ExplicitPersonLineage_member
+  ---
+  duration_ms: 51.601875
+  type: 'test'
+  ...
+# Subtest: AIX2_SecondSameOwnerIntent_UnchangedGenerationRefusesBeforeImages
+not ok 4 - AIX2_SecondSameOwnerIntent_UnchangedGenerationRefusesBeforeImages
+  ---
+  duration_ms: 1858.35475
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:358:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:388:14
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: AIX2_SecondSameOwnerIntent_AdvancesBothGenerations
+ok 5 - AIX2_SecondSameOwnerIntent_AdvancesBothGenerations
+  ---
+  duration_ms: 2224.206542
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 3
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4298.344959

@@ -1,0 +1,743 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { createHash, createHmac } from "node:crypto"
+import { constants as fsConstants, promises as fs } from "node:fs"
+import { join } from "node:path"
+import { scratch } from "./_session_helpers.js"
+import { factoryStateRoot, readContributionPolicyFile, writeContributionPolicyFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { stableStringify } from "../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
+
+const policy = await import("../../../../../plugins/desk/mcp/src/factory/contribution-policy.js").catch(error => {
+  if (error.code === "ERR_MODULE_NOT_FOUND") return {}
+  throw error
+})
+const STORE = "synthetic/proofs"
+const SESSION = "12345678-1234-4123-8123-123456789abc"
+const hash = value => createHash("sha256").update(value).digest("hex")
+const json = value => `${JSON.stringify(value)}\n`
+const mac = (key, value) => createHmac("sha256", key).update(stableStringify(value)).digest("hex")
+const required = () => assert.equal(typeof policy.planSessionExclusion, "function", "the inert exclusion policy is not implemented")
+
+async function fixture(ctx) {
+  required()
+  const root = await factoryStateRoot(ctx.env, { platform: "linux" })
+  const source = join(ctx.base, "retained-source.txt")
+  await fs.writeFile(source, "Synthetic evidence remains private.\n", { mode: 0o600 })
+  const request = { store: STORE, host: "copilot-cli", session: SESSION, deskRoot: ctx.desk, personPrefix: "" }
+  const key = Buffer.alloc(32, 7)
+  const owner = { deskRoot: ctx.desk, personPrefix: "", machine: "a".repeat(64) }
+  const scope = mac(key, { owner, store: STORE })
+  const authority = {
+    key, owner, target: { store: STORE, host: request.host, session: SESSION },
+    evidence: { ownerScope: scope, kind: "source", digest: hash(await fs.readFile(source)) },
+    consent: { store: STORE, contribute: true },
+    compatibility: { protocol: 1, publisher: "b".repeat(64), storeWitness: "c".repeat(64) },
+  }
+  const f = { ...ctx, root, source, request, key, scope, authority, remote: { state: "submitted", pr: 7, head: "d".repeat(40) } }
+  f.dependencies = {
+    platform: "linux",
+    readAuthority: async () => ({ ...f.authority, key: f.authority.key,
+      evidence: { ...f.authority.evidence, digest: hash(await fs.readFile(source)) } }),
+    observeRemote: async () => structuredClone(f.remote),
+  }
+  f.plan = () => policy.planSessionExclusion(f.env, f.request, f.dependencies)
+  f.apply = plan => policy.applySessionExclusion(f.env, { request: f.request, expectedPlan: plan.planToken }, f.dependencies)
+  f.read = () => policy.readContributionPolicy(f.env, { store: STORE, ownerScope: scope }, f.dependencies)
+  f.directory = join(root, "contribution-policy")
+  f.ledger = join(f.directory, `${scope}.json`)
+  f.activation = join(f.directory, `${scope}.active.json`)
+  return f
+}
+
+async function files(dir) {
+  const result = []
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name)
+    if (entry.isDirectory()) result.push(...await files(file))
+    else result.push([file, hash(await fs.readFile(file))])
+  }
+  return result.sort(([a], [b]) => a.localeCompare(b))
+}
+
+async function reseal(f, change) {
+  const ledger = JSON.parse(await fs.readFile(f.ledger, "utf8"))
+  delete ledger.seal
+  change(ledger)
+  await fs.writeFile(f.ledger, json({ ...ledger, seal: mac(f.key, ledger) }))
+  const activation = { schema: "desk.factory.exclusion/1", ownerScope: f.scope, store: STORE, generation: ledger.generation }
+  await fs.writeFile(f.activation, json({ ...activation, seal: mac(f.key, activation) }))
+}
+
+test("GivenOwnedQueuedSession_WhenExcludedTwice_PersistsOneIntentAndGeneration", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const before = await fs.readFile(f.source)
+  const plan = await f.plan()
+  assert.equal(plan.result, "planned")
+  const applied = await f.apply(plan)
+  assert.equal(applied.result, "excluded")
+  assert.equal(applied.generation, 1)
+  const duplicate = await f.apply(plan)
+  assert.equal(duplicate.result, "already_excluded")
+  assert.equal(duplicate.intentId, applied.intentId)
+  assert.equal(duplicate.generation, 1)
+  const newlyPlanned = await f.apply(await f.plan())
+  assert.equal(newlyPlanned.intentId, applied.intentId)
+  assert.equal(newlyPlanned.generation, 1)
+  const state = await f.read()
+  assert.equal(state.state, "ready")
+  assert.equal(state.generation, 1)
+  assert.deepEqual(policy.contributionAllowed(state, f.request), { allowed: false, code: "session_excluded" })
+  assert.equal(Object.keys(state.exclusions).length, 1)
+  assert.deepEqual(await fs.readFile(f.source), before)
+}))
+
+test("GivenFirstUse_WhenPlannedAndRead_LeavesAllFilesystemBytesUnchanged", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const before = await files(ctx.base)
+  assert.equal((await f.read()).generation, 0)
+  const one = await f.plan()
+  assert.equal(one.planToken, (await f.plan()).planToken)
+  assert.deepEqual(await files(ctx.base), before)
+  assert.ok(!JSON.stringify(one).includes(SESSION))
+  assert.ok(!JSON.stringify(one).includes(ctx.desk))
+}))
+
+for (const state of ["unknown", "conflict", "merged"]) {
+  test(`GivenValidPlan_WhenRemoteBecomes${state}_ExcludesLocallyWithoutRemoteMutation`, () => scratch(async ctx => {
+    const f = await fixture(ctx)
+    const plan = await f.plan()
+    f.remote = { state, pr: 7, head: "e".repeat(40) }
+    const applied = await f.apply(plan)
+    assert.equal(applied.result, "excluded")
+    assert.equal(applied.generation, 1)
+    assert.equal(applied.remote.state, state)
+    assert.equal(applied.withdrawal, state === "conflict" ? "refused" : state === "unknown" ? "unknown" : "pending")
+    assert.equal((await f.apply(plan)).generation, 1)
+    assert.deepEqual(await fs.readFile(f.source, "utf8"), "Synthetic evidence remains private.\n")
+  }))
+}
+
+test("GivenValidPlan_WhenRemoteReadLosesItsResponse_PersistsUnknownNotAnEmptySuccess", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  f.dependencies.observeRemote = async () => { throw Object.assign(new Error("synthetic transport lost response"), { code: "ETIMEDOUT" }) }
+  const result = await f.apply(plan)
+  assert.equal(result.result, "excluded")
+  assert.equal(result.generation, 1)
+  assert.equal(result.remote.state, "unknown")
+  assert.equal(result.remote.code, "observation_failed")
+  assert.equal(result.withdrawal, "unknown")
+}))
+
+test("GivenValidPlan_WhenRemoteCacheDisappears_DoesNotRevokeIndependentOwnerEvidence", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const cache = join(ctx.base, "remote-cache.json")
+  await fs.writeFile(cache, json(f.remote))
+  f.dependencies.observeRemote = async () => JSON.parse(await fs.readFile(cache, "utf8"))
+  const plan = await f.plan()
+  await fs.rename(cache, `${cache}.retained`)
+  const result = await f.apply(plan)
+  assert.equal(result.result, "excluded")
+  assert.equal(result.remote.state, "unknown")
+  assert.equal(result.generation, 1)
+}))
+
+for (const drift of ["owner", "source", "consent", "compatibility", "evidence", "machine"]) {
+  test(`GivenValidPlan_WhenLocal${drift}Changes_RefusesBeforeWritingPolicy`, () => scratch(async ctx => {
+    const f = await fixture(ctx)
+    const plan = await f.plan()
+    if (drift === "owner") f.authority.owner = { ...f.authority.owner, deskRoot: join(ctx.base, "foreign") }
+    if (drift === "source") await fs.writeFile(f.source, "Changed synthetic source.\n")
+    if (drift === "consent") f.authority.consent.contribute = false
+    if (drift === "compatibility") f.authority.compatibility.publisher = "f".repeat(64)
+    if (drift === "evidence") f.authority.evidence.ownerScope = "0".repeat(64)
+    if (drift === "machine") f.authority.owner.machine = "0".repeat(64)
+    const before = await files(f.root)
+    const result = await f.apply(plan)
+    assert.notEqual(result.result, "excluded")
+    assert.equal(result.intentId, undefined)
+    assert.deepEqual(await files(f.root), before)
+  }))
+}
+
+test("GivenDifferentIntentAdvancesPolicy_WhenOldPlanApplied_RefusesStaleLocalGeneration", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const old = await f.plan()
+  const secondRequest = { ...f.request, session: "87654321-1234-4123-8123-123456789abc" }
+  f.authority.target.session = secondRequest.session
+  const second = await policy.planSessionExclusion(f.env, secondRequest, f.dependencies)
+  assert.equal((await policy.applySessionExclusion(f.env, { request: secondRequest, expectedPlan: second.planToken }, f.dependencies)).generation, 1)
+  f.authority.target.session = SESSION
+  assert.equal((await f.apply(old)).result, "plan_changed")
+  assert.equal((await f.read()).generation, 1)
+}))
+
+test("GivenTwoConcurrentIdenticalApplications_WhenSerialized_ProduceOneGeneration", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  const results = await Promise.all([f.apply(plan), f.apply(plan)])
+  assert.equal(new Set(results.map(result => result.intentId)).size, 1)
+  assert.deepEqual(results.map(result => result.generation), [1, 1])
+  assert.equal((await f.read()).generation, 1)
+}))
+
+for (const fault of ["ledger_missing", "ledger_corrupt", "activation_missing", "linked", "symlink", "oversized", "permissions", "schema", "seal"]) {
+  test(`GivenActivatedPolicy_When${fault}_RefusesWithoutRepairOrEmptyFallback`, () => scratch(async ctx => {
+    const f = await fixture(ctx)
+    await f.apply(await f.plan())
+    if (fault === "ledger_missing") await fs.rename(f.ledger, `${f.ledger}.retained`)
+    if (fault === "ledger_corrupt") await fs.writeFile(f.ledger, "{broken")
+    if (fault === "activation_missing") await fs.rename(f.activation, `${f.activation}.retained`)
+    if (fault === "linked") await fs.link(f.ledger, `${f.ledger}.linked`)
+    if (fault === "symlink") { await fs.rename(f.ledger, `${f.ledger}.retained`); await fs.symlink(`${f.ledger}.retained`, f.ledger) }
+    if (fault === "oversized") await fs.writeFile(f.ledger, " ".repeat(1024 * 1024 + 1))
+    if (fault === "permissions") await fs.chmod(f.ledger, 0o644)
+    if (["schema", "seal"].includes(fault)) {
+      const state = JSON.parse(await fs.readFile(f.ledger, "utf8"))
+      if (fault === "schema") state.schema = "desk.factory.exclusion/99"
+      else state.generation = 99
+      await fs.writeFile(f.ledger, json(state))
+    }
+    const read = await f.read()
+    assert.deepEqual(read, { state: "unavailable", code: "policy_unavailable" })
+    assert.deepEqual(policy.contributionAllowed(read, f.request), { allowed: false, code: "policy_unavailable" })
+  }))
+}
+
+test("GivenNoAuthorityAdapterOrSecret_WhenPlanned_RefusesWithoutCreatingAnything", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const before = await files(f.root)
+  assert.equal((await policy.planSessionExclusion(ctx.env, f.request)).result, "ownership_unknown")
+  f.authority.key = null
+  assert.equal((await f.plan()).result, "ownership_unknown")
+  assert.deepEqual(await files(f.root), before)
+}))
+
+test("GivenTamperedPlan_WhenApplied_RefusesWithoutStorageEffects", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  const before = await files(f.root)
+  assert.equal((await f.apply({ ...plan, planToken: `${plan.planToken.slice(0, -1)}!` })).result, "invalid_plan")
+  assert.deepEqual(await files(f.root), before)
+}))
+
+test("GivenMalformedTokenPayload_WhenApplied_ReturnsInvalidPlanNotAnException", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  for (const payload of [null, [], 1, "not a record", {}]) {
+    const result = await f.apply({ planToken: Buffer.from(JSON.stringify(payload)).toString("base64url") })
+    assert.equal(result.result, "invalid_plan")
+  }
+}))
+
+test("GivenMalformedAuthority_WhenRead_RefusesInsteadOfThrowingOrCreatingState", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const before = await files(f.root)
+  const original = structuredClone(f.authority)
+  original.key = f.key
+  for (const bad of [null, 1, {}, { ...original, owner: { ...original.owner, deskRoot: null } },
+    { ...original, consent: { store: null, contribute: true } }]) {
+    f.dependencies.readAuthority = async () => bad
+    assert.equal((await f.plan()).result, "ownership_unknown")
+  }
+  assert.deepEqual(await files(f.root), before)
+}))
+
+test("GivenUnreadableOwnerEvidence_WhenPlanned_ReturnsExplicitUnknown", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  f.dependencies.readAuthority = async () => { throw Object.assign(new Error("synthetic private path"), { code: "EACCES" }) }
+  assert.equal((await f.plan()).result, "ownership_unknown")
+}))
+
+test("GivenMalformedOrForeignSnapshot_WhenAdmissionChecked_NeverAllowsIt", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  for (const value of [null, {}, { state: "ready" }, { state: "ready", generation: 0, exclusions: { x: null } }])
+    assert.deepEqual(policy.contributionAllowed(value, f.request), { allowed: false, code: "policy_unavailable" })
+  const state = await f.read()
+  assert.deepEqual(policy.contributionAllowed(state, { ...f.request, store: "synthetic/foreign" }),
+    { allowed: false, code: "ownership_mismatch" })
+  assert.deepEqual(policy.contributionAllowed(state, f.request), { allowed: true, code: "allowed" })
+  assert.deepEqual(policy.contributionAllowed(state, { store: STORE }), { allowed: false, code: "ownership_mismatch" })
+}))
+
+test("GivenMalformedApplyOrReadOptions_WhenCalled_ReturnsExplicitRefusal", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  for (const input of [null, 1, []]) {
+    assert.equal((await policy.applySessionExclusion(f.env, input, f.dependencies)).result, "invalid_request")
+    assert.equal((await policy.readContributionPolicy(f.env, input, f.dependencies)).state, "unavailable")
+  }
+}))
+
+test("GivenUnqualifiedCompatibilityOrMarkerOnlyEvidence_WhenPlanned_Refuses", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  f.authority.compatibility.protocol = 0
+  assert.equal((await f.plan()).result, "compatibility_unqualified")
+  f.authority.compatibility.protocol = 1
+  f.authority.evidence.kind = "marker"
+  assert.equal((await f.plan()).result, "ownership_unknown")
+}))
+
+test("GivenUnexpectedAuthorityOrRemoteFault_WhenPlanned_PropagatesRatherThanInventingUnknown", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const read = f.dependencies.readAuthority
+  f.dependencies.readAuthority = async () => { throw new Error("synthetic programmer fault") }
+  await assert.rejects(f.plan(), /synthetic programmer fault/)
+  f.dependencies.readAuthority = read
+  f.dependencies.observeRemote = async () => { throw new Error("synthetic observer fault") }
+  await assert.rejects(f.plan(), /synthetic observer fault/)
+}))
+
+test("GivenMalformedRemoteObservation_WhenApplied_RecordsUnknownWithoutPayload", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  f.remote = { state: "merged", payload: "synthetic confidential payload" }
+  const applied = await f.apply(plan)
+  assert.deepEqual(applied.remote, { state: "unknown", code: "observation_failed" })
+  assert.ok(!(await fs.readFile(f.ledger, "utf8")).includes("confidential"))
+}))
+
+test("GivenChangedAuthorityAtApplyLock_WhenRechecked_RefusesBeforeIntent", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  const read = f.dependencies.readAuthority
+  let reads = 0
+  f.dependencies.readAuthority = async (...args) => {
+    if (++reads === 2) f.authority.consent.contribute = false
+    return read(...args)
+  }
+  assert.equal((await f.apply(plan)).result, "not_opted_in")
+  f.authority.consent.contribute = true
+  assert.equal((await f.read()).generation, 0)
+}))
+
+test("GivenLocalConsentChangesDuringRemoteObservation_WhenApplying_RefusesLateWrite", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  f.dependencies.observeRemote = async () => {
+    f.authority.consent.contribute = false
+    return { state: "merged", pr: 7 }
+  }
+  assert.equal((await f.apply(plan)).result, "not_opted_in")
+  f.authority.consent.contribute = true
+  assert.equal((await f.read()).generation, 0)
+}))
+
+test("GivenJournalInputMutatedDuringAuthorityAwait_WhenRecorded_UsesValidatedSnapshot", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  const input = { store: STORE, ownerScope: f.scope, intentId: applied.intentId, expectedRevision: 0,
+    effect: { remote: { state: "unknown" }, withdrawal: "unknown" } }
+  const read = f.dependencies.readAuthority
+  f.dependencies.readAuthority = async (...args) => {
+    input.effect.withdrawal = "withdrawn"
+    return read(...args)
+  }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "recorded")
+  const snapshot = await f.read()
+  assert.equal(snapshot.state, "ready", "caller mutation must not poison the authenticated journal")
+  assert.equal(snapshot.exclusions[applied.intentId].withdrawal, "unknown")
+}))
+
+test("GivenActivatedPolicyBothFilesLost_WhenWitnessStillRequiresGeneration_RefusesFirstUseFallback", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  await fs.rename(f.activation, `${f.activation}.retained`)
+  await fs.rename(f.ledger, `${f.ledger}.retained`)
+  f.dependencies.expectedGeneration = 1
+  assert.deepEqual(await f.read(), { state: "unavailable", code: "policy_unavailable" })
+}))
+
+test("GivenMaximumGeneration_WhenAnotherIntentApplied_RefusesOverflow", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  await reseal(f, ledger => { ledger.generation = Number.MAX_SAFE_INTEGER })
+  f.request = { ...f.request, session: "87654321-1234-4123-8123-123456789abc" }
+  f.authority.target.session = f.request.session
+  const before = await fs.readFile(f.ledger)
+  const result = await f.apply(await f.plan())
+  assert.equal(result.result, "policy_limit")
+  assert.deepEqual(await fs.readFile(f.ledger), before)
+}))
+
+test("GivenUnknownRemoteObservationWithWithdrawnClaim_WhenJournaled_RejectsContradiction", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  const input = { store: STORE, ownerScope: f.scope, intentId: applied.intentId, expectedRevision: 0,
+    effect: { remote: { state: "unknown" }, withdrawal: "withdrawn" } }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "invalid_effect")
+  assert.equal((await f.apply(await f.plan())).revision, 0)
+}))
+
+test("GivenSealedContradictoryOrMalformedPolicy_WhenRead_RefusesIt", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  const pristine = await fs.readFile(f.ledger)
+  for (const mutate of [
+    ledger => { ledger.generation = -1 },
+    ledger => { ledger.ownerScope = "0".repeat(64) },
+    ledger => { Object.values(ledger.exclusions)[0].remote = { state: "unknown" }; Object.values(ledger.exclusions)[0].withdrawal = "withdrawn" },
+    ledger => { Object.values(ledger.exclusions)[0].effects = [{ remote: { state: "unknown" }, withdrawal: "withdrawn" }] },
+    ledger => { Object.values(ledger.exclusions)[0].target.session = "not a session" },
+  ]) {
+    await fs.writeFile(f.ledger, pristine)
+    await reseal(f, mutate)
+    assert.deepEqual(await f.read(), { state: "unavailable", code: "policy_unavailable" })
+  }
+}))
+
+test("GivenPolicyJournalAtItsBound_WhenAnotherEffectArrives_RefusesWithoutTruncatingAudit", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  await reseal(f, ledger => {
+    const intent = ledger.exclusions[applied.intentId]
+    intent.effects = Array.from({ length: 64 }, () => ({ remote: { state: "unknown" }, withdrawal: "unknown" }))
+    intent.revision = 64
+  })
+  const input = { store: STORE, ownerScope: f.scope, intentId: applied.intentId, expectedRevision: 64,
+    effect: { remote: { state: "unknown" }, withdrawal: "unknown" } }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "policy_limit")
+  assert.equal((await f.read()).exclusions[applied.intentId].effects.length, 64)
+}))
+
+test("GivenUnknownIntentOrWrongOwner_WhenJournaled_Refuses", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const input = { store: STORE, ownerScope: f.scope, intentId: "0".repeat(64), expectedRevision: 0,
+    effect: { remote: { state: "unknown" }, withdrawal: "unknown" } }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "intent_unknown")
+  assert.equal((await policy.recordContributionEffect(f.env, { ...input, ownerScope: "0".repeat(64) }, f.dependencies)).result, "ownership_mismatch")
+}))
+
+test("GivenDifferentTargetAuthority_WhenExistingIntentJournaled_RefusesCrossSessionUpdate", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  f.authority.target.session = "87654321-1234-4123-8123-123456789abc"
+  const input = { store: STORE, ownerScope: f.scope, intentId: applied.intentId, expectedRevision: 0,
+    effect: { remote: { state: "unknown" }, withdrawal: "unknown" } }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "ownership_mismatch")
+  f.authority.target.session = SESSION
+  assert.equal((await f.apply(await f.plan())).revision, 0)
+}))
+
+test("GivenSymlinkedPolicyDirectory_WhenRead_RefusesWithoutFollowingIt", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  await fs.rename(f.directory, `${f.directory}.retained`)
+  await fs.symlink(`${f.directory}.retained`, f.directory)
+  assert.deepEqual(await f.read(), { state: "unavailable", code: "policy_unavailable" })
+}))
+
+test("GivenReadOpenIdentityChanges_WhenProtectedFileRead_RefusesIt", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  await test("the actual handle identity is compared", async t => {
+    const open = fs.open.bind(fs)
+    t.mock.method(fs, "open", async (file, ...args) => {
+      const handle = await open(file, ...args)
+      if (file !== f.ledger) return handle
+      return {
+        stat: async () => ({ ...await handle.stat(), ino: -1 }),
+        readFile: (...readArgs) => handle.readFile(...readArgs),
+        close: () => handle.close(),
+      }
+    })
+    assert.deepEqual(await f.read(), { state: "unavailable", code: "policy_unavailable" })
+  })
+}))
+
+test("GivenDirectProtectedStorageRead_WhenPlatformUnqualified_RefusesExplicitly", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await assert.rejects(readContributionPolicyFile(f.env, f.scope, "ledger", { platform: "win32" }), /platform_unqualified/)
+}))
+
+test("GivenOwnerRevokedWhileWaitingForJournalLock_WhenAcquired_RefusesUpdate", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  const read = f.dependencies.readAuthority
+  let reads = 0
+  f.dependencies.readAuthority = async (...args) => {
+    if (++reads === 2) f.authority.consent.contribute = false
+    return read(...args)
+  }
+  const input = { store: STORE, ownerScope: f.scope, intentId: applied.intentId, expectedRevision: 0,
+    effect: { remote: { state: "unknown" }, withdrawal: "unknown" } }
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "not_opted_in")
+  f.authority.consent.contribute = true
+  assert.equal((await f.apply(await f.plan())).revision, 0)
+}))
+
+test("GivenForeignSessionOrRequestShape_WhenPlanned_RefusesExplicitly", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  for (const request of [null, { ...f.request, extra: true }, { ...f.request, session: "87654321-1234-4123-8123-123456789abc" }]) {
+    const result = await policy.planSessionExclusion(f.env, request, f.dependencies)
+    assert.ok(["invalid_request", "ownership_mismatch"].includes(result.result))
+  }
+}))
+
+test("GivenExcludedIntent_WhenEffectRevisionMatches_AppendsAuditAndRefusesStaleRevision", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const excluded = await f.apply(await f.plan())
+  const input = { store: STORE, ownerScope: f.scope, intentId: excluded.intentId, expectedRevision: 0,
+    effect: { remote: { state: "unknown", pr: 7 }, withdrawal: "unknown" } }
+  const recorded = await policy.recordContributionEffect(f.env, input, f.dependencies)
+  assert.equal(recorded.result, "recorded")
+  assert.equal(recorded.revision, 1)
+  assert.equal((await policy.recordContributionEffect(f.env, input, f.dependencies)).result, "revision_changed")
+  const duplicate = await f.apply(await f.plan())
+  assert.equal(duplicate.revision, 1)
+  assert.equal(duplicate.remote.state, "unknown")
+  assert.equal(duplicate.generation, 1)
+}))
+
+test("GivenAtomicPolicyWriteFails_WhenApplying_KeepsEvidenceAndNeverReturnsExcluded", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const plan = await f.plan()
+  const rename = fs.rename.bind(fs)
+  const real = f.dependencies
+  await test("storage fault is observable", async t => {
+    t.mock.method(fs, "rename", async (from, to) => {
+      if (to === f.ledger) throw Object.assign(new Error("synthetic storage failure"), { code: "ENOSPC" })
+      return rename(from, to)
+    })
+    const result = await policy.applySessionExclusion(f.env, { request: f.request, expectedPlan: plan.planToken }, real)
+    assert.equal(result.result, "storage_failed")
+    assert.equal(result.intentId, undefined)
+  })
+  assert.equal((await f.read()).state, "unavailable")
+  assert.equal(await fs.readFile(f.source, "utf8"), "Synthetic evidence remains private.\n")
+}))
+
+// FPI-1/2/3 causal controls: drafted under the validation hold; do not run without the admitted pre-isolation fence.
+const POLICY_BYTE_LIMIT = 1024 * 1024
+const encodedSealed = (f, value) => Buffer.from(json({ ...value, seal: mac(f.key, value) }), "utf8")
+const wideUnknownEffect = () => ({
+  remote: { state: "unknown", pr: Number.MAX_SAFE_INTEGER, head: "e".repeat(40), code: "observation_failed" },
+  withdrawal: "unknown",
+})
+
+async function seedValidPolicyNearByteLimit(f) {
+  const first = await f.apply(await f.plan())
+  const source = JSON.parse(await fs.readFile(f.ledger, "utf8"))
+  delete source.seal
+  const original = source.exclusions[first.intentId]
+  const makeLedger = effectCount => {
+    const exclusions = { [first.intentId]: structuredClone(original) }
+    let remaining = effectCount
+    for (let index = 1; index < 128; index += 1) {
+      const session = `${index.toString(16).padStart(8, "0")}-1234-4123-8123-123456789abc`
+      const id = mac(f.key, { ownerScope: f.scope, host: f.request.host, session, reason: "proof" })
+      const length = Math.min(64, remaining)
+      remaining -= length
+      exclusions[id] = { ...structuredClone(original), target: { host: f.request.host, session },
+        generation: index + 1, revision: length, remote: { state: "unknown" }, withdrawal: "unknown",
+        effects: Array.from({ length }, wideUnknownEffect) }
+    }
+    return { ...source, generation: 128, exclusions }
+  }
+  let low = 0
+  let high = 127 * 64
+  while (low < high) {
+    const count = Math.ceil((low + high) / 2)
+    if (encodedSealed(f, makeLedger(count)).length <= POLICY_BYTE_LIMIT) low = count
+    else high = count - 1
+  }
+  const ledger = makeLedger(low)
+  const bytes = encodedSealed(f, ledger)
+  assert.ok(bytes.length <= POLICY_BYTE_LIMIT)
+  assert.ok(POLICY_BYTE_LIMIT - bytes.length < Buffer.byteLength(JSON.stringify(wideUnknownEffect())) + 1,
+    "the fixture must leave less than one valid journal effect of headroom")
+  await fs.writeFile(f.ledger, bytes)
+  const activation = { schema: "desk.factory.exclusion/1", ownerScope: f.scope, store: STORE, generation: 128 }
+  await fs.writeFile(f.activation, encodedSealed(f, activation))
+  assert.equal((await f.read()).state, "ready", "the below-limit authenticated fixture must be admitted by the actual reader")
+  return { first, ledger, bytes }
+}
+
+test("FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const { first, ledger } = await seedValidPolicyNearByteLimit(f)
+  const effect = wideUnknownEffect()
+  const prospective = structuredClone(ledger)
+  const old = prospective.exclusions[first.intentId]
+  prospective.exclusions[first.intentId] = { ...old, ...effect, revision: 1, effects: [effect] }
+  assert.ok(encodedSealed(f, prospective).length > POLICY_BYTE_LIMIT,
+    "the prospective sealed JSON including its newline must actually exceed the cap")
+  const before = await Promise.all([fs.readFile(f.ledger), fs.readFile(f.activation), fs.readFile(f.source)])
+  const outcome = await policy.recordContributionEffect(f.env, {
+    store: STORE, ownerScope: f.scope, intentId: first.intentId, expectedRevision: 0, effect,
+  }, f.dependencies)
+  assert.equal(outcome.result, "policy_limit")
+  assert.deepEqual(await Promise.all([fs.readFile(f.ledger), fs.readFile(f.activation), fs.readFile(f.source)]), before)
+  assert.equal((await f.read()).state, "ready")
+}))
+
+test("FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const { bytes } = await seedValidPolicyNearByteLimit(f)
+  assert.ok(POLICY_BYTE_LIMIT - bytes.length < 256,
+    "remaining bytes must be fewer than the new intent's four mandatory 64-hex digest fields alone")
+  f.request = { ...f.request, session: "fffffff0-1234-4123-8123-123456789abc" }
+  f.authority.target.session = f.request.session
+  const plan = await f.plan()
+  assert.equal(plan.result, "planned")
+  const before = await Promise.all([fs.readFile(f.ledger), fs.readFile(f.activation), fs.readFile(f.source)])
+  assert.equal((await f.apply(plan)).result, "policy_limit")
+  assert.deepEqual(await Promise.all([fs.readFile(f.ledger), fs.readFile(f.activation), fs.readFile(f.source)]), before)
+  assert.equal((await f.read()).state, "ready")
+}))
+
+for (const name of ["activation", "ledger"]) {
+  test(`FPI1_GivenExactSealedUtf8ByteLimit_WhenWriting${name}_AdmitsLimitAndRefusesOneExtraByteWithoutMutation`, () => scratch(async ctx => {
+    const f = await fixture(ctx)
+    const overhead = Buffer.byteLength(json({ text: "", seal: "f".repeat(64) }), "utf8")
+    const room = POLICY_BYTE_LIMIT - overhead
+    const text = `${"é".repeat(Math.floor(room / 2))}${"a".repeat(room % 2)}`
+    const value = { text, seal: "f".repeat(64) }
+    const expected = Buffer.from(json(value), "utf8")
+    assert.equal(expected.length, POLICY_BYTE_LIMIT, "the byte limit includes actual JSON, seal, UTF-8 and trailing newline")
+    await writeContributionPolicyFile(f.env, f.scope, name, value, { platform: "linux" })
+    assert.deepEqual(await readContributionPolicyFile(f.env, f.scope, name, { platform: "linux" }), expected)
+    const before = await files(f.root)
+    await assert.rejects(
+      writeContributionPolicyFile(f.env, f.scope, name, { ...value, text: `${text}a` }, { platform: "linux" }),
+      /contribution_file_too_large/,
+    )
+    assert.deepEqual(await files(f.root), before)
+  }))
+}
+
+test("FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  const applied = await f.apply(await f.plan())
+  const real = await f.read()
+  const validEntry = real.exclusions[applied.intentId]
+  const target = { ...f.request, session: "87654321-1234-4123-8123-123456789abc" }
+  const base = { ...real, schema: "desk.factory.exclusion/1" }
+  for (const [key, entry] of [
+    ["b".repeat(64), { target: {} }],
+    ["b".repeat(64), { ...validEntry, target: {} }],
+    ["b".repeat(64), { ...validEntry, target: { host: f.request.host } }],
+    ["b".repeat(64), { ...validEntry, target: { session: SESSION } }],
+    ["b".repeat(64), { ...validEntry, target: { host: "foreign-host", session: SESSION } }],
+    ["b".repeat(64), { ...validEntry, target: { host: f.request.host, session: "not-an-id" } }],
+    ["b".repeat(64), { ...validEntry, revision: -1 }],
+    ["malformed-key", validEntry],
+  ]) {
+    assert.deepEqual(policy.contributionAllowed({ ...base, exclusions: { [key]: entry } }, target),
+      { allowed: false, code: "policy_unavailable" })
+  }
+  assert.deepEqual(policy.contributionAllowed({ ...base, schema: "desk.factory.exclusion/99" }, target),
+    { allowed: false, code: "policy_unavailable" })
+  assert.deepEqual(policy.contributionAllowed(base, target), { allowed: true, code: "allowed" })
+  assert.deepEqual(policy.contributionAllowed(base, f.request), { allowed: false, code: "session_excluded" })
+}))
+
+test("FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  const originalEvidence = await fs.readFile(f.source)
+  const parentBefore = await fs.stat(f.directory)
+  const originalLedger = await fs.readFile(f.ledger)
+  const growth = Buffer.alloc(POLICY_BYTE_LIMIT + 256, 0x20)
+  let grew = false
+  let bytesRead = 0
+  let readFileCalls = 0
+  await test("controlled same-inode growth at the held descriptor read boundary", async t => {
+    const open = fs.open.bind(fs)
+    const grow = async () => {
+      if (!grew) { grew = true; await fs.appendFile(f.ledger, growth) }
+    }
+    t.mock.method(fs, "open", async (file, flags, ...args) => {
+      const handle = await open(file, flags, ...args)
+      if (file !== f.ledger || flags !== (fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)) return handle
+      return {
+        stat: () => handle.stat(),
+        readFile: async (...readArgs) => {
+          await grow()
+          readFileCalls += 1
+          const bytes = await handle.readFile(...readArgs)
+          bytesRead += bytes.length
+          return bytes
+        },
+        read: async (buffer, offset, length, position) => {
+          await grow()
+          assert.ok(buffer.byteLength <= POLICY_BYTE_LIMIT + 1)
+          assert.ok(offset + length <= POLICY_BYTE_LIMIT + 1)
+          const read = await handle.read(buffer, offset, length, position)
+          bytesRead += read.bytesRead
+          return read
+        },
+        close: () => handle.close(),
+      }
+    })
+    await assert.rejects(readContributionPolicyFile(f.env, f.scope, "ledger", { platform: "linux" }),
+      /contribution_(?:file_changed|file_unsafe|file_too_large)/)
+    assert.equal(grew, true, "the growth must occur after initial metadata and before the actual descriptor read")
+    assert.ok(bytesRead <= POLICY_BYTE_LIMIT + 1, "post-read rejection must not hide an unbounded allocation/read")
+    assert.equal(readFileCalls, 0, "protected reads must not fall back to unbounded handle.readFile")
+  })
+  assert.deepEqual(await fs.readFile(f.ledger), Buffer.concat([originalLedger, growth]), "refusal must not repair or truncate the grown source")
+  assert.deepEqual(await fs.readFile(f.source), originalEvidence)
+  const parentAfter = await fs.stat(f.directory)
+  assert.deepEqual([parentAfter.dev, parentAfter.ino, parentAfter.mode, parentAfter.uid],
+    [parentBefore.dev, parentBefore.ino, parentBefore.mode, parentBefore.uid])
+}))
+
+test("FPI3_GivenPartialDescriptorReads_WhenReading_ReturnsExactBytesAndClosesAtEof", () => scratch(async ctx => {
+  const f = await fixture(ctx)
+  await f.apply(await f.plan())
+  const expected = await fs.readFile(f.ledger)
+  let closed = 0
+  let eof = false
+  await test("bounded reads tolerate actual short chunks", async t => {
+    const open = fs.open.bind(fs)
+    t.mock.method(fs, "open", async (file, flags, ...args) => {
+      const handle = await open(file, flags, ...args)
+      if (file !== f.ledger || flags !== (fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)) return handle
+      return {
+        stat: () => handle.stat(),
+        read: async (buffer, offset, length, position) => {
+          assert.ok(buffer.length <= POLICY_BYTE_LIMIT + 1)
+          const result = await handle.read(buffer, offset, Math.min(7, length), position)
+          if (result.bytesRead === 0) eof = true
+          return result
+        },
+        close: async () => { closed += 1; await handle.close() },
+      }
+    })
+    assert.deepEqual(await readContributionPolicyFile(f.env, f.scope, "ledger", { platform: "linux" }), expected)
+    assert.equal(eof, true, "an admitted exact-size read must establish EOF within its sentinel budget")
+    assert.equal(closed, 1)
+  })
+}))
+
+for (const fault of ["truncated", "read_error"]) {
+  test(`FPI3_Given${fault}AfterMetadata_WhenReading_RefusesAndClosesWithoutRepair`, () => scratch(async ctx => {
+    const f = await fixture(ctx)
+    await f.apply(await f.plan())
+    const evidence = await fs.readFile(f.source)
+    let closed = 0
+    let reached = false
+    await test("held descriptor failure still closes", async t => {
+      const open = fs.open.bind(fs)
+      t.mock.method(fs, "open", async (file, flags, ...args) => {
+        const handle = await open(file, flags, ...args)
+        if (file !== f.ledger || flags !== (fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)) return handle
+        return {
+          stat: () => handle.stat(),
+          read: async (...readArgs) => {
+            reached = true
+            if (fault === "read_error") throw Object.assign(new Error("synthetic held-read fault"), { code: "EIO" })
+            await fs.truncate(f.ledger, 0)
+            return handle.read(...readArgs)
+          },
+          close: async () => { closed += 1; await handle.close() },
+        }
+      })
+      await assert.rejects(readContributionPolicyFile(f.env, f.scope, "ledger", { platform: "linux" }),
+        fault === "read_error" ? { code: "EIO" } : /contribution_file_changed/)
+      assert.equal(reached, true)
+      assert.equal(closed, 1)
+    })
+    if (fault === "truncated") assert.equal((await fs.readFile(f.ledger)).length, 0)
+    assert.deepEqual(await fs.readFile(f.source), evidence)
+  }))
+}

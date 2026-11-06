@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: AIX3_JournalEffectunknown_Currentwithdrawn
+ok 1 - AIX3_JournalEffectunknown_Currentwithdrawn
+  ---
+  duration_ms: 3481.811791
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectwithdrawn_Currentunknown
+ok 2 - AIX3_JournalEffectwithdrawn_Currentunknown
+  ---
+  duration_ms: 2459.818083
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectconflict_Currentwithdrawn
+ok 3 - AIX3_JournalEffectconflict_Currentwithdrawn
+  ---
+  duration_ms: 1852.997625
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectwithdrawn_Currentconflict
+ok 4 - AIX3_JournalEffectwithdrawn_Currentconflict
+  ---
+  duration_ms: 2514.319125
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectunknown_Currentunknown
+ok 5 - AIX3_JournalEffectunknown_Currentunknown
+  ---
+  duration_ms: 3400.629667
+  type: 'test'
+  ...
+# Subtest: AIX3_JournalEffectconflict_Currentconflict
+ok 6 - AIX3_JournalEffectconflict_Currentconflict
+  ---
+  duration_ms: 3951.184459
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17710.336959

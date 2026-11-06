@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "scope": "Inert Task 1 policy engine and two dedicated protected outbox file primitives only; frozen for independent affected source review",
+  "qualification_correction": {
+    "authority": "Parent validation hold relayed 2026-11-02T11:17:36-08:00; source review continues",
+    "invalidated_claim": "The selected 53-case command cannot be qualified as no-Git/no-native-subprocess validation.",
+    "static_primary_source": "tests/desk/mcp/__tests__/_isolated_env.mjs:188-218",
+    "finding": "Its top-level checkoutConfig() invokes spawnSync('git', ['-C', checkout, 'config', '--list', '--show-scope']); an exit listener calls it again when the initial snapshot is non-null. No earlier child-process fence was present in the retained command.",
+    "not_proved": "This is static selected-entry-path evidence, not an independent OS execution trace, actual config readback or proof of effect absence.",
+    "preserved": "All original logs, 53-pass assertion count, commands, source bytes and source fingerprints are retained unchanged.",
+    "hold": "No new tests, Knip/static runners with unadmitted native paths, Git replay, OS/process/index/user-root lookup or maintained isolation-helper edit. Await separately reviewed/admitted pre-isolation fence/selection.",
+    "potential_future_fence_limit": "A privately admitted fence may seam this Git probe as explicit status128 before isolation loads; that would leave the real repository-config guard unqualified, not prove actual configuration stability. No unexecuted fence is treated as proof."
+  },
+  "authority": "proof-policy-task1-reservation-20261102.txt (byte-identical parent disposition, SHA256 e84eaba31453d9056af65a9e576856175da7f69ba9cad29a2501a76d029e5412); no Task 2 or integration/publication/live authority",
+  "source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "branch": "user/arimendelow/factory-context-optional-card-20261027",
+    "base_head": "cdccc0de13501f210cf8f65f43752709a741f7f7",
+    "observed_origin_main": "cbbd0005b05a5fb2f8f4c3feb35eff11abcbcf07",
+    "state": "uncommitted, not staged, not pushed",
+    "files": [
+      {
+        "path": "plugins/desk/mcp/src/factory/contribution-policy.js",
+        "sha256": "0302c50c252701a6fb39ac604f6819f83b7b71bc1f58cc8e53143058a885f277",
+        "kind": "new inert module",
+        "notes": "No authority adapter registered by default; refuses ownership_unknown before real policy access. Checked adapter integration remains future reserved work."
+      },
+      {
+        "path": "plugins/desk/mcp/src/factory/outbox.js",
+        "sha256": "5085df265958fe397e75a107412dd99d46e60a4ec2e09fc49988e813b472a934",
+        "kind": "imports plus dedicated readContributionPolicyFile/writeContributionPolicyFile",
+        "diff": "62 added,1 replaced; existing root/request/atomic writer behavior unchanged",
+        "notes": "Strict nonrepairing bounded reads; existing protected atomic writer reused. No archive beforeEffect/admit gate added."
+      },
+      {
+        "path": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+        "sha256": "806e3867db9818f53660dc566188617d9edc10e0baf3d9430565c196b4f4e644",
+        "kind": "new synthetic actual-module/isolated-filesystem tests"
+      }
+    ]
+  },
+  "written_review_inputs": {
+    "spec_sha256": "6d88c8c690cc148989f1cbb71e7892d39f2fa5c0b7bdb6fc47e2da3ca4a5a06e",
+    "plan_sha256": "30d19b77b54617bbbf7ea0075d5203f8bcb2205c892c7819d2ed724f971a8ce4",
+    "FEX_1": "discharged by parent at written-contract level only"
+  },
+  "validation": {
+    "command": "node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --experimental-test-coverage --test-coverage-include=plugins/desk/mcp/src/factory/contribution-policy.js --test-coverage-include=plugins/desk/mcp/src/factory/outbox.js --test tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+    "log": "proof-policy-task1-final-unit-coverage.txt",
+    "passed": 53,
+    "failed": 0,
+    "skipped": 0,
+    "runner": "Node built-in test/coverage; maintained isolation preloader with the statically identified unadmitted Git probe; no pre-isolation child-process fence in this command",
+    "policy_module_coverage": { "lines_percent": 97.63, "branches_percent": 93.33, "functions_percent": 100 },
+    "outbox_whole_file_in_this_selection": { "lines_percent": 48.74, "branches_percent": 66.02, "functions_percent": 10.67 },
+    "coverage_limit": "Retained measurement of this selected run only; no-Git/no-native qualification invalidated. Not the maintained complete changed-file 100% gate or whole repository baseline.",
+    "syntax": "node --check passed for both production files",
+    "whitespace": "git diff --check passed",
+    "unused_code": "Retained tools/unused-code npm run knip exit-success output in proof-policy-task1-final-knip.txt; this does not certify no native effects. Reruns held pending entry-path qualification.",
+    "dependencies": "No manifest, lockfile, tooling installation or dependency changes"
+  },
+  "red_evidence": [
+    { "log": "proof-policy-task1-red.txt", "result": "29 missing-feature assertions failed before the production module existed" },
+    { "log": "proof-policy-task1-green-attempt1.txt", "result": "first candidate exposed readonly state-home permission mismatch; retained, not counted as GREEN" },
+    { "log": "proof-policy-task1-boundaries-red.txt", "result": "malformed token/authority, unreadable evidence, unsafe snapshot, unknown-as-withdrawn and journal authority-race regressions" },
+    { "log": "proof-policy-task1-storage-red.txt", "result": "malformed apply/snapshot and authenticated contradictory policy state regressions" },
+    { "log": "proof-policy-task1-journal-target-red.txt", "result": "same-owner different-target journal mutation was wrongly accepted before exact-target check" },
+    { "log": "proof-policy-task1-late-admission-red.txt", "result": "local consent change across observation was wrongly accepted; initial payload-poison case also retained" },
+    { "log": "proof-policy-task1-payload-red.txt", "result": "explicit ready-versus-unavailable assertion proved mutable caller input could poison the authenticated journal" }
+  ],
+  "proven_unit_behaviors": [
+    "Authenticated separate original local/remote digests; remote known-to-unknown/conflict/merged/cache-loss permits one valid local exclusion",
+    "Foreign or changed local authority/source/consent/compatibility/policy refuses",
+    "Deterministic intent, exact duplicate lookup before stale-generation rejection, one generation under concurrent asynchronous calls",
+    "Read-only plan/read with no new secret/plan/status/hidden file creation",
+    "Known missing activated policy, corrupt/linked/unsafe/oversized/wrong-schema/wrong-seal state never becomes empty permission",
+    "Policy intent storage before any future queue movement; original synthetic evidence remains byte-identical",
+    "Atomic write failure never reports excluded; activation/ledger mismatch becomes explicitly unavailable",
+    "Exact journal revision and target, immutable validated inputs, no unknown-as-withdrawn claim",
+    "Late consent recheck after asynchronous remote observation"
+  ],
+  "qualification_limits_and_review_risks": [
+    "Policy/storage test cases explicitly requested platform linux and synthetic owned temporary fixtures. This body-level selection does not qualify the whole run: the isolation preloader has a statically identified Git subprocess path, so prior no-Git/no-native claims are withdrawn; no independent OS trace was collected.",
+    "Darwin readonly ACL-listing branch is implemented but not natively exercised. Windows readonly policy protection explicitly refuses as unqualified; no cross-platform support claim.",
+    "Authority/evidence and destination observations are synthetic trusted read-only adapters. Actual native source ownership, real secret/consent, authenticated destination and compatibility witnesses are not integrated or qualified.",
+    "Concurrent asynchronous callers exercise the existing filesystem lock; this is not two real process/reboot recovery proof.",
+    "Failed first ledger replacement after the activation write leaves policy unavailable; this unit does not claim an automatic repair of torn storage or a complete self-healing loop.",
+    "No aggregate maximum serialized ledger-write preflight is claimed beyond bounded records/journals and the strict 1MiB reader. Review whether further bounded-write admission is required.",
+    "Only inert policy audit/state changes exist. Actual copy movement, derive/capture/context/final transport locks and guards remain unwired/unreserved.",
+    "New writer reuses existing protected writer side effects; no archive zero-effects-on-racing-marker guarantee or broad beforeEffect callback is supplied."
+  ],
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does it break a Lean principle or the terrarium?",
+    "Is the mandatory trusted authority-adapter boundary honest and fail-closed, rather than a pretend live ownership verifier?",
+    "Do torn-storage recovery and aggregate write bounds require correction inside this Task 1 reservation before its source finding can close?"
+  ],
+  "scope_and_effect_evidence": [
+    "Policy tests and supplied adapters are written against synthetic identity/evidence/secret/observation inputs and owned isolated fixture files; this is source/test evidence, not an independent host-effect audit.",
+    "Whole-run native/Git absence is NOT established. The selected isolation helper contains top-level and conditional exit-time Git config probes.",
+    "No CI dispatch, commit, push, PR, installation, activation or live suppression/withdrawal operation was intentionally issued in this source unit; no such action is authorized by the correction.",
+    "No new task, writer, branch, worktree, helper service or account/global/permission change was intentionally created as part of this source unit."
+  ],
+  "resources": {
+    "new_resources": "Three task-owned source files/hunks and private task-local evidence only; no new worktree/branch/process",
+    "remaining_commands": "All own bounded test/static-check commands completed",
+    "durability": "Source remains in the exact existing checkout; reports local/uncommitted in the desk. No remote checkpoint or canonical task update claimed."
+  },
+  "next": "Static source review/remediation planning only under the validation hold. Await independent review/admission of any pre-isolation fence/selection before further tests or runners; no Task 2, source expansion, integration, platform support claim, publication or live action."
+}

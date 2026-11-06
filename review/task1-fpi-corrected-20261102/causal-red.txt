@@ -1,0 +1,162 @@
+TAP version 13
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+not ok 1 - FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+  ---
+  duration_ms: 382.945375
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:554:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'recorded'
+    - 'policy_limit'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'policy_limit'
+  actual: 'recorded'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:567:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+not ok 2 - FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+  ---
+  duration_ms: 318.016333
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:572:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'excluded'
+    - 'policy_limit'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'policy_limit'
+  actual: 'excluded'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:582:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+not ok 3 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 36.144333
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:588:3'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  operator: 'rejects'
+  stack: |-
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:599:5
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+not ok 4 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 53.416792
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:588:3'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  operator: 'rejects'
+  stack: |-
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:599:5
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+not ok 5 - FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+  ---
+  duration_ms: 22.762917
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:607:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   allowed: true,
+    +   code: 'allowed'
+    -   allowed: false,
+    -   code: 'policy_unavailable'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    allowed: false
+    code: 'policy_unavailable'
+  actual:
+    allowed: true
+    code: 'allowed'
+  operator: 'deepStrictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:624:12
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+    # Subtest: controlled same-inode growth at the held descriptor read boundary
+    not ok 1 - controlled same-inode growth at the held descriptor read boundary
+      ---
+      duration_ms: 3.303583
+      type: 'test'
+      location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:643:9'
+      failureType: 'testCodeFailure'
+      error: 'post-read rejection must not hide an unbounded allocation/read'
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: true
+      actual: false
+      operator: '=='
+      stack: |-
+        TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:674:12)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+        async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:643:3
+        async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    1..1
+not ok 6 - FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+  ---
+  duration_ms: 29.380834
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js:633:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..6
+# tests 7
+# suites 0
+# pass 0
+# fail 7
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 881.15025

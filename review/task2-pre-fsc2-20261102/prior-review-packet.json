@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "status": "FSC-1 author correction frozen for independent affected pure-source review; not independently discharged or integrated",
+  "finding": {
+    "id": "FSC-1",
+    "severity": "Medium",
+    "parent_confidence": "97%",
+    "received": "2026-11-02T12:11:15-08:00",
+    "scope": "Supplied DATA accessor/coherence defect only; no live adapter exploit or publication claim"
+  },
+  "preservation": {
+    "pre_fsc_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/manifest.json",
+    "original_source_hashes": {
+      "module": "35cd1396e5ffdccb31cc65bedd8db2744a315bd2b6428bf5928416f3cdf31922",
+      "tests": "e864f3a70d4d66d41776425275b16aefb0458d9548263e0b29f0bb2b2ffa4850",
+      "docs": "433f41d699866280d09cd4f89b8c0742ef4b7ca889a62c41c10893b24c0f1fa5"
+    },
+    "original_114_receipt_hash": "675d1438457c55355afe47de369027318866d1431698e51a3d27973ba1128d4f",
+    "prior_packet_hash": "ee096e86dd73ef519fb376d31eacf50cee9e0a900fee0447a836659dccf3b817",
+    "historical_evidence": "Original source, 114-case receipt and packet were preserved before edits. Prior 53-run no-Git/no-native qualification withdrawal is unchanged.",
+    "intermediate_fsc_copy": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/manifest.json",
+    "final_frozen_copy": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-final-v2-20261102/manifest.json",
+    "boundary": "Local immutable filesystem copies and readback only, not a commit/push/off-host backup or OS-effect proof; review directories are not product files to stage"
+  },
+  "corrected_source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "scope": "Same reserved contribution-schema.js, contribution_schema.test.js and directly related documentation only",
+    "files": [
+      { "path": "plugins/desk/mcp/src/factory/contribution-schema.js", "bytes": 21465, "sha256": "8ea07bbf150535f1fbc67da5e4b971341c3659ae515d2dfb25e65c75d4e1e120" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js", "bytes": 30950, "sha256": "e4938fd85c7329479c73918da93d258eff4e609e4def5c22c21be1dbd5dc3219" },
+      { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 7274, "sha256": "3eef2a4f51ea9d71f4ea2f5f5cdae88a476cfba87c8c971948a6962e7a51456b" }
+    ],
+    "task1_verified_unchanged": [
+      "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac",
+      "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+      "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    ],
+    "git_state": "No Git probe/stage/commit/push performed; recorded earlier branch/base continuity is not a fresh ref-state claim"
+  },
+  "correction": {
+    "one_snapshot": "Context/set entry points inspect one bounded graph via descriptors, then materialize it. Helpers consume only this inert snapshot, not original receiver properties.",
+    "rejection": "Proxies rejected before reflection/traps; non-data/custom prototypes, own accessors, executable hooks/functions/symbols, cycles and unsupported references refuse without invoking them. No JSON.stringify/structuredClone/iterator/toJSON rejection probe is applied to the original graph.",
+    "buffers": "Native byte-length/backing getters and native typed-array copy preserve admitted ordinary Buffer contents. Shared/proxied/custom-prototype Buffers and own byte-conversion hooks refuse. Extra non-byte Buffer properties are not copied or invoked.",
+    "parse": "Wire bytes are captured, decoded and parsed/validated as one value reused by later checks. Existing object validators/canonical helper are reused locally; no shared schema module is rewritten.",
+    "preallocation": "Graph and typed-payload caps are checked before materialization: depth16, nodes10000, object fields64, array entries500, graph byte content24MiB; existing envelope/withdrawal/capture/context caps and 16MiB change-set budget apply to the descriptor plan before Buffer copies.",
+    "shared_references": "Repeated plain data/byte references are captured once; operational change-set bytes still count each occurrence. Cyclic graphs refuse.",
+    "errors": "Fixed refusal codes/paths only; original PRIVATE_SENTINEL getter/proxy/hook exceptions are never executed or echoed in accepted rejection controls",
+    "authority": "Snapshot discipline is not live actor/provenance/capability authentication. FEX local/remote authority separation and all later integration gates remain unchanged."
+  },
+  "causal_validation": {
+    "getter_red": {
+      "log": "proof-schema-task2-fsc-fenced-red.txt",
+      "sha256": "5f1ca2d4a7d3616a745d7eb584237b43d45488ec0d749b8b77a691726a6eda74",
+      "tests": 14,
+      "failed": 12,
+      "passed": 2,
+      "meaning": "Changing/throwing accessor, inherited/proxy/array/Buffer-hook failures reproduced before correction; source records are synthetic, not a live exploit trace"
+    },
+    "getter_green": {
+      "log": "proof-schema-task2-fsc-fenced-green-attempt1.txt",
+      "sha256": "bbac4ff0acc84453bedc44a7158693937a20660346f82b0dcaf69ca2f1642200",
+      "tests": 14,
+      "passed": 14,
+      "failed": 0,
+      "skipped": 0
+    },
+    "preallocation_red": {
+      "log": "proof-schema-task2-fsc-preallocation-red.txt",
+      "sha256": "8a330ec5c46d6fb7da3316a77534e009ca08e422a6c64f2c56e54747f22cb4bc",
+      "tests": 2,
+      "failed": 2,
+      "meaning": "Actual copy counters showed 16777217 and 4097 bytes copied before existing payload-cap refusal; the final correction refuses before those copies."
+    },
+    "final_combined": {
+      "log": "proof-schema-task2-fsc-final-fenced-coverage.txt",
+      "sha256": "0733e78d5c73fa3e64f1c1efb2aa124d6f30c2915c7e63fb2f1c661139925bd7",
+      "tests": 136,
+      "passed": 136,
+      "failed": 0,
+      "skipped": 0,
+      "scope": "Preserved Task1 and pure Task2 source selections only"
+    },
+    "positive_controls": "Ordinary objects/Buffers/shared noncyclic references, exact byte/count caps, sequence+1, legitimate sibling facts/context and supplied public-withdrawal semantics stay accepted",
+    "negative_controls": "Sequence4-to-sequence1 getter, private throwing getters, changing proposed/lineage/record-list values, hidden/inherited accessors, proxy traps, Buffer hooks, non-data refs/cycles/depth, large array, shared memory and pre-copy aggregate/individual caps refuse with zero callback calls; set failures return null, never empty/prefix success"
+  },
+  "runner": {
+    "node": "v22.23.3",
+    "fence": "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+    "fence_sha256": "a19b5a09477b1c0b5a49b7061574936197e7afa40007973014f173ea58e4ce14",
+    "fence_bytes": 2059,
+    "ordering": "Exact hash verified before each test startup; fence FIRST --import, maintained isolation SECOND, --experimental-test-isolation=none and --test-concurrency=1",
+    "selected_tests": [
+      "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "tests/desk/mcp/__tests__/factory/contribution_schema.test.js"
+    ],
+    "coverage_includes": [
+      "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "plugins/desk/mcp/src/factory/contribution-schema.js",
+      "plugins/desk/mcp/src/factory/outbox.js"
+    ],
+    "coverage": {
+      "schema": { "line_percent": 98.81, "branch_percent": 91.51, "function_percent": 100 },
+      "policy": { "line_percent": 97.74, "branch_percent": 94.09, "function_percent": 100 },
+      "whole_outbox_in_selection": { "line_percent": 48.95, "branch_percent": 68.42, "function_percent": 10 }
+    },
+    "qualification": "Builtin source-call fence/order only. Git-status128 is synthetic; actual repository-config guard remains UNQUALIFIED. No OS sandbox, independent OS-effect trace, native ACL/platform or full changed-file100%CI proof.",
+    "unexpected_forbidden_call": "None surfaced in retained selected receipts; no independent absence trace is claimed",
+    "tools_not_rerun": "No npm/Knip/native/CI runner or Git/config/index/user-root/OS probe"
+  },
+  "review_limits": [
+    "Snapshot caps qualify bounded data materialization; native reflection/runtime heap allocation is not independently OS-profiled or sandboxed.",
+    "The runtime's standard JS intrinsics/prototypes are trusted; this is not a compromised-runtime defense.",
+    "Buffers are byte views, not general property bags; unused non-byte properties are discarded, never consumed.",
+    "Input capability/verified-lineage values remain supplied DATA, not real authentication or authority.",
+    "Actual trusted adapters, pipeline/CLI/workflow/store/reader/capture2/activation/publication, native/platform, installed/runtime and end-to-end withdrawal remain unreserved/unqualified."
+  ],
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does it break a Lean principle or the terrarium?",
+    "Does descriptor-only capture reject executable/ref/accessor inputs without invoking them, preserve admitted bytes and apply existing limits before materialization?",
+    "Do the same captured/parsed values serve validation and verdict without rereading a receiver or minting live authority?"
+  ],
+  "resources_and_next": {
+    "resources": "Existing source checkout and explicitly retained original/intermediate/final review-copy directories; none are product staging inputs",
+    "commands": "All own bounded test/metadata/preservation commands completed; no service/helper/worker/branch/worktree added",
+    "durability": "Local/uncommitted source and private desk receipts only; no canonical task update, commit, push, PR or off-host backup claimed",
+    "next": "Independent affected FSC-1 pure-source recheck at these fingerprints before any integration or wider authority"
+  }
+}

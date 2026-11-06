@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "status": "FSC-2 author correction frozen for independent affected pure-source review; not independently discharged or integrated",
+  "finding": {
+    "id": "FSC-2",
+    "severity": "Medium",
+    "parent_confidence": "96%",
+    "received": "2026-11-02T12:46:40.987-08:00",
+    "parent_disposition": "Parent reports 6daa discharged FSC-1 accessor/coherence correction; FSC-2 still blocks pure Task2. Full parent record forthcoming.",
+    "scope": "Detached native Buffer supplied-data boundary; original report was a static counterexample, not a live/native-tool fault trace"
+  },
+  "preservation": {
+    "before_edits": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc2-20261102/manifest.json",
+    "original_source": [
+      { "sha256": "8ea07bbf150535f1fbc67da5e4b971341c3659ae515d2dfb25e65c75d4e1e120", "bytes": 21465 },
+      { "sha256": "e4938fd85c7329479c73918da93d258eff4e609e4def5c22c21be1dbd5dc3219", "bytes": 30950 },
+      { "sha256": "3eef2a4f51ea9d71f4ea2f5f5cdae88a476cfba87c8c971948a6962e7a51456b", "bytes": 7274 }
+    ],
+    "prior_136_receipt_sha256": "0733e78d5c73fa3e64f1c1efb2aa124d6f30c2915c7e63fb2f1c661139925bd7",
+    "prior_packet_sha256": "920f44d5143ccdc4787f5236b3d5b4a918462ab44f7ae928d7e7e6b151cd661f",
+    "final_freeze": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc2-final-v3-20261102/manifest.json",
+    "final_manifest_sha256": "c8c2d3fc1119fc96407ce2b8e1435279e68d4cad1c50f066d76e5e6419a01568",
+    "boundary": "Exact local copies/readback only, not product staging inputs, Git/config verification or remote backup. Original FSC-1 and earlier qualification records remain intact."
+  },
+  "source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "files": [
+      { "path": "plugins/desk/mcp/src/factory/contribution-schema.js", "bytes": 21636, "sha256": "c26bf083ff721d0068299fb87da492b4a84635151bcc9c7a646c207bac430d1b" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js", "bytes": 34837, "sha256": "7214396efc693332cec489fed1b1a543f316084201d95efd38489c75b970159d" },
+      { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 7842, "sha256": "4ddb4ad0164cf40d42330a05b038c18628ebbc92b24cf3e41e760bf715c5d6a2" }
+    ],
+    "task1_verified_unchanged": [
+      "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac",
+      "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+      "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    ],
+    "git": "No Git/ref/index/config probe or mutation; prior recorded checkout/branch ownership is not a fresh ref-state claim"
+  },
+  "correction": {
+    "native_brand": "types.isUint8Array refuses prototype-only Buffer impostors before native backing/length getters; proxy rejection still precedes this branch.",
+    "boundary": "Only TypeError from the captured native Uint8Array.prototype.set call becomes DataInputError(non_data_input). Outer snapshot catch remains DataInputError-only. Allocation and unrelated errors are outside this normalization.",
+    "empty": "Detached views reporting zero byte length still hit native copy validation and refuse; attached empty views proceed to ordinary JSON refusal. Unknown/unusable is never valid empty data.",
+    "unchanged_contracts": "Descriptor/getter-free preflight, payload-before-copy caps, admitted Buffer copies/shared references and one captured parsed value remain. No shared schema rewrite or live authority adapter.",
+    "setup_only": "Fresh unpooled ArrayBuffer-backed Buffers are detached with structuredClone(backing,{transfer:[backing]}) solely in synthetic test setup; no validation/rejection path invokes structuredClone or detaches a caller input."
+  },
+  "validation": {
+    "causal_red": {
+      "log": "proof-schema-task2-fsc2-fenced-red.txt",
+      "sha256": "f06b86c28e97c5cbfff42e78f48b5a8bde27b80df3421db032cf5aecb514ddb3",
+      "tests": 17,
+      "failed": 15,
+      "passed": 2,
+      "exit": 1,
+      "meaning": "Fourteen empty/nonempty detached direct/context/set cases reproduced native set TypeError before correction. One secondary prototype-impostor case actually reproduced incompatible native backing getter TypeError in this runtime. Attached empty/nonempty/shared-reference controls passed."
+    },
+    "focused_green": {
+      "log": "proof-schema-task2-fsc2-fenced-green.txt",
+      "sha256": "5e31c214230ba7040b1a0bf4c299a79adf2281ab9f22441713b65e42b1faf039",
+      "tests": 18,
+      "passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "exit": 0,
+      "extra_control": "A synthetic Buffer.alloc TypeError propagates as the exact same error object, proving native-copy normalization did not become a broad snapshot/allocation catch."
+    },
+    "combined": {
+      "log": "proof-schema-task2-fsc2-final-fenced-coverage.txt",
+      "sha256": "5de863fd9669487bad6a7e3ee23c0255d48ec46c19bcfb21a3de4ec5fc419438",
+      "tests": 154,
+      "passed": 154,
+      "failed": 0,
+      "skipped": 0,
+      "exit": 0,
+      "scope": "Admitted unchanged Task1 and pure Task2 source selections only; not the full repository suite"
+    },
+    "public_surfaces": "Both direct validators; context base/proposed/change/current-withdrawal bytes; set projection after a valid prefix. Detached failures return fixed non_data_input refusal without throwing or PRIVATE_SENTINEL echo; set failure has sessions:null, not empty/prefix success.",
+    "preserved_controls": "Attached empty JSON refusal, attached unpooled nonempty record success, repeated byte references and legitimate set members; prior FSC-1 callback-zero/preallocation/sequence/sibling controls pass in the combined selection."
+  },
+  "runner": {
+    "node": "Existing v22.23.3",
+    "fence": "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+    "fence_sha256": "a19b5a09477b1c0b5a49b7061574936197e7afa40007973014f173ea58e4ce14",
+    "ordering": "Fence hash verified before each selected test startup; fence FIRST --import, maintained _isolated_env.mjs SECOND; --experimental-test-isolation=none --test-concurrency=1",
+    "focused_selection": "--test-name-pattern=FSC2 tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+    "combined_selection": "--experimental-test-coverage --test-coverage-include=plugins/desk/mcp/src/factory/contribution-policy.js --test-coverage-include=plugins/desk/mcp/src/factory/contribution-schema.js --test-coverage-include=plugins/desk/mcp/src/factory/outbox.js --test tests/desk/mcp/__tests__/factory/contribution_policy.test.js tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+    "coverage": {
+      "schema": { "line_percent": 98.82, "branch_percent": 91.64, "function_percent": 100 },
+      "policy": { "line_percent": 97.74, "branch_percent": 94.09, "function_percent": 100 },
+      "whole_outbox_in_selection": { "line_percent": 48.95, "branch_percent": 68.42, "function_percent": 10 }
+    },
+    "qualification": "Builtin source-call fence/order only, not an OS sandbox or independent OS-effect trace. Synthetic Git status128 makes actual repo-config guard UNQUALIFIED. Original53 qualification withdrawal remains.",
+    "unadmitted_calls": "No forbidden external tool invocation surfaced in selected receipts; no independent absence trace claimed. No npm/Knip/CI/network/model/native ACL or OS/Git probes."
+  },
+  "lean_reading": {
+    "concept": "Poka-yoke and jidoka",
+    "implication": "Unusable byte views explicitly stop with fixed refusal; zero-length metadata cannot masquerade as valid empty contribution data. The cause is corrected and verified without operator repair, not merely reported."
+  },
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does this break a Lean principle or the terrarium?",
+    "Is normalization confined to the captured native byte-copy TypeError while genuine brand checks precede backing getters and unrelated faults still propagate?",
+    "Do detached zero/nonzero views refuse across all public supplied-data paths with null set failure, while attached bytes, getter-free capture and preallocation caps remain intact?"
+  ],
+  "limits_and_next": {
+    "status": "FSC-2 author-addressed; independent 6daa affected review pending",
+    "authority": "Still pure/unwired/inert; no pipeline/CLI/store/workflow/reader/activation/integration/publication/live queue or withdrawal authority",
+    "runtime": "Standard JS intrinsics trusted; no compromised-runtime, native platform/ACL, installed consumer, full100CI or end-to-end acceptance claim",
+    "resources": "Existing owned source checkout and exact retained review-copy resources only; no new writer/worktree/helper/service",
+    "durability": "Local/uncommitted product source and private mapped progress/receipts only; no canonical task update, commit/push/PR or remote backup claimed",
+    "commands": "All own bounded commands completed"
+  }
+}

@@ -1,0 +1,560 @@
+TAP version 13
+# Subtest: FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+not ok 1 - FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 1.676
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:663:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    publicBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:207:20)
+    Module.validateContributionBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:214:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:71
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+not ok 2 - FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.14575
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:663:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    publicBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:207:20)
+    Module.validateWithdrawalBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:218:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:71
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+not ok 3 - FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 2.14075
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+not ok 4 - FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.657667
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+not ok 5 - FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.368458
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+not ok 6 - FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.268875
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+not ok 7 - FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.23525
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:683:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.withdrawnPublicSessions (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:242:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:689:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:689:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+not ok 8 - FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.077959
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:663:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    publicBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:207:20)
+    Module.validateContributionBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:214:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:71
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+not ok 9 - FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.664167
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:663:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    publicBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:207:20)
+    Module.validateWithdrawalBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:218:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:71
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:667:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+not ok 10 - FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.549125
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+not ok 11 - FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.831667
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+not ok 12 - FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.275833
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+not ok 13 - FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.233083
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:672:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.checkContributionIntake (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:287:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:48
+    getActual (node:assert:609:5)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:679:14)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+not ok 14 - FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.093541
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:683:3'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer'
+  name: 'TypeError'
+  stack: |-
+    Buffer.set (<anonymous>)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:103:17)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    materialize (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:110:50)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:116:31)
+    Module.withdrawnPublicSessions (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:242:20)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:689:46
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:689:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+ok 15 - FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+  ---
+  duration_ms: 0.331083
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+ok 16 - FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+  ---
+  duration_ms: 2.951958
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+not ok 17 - FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.1235
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:722:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception.
+    Actual message: "Method get %TypedArray%.prototype.buffer called on incompatible receiver [object Object]"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'Method get %TypedArray%.prototype.buffer called on incompatible receiver [object Object]'
+  name: 'TypeError'
+  stack: |-
+    get buffer (<anonymous>)
+    inspect (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:63:100)
+    snapshotData (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:114:18)
+    publicBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:207:20)
+    validateContributionBytes (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js:214:10)
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:728:42
+    getActual (node:assert:609:5)
+    Function.doesNotThrow (node:assert:777:32)
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:728:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js:728:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 2
+# fail 15
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 63.559333

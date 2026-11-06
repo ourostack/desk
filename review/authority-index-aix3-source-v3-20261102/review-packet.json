@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "status": "AIX3 author correction frozen for affected review; not independently discharged",
+  "prior": "authority-index-aix-source-review-v2-20261102.json",
+  "parent_disposition": "AIX1/2 discharged at affected-source level; AIX3 blocked v2. This candidate changes only AIX3 equality, tests and related doc.",
+  "preserved_before_edit": {
+    "manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-pre-aix3-20261102/manifest.json",
+    "sha256": "e0c97d297c6bbb84f955168533a95dc07f54b8bfe967dca71474b60c6311dc8e",
+    "includes": "Exact v2 changed files, packet/manifest and119+4 receipts; full earlier generations remain retained"
+  },
+  "defect_evidence_effect": "Existing-intent transition independently validated current remote/withdrawal and appended effect but did not require equality; four actual-function inconsistent pairs committed before repair, including unknown journal with falsely withdrawn current state.",
+  "repair": "At existing-intent journal transition validation, require stable exact equality between the last appended effect and {remote,withdrawal} before any transaction image/receipt writes. Prior immutable fields, prefix/revision/generation checks and new-initial-intent rules remain unchanged.",
+  "changed": [
+    { "path": "plugins/desk/mcp/src/factory/contribution-index.js", "bytes": 17356, "sha256": "286e32d40d84ec2867439cf88933c8f5250e5eb9dcbac0441b9dc68642a93793" },
+    { "path": "tests/desk/mcp/__tests__/factory/contribution_index.test.js", "bytes": 26579, "sha256": "fae4feaefc7c226958ffe01075fa60ed228fc6520261cefa1cc349ac0fc4f0df" },
+    { "path": "plugins/desk/docs/factory-contribution-schema.md", "bytes": 13230, "sha256": "176737f81ee24d848e6e576ebf34482d766c037ce16b892f4ed647061d3c3cf7" }
+  ],
+  "unchanged": "Other11 v2 source/test/doc pins verified unchanged. Outbox67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1 unchanged.",
+  "causal": {
+    "cases": "unknown effect/withdrawn current; withdrawn effect/unknown current; conflict-refused effect/withdrawn current; withdrawn effect/conflict-refused current; matching unknown and matching conflict positives",
+    "negative_effects": "Actual function returns invalid_images; exact index/transaction/owner-pair bytes and receipt directory unchanged",
+    "positive": "Matching pair commits journal revision only, owner/intake generations stay1; duplicate returns already_committed with no additional revision",
+    "red": { "log": "authority-aix3-red-20261102.txt", "tests": 6, "passed": 2, "failed": 4, "sha256": "f3151da1ff4e79196cf2983caee399f3b4de20af601392777033d4c7baaff7b2" },
+    "green": { "log": "authority-aix3-green-20261102.txt", "tests": 6, "passed": 6, "failed": 0, "sha256": "c61e3384b4756f0e52443275964e3d3e69bae529b1728c9f9178145122c0d619" }
+  },
+  "current_validation": {
+    "core": { "log": "authority-aix3-core-20261102.txt", "tests": 125, "passed": 125, "failed": 0, "skipped": 0, "sha256": "17fe35eecf83ef8a48629e8645612e5fa444c7617deba5c9aee6d382b06bb265" },
+    "four_exact_cli_negative_lock": { "log": "authority-aix3-cli-lock-20261102.txt", "pattern": "^ContributionAuthority_(Cli|FlushLock)", "tests": 4, "passed": 4, "failed": 0, "skipped": 0, "sha256": "9d4e427572cd8106b324c18b9e6c46f09465595a01597badb83ab391276ad034" },
+    "ordering": "Exacta19b hash verified; unchanged FIRST fence/SECOND maintained isolation/in-process one worker. Same admitted files/names as v2; no coverage rerun or native expansion.",
+    "limits": "Maintained-native compatibility HELD; realconfigguard UNQUALIFIED(synthetic128); no OS/native/platform/CI/installed/store/activation/publication proof. Prior qualifications retained."
+  },
+  "freeze": {
+    "manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/authority-index-aix3-source-v3-20261102/manifest.json",
+    "sha256": "9c8b90d2c884180171dd90738b8fc82390021d58ee388a6625aaaa74e5c6850a",
+    "boundary": "Exact local copies only, not product staging/off-host persistence"
+  },
+  "lean": "Poka-yoke: independently valid but contradictory journal/current states must not read as completed withdrawal. Local consistency correction only; operational loop remains unwired.",
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does this break a Lean principle or the terrarium?",
+    "Does exact appended-effect/current equality stop false summaries before image effects while preserving matching journal, effective generation, new-intent and retry contracts?"
+  ],
+  "resources": "Same owner/task/checkout, no agents or helpers; all bounded commands finished. Local/uncommitted; no source publication, live action, outbox or producer/store/581 expansion."
+}

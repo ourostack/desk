@@ -1,0 +1,55 @@
+{
+  "scope": "FSC2 final pure Task2 source/receipts; Task1 verified unchanged; local copies only, not product staging, Git or OS proof",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "review/task2-fsc2-final-v3-20261102/contribution-schema.js.source",
+      "bytes": 21636,
+      "sha256": "c26bf083ff721d0068299fb87da492b4a84635151bcc9c7a646c207bac430d1b"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "review/task2-fsc2-final-v3-20261102/contribution_schema.test.js.source",
+      "bytes": 34837,
+      "sha256": "7214396efc693332cec489fed1b1a543f316084201d95efd38489c75b970159d"
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "path": "review/task2-fsc2-final-v3-20261102/factory-contribution-schema.md.source",
+      "bytes": 7842,
+      "sha256": "4ddb4ad0164cf40d42330a05b038c18628ebbc92b24cf3e41e760bf715c5d6a2"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc2-fenced-red.txt",
+      "path": "review/task2-fsc2-final-v3-20261102/causal-red.txt",
+      "bytes": 37918,
+      "sha256": "f06b86c28e97c5cbfff42e78f48b5a8bde27b80df3421db032cf5aecb514ddb3"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc2-fenced-green.txt",
+      "path": "review/task2-fsc2-final-v3-20261102/focused-green.txt",
+      "bytes": 4134,
+      "sha256": "5e31c214230ba7040b1a0bf4c299a79adf2281ab9f22441713b65e42b1faf039"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc2-final-fenced-coverage.txt",
+      "path": "review/task2-fsc2-final-v3-20261102/final-154-coverage.txt",
+      "bytes": 40182,
+      "sha256": "5de863fd9669487bad6a7e3ee23c0255d48ec46c19bcfb21a3de4ec5fc419438"
+    }
+  ],
+  "task1_unchanged": [
+    [
+      "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac"
+    ],
+    [
+      "plugins/desk/mcp/src/factory/outbox.js",
+      "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1"
+    ],
+    [
+      "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    ]
+  ]
+}

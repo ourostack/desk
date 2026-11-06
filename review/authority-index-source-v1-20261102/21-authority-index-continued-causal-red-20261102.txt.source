@@ -1,0 +1,80 @@
+TAP version 13
+# Subtest: ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+ok 1 - ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+  ---
+  duration_ms: 12824.672542
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+not ok 2 - ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+  ---
+  duration_ms: 12787.577833
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:174:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'committed'
+    - 'invalid_images'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'invalid_images'
+  actual: 'committed'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:186:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+not ok 3 - ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+  ---
+  duration_ms: 55.692209
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:190:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted rejection.
+    Actual message: "file_unsafe"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+    contributionCode: 'file_unsafe'
+  error: 'file_unsafe'
+  stack: |-
+    failure (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-index.js:19:47)
+    snapshot (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-index.js:44:31)
+    async Module.readContributionIndex (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-index.js:76:19)
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:194:53
+    async waitForActual (node:assert:644:5)
+    async Function.doesNotReject (node:assert:787:33)
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:194:3
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  operator: 'doesNotReject'
+  stack: |-
+    async file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:194:3
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+ok 4 - ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+  ---
+  duration_ms: 3548.34425
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 29293.282167

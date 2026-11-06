@@ -1,0 +1,700 @@
+TAP version 13
+# Subtest: ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+ok 1 - ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+  ---
+  duration_ms: 2551.367292
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+ok 2 - ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 2123.21875
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+ok 3 - ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 5747.028125
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+ok 4 - ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 3704.831791
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+ok 5 - ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 628.081459
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+ok 6 - ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 5073.910417
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+ok 7 - ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 3481.338
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+ok 8 - ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 1280.317
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+ok 9 - ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+  ---
+  duration_ms: 167.102666
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_ClosedPrivateRequestReadsOnceWithoutCreatingState
+ok 10 - ContributionAuthority_ClosedPrivateRequestReadsOnceWithoutCreatingState
+  ---
+  duration_ms: 145.074917
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestextra_fieldRefusesWithoutEchoOrRepair
+ok 11 - ContributionAuthority_PrivateRequestextra_fieldRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 171.039875
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestmalformedRefusesWithoutEchoOrRepair
+ok 12 - ContributionAuthority_PrivateRequestmalformedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 197.337666
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestsymlinkRefusesWithoutEchoOrRepair
+ok 13 - ContributionAuthority_PrivateRequestsymlinkRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 84.706167
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestlinkedRefusesWithoutEchoOrRepair
+ok 14 - ContributionAuthority_PrivateRequestlinkedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 86.896375
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestunsafe_modeRefusesWithoutEchoOrRepair
+ok 15 - ContributionAuthority_PrivateRequestunsafe_modeRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 35.109125
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestoversizedRefusesWithoutEchoOrRepair
+ok 16 - ContributionAuthority_PrivateRequestoversizedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 65.040292
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+ok 17 - ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+  ---
+  duration_ms: 695.135041
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+ok 18 - ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+  ---
+  duration_ms: 2392.443916
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 19 - ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 3223.415583
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 20 - ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 3535.636625
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 21 - ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 2343.853875
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 22 - ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 2226.257625
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+ok 23 - ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+  ---
+  duration_ms: 2289.252
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+ok 24 - ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+  ---
+  duration_ms: 1516.98775
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+ok 25 - ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+  ---
+  duration_ms: 7980.722167
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+ok 26 - ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+  ---
+  duration_ms: 12797.47425
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+ok 27 - ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+  ---
+  duration_ms: 3037.757709
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+ok 28 - ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+  ---
+  duration_ms: 17442.342084
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+ok 29 - ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+  ---
+  duration_ms: 29874.384708
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+ok 30 - ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+  ---
+  duration_ms: 22340.3225
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_PolicyUsesActualAuthorityAndIndexTransactionWithoutReadSideEffects
+ok 31 - ContributionIndex_PolicyUsesActualAuthorityAndIndexTransactionWithoutReadSideEffects
+  ---
+  duration_ms: 20918.465958
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_PolicyRetryCompletesItsAuthenticatedInterruptedIntentOnce
+ok 32 - ContributionIndex_PolicyRetryCompletesItsAuthenticatedInterruptedIntentOnce
+  ---
+  duration_ms: 16201.526209
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_CheckedAuthorityFailureNeverSelectsHistoricalInertFallback
+ok 33 - ContributionIndex_CheckedAuthorityFailureNeverSelectsHistoricalInertFallback
+  ---
+  duration_ms: 2739.61425
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_DefaultPolicyCannotReceiveTrustedBranchFromCallerFlags
+ok 34 - ContributionIndex_DefaultPolicyCannotReceiveTrustedBranchFromCallerFlags
+  ---
+  duration_ms: 2343.531666
+  type: 'test'
+  ...
+# Subtest: GivenOwnedQueuedSession_WhenExcludedTwice_PersistsOneIntentAndGeneration
+ok 35 - GivenOwnedQueuedSession_WhenExcludedTwice_PersistsOneIntentAndGeneration
+  ---
+  duration_ms: 5028.7555
+  type: 'test'
+  ...
+# Subtest: GivenFirstUse_WhenPlannedAndRead_LeavesAllFilesystemBytesUnchanged
+ok 36 - GivenFirstUse_WhenPlannedAndRead_LeavesAllFilesystemBytesUnchanged
+  ---
+  duration_ms: 3158.912791
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesunknown_ExcludesLocallyWithoutRemoteMutation
+ok 37 - GivenValidPlan_WhenRemoteBecomesunknown_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 2661.095875
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesconflict_ExcludesLocallyWithoutRemoteMutation
+ok 38 - GivenValidPlan_WhenRemoteBecomesconflict_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 3095.133709
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesmerged_ExcludesLocallyWithoutRemoteMutation
+ok 39 - GivenValidPlan_WhenRemoteBecomesmerged_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 2767.443625
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteReadLosesItsResponse_PersistsUnknownNotAnEmptySuccess
+ok 40 - GivenValidPlan_WhenRemoteReadLosesItsResponse_PersistsUnknownNotAnEmptySuccess
+  ---
+  duration_ms: 2154.166167
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteCacheDisappears_DoesNotRevokeIndependentOwnerEvidence
+ok 41 - GivenValidPlan_WhenRemoteCacheDisappears_DoesNotRevokeIndependentOwnerEvidence
+  ---
+  duration_ms: 1436.002125
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalownerChanges_RefusesBeforeWritingPolicy
+ok 42 - GivenValidPlan_WhenLocalownerChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 822.533416
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalsourceChanges_RefusesBeforeWritingPolicy
+ok 43 - GivenValidPlan_WhenLocalsourceChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 2874.45725
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalconsentChanges_RefusesBeforeWritingPolicy
+ok 44 - GivenValidPlan_WhenLocalconsentChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 2015.184958
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalcompatibilityChanges_RefusesBeforeWritingPolicy
+ok 45 - GivenValidPlan_WhenLocalcompatibilityChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 2010.217208
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalevidenceChanges_RefusesBeforeWritingPolicy
+ok 46 - GivenValidPlan_WhenLocalevidenceChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 1668.971375
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalmachineChanges_RefusesBeforeWritingPolicy
+ok 47 - GivenValidPlan_WhenLocalmachineChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 1315.763791
+  type: 'test'
+  ...
+# Subtest: GivenDifferentIntentAdvancesPolicy_WhenOldPlanApplied_RefusesStaleLocalGeneration
+ok 48 - GivenDifferentIntentAdvancesPolicy_WhenOldPlanApplied_RefusesStaleLocalGeneration
+  ---
+  duration_ms: 2713.204709
+  type: 'test'
+  ...
+# Subtest: GivenTwoConcurrentIdenticalApplications_WhenSerialized_ProduceOneGeneration
+ok 49 - GivenTwoConcurrentIdenticalApplications_WhenSerialized_ProduceOneGeneration
+  ---
+  duration_ms: 1608.98625
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenledger_missing_RefusesWithoutRepairOrEmptyFallback
+ok 50 - GivenActivatedPolicy_Whenledger_missing_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 1332.141792
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenledger_corrupt_RefusesWithoutRepairOrEmptyFallback
+ok 51 - GivenActivatedPolicy_Whenledger_corrupt_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 2588.823208
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenactivation_missing_RefusesWithoutRepairOrEmptyFallback
+ok 52 - GivenActivatedPolicy_Whenactivation_missing_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 4993.692125
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenlinked_RefusesWithoutRepairOrEmptyFallback
+ok 53 - GivenActivatedPolicy_Whenlinked_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 5413.502375
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whensymlink_RefusesWithoutRepairOrEmptyFallback
+ok 54 - GivenActivatedPolicy_Whensymlink_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 2207.7785
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenoversized_RefusesWithoutRepairOrEmptyFallback
+ok 55 - GivenActivatedPolicy_Whenoversized_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 1679.1525
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenpermissions_RefusesWithoutRepairOrEmptyFallback
+ok 56 - GivenActivatedPolicy_Whenpermissions_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 520.172125
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenschema_RefusesWithoutRepairOrEmptyFallback
+ok 57 - GivenActivatedPolicy_Whenschema_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 1012.572375
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenseal_RefusesWithoutRepairOrEmptyFallback
+ok 58 - GivenActivatedPolicy_Whenseal_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 2101.667334
+  type: 'test'
+  ...
+# Subtest: GivenNoAuthorityAdapterOrSecret_WhenPlanned_RefusesWithoutCreatingAnything
+ok 59 - GivenNoAuthorityAdapterOrSecret_WhenPlanned_RefusesWithoutCreatingAnything
+  ---
+  duration_ms: 327.5475
+  type: 'test'
+  ...
+# Subtest: GivenTamperedPlan_WhenApplied_RefusesWithoutStorageEffects
+ok 60 - GivenTamperedPlan_WhenApplied_RefusesWithoutStorageEffects
+  ---
+  duration_ms: 478.73725
+  type: 'test'
+  ...
+# Subtest: GivenMalformedTokenPayload_WhenApplied_ReturnsInvalidPlanNotAnException
+ok 61 - GivenMalformedTokenPayload_WhenApplied_ReturnsInvalidPlanNotAnException
+  ---
+  duration_ms: 230.328167
+  type: 'test'
+  ...
+# Subtest: GivenMalformedAuthority_WhenRead_RefusesInsteadOfThrowingOrCreatingState
+ok 62 - GivenMalformedAuthority_WhenRead_RefusesInsteadOfThrowingOrCreatingState
+  ---
+  duration_ms: 290.426708
+  type: 'test'
+  ...
+# Subtest: GivenUnreadableOwnerEvidence_WhenPlanned_ReturnsExplicitUnknown
+ok 63 - GivenUnreadableOwnerEvidence_WhenPlanned_ReturnsExplicitUnknown
+  ---
+  duration_ms: 194.0325
+  type: 'test'
+  ...
+# Subtest: GivenMalformedOrForeignSnapshot_WhenAdmissionChecked_NeverAllowsIt
+ok 64 - GivenMalformedOrForeignSnapshot_WhenAdmissionChecked_NeverAllowsIt
+  ---
+  duration_ms: 189.539833
+  type: 'test'
+  ...
+# Subtest: GivenMalformedApplyOrReadOptions_WhenCalled_ReturnsExplicitRefusal
+ok 65 - GivenMalformedApplyOrReadOptions_WhenCalled_ReturnsExplicitRefusal
+  ---
+  duration_ms: 208.539583
+  type: 'test'
+  ...
+# Subtest: GivenUnqualifiedCompatibilityOrMarkerOnlyEvidence_WhenPlanned_Refuses
+ok 66 - GivenUnqualifiedCompatibilityOrMarkerOnlyEvidence_WhenPlanned_Refuses
+  ---
+  duration_ms: 360.102334
+  type: 'test'
+  ...
+# Subtest: GivenUnexpectedAuthorityOrRemoteFault_WhenPlanned_PropagatesRatherThanInventingUnknown
+ok 67 - GivenUnexpectedAuthorityOrRemoteFault_WhenPlanned_PropagatesRatherThanInventingUnknown
+  ---
+  duration_ms: 219.888375
+  type: 'test'
+  ...
+# Subtest: GivenMalformedRemoteObservation_WhenApplied_RecordsUnknownWithoutPayload
+ok 68 - GivenMalformedRemoteObservation_WhenApplied_RecordsUnknownWithoutPayload
+  ---
+  duration_ms: 397.199083
+  type: 'test'
+  ...
+# Subtest: GivenChangedAuthorityAtApplyLock_WhenRechecked_RefusesBeforeIntent
+ok 69 - GivenChangedAuthorityAtApplyLock_WhenRechecked_RefusesBeforeIntent
+  ---
+  duration_ms: 150.616833
+  type: 'test'
+  ...
+# Subtest: GivenLocalConsentChangesDuringRemoteObservation_WhenApplying_RefusesLateWrite
+ok 70 - GivenLocalConsentChangesDuringRemoteObservation_WhenApplying_RefusesLateWrite
+  ---
+  duration_ms: 293.171875
+  type: 'test'
+  ...
+# Subtest: GivenJournalInputMutatedDuringAuthorityAwait_WhenRecorded_UsesValidatedSnapshot
+ok 71 - GivenJournalInputMutatedDuringAuthorityAwait_WhenRecorded_UsesValidatedSnapshot
+  ---
+  duration_ms: 792.978666
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicyBothFilesLost_WhenWitnessStillRequiresGeneration_RefusesFirstUseFallback
+ok 72 - GivenActivatedPolicyBothFilesLost_WhenWitnessStillRequiresGeneration_RefusesFirstUseFallback
+  ---
+  duration_ms: 378.542709
+  type: 'test'
+  ...
+# Subtest: GivenMaximumGeneration_WhenAnotherIntentApplied_RefusesOverflow
+ok 73 - GivenMaximumGeneration_WhenAnotherIntentApplied_RefusesOverflow
+  ---
+  duration_ms: 2654.783416
+  type: 'test'
+  ...
+# Subtest: GivenUnknownRemoteObservationWithWithdrawnClaim_WhenJournaled_RejectsContradiction
+ok 74 - GivenUnknownRemoteObservationWithWithdrawnClaim_WhenJournaled_RejectsContradiction
+  ---
+  duration_ms: 2601.974625
+  type: 'test'
+  ...
+# Subtest: GivenSealedContradictoryOrMalformedPolicy_WhenRead_RefusesIt
+ok 75 - GivenSealedContradictoryOrMalformedPolicy_WhenRead_RefusesIt
+  ---
+  duration_ms: 2816.471792
+  type: 'test'
+  ...
+# Subtest: GivenPolicyJournalAtItsBound_WhenAnotherEffectArrives_RefusesWithoutTruncatingAudit
+ok 76 - GivenPolicyJournalAtItsBound_WhenAnotherEffectArrives_RefusesWithoutTruncatingAudit
+  ---
+  duration_ms: 1935.498167
+  type: 'test'
+  ...
+# Subtest: GivenUnknownIntentOrWrongOwner_WhenJournaled_Refuses
+ok 77 - GivenUnknownIntentOrWrongOwner_WhenJournaled_Refuses
+  ---
+  duration_ms: 348.99875
+  type: 'test'
+  ...
+# Subtest: GivenDifferentTargetAuthority_WhenExistingIntentJournaled_RefusesCrossSessionUpdate
+ok 78 - GivenDifferentTargetAuthority_WhenExistingIntentJournaled_RefusesCrossSessionUpdate
+  ---
+  duration_ms: 196.630042
+  type: 'test'
+  ...
+# Subtest: GivenSymlinkedPolicyDirectory_WhenRead_RefusesWithoutFollowingIt
+ok 79 - GivenSymlinkedPolicyDirectory_WhenRead_RefusesWithoutFollowingIt
+  ---
+  duration_ms: 36.916042
+  type: 'test'
+  ...
+# Subtest: GivenReadOpenIdentityChanges_WhenProtectedFileRead_RefusesIt
+    # Subtest: the actual handle identity is compared
+    ok 1 - the actual handle identity is compared
+      ---
+      duration_ms: 1.490708
+      type: 'test'
+      ...
+    1..1
+ok 80 - GivenReadOpenIdentityChanges_WhenProtectedFileRead_RefusesIt
+  ---
+  duration_ms: 41.539334
+  type: 'test'
+  ...
+# Subtest: GivenDirectProtectedStorageRead_WhenPlatformUnqualified_RefusesExplicitly
+ok 81 - GivenDirectProtectedStorageRead_WhenPlatformUnqualified_RefusesExplicitly
+  ---
+  duration_ms: 6.409458
+  type: 'test'
+  ...
+# Subtest: GivenOwnerRevokedWhileWaitingForJournalLock_WhenAcquired_RefusesUpdate
+ok 82 - GivenOwnerRevokedWhileWaitingForJournalLock_WhenAcquired_RefusesUpdate
+  ---
+  duration_ms: 60.093834
+  type: 'test'
+  ...
+# Subtest: GivenForeignSessionOrRequestShape_WhenPlanned_RefusesExplicitly
+ok 83 - GivenForeignSessionOrRequestShape_WhenPlanned_RefusesExplicitly
+  ---
+  duration_ms: 7.470959
+  type: 'test'
+  ...
+# Subtest: GivenExcludedIntent_WhenEffectRevisionMatches_AppendsAuditAndRefusesStaleRevision
+ok 84 - GivenExcludedIntent_WhenEffectRevisionMatches_AppendsAuditAndRefusesStaleRevision
+  ---
+  duration_ms: 634.508125
+  type: 'test'
+  ...
+# Subtest: GivenAtomicPolicyWriteFails_WhenApplying_KeepsEvidenceAndNeverReturnsExcluded
+    # Subtest: storage fault is observable
+    ok 1 - storage fault is observable
+      ---
+      duration_ms: 135.559625
+      type: 'test'
+      ...
+    1..1
+ok 85 - GivenAtomicPolicyWriteFails_WhenApplying_KeepsEvidenceAndNeverReturnsExcluded
+  ---
+  duration_ms: 366.780917
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+ok 86 - FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+  ---
+  duration_ms: 448.738625
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+ok 87 - FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+  ---
+  duration_ms: 1033.46325
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+ok 88 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 655.972666
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+ok 89 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 381.015084
+  type: 'test'
+  ...
+# Subtest: FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+ok 90 - FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+  ---
+  duration_ms: 279.395
+  type: 'test'
+  ...
+# Subtest: FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+    # Subtest: controlled same-inode growth at the held descriptor read boundary
+    ok 1 - controlled same-inode growth at the held descriptor read boundary
+      ---
+      duration_ms: 2.478625
+      type: 'test'
+      ...
+    1..1
+ok 91 - FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+  ---
+  duration_ms: 383.528583
+  type: 'test'
+  ...
+# Subtest: FPI3_GivenPartialDescriptorReads_WhenReading_ReturnsExactBytesAndClosesAtEof
+    # Subtest: bounded reads tolerate actual short chunks
+    ok 1 - bounded reads tolerate actual short chunks
+      ---
+      duration_ms: 4.156541
+      type: 'test'
+      ...
+    1..1
+ok 92 - FPI3_GivenPartialDescriptorReads_WhenReading_ReturnsExactBytesAndClosesAtEof
+  ---
+  duration_ms: 397.755
+  type: 'test'
+  ...
+# Subtest: FPI3_GiventruncatedAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+    # Subtest: held descriptor failure still closes
+    ok 1 - held descriptor failure still closes
+      ---
+      duration_ms: 71.766834
+      type: 'test'
+      ...
+    1..1
+ok 93 - FPI3_GiventruncatedAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+  ---
+  duration_ms: 544.02875
+  type: 'test'
+  ...
+# Subtest: FPI3_Givenread_errorAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+    # Subtest: held descriptor failure still closes
+    ok 1 - held descriptor failure still closes
+      ---
+      duration_ms: 9.577042
+      type: 'test'
+      ...
+    1..1
+ok 94 - FPI3_Givenread_errorAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+  ---
+  duration_ms: 88.17125
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+ok 95 - ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+  ---
+  duration_ms: 14.917834
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+ok 96 - ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+  ---
+  duration_ms: 33.458542
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_linkedRoleRefusesWithoutRepair
+ok 97 - ContributionStorage_linkedRoleRefusesWithoutRepair
+  ---
+  duration_ms: 25.987792
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_symlinkRoleRefusesWithoutRepair
+ok 98 - ContributionStorage_symlinkRoleRefusesWithoutRepair
+  ---
+  duration_ms: 29.264292
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_modeRoleRefusesWithoutRepair
+ok 99 - ContributionStorage_modeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 338.926208
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_too_largeRoleRefusesWithoutRepair
+ok 100 - ContributionStorage_too_largeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 180.568416
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+ok 101 - ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+  ---
+  duration_ms: 409.535709
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+ok 102 - ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+  ---
+  duration_ms: 217.79725
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+ok 103 - ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+  ---
+  duration_ms: 271.366334
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_GrowingHeldFileUsesBoundedSentinelAndClosesItsDescriptor
+ok 104 - ContributionStorage_GrowingHeldFileUsesBoundedSentinelAndClosesItsDescriptor
+  ---
+  duration_ms: 379.256166
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ExactByteCapPassesAndOversizeOrTooManyRolesAllocateNothing
+ok 105 - ContributionStorage_ExactByteCapPassesAndOversizeOrTooManyRolesAllocateNothing
+  ---
+  duration_ms: 29.278417
+  type: 'test'
+  ...
+1..105
+# tests 111
+# suites 0
+# pass 111
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 259374.6495
+# start of coverage report
+# -----------------------------------------------------------------------------------------------
+# file                           | line % | branch % | funcs % | uncovered lines
+# -----------------------------------------------------------------------------------------------
+# plugins                        |        |          |         | 
+#  desk                          |        |          |         | 
+#   mcp                          |        |          |         | 
+#    src                         |        |          |         | 
+#     factory                    |        |          |         | 
+#      contribution-authority.js |  98.83 |    83.62 |  100.00 | 168-169
+#      contribution-index.js     |  97.35 |    84.86 |  100.00 | 80-81 176-179
+#      contribution-policy.js    |  97.14 |    93.13 |  100.00 | 162-163 204-205 280-281 312-314
+#      contribution-storage.js   |  94.32 |    77.63 |   95.45 | 22 84-85 167 226-235 237
+#      flush-lock.js             |  73.68 |    50.00 |   40.00 | 21-27 29 36-37
+# -----------------------------------------------------------------------------------------------
+# all files                      |  95.86 |    86.13 |   96.30 | 
+# -----------------------------------------------------------------------------------------------
+# end of coverage report

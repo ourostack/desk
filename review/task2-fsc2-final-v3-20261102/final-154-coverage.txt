@@ -1,0 +1,956 @@
+TAP version 13
+# Subtest: GivenOwnedQueuedSession_WhenExcludedTwice_PersistsOneIntentAndGeneration
+ok 1 - GivenOwnedQueuedSession_WhenExcludedTwice_PersistsOneIntentAndGeneration
+  ---
+  duration_ms: 67.866667
+  type: 'test'
+  ...
+# Subtest: GivenFirstUse_WhenPlannedAndRead_LeavesAllFilesystemBytesUnchanged
+ok 2 - GivenFirstUse_WhenPlannedAndRead_LeavesAllFilesystemBytesUnchanged
+  ---
+  duration_ms: 10.043375
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesunknown_ExcludesLocallyWithoutRemoteMutation
+ok 3 - GivenValidPlan_WhenRemoteBecomesunknown_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 39.386375
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesconflict_ExcludesLocallyWithoutRemoteMutation
+ok 4 - GivenValidPlan_WhenRemoteBecomesconflict_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 31.569833
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteBecomesmerged_ExcludesLocallyWithoutRemoteMutation
+ok 5 - GivenValidPlan_WhenRemoteBecomesmerged_ExcludesLocallyWithoutRemoteMutation
+  ---
+  duration_ms: 28.192041
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteReadLosesItsResponse_PersistsUnknownNotAnEmptySuccess
+ok 6 - GivenValidPlan_WhenRemoteReadLosesItsResponse_PersistsUnknownNotAnEmptySuccess
+  ---
+  duration_ms: 30.073042
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenRemoteCacheDisappears_DoesNotRevokeIndependentOwnerEvidence
+ok 7 - GivenValidPlan_WhenRemoteCacheDisappears_DoesNotRevokeIndependentOwnerEvidence
+  ---
+  duration_ms: 27.374208
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalownerChanges_RefusesBeforeWritingPolicy
+ok 8 - GivenValidPlan_WhenLocalownerChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 9.592042
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalsourceChanges_RefusesBeforeWritingPolicy
+ok 9 - GivenValidPlan_WhenLocalsourceChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 19.376416
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalconsentChanges_RefusesBeforeWritingPolicy
+ok 10 - GivenValidPlan_WhenLocalconsentChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 13.333584
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalcompatibilityChanges_RefusesBeforeWritingPolicy
+ok 11 - GivenValidPlan_WhenLocalcompatibilityChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 17.180541
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalevidenceChanges_RefusesBeforeWritingPolicy
+ok 12 - GivenValidPlan_WhenLocalevidenceChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 7.616208
+  type: 'test'
+  ...
+# Subtest: GivenValidPlan_WhenLocalmachineChanges_RefusesBeforeWritingPolicy
+ok 13 - GivenValidPlan_WhenLocalmachineChanges_RefusesBeforeWritingPolicy
+  ---
+  duration_ms: 7.6405
+  type: 'test'
+  ...
+# Subtest: GivenDifferentIntentAdvancesPolicy_WhenOldPlanApplied_RefusesStaleLocalGeneration
+ok 14 - GivenDifferentIntentAdvancesPolicy_WhenOldPlanApplied_RefusesStaleLocalGeneration
+  ---
+  duration_ms: 51.152208
+  type: 'test'
+  ...
+# Subtest: GivenTwoConcurrentIdenticalApplications_WhenSerialized_ProduceOneGeneration
+ok 15 - GivenTwoConcurrentIdenticalApplications_WhenSerialized_ProduceOneGeneration
+  ---
+  duration_ms: 37.250875
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenledger_missing_RefusesWithoutRepairOrEmptyFallback
+ok 16 - GivenActivatedPolicy_Whenledger_missing_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 30.437209
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenledger_corrupt_RefusesWithoutRepairOrEmptyFallback
+ok 17 - GivenActivatedPolicy_Whenledger_corrupt_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 30.258875
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenactivation_missing_RefusesWithoutRepairOrEmptyFallback
+ok 18 - GivenActivatedPolicy_Whenactivation_missing_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 28.8955
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenlinked_RefusesWithoutRepairOrEmptyFallback
+ok 19 - GivenActivatedPolicy_Whenlinked_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 22.977875
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whensymlink_RefusesWithoutRepairOrEmptyFallback
+ok 20 - GivenActivatedPolicy_Whensymlink_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 22.928834
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenoversized_RefusesWithoutRepairOrEmptyFallback
+ok 21 - GivenActivatedPolicy_Whenoversized_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 22.349041
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenpermissions_RefusesWithoutRepairOrEmptyFallback
+ok 22 - GivenActivatedPolicy_Whenpermissions_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 26.457459
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenschema_RefusesWithoutRepairOrEmptyFallback
+ok 23 - GivenActivatedPolicy_Whenschema_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 20.169125
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicy_Whenseal_RefusesWithoutRepairOrEmptyFallback
+ok 24 - GivenActivatedPolicy_Whenseal_RefusesWithoutRepairOrEmptyFallback
+  ---
+  duration_ms: 21.277541
+  type: 'test'
+  ...
+# Subtest: GivenNoAuthorityAdapterOrSecret_WhenPlanned_RefusesWithoutCreatingAnything
+ok 25 - GivenNoAuthorityAdapterOrSecret_WhenPlanned_RefusesWithoutCreatingAnything
+  ---
+  duration_ms: 3.708458
+  type: 'test'
+  ...
+# Subtest: GivenTamperedPlan_WhenApplied_RefusesWithoutStorageEffects
+ok 26 - GivenTamperedPlan_WhenApplied_RefusesWithoutStorageEffects
+  ---
+  duration_ms: 3.968667
+  type: 'test'
+  ...
+# Subtest: GivenMalformedTokenPayload_WhenApplied_ReturnsInvalidPlanNotAnException
+ok 27 - GivenMalformedTokenPayload_WhenApplied_ReturnsInvalidPlanNotAnException
+  ---
+  duration_ms: 5.421458
+  type: 'test'
+  ...
+# Subtest: GivenMalformedAuthority_WhenRead_RefusesInsteadOfThrowingOrCreatingState
+ok 28 - GivenMalformedAuthority_WhenRead_RefusesInsteadOfThrowingOrCreatingState
+  ---
+  duration_ms: 4.633
+  type: 'test'
+  ...
+# Subtest: GivenUnreadableOwnerEvidence_WhenPlanned_ReturnsExplicitUnknown
+ok 29 - GivenUnreadableOwnerEvidence_WhenPlanned_ReturnsExplicitUnknown
+  ---
+  duration_ms: 4.718291
+  type: 'test'
+  ...
+# Subtest: GivenMalformedOrForeignSnapshot_WhenAdmissionChecked_NeverAllowsIt
+ok 30 - GivenMalformedOrForeignSnapshot_WhenAdmissionChecked_NeverAllowsIt
+  ---
+  duration_ms: 4.007208
+  type: 'test'
+  ...
+# Subtest: GivenMalformedApplyOrReadOptions_WhenCalled_ReturnsExplicitRefusal
+ok 31 - GivenMalformedApplyOrReadOptions_WhenCalled_ReturnsExplicitRefusal
+  ---
+  duration_ms: 4.759333
+  type: 'test'
+  ...
+# Subtest: GivenUnqualifiedCompatibilityOrMarkerOnlyEvidence_WhenPlanned_Refuses
+ok 32 - GivenUnqualifiedCompatibilityOrMarkerOnlyEvidence_WhenPlanned_Refuses
+  ---
+  duration_ms: 5.57375
+  type: 'test'
+  ...
+# Subtest: GivenUnexpectedAuthorityOrRemoteFault_WhenPlanned_PropagatesRatherThanInventingUnknown
+ok 33 - GivenUnexpectedAuthorityOrRemoteFault_WhenPlanned_PropagatesRatherThanInventingUnknown
+  ---
+  duration_ms: 10.116625
+  type: 'test'
+  ...
+# Subtest: GivenMalformedRemoteObservation_WhenApplied_RecordsUnknownWithoutPayload
+ok 34 - GivenMalformedRemoteObservation_WhenApplied_RecordsUnknownWithoutPayload
+  ---
+  duration_ms: 26.46775
+  type: 'test'
+  ...
+# Subtest: GivenChangedAuthorityAtApplyLock_WhenRechecked_RefusesBeforeIntent
+ok 35 - GivenChangedAuthorityAtApplyLock_WhenRechecked_RefusesBeforeIntent
+  ---
+  duration_ms: 8.500125
+  type: 'test'
+  ...
+# Subtest: GivenLocalConsentChangesDuringRemoteObservation_WhenApplying_RefusesLateWrite
+ok 36 - GivenLocalConsentChangesDuringRemoteObservation_WhenApplying_RefusesLateWrite
+  ---
+  duration_ms: 8.981083
+  type: 'test'
+  ...
+# Subtest: GivenJournalInputMutatedDuringAuthorityAwait_WhenRecorded_UsesValidatedSnapshot
+ok 37 - GivenJournalInputMutatedDuringAuthorityAwait_WhenRecorded_UsesValidatedSnapshot
+  ---
+  duration_ms: 41.740834
+  type: 'test'
+  ...
+# Subtest: GivenActivatedPolicyBothFilesLost_WhenWitnessStillRequiresGeneration_RefusesFirstUseFallback
+ok 38 - GivenActivatedPolicyBothFilesLost_WhenWitnessStillRequiresGeneration_RefusesFirstUseFallback
+  ---
+  duration_ms: 33.638625
+  type: 'test'
+  ...
+# Subtest: GivenMaximumGeneration_WhenAnotherIntentApplied_RefusesOverflow
+ok 39 - GivenMaximumGeneration_WhenAnotherIntentApplied_RefusesOverflow
+  ---
+  duration_ms: 52.362542
+  type: 'test'
+  ...
+# Subtest: GivenUnknownRemoteObservationWithWithdrawnClaim_WhenJournaled_RejectsContradiction
+ok 40 - GivenUnknownRemoteObservationWithWithdrawnClaim_WhenJournaled_RejectsContradiction
+  ---
+  duration_ms: 29.345125
+  type: 'test'
+  ...
+# Subtest: GivenSealedContradictoryOrMalformedPolicy_WhenRead_RefusesIt
+ok 41 - GivenSealedContradictoryOrMalformedPolicy_WhenRead_RefusesIt
+  ---
+  duration_ms: 59.88375
+  type: 'test'
+  ...
+# Subtest: GivenPolicyJournalAtItsBound_WhenAnotherEffectArrives_RefusesWithoutTruncatingAudit
+ok 42 - GivenPolicyJournalAtItsBound_WhenAnotherEffectArrives_RefusesWithoutTruncatingAudit
+  ---
+  duration_ms: 36.51825
+  type: 'test'
+  ...
+# Subtest: GivenUnknownIntentOrWrongOwner_WhenJournaled_Refuses
+ok 43 - GivenUnknownIntentOrWrongOwner_WhenJournaled_Refuses
+  ---
+  duration_ms: 7.650875
+  type: 'test'
+  ...
+# Subtest: GivenDifferentTargetAuthority_WhenExistingIntentJournaled_RefusesCrossSessionUpdate
+ok 44 - GivenDifferentTargetAuthority_WhenExistingIntentJournaled_RefusesCrossSessionUpdate
+  ---
+  duration_ms: 27.901375
+  type: 'test'
+  ...
+# Subtest: GivenSymlinkedPolicyDirectory_WhenRead_RefusesWithoutFollowingIt
+ok 45 - GivenSymlinkedPolicyDirectory_WhenRead_RefusesWithoutFollowingIt
+  ---
+  duration_ms: 24.400166
+  type: 'test'
+  ...
+# Subtest: GivenReadOpenIdentityChanges_WhenProtectedFileRead_RefusesIt
+    # Subtest: the actual handle identity is compared
+    ok 1 - the actual handle identity is compared
+      ---
+      duration_ms: 1.835959
+      type: 'test'
+      ...
+    1..1
+ok 46 - GivenReadOpenIdentityChanges_WhenProtectedFileRead_RefusesIt
+  ---
+  duration_ms: 23.531667
+  type: 'test'
+  ...
+# Subtest: GivenDirectProtectedStorageRead_WhenPlatformUnqualified_RefusesExplicitly
+ok 47 - GivenDirectProtectedStorageRead_WhenPlatformUnqualified_RefusesExplicitly
+  ---
+  duration_ms: 5.200167
+  type: 'test'
+  ...
+# Subtest: GivenOwnerRevokedWhileWaitingForJournalLock_WhenAcquired_RefusesUpdate
+ok 48 - GivenOwnerRevokedWhileWaitingForJournalLock_WhenAcquired_RefusesUpdate
+  ---
+  duration_ms: 27.885333
+  type: 'test'
+  ...
+# Subtest: GivenForeignSessionOrRequestShape_WhenPlanned_RefusesExplicitly
+ok 49 - GivenForeignSessionOrRequestShape_WhenPlanned_RefusesExplicitly
+  ---
+  duration_ms: 3.953625
+  type: 'test'
+  ...
+# Subtest: GivenExcludedIntent_WhenEffectRevisionMatches_AppendsAuditAndRefusesStaleRevision
+ok 50 - GivenExcludedIntent_WhenEffectRevisionMatches_AppendsAuditAndRefusesStaleRevision
+  ---
+  duration_ms: 52.432
+  type: 'test'
+  ...
+# Subtest: GivenAtomicPolicyWriteFails_WhenApplying_KeepsEvidenceAndNeverReturnsExcluded
+    # Subtest: storage fault is observable
+    ok 1 - storage fault is observable
+      ---
+      duration_ms: 15.304542
+      type: 'test'
+      ...
+    1..1
+ok 51 - GivenAtomicPolicyWriteFails_WhenApplying_KeepsEvidenceAndNeverReturnsExcluded
+  ---
+  duration_ms: 22.718
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+ok 52 - FPI1_GivenValidNearLimitPolicy_WhenJournalAppendCrossesSealedByteCap_LeavesBothFilesReadyAndIdentical
+  ---
+  duration_ms: 498.15975
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+ok 53 - FPI1_GivenValidNearLimitPolicy_WhenNewIntentWouldCrossByteCap_RefusesBeforeEitherWrite
+  ---
+  duration_ms: 384.921542
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+ok 54 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingactivation_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 26.614708
+  type: 'test'
+  ...
+# Subtest: FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+ok 55 - FPI1_GivenExactSealedUtf8ByteLimit_WhenWritingledger_AdmitsLimitAndRefusesOneExtraByteWithoutMutation
+  ---
+  duration_ms: 46.495625
+  type: 'test'
+  ...
+# Subtest: FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+ok 56 - FPI2_GivenReadyFlagWithMalformedEntriesOrSchema_WhenCheckingAbsence_RefusesInsteadOfAllowing
+  ---
+  duration_ms: 39.260959
+  type: 'test'
+  ...
+# Subtest: FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+    # Subtest: controlled same-inode growth at the held descriptor read boundary
+    ok 1 - controlled same-inode growth at the held descriptor read boundary
+      ---
+      duration_ms: 2.508
+      type: 'test'
+      ...
+    1..1
+ok 57 - FPI3_GivenHeldFileGrowsAfterMetadata_WhenReading_StaysWithinCapPlusSentinelAndPreservesEvidence
+  ---
+  duration_ms: 28.749791
+  type: 'test'
+  ...
+# Subtest: FPI3_GivenPartialDescriptorReads_WhenReading_ReturnsExactBytesAndClosesAtEof
+    # Subtest: bounded reads tolerate actual short chunks
+    ok 1 - bounded reads tolerate actual short chunks
+      ---
+      duration_ms: 10.459166
+      type: 'test'
+      ...
+    1..1
+ok 58 - FPI3_GivenPartialDescriptorReads_WhenReading_ReturnsExactBytesAndClosesAtEof
+  ---
+  duration_ms: 40.563583
+  type: 'test'
+  ...
+# Subtest: FPI3_GiventruncatedAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+    # Subtest: held descriptor failure still closes
+    ok 1 - held descriptor failure still closes
+      ---
+      duration_ms: 2.175459
+      type: 'test'
+      ...
+    1..1
+ok 59 - FPI3_GiventruncatedAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+  ---
+  duration_ms: 41.522459
+  type: 'test'
+  ...
+# Subtest: FPI3_Givenread_errorAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+    # Subtest: held descriptor failure still closes
+    ok 1 - held descriptor failure still closes
+      ---
+      duration_ms: 1.377833
+      type: 'test'
+      ...
+    1..1
+ok 60 - FPI3_Givenread_errorAfterMetadata_WhenReading_RefusesAndClosesWithoutRepair
+  ---
+  duration_ms: 26.881291
+  type: 'test'
+  ...
+# Subtest: GivenCanonicalClosedPublicRecords_WhenValidated_AcceptsWithoutChangingInputs
+ok 61 - GivenCanonicalClosedPublicRecords_WhenValidated_AcceptsWithoutChangingInputs
+  ---
+  duration_ms: 1.185625
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 62 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.101666
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputnumber_WhenValidated_RefusesExplicitly
+ok 63 - GivenNonByteInputnumber_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.0355
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 64 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.031666
+  type: 'test'
+  ...
+# Subtest: GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+ok 65 - GivenNonByteInputobject_WhenValidated_RefusesExplicitly
+  ---
+  duration_ms: 0.02875
+  type: 'test'
+  ...
+# Subtest: GivenDuplicateKeysNoncanonicalOrOversizedBytes_WhenValidated_RefusesWithoutEcho
+ok 66 - GivenDuplicateKeysNoncanonicalOrOversizedBytes_WhenValidated_RefusesWithoutEcho
+  ---
+  duration_ms: 0.1205
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence-1_WhenValidated_Refuses
+ok 67 - GivenInvalidSequence-1_WhenValidated_Refuses
+  ---
+  duration_ms: 0.068958
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence0_WhenValidated_Refuses
+ok 68 - GivenInvalidSequence0_WhenValidated_Refuses
+  ---
+  duration_ms: 0.042125
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence0.5_WhenValidated_Refuses
+ok 69 - GivenInvalidSequence0.5_WhenValidated_Refuses
+  ---
+  duration_ms: 0.04025
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence9007199254740992_WhenValidated_Refuses
+ok 70 - GivenInvalidSequence9007199254740992_WhenValidated_Refuses
+  ---
+  duration_ms: 0.119
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequence1_WhenValidated_Refuses
+ok 71 - GivenInvalidSequence1_WhenValidated_Refuses
+  ---
+  duration_ms: 0.039042
+  type: 'test'
+  ...
+# Subtest: GivenInvalidSequencenull_WhenValidated_Refuses
+ok 72 - GivenInvalidSequencenull_WhenValidated_Refuses
+  ---
+  duration_ms: 0.035709
+  type: 'test'
+  ...
+# Subtest: GivenBoundarySafeIntegers_WhenValidated_AcceptsButDoesNotAuthorizeOverflow
+ok 73 - GivenBoundarySafeIntegers_WhenValidated_AcceptsButDoesNotAuthorizeOverflow
+  ---
+  duration_ms: 0.105791
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawalPathIdentityOrPrivateFieldMismatch_WhenValidated_Refuses
+ok 74 - GivenWithdrawalPathIdentityOrPrivateFieldMismatch_WhenValidated_Refuses
+  ---
+  duration_ms: 0.207333
+  type: 'test'
+  ...
+# Subtest: GivenCompleteValidatedTombstones_WhenProjected_ReturnsOnlyPublicAliasSet
+ok 75 - GivenCompleteValidatedTombstones_WhenProjected_ReturnsOnlyPublicAliasSet
+  ---
+  duration_ms: 0.370625
+  type: 'test'
+  ...
+# Subtest: GivenUnknownMalformedDuplicateOrOversizedTombstones_WhenProjected_ReturnsNullNotPartialSet
+ok 76 - GivenUnknownMalformedDuplicateOrOversizedTombstones_WhenProjected_ReturnsNullNotPartialSet
+  ---
+  duration_ms: 0.605542
+  type: 'test'
+  ...
+# Subtest: GivenSupportedFirstDataIntake_WhenChecked_RequiresExactChangedEnvelopeAndLeavesInputsUntouched
+ok 77 - GivenSupportedFirstDataIntake_WhenChecked_RequiresExactChangedEnvelopeAndLeavesInputsUntouched
+  ---
+  duration_ms: 2.810625
+  type: 'test'
+  ...
+# Subtest: GivenAbsentOrUnknownCapability_WhenChecked_RemainsInertNotLegacySuccess
+ok 78 - GivenAbsentOrUnknownCapability_WhenChecked_RemainsInertNotLegacySuccess
+  ---
+  duration_ms: 0.60975
+  type: 'test'
+  ...
+# Subtest: GivenCurrentBase_WhenAdvancingSequenceExactlyOnce_AllowsNondecreasingPolicy
+ok 79 - GivenCurrentBase_WhenAdvancingSequenceExactlyOnce_AllowsNondecreasingPolicy
+  ---
+  duration_ms: 0.828583
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed3_RejectsDowngradeReplayOrSkippedSequence
+ok 80 - GivenBaseSequence4_WhenProposed3_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.263834
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed4_RejectsDowngradeReplayOrSkippedSequence
+ok 81 - GivenBaseSequence4_WhenProposed4_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.215667
+  type: 'test'
+  ...
+# Subtest: GivenBaseSequence4_WhenProposed6_RejectsDowngradeReplayOrSkippedSequence
+ok 82 - GivenBaseSequence4_WhenProposed6_RejectsDowngradeReplayOrSkippedSequence
+  ---
+  duration_ms: 0.214083
+  type: 'test'
+  ...
+# Subtest: GivenOverflowOrPolicyDowngrade_WhenChecked_Refuses
+ok 83 - GivenOverflowOrPolicyDowngrade_WhenChecked_Refuses
+  ---
+  duration_ms: 0.654666
+  type: 'test'
+  ...
+# Subtest: GivenInheritedOrUnchangedEnvelope_WhenDataChanges_RejectsEvenClaimedMaintenance
+ok 84 - GivenInheritedOrUnchangedEnvelope_WhenDataChanges_RejectsEvenClaimedMaintenance
+  ---
+  duration_ms: 0.584666
+  type: 'test'
+  ...
+# Subtest: GivenCodeOnlyMaintenance_WhenChecked_DoesNotRequireADataEnvelope
+ok 85 - GivenCodeOnlyMaintenance_WhenChecked_DoesNotRequireADataEnvelope
+  ---
+  duration_ms: 0.332042
+  type: 'test'
+  ...
+# Subtest: GivenWrongNonceBranchOrBase_WhenChecked_Refuses
+ok 86 - GivenWrongNonceBranchOrBase_WhenChecked_Refuses
+  ---
+  duration_ms: 0.722625
+  type: 'test'
+  ...
+# Subtest: GivenUnknownIncompleteOrAmbiguousInputs_WhenChecked_RefusesNotEmptySuccess
+ok 87 - GivenUnknownIncompleteOrAmbiguousInputs_WhenChecked_RefusesNotEmptySuccess
+  ---
+  duration_ms: 1.032875
+  type: 'test'
+  ...
+# Subtest: GivenOwnedAlreadyPublicWithdrawal_WhenChecked_RequiresExactRemovalAndProvenance
+ok 88 - GivenOwnedAlreadyPublicWithdrawal_WhenChecked_RequiresExactRemovalAndProvenance
+  ---
+  duration_ms: 0.386833
+  type: 'test'
+  ...
+# Subtest: GivenQueuedOnlyTarget_WhenPublicWithdrawalProposed_RefusesWithoutEmittingAlias
+ok 89 - GivenQueuedOnlyTarget_WhenPublicWithdrawalProposed_RefusesWithoutEmittingAlias
+  ---
+  duration_ms: 0.263083
+  type: 'test'
+  ...
+# Subtest: GivenForeignChangedOrMissingPublicOwnership_WhenChecked_RefusesDeletion
+ok 90 - GivenForeignChangedOrMissingPublicOwnership_WhenChecked_RefusesDeletion
+  ---
+  duration_ms: 1.227167
+  type: 'test'
+  ...
+# Subtest: GivenAcceptedTombstone_WhenRemovedModifiedOrDuplicated_RefusesOrdinaryMutation
+ok 91 - GivenAcceptedTombstone_WhenRemovedModifiedOrDuplicated_RefusesOrdinaryMutation
+  ---
+  duration_ms: 0.676709
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawnAlias_WhenFactsReappearUnderAnyHost_Refuses
+ok 92 - GivenWithdrawnAlias_WhenFactsReappearUnderAnyHost_Refuses
+  ---
+  duration_ms: 0.747916
+  type: 'test'
+  ...
+# Subtest: GivenWithdrawnAlias_WhenLabelsOrContextCiteIt_RefusesButKeepsLegitimateSiblingEligible
+ok 93 - GivenWithdrawnAlias_WhenLabelsOrContextCiteIt_RefusesButKeepsLegitimateSiblingEligible
+  ---
+  duration_ms: 3.072334
+  type: 'test'
+  ...
+# Subtest: GivenDuplicatePathsUnsafePathsOrOversizedInput_WhenChecked_RefusesSafely
+ok 94 - GivenDuplicatePathsUnsafePathsOrOversizedInput_WhenChecked_RefusesSafely
+  ---
+  duration_ms: 5.3055
+  type: 'test'
+  ...
+# Subtest: GivenNullEmptyOrSparseContext_WhenChecked_RefusesWithoutThrowingOrReturningPartialData
+ok 95 - GivenNullEmptyOrSparseContext_WhenChecked_RefusesWithoutThrowingOrReturningPartialData
+  ---
+  duration_ms: 0.300208
+  type: 'test'
+  ...
+# Subtest: GivenEnvelopeOnlyExclusionAnnouncement_WhenChecked_RefusesExtraPublicNonce
+ok 96 - GivenEnvelopeOnlyExclusionAnnouncement_WhenChecked_RefusesExtraPublicNonce
+  ---
+  duration_ms: 0.237833
+  type: 'test'
+  ...
+# Subtest: GivenNonRemovedDataWithoutBytes_WhenChecked_RefusesUnknownPayload
+ok 97 - GivenNonRemovedDataWithoutBytes_WhenChecked_RefusesUnknownPayload
+  ---
+  duration_ms: 0.354083
+  type: 'test'
+  ...
+# Subtest: GivenMalformedLabelOrCapturePayload_WhenChecked_RefusesRatherThanCallingItEligible
+ok 98 - GivenMalformedLabelOrCapturePayload_WhenChecked_RefusesRatherThanCallingItEligible
+  ---
+  duration_ms: 0.518583
+  type: 'test'
+  ...
+# Subtest: GivenValidUnexcludedLabelOrCapture_WhenChecked_PreservesExistingSchemas
+ok 99 - GivenValidUnexcludedLabelOrCapture_WhenChecked_PreservesExistingSchemas
+  ---
+  duration_ms: 1.332542
+  type: 'test'
+  ...
+# Subtest: GivenContextJobOrLabelSessionMismatch_WhenChecked_RefusesPathAlias
+ok 100 - GivenContextJobOrLabelSessionMismatch_WhenChecked_RefusesPathAlias
+  ---
+  duration_ms: 0.892917
+  type: 'test'
+  ...
+# Subtest: GivenReservedInvalidRootOrForeignCapture_WhenChecked_Refuses
+ok 101 - GivenReservedInvalidRootOrForeignCapture_WhenChecked_Refuses
+  ---
+  duration_ms: 0.51925
+  type: 'test'
+  ...
+# Subtest: GivenOrdinaryDataRemovalWithoutExactOwnerBlob_WhenChecked_RefusesDespiteNoNewTombstone
+ok 102 - GivenOrdinaryDataRemovalWithoutExactOwnerBlob_WhenChecked_RefusesDespiteNoNewTombstone
+  ---
+  duration_ms: 0.285375
+  type: 'test'
+  ...
+# Subtest: GivenReservedWithdrawalRootClaimedAsCodeMaintenance_WhenChecked_Refuses
+ok 103 - GivenReservedWithdrawalRootClaimedAsCodeMaintenance_WhenChecked_Refuses
+  ---
+  duration_ms: 0.171875
+  type: 'test'
+  ...
+# Subtest: GivenCompleteTombstoneListAtCountLimit_WhenProjected_AcceptsLimitAndRejectsNext
+ok 104 - GivenCompleteTombstoneListAtCountLimit_WhenProjected_AcceptsLimitAndRejectsNext
+  ---
+  duration_ms: 6.921542
+  type: 'test'
+  ...
+# Subtest: GivenFiveHundredDistinctChanges_WhenChecked_AcceptsBoundWithoutTruncation
+ok 105 - GivenFiveHundredDistinctChanges_WhenChecked_AcceptsBoundWithoutTruncation
+  ---
+  duration_ms: 58.660167
+  type: 'test'
+  ...
+# Subtest: GivenExactAggregateByteBudget_WhenChecked_AcceptsLimitAndRejectsOneExtraByte
+ok 106 - GivenExactAggregateByteBudget_WhenChecked_AcceptsLimitAndRejectsOneExtraByte
+  ---
+  duration_ms: 4.486042
+  type: 'test'
+  ...
+# Subtest: GivenOnlyEmptyCaptureForFirstIntake_WhenChecked_RefusesNewPublicNonce
+ok 107 - GivenOnlyEmptyCaptureForFirstIntake_WhenChecked_RefusesNewPublicNonce
+  ---
+  duration_ms: 0.374958
+  type: 'test'
+  ...
+# Subtest: GivenExistingCaptureOwnedByForeignActor_WhenChecked_RefusesEvenWithMatchingNonce
+ok 108 - GivenExistingCaptureOwnedByForeignActor_WhenChecked_RefusesEvenWithMatchingNonce
+  ---
+  duration_ms: 0.286584
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenChangingBaseBytesGetter_WhenChecked_RejectsWithoutExecutingIt
+ok 109 - FSC1_GivenChangingBaseBytesGetter_WhenChecked_RejectsWithoutExecutingIt
+  ---
+  duration_ms: 0.203667
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenPrivateThrowingbaseAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+ok 110 - FSC1_GivenPrivateThrowingbaseAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.266084
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenPrivateThrowingproposedAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+ok 111 - FSC1_GivenPrivateThrowingproposedAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.13825
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenPrivateThrowingpayloadAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+ok 112 - FSC1_GivenPrivateThrowingpayloadAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.14825
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenPrivateThrowinglineageAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+ok 113 - FSC1_GivenPrivateThrowinglineageAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.135875
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenPrivateThrowingrecordsAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+ok 114 - FSC1_GivenPrivateThrowingrecordsAccessor_WhenChecked_RefusesWithoutRunningOrEchoing
+  ---
+  duration_ms: 0.11775
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenChangingWithdrawalGetter_WhenBuildingSet_RejectsWithNullAndNoAccessorCall
+ok 115 - FSC1_GivenChangingWithdrawalGetter_WhenBuildingSet_RejectsWithNullAndNoAccessorCall
+  ---
+  duration_ms: 0.101208
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenInheritedAccessorOrExecutableHook_WhenChecked_RejectsInertly
+ok 116 - FSC1_GivenInheritedAccessorOrExecutableHook_WhenChecked_RejectsInertly
+  ---
+  duration_ms: 0.243875
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenProxyOrArrayExecutionHook_WhenChecked_RejectsWithoutRunningTraps
+ok 117 - FSC1_GivenProxyOrArrayExecutionHook_WhenChecked_RejectsWithoutRunningTraps
+  ---
+  duration_ms: 0.224625
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenBuffertoStringExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+ok 118 - FSC1_GivenBuffertoStringExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.08175
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenBuffertoJSONExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+ok 119 - FSC1_GivenBuffertoJSONExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.04375
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenBufferutf8SliceExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+ok 120 - FSC1_GivenBufferutf8SliceExecutionHook_WhenValidated_RejectsWithoutInvokingIt
+  ---
+  duration_ms: 0.03775
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenOrdinaryBuffersAndSharedDataReferences_WhenChecked_PreservesCoherentInputs
+ok 121 - FSC1_GivenOrdinaryBuffersAndSharedDataReferences_WhenChecked_PreservesCoherentInputs
+  ---
+  duration_ms: 0.78625
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenNonDataReferencesCyclesOrExcessDepth_WhenChecked_RefusesWithoutCloningCallbacks
+ok 122 - FSC1_GivenNonDataReferencesCyclesOrExcessDepth_WhenChecked_RefusesWithoutCloningCallbacks
+  ---
+  duration_ms: 2.509208
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenNonEnumerableAccessor_WhenChecked_StillRejectsWithoutExecuting
+ok 123 - FSC1_GivenNonEnumerableAccessor_WhenChecked_StillRejectsWithoutExecuting
+  ---
+  duration_ms: 0.2105
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenSharedBackingBytes_WhenChecked_RejectsUnsnapshotableMutableStorage
+ok 124 - FSC1_GivenSharedBackingBytes_WhenChecked_RejectsUnsnapshotableMutableStorage
+  ---
+  duration_ms: 0.1795
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenAggregateSnapshotByteOverflow_WhenChecked_RejectsBeforeBufferCopies
+ok 125 - FSC1_GivenAggregateSnapshotByteOverflow_WhenChecked_RejectsBeforeBufferCopies
+  ---
+  duration_ms: 2.619542
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenChangingproposedGetter_WhenChecked_RejectsWithZeroCalls
+ok 126 - FSC1_GivenChangingproposedGetter_WhenChecked_RejectsWithZeroCalls
+  ---
+  duration_ms: 0.261875
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenChanginglineageGetter_WhenChecked_RejectsWithZeroCalls
+ok 127 - FSC1_GivenChanginglineageGetter_WhenChecked_RejectsWithZeroCalls
+  ---
+  duration_ms: 0.167125
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenChangingRecordListGetter_WhenProjected_RejectsWithNullNotEmptySet
+ok 128 - FSC1_GivenChangingRecordListGetter_WhenProjected_RejectsWithNullNotEmptySet
+  ---
+  duration_ms: 0.080708
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenExistingPayloadBudgetExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+ok 129 - FSC1_GivenExistingPayloadBudgetExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+  ---
+  duration_ms: 0.700541
+  type: 'test'
+  ...
+# Subtest: FSC1_GivenExistingEnvelopeByteCapExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+ok 130 - FSC1_GivenExistingEnvelopeByteCapExceeded_WhenChecked_RejectsBeforeSnapshotCopies
+  ---
+  duration_ms: 0.753209
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+ok 131 - FSC2_GivenDetachedNonemptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.181958
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+ok 132 - FSC2_GivenDetachedNonemptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.073959
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 133 - FSC2_GivenDetachedNonemptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.245208
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 134 - FSC2_GivenDetachedNonemptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.194333
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+ok 135 - FSC2_GivenDetachedNonemptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.174416
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+ok 136 - FSC2_GivenDetachedNonemptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.17725
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+ok 137 - FSC2_GivenDetachedNonemptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.115417
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+ok 138 - FSC2_GivenDetachedEmptyContributionBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.051666
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+ok 139 - FSC2_GivenDetachedEmptyWithdrawalBytes_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.051125
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 140 - FSC2_GivenDetachedEmptybaseEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.16175
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+ok 141 - FSC2_GivenDetachedEmptyproposedEnvelopeBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.156583
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+ok 142 - FSC2_GivenDetachedEmptychangesBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.162291
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+ok 143 - FSC2_GivenDetachedEmptycurrentWithdrawalsBytes_WhenChecked_RefusesWithoutThrow
+  ---
+  duration_ms: 0.170334
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+ok 144 - FSC2_GivenDetachedEmptyWithdrawalAfterValidRecord_WhenProjected_ReturnsNullWithoutThrow
+  ---
+  duration_ms: 0.0775
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+ok 145 - FSC2_GivenAttachedEmptyBytes_WhenValidated_RefusesInvalidJSONNotNativeView
+  ---
+  duration_ms: 0.122209
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+ok 146 - FSC2_GivenAttachedUnpooledBytesAndSharedReferences_WhenChecked_PreservesValidData
+  ---
+  duration_ms: 0.477541
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+ok 147 - FSC2_GivenPrototypeOnlyBufferImpostor_WhenValidated_RefusesWithoutThrow
+  ---
+  duration_ms: 0.109458
+  type: 'test'
+  ...
+# Subtest: FSC2_GivenAllocationTypeError_WhenCapturing_PropagatesUnrelatedFailure
+ok 148 - FSC2_GivenAllocationTypeError_WhenCapturing_PropagatesUnrelatedFailure
+  ---
+  duration_ms: 0.112583
+  type: 'test'
+  ...
+1..148
+# tests 154
+# suites 0
+# pass 154
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2475.986042
+# start of coverage report
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# file                        | line % | branch % | funcs % | uncovered lines
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# plugins                     |        |          |         | 
+#  desk                       |        |          |         | 
+#   mcp                       |        |          |         | 
+#    src                      |        |          |         | 
+#     factory                 |        |          |         | 
+#      contribution-policy.js |  97.74 |    94.09 |  100.00 | 137-138 179-180 236-237
+#      contribution-schema.js |  98.82 |    91.64 |  100.00 | 106-107 188-190
+#      outbox.js              |  48.95 |    68.42 |   10.00 | 142-148 160-169 174-177 183-186 201-203 211-213 219-221 223-225 227-229 241 246-249 251-252 256-261 274-276 346-351 361-378 387-394 427-429 440-441 445-447 449-456 459-467 499-503 517-519 533-541 547-550 569-570 581-582 629-632 638-640 644-646 656-669 675-678 682-687 689-698 700-704 706-709 711-725 729-733 737-740 766-807 810-812 824-834 851-889 898-908 916-930 937-945 952-954 961-966 970-979 987-996 1005-1013 1022-1028 1038-1062 1076-1087 1094-1099 1103-1108 1112-1119 1133-1143 1152-1155 1163-1165 1169-1175 1183-1188 1196-1198 1202-1211 1215-1222 1234-1242 1251-1257 1259-1265 1269-1272 1276-1281 1287-1293 1310-1312 1314-1319 1321-1344 1354-1367 1376-1387 1389-1400 1405-1415 1423-1429 1433-1444 1448-1461 1465-1472 1476-1478 1482-1498 1501-1509 1518-1548 1552-1554 1566-1569 1573-1578 1581-1585 1588-1595 1598-1600 1603-1607 1616-1628 1637-1646 1658-1686 1694-1701 1711-1724 1726-1736 1746-1754 1764-1782 1786-1793 1797-1798 1809-1821 1832-1839 1850-1873 1884-1908 1917-1926 1941-1960 1968-1975 1979-1984 1992-2011 2021-2029 2033-2037 2044-2052 2061-2067 2071-2077 2081-2087 2099-2110 2114-2125 2129-2137 2141-2145 2149-2151
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# all files                   |  60.96 |    88.90 |   42.06 | 
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# end of coverage report

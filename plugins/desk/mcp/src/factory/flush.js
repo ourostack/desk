@@ -142,7 +142,6 @@
 // files.
 
 import { spawn as spawnProcess } from "node:child_process"
-import { randomBytes } from "node:crypto"
 import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -197,7 +196,7 @@ import { keyedJobId, serializePublished, toPublished, toPublishedLabels } from "
 import { validatePublishedBytes } from "./published-schema.js"
 import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
-import { EXACT, sameFile } from "../util/file-identity.js"
+import { acquireLock, releaseLock } from "./flush-lock.js"
 import { derivedStoreOf, deskRootOf, isFolder, sessionPlace, sessionRoute } from "./session-route.js"
 import { deskVersion } from "../package-metadata.js"
 import {
@@ -218,7 +217,6 @@ export const MIN_GH_VERSION = Object.freeze([2, 40, 0])
 export const DEFAULT_DEADLINE_MS = 120000
 export const FINALIZE_QUIET_MS = 5000
 
-const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
 // Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
@@ -346,40 +344,6 @@ export function anonymousGithub({ fetch: fetchImpl = globalThis.fetch } = {}) {
 // ---------------------------------------------------------------------------
 // The lock.
 // ---------------------------------------------------------------------------
-
-async function acquireLock(root) {
-  const file = path.join(root, "flush.lock")
-  const token = randomBytes(16).toString("hex")
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fsp.open(file, "wx", 0o600)
-      try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, started_at: new Date().toISOString(), token }))
-      } finally {
-        await handle.close()
-      }
-      return { file, token }
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error
-      // Staleness comes from the file's own time, never its content.
-      const stat = await fsp.stat(file, EXACT).catch(() => null)
-      if (stat !== null && Date.now() - Number(stat.mtimeMs) <= LOCK_STALE_MS) return null
-      // Another flush may have replaced the stale lock since it was read: remove only the same file.
-      const again = await fsp.stat(file, EXACT).catch(() => null)
-      if (stat !== null && (again === null || !sameFile(again, stat) || again.mtimeNs !== stat.mtimeNs)) return null
-      await fsp.unlink(file).catch(() => {})
-    }
-  }
-  return null
-}
-
-async function releaseLock({ file, token }) {
-  try {
-    if (JSON.parse(await fsp.readFile(file, "utf8")).token === token) await fsp.unlink(file)
-  } catch {
-    // Gone or replaced: never remove another owner's lock.
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Talking to GitHub through the runner.

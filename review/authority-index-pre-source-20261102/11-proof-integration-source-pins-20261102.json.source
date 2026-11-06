@@ -1,0 +1,191 @@
+{
+  "scope": "Read-only source-byte mapping, no imports/execution/Git or live state; local ref metadata separately retained in design",
+  "sources": [
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "bytes": 17454,
+      "sha256": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/contribution-schema.js",
+      "bytes": 21636,
+      "sha256": "c26bf083ff721d0068299fb87da492b4a84635151bcc9c7a646c207bac430d1b"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/outbox.js",
+      "bytes": 119881,
+      "sha256": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/derive-run.js",
+      "bytes": 49702,
+      "sha256": "3fe43db39e151667089d813d265ded5fdce81d56e82ca45569a6151f0d91102c"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/session-route.js",
+      "bytes": 12321,
+      "sha256": "95d0b74e7d0d3c2bc4c7f63b2889a1f365a1e32d2e5979a14593219dc8694aa9"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/publish.js",
+      "bytes": 34246,
+      "sha256": "810f20bed8ee2486dbb03c0f561e38c03dcbb8d97c201e3445da977f1a79c42f"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/capture-classify.js",
+      "bytes": 10348,
+      "sha256": "1953bfed84ca183af9a6be9e803885164471ee9d370b276e9ac8500ad95242ec"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/capture-sweep.js",
+      "bytes": 14421,
+      "sha256": "423ec1d08349a7f4fe89cefd3617a9f374ce07244ba97214a8d357835aba01fd"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/capture-schema.js",
+      "bytes": 8578,
+      "sha256": "50045378b7f9d58789f6e9ab19e822a6435d8ee637537fb8d46b25dc97e629a4"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/capture-publish.js",
+      "bytes": 9250,
+      "sha256": "7c497ebf16503b726a573271c6045bbd572554e5b4e65e9945a59759bc4b82fa"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/capture-flush.js",
+      "bytes": 18896,
+      "sha256": "7a0759a0f856ce483e82d9e695008065bf7dc3a9f830e4480a91138f9b9fba71"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/context-outbox.js",
+      "bytes": 49172,
+      "sha256": "d6400985d655b985a15eb7e061e2b5a292f0f99aaf186345f253dac2b5b8ffa2"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/context-run.js",
+      "bytes": 21183,
+      "sha256": "164e23b347a1d8a9cb67bba468da34b18744d4a2121afb1b773ca3882161293f"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/evaluate-run.js",
+      "bytes": 38017,
+      "sha256": "1cfc029e03d7c09999173e683fc45aeaf2b44623399f560c9ab8790f3a4a5852"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/evaluator-step.js",
+      "bytes": 30291,
+      "sha256": "24a68742a8bd43918488afc944a571d736a461cf564f9437465a0efbcaeb15c9"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/label-binding.js",
+      "bytes": 4114,
+      "sha256": "288c161efd5693a5336f6a746fb8a1773b70cf5188e704e025fe532ec5790e46"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/flush.js",
+      "bytes": 103727,
+      "sha256": "21321963746883b8d73bd4987e33df15c779ce40a563622106230f9f2868e9ee"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/pipeline/build.js",
+      "bytes": 16062,
+      "sha256": "a2379858f3479408582ba0c04c4e7da7f64b9239506ab07f9d74eab465f5bb38"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/src/factory/pipeline/validate-pr.js",
+      "bytes": 11691,
+      "sha256": "17fb0d677162c322c2507fd37784d33cf87657a89dc0fab7a022ac4f4928a27e"
+    },
+    {
+      "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+      "path": "plugins/desk/mcp/scripts/factory.js",
+      "bytes": 40273,
+      "sha256": "f87cb467b55cccdbd973582a419f1c4f436d627759ed10bddcbb99a5d3e379a7"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/workflows/validate.yml",
+      "bytes": 23566,
+      "sha256": "431d6c2e7be4cd41e0abc71ffcd356f379515bd0f61edb34a0a292f3b880a532"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/workflows/merge.yml",
+      "bytes": 19480,
+      "sha256": "88eb9d57aef6e2cceb91ddf9a5616cb815164c79f71d101db9aa0c2264656c9d"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/workflows/build.yml",
+      "bytes": 14244,
+      "sha256": "a1d54c7d669013bc63346139182725b7948fde1b9517fe767521e01825fdb424"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/workflows/pages.yml",
+      "bytes": 9002,
+      "sha256": "c4399ba4bf56324964cbda7c89a6e207d3e334fd68ec70ca5bd31e817ab18065"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/scripts/triage-values.mjs",
+      "bytes": 15713,
+      "sha256": "ae67e127a1542ad0761a9520856ccc95e9fb3627e747ff3d4d2eb2f6e034b48b"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": ".github/scripts/check-capture.sh",
+      "bytes": 5785,
+      "sha256": "2c463faab7200dac36cb71d086de1d4c23cda1b898d5111cb6495fcd2643af4f"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": "site/scripts/build-data.mjs",
+      "bytes": 55310,
+      "sha256": "63cc4f94ee6d88d45a5bf8da07c8696555a7683e9ca85fce33798cc7601c645a"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": "site/scripts/capture-coverage.mjs",
+      "bytes": 13952,
+      "sha256": "c07a46204257e4e255ea002b60ce68362e1f9de6b6069d0e523df1d013d5c555"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": "site/scripts/task-context.mjs",
+      "bytes": 1788,
+      "sha256": "0a9ac7cc907bd49a613d603d1ae692c46be411c7689e1b151c51bd48559abd83"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": "site/scripts/session-intelligence.mjs",
+      "bytes": 12171,
+      "sha256": "0d82e45edad2f604811c1b12402c12633041e0265e320462856766ba05f7797e"
+    },
+    {
+      "root": "/Users/microsoft/code/factory-worktrees/factory-session-intelligence-20261027",
+      "path": "site/src/task-context.js",
+      "bytes": 8667,
+      "sha256": "b8272fa857cb0dfc87a382089cdeabb7c1d03ade1a31ddcf463c650d523e98b9"
+    }
+  ]
+}

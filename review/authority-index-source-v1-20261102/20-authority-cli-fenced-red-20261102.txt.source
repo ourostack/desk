@@ -1,0 +1,63 @@
+TAP version 13
+# Subtest: ContributionAuthority_CliClosedHandlersRejectIdentityFlagsBeforeAnyRead
+not ok 1 - ContributionAuthority_CliClosedHandlersRejectIdentityFlagsBeforeAnyRead
+  ---
+  duration_ms: 1.455834
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/factory_cli.test.js:47:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    closed private contribution CLI handler is missing
+    + actual - expected
+    
+    + 'undefined'
+    - 'function'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'function'
+  actual: 'undefined'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/factory_cli.test.js:54:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: ContributionAuthority_CliUnavailableProtectionIsExplicitFailureWithoutPayload
+not ok 2 - ContributionAuthority_CliUnavailableProtectionIsExplicitFailureWithoutPayload
+  ---
+  duration_ms: 0.86425
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/factory_cli.test.js:59:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + [
+    +   'factory.js: unknown subcommand "contribution-status" (supported: account, consent, derive, status, flush, context-request, finalize, validate-pr, build, job-link, evaluate, evaluate-accept, kaizen-check, andon, reconcile, loop)\n'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: |-
+      factory.js: unknown subcommand "contribution-status" (supported: account, consent, derive, status, flush, context-request, finalize, validate-pr, build, job-link, evaluate, evaluate-accept, kaizen-check, andon, reconcile, loop)
+      
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/factory_cli.test.js:65:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 187.925666

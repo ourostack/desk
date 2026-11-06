@@ -1,0 +1,287 @@
+TAP version 13
+# Subtest: ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+ok 1 - ContributionAuthority_ActualStoredChainProducesCheckedAuthorityWithoutWrites
+  ---
+  duration_ms: 89.8595
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+ok 2 - ContributionAuthority_secret_missingRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 118.476042
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+ok 3 - ContributionAuthority_consent_falseRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 27.677208
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+ok 4 - ContributionAuthority_marker_onlyRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 177.64675
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+ok 5 - ContributionAuthority_foreign_ownerRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 37.179833
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+ok 6 - ContributionAuthority_wrong_sessionRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 60.703167
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+ok 7 - ContributionAuthority_witness_sealRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 84.561542
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+ok 8 - ContributionAuthority_publisher_changedRefusesNoRepairOrPermissiveGrant
+  ---
+  duration_ms: 95.862709
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+ok 9 - ContributionAuthority_AbsentRootAndUnsupportedPlatformDoNotCreateOrFabricateAuthority
+  ---
+  duration_ms: 5.423625
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_ClosedPrivateRequestReadsOnceWithoutCreatingState
+ok 10 - ContributionAuthority_ClosedPrivateRequestReadsOnceWithoutCreatingState
+  ---
+  duration_ms: 8.040292
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestextra_fieldRefusesWithoutEchoOrRepair
+ok 11 - ContributionAuthority_PrivateRequestextra_fieldRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 7.643583
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestmalformedRefusesWithoutEchoOrRepair
+ok 12 - ContributionAuthority_PrivateRequestmalformedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 10.947291
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestsymlinkRefusesWithoutEchoOrRepair
+ok 13 - ContributionAuthority_PrivateRequestsymlinkRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 204.364875
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestlinkedRefusesWithoutEchoOrRepair
+ok 14 - ContributionAuthority_PrivateRequestlinkedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 5.429333
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestunsafe_modeRefusesWithoutEchoOrRepair
+ok 15 - ContributionAuthority_PrivateRequestunsafe_modeRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 7.239541
+  type: 'test'
+  ...
+# Subtest: ContributionAuthority_PrivateRequestoversizedRefusesWithoutEchoOrRepair
+ok 16 - ContributionAuthority_PrivateRequestoversizedRefusesWithoutEchoOrRepair
+  ---
+  duration_ms: 4.627584
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+ok 17 - ContributionIndex_AbsentIndexIsUnknownAndReadOnly
+  ---
+  duration_ms: 203.200292
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+ok 18 - ContributionIndex_ActualCommitKeepsOneIntentAndGenerationOnRetry
+  ---
+  duration_ms: 8667.672708
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 19 - ContributionIndex_InterruptedAftertransaction.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 7185.126666
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 20 - ContributionIndex_InterruptedAfterindex.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 7531.576209
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 21 - ContributionIndex_InterruptedAfter.active.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 3167.043083
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+ok 22 - ContributionIndex_InterruptedAfterowner.json_ReadOnlyPendingAndAuthorizedRetryFinishesOnce
+  ---
+  duration_ms: 5485.8845
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+ok 23 - ContributionIndex_ForeignChangedImageDuringPendingTransactionRefusesWithoutOverwriting
+  ---
+  duration_ms: 2622.964833
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+ok 24 - ContributionIndex_UnbrandedAuthorityAndLostTransactionNeverManufactureLegacySuccess
+  ---
+  duration_ms: 516.350709
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+ok 25 - ContributionIndex_EffectRevisionDoesNotAdvanceEffectiveOwnerOrIntakeGeneration
+  ---
+  duration_ms: 11280.367834
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+ok 26 - ContributionIndex_NativeAuthorityCannotErasePreviouslyExcludedIntentThroughImages
+  ---
+  duration_ms: 7332.13275
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+ok 27 - ContributionIndex_UnsafeReadReturnsExplicitUnavailableNotThrow
+  ---
+  duration_ms: 132.759583
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+ok 28 - ContributionIndex_FinalIndexResponseLostRecoversWithoutReplayingOwnerWrites
+  ---
+  duration_ms: 3629.273958
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+ok 29 - ContributionIndex_SecondOwnerChangeAdvancesIntakeInsteadOfTakingMaximumOwnerGeneration
+  ---
+  duration_ms: 6404.000083
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+ok 30 - ContributionIndex_StoredAuthorityRevokedAfterQualificationIsNotReusableAdmission
+  ---
+  duration_ms: 49.503125
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_PolicyUsesActualAuthorityAndIndexTransactionWithoutReadSideEffects
+ok 31 - ContributionIndex_PolicyUsesActualAuthorityAndIndexTransactionWithoutReadSideEffects
+  ---
+  duration_ms: 4031.46325
+  type: 'test'
+  ...
+# Subtest: ContributionIndex_PolicyRetryCompletesItsAuthenticatedInterruptedIntentOnce
+not ok 32 - ContributionIndex_PolicyRetryCompletesItsAuthenticatedInterruptedIntentOnce
+  ---
+  duration_ms: 4633.914291
+  type: 'test'
+  location: '/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:288:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'policy_unavailable'
+    - 'already_excluded'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'already_excluded'
+  actual: 'policy_unavailable'
+  operator: 'strictEqual'
+  stack: |-
+    file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_index.test.js:310:10
+    async scratch (file:///Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/_session_helpers.js:21:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+ok 33 - ContributionStorage_AbsentRootReadDoesNotCreateAnyDirectory
+  ---
+  duration_ms: 8.941292
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+ok 34 - ContributionStorage_ClosedRoleReadsExistingBytesWithoutRepair
+  ---
+  duration_ms: 15.431292
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_linkedRoleRefusesWithoutRepair
+ok 35 - ContributionStorage_linkedRoleRefusesWithoutRepair
+  ---
+  duration_ms: 16.919542
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_symlinkRoleRefusesWithoutRepair
+ok 36 - ContributionStorage_symlinkRoleRefusesWithoutRepair
+  ---
+  duration_ms: 1037.420375
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_modeRoleRefusesWithoutRepair
+ok 37 - ContributionStorage_modeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 13.857625
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_too_largeRoleRefusesWithoutRepair
+ok 38 - ContributionStorage_too_largeRoleRefusesWithoutRepair
+  ---
+  duration_ms: 8.909875
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+ok 39 - ContributionStorage_UnsafeRootRefusesWithoutChangingProtection
+  ---
+  duration_ms: 8.3785
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+ok 40 - ContributionStorage_UnknownRoleAndUnbrandedRootCannotReadCallerPath
+  ---
+  duration_ms: 7.229417
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+ok 41 - ContributionStorage_ReplacementDuringHeldReadRefusesMixedSnapshot
+  ---
+  duration_ms: 324.491708
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_GrowingHeldFileUsesBoundedSentinelAndClosesItsDescriptor
+ok 42 - ContributionStorage_GrowingHeldFileUsesBoundedSentinelAndClosesItsDescriptor
+  ---
+  duration_ms: 24.489458
+  type: 'test'
+  ...
+# Subtest: ContributionStorage_ExactByteCapPassesAndOversizeOrTooManyRolesAllocateNothing
+ok 43 - ContributionStorage_ExactByteCapPassesAndOversizeOrTooManyRolesAllocateNothing
+  ---
+  duration_ms: 21.937209
+  type: 'test'
+  ...
+1..43
+# tests 43
+# suites 0
+# pass 42
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 75381.850291

@@ -1,0 +1,202 @@
+{
+  "scope": "Current bounded authority/index SOURCE generation; local copies only, not staging inputs or Git/publication/platform/CI proof",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-storage.js",
+      "path": "review/authority-index-source-v1-20261102/00-contribution-storage.js.source",
+      "bytes": 14450,
+      "sha256": "95ff183ac9668b56ef30aeb93feec6ed628dbb67bd3b5b65774e245cf10e7004"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-index.js",
+      "path": "review/authority-index-source-v1-20261102/01-contribution-index.js.source",
+      "bytes": 16560,
+      "sha256": "276582964550ef191be4b8e2659e5734d0b206e56740ac7ac9ef5b5549cceea0"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-authority.js",
+      "path": "review/authority-index-source-v1-20261102/02-contribution-authority.js.source",
+      "bytes": 11721,
+      "sha256": "1cd527bdcdda0b77789d6b99baa36633574634bf8649747b47eb3b8b79407fa9"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/flush-lock.js",
+      "path": "review/authority-index-source-v1-20261102/03-flush-lock.js.source",
+      "bytes": 1391,
+      "sha256": "90a32df4fbf33add0d84db0187e56eabe82899fb3125ce46b6e337981c8331d1"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "path": "review/authority-index-source-v1-20261102/04-contribution-policy.js.source",
+      "bytes": 20572,
+      "sha256": "69f520e890fa3395c4e07a27c2753d6c76109c94073c39241782b2326444dde3"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/flush.js",
+      "path": "review/authority-index-source-v1-20261102/05-flush.js.source",
+      "bytes": 102314,
+      "sha256": "92c8ffb3fe1d4c7e14245d5fb31df508e55e78c2885c5cdfeaac0d45cb23c3ea"
+    },
+    {
+      "source": "plugins/desk/mcp/scripts/factory.js",
+      "path": "review/authority-index-source-v1-20261102/06-factory.js.source",
+      "bytes": 42976,
+      "sha256": "481f3596a2659120d344a1d274d6849dfbea6a21447b2f90bae456bfe20cc75e"
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "path": "review/authority-index-source-v1-20261102/07-factory-contribution-schema.md.source",
+      "bytes": 12524,
+      "sha256": "b6e47e76fc242356e6a8944e50d21af516f65f9f1cb58754809c1778657314c5"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_storage.test.js",
+      "path": "review/authority-index-source-v1-20261102/08-contribution_storage.test.js.source",
+      "bytes": 8416,
+      "sha256": "1ccebecbdb632f2656ce69609605dbf522c5164a07ca66cf961d358d6d8c8b10"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_index.test.js",
+      "path": "review/authority-index-source-v1-20261102/09-contribution_index.test.js.source",
+      "bytes": 21373,
+      "sha256": "e1810d262c915148215a8050562ba5d82f109be84ed1589518e3c04d1c0ffcd7"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_authority.test.js",
+      "path": "review/authority-index-source-v1-20261102/10-contribution_authority.test.js.source",
+      "bytes": 9200,
+      "sha256": "33303f109725b69bd1658debc580076fd4db88b6390d812e67119a54c4ca1e84"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/factory_cli.test.js",
+      "path": "review/authority-index-source-v1-20261102/11-factory_cli.test.js.source",
+      "bytes": 81445,
+      "sha256": "68c2d6570208dcec73ee49c7a7de7963b54ed669ef37d64148edccdce952fccc"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/flush.test.js",
+      "path": "review/authority-index-source-v1-20261102/12-flush.test.js.source",
+      "bytes": 117594,
+      "sha256": "58ad53ea02950d88a5987ce6d80a33b7b90704d2d01a765d4284381dfd160350"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "path": "review/authority-index-source-v1-20261102/13-contribution_policy.test.js.source",
+      "bytes": 38279,
+      "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-storage-fenced-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/14-authority-storage-fenced-red-20261102.txt.source",
+      "bytes": 11226,
+      "sha256": "cbecd3a54f64492a983c05bd35060ade3a477e618ebc1930dbacc41b3d9b6773"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-reader-fenced-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/15-authority-reader-fenced-red-20261102.txt.source",
+      "bytes": 12844,
+      "sha256": "4c29f983f7b243d08399efb10ec3d0684082a04311f4abea7874e0ab4724863b"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-index-fenced-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/16-authority-index-fenced-red-20261102.txt.source",
+      "bytes": 11619,
+      "sha256": "fa3c91f2c61fd54ddda9d107cff428322ca4404fa632a63b2a5d598c9cca4fa4"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-flush-lock-fenced-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/17-authority-flush-lock-fenced-red-20261102.txt.source",
+      "bytes": 2271,
+      "sha256": "d3fe861eb04c0151c6968c25fbea009ffed4755c087c6127f647d5845784d61d"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-private-request-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/18-authority-private-request-red-20261102.txt.source",
+      "bytes": 7787,
+      "sha256": "5d70faa0d9601c6b3b739e49ac851dd7dcbba6b46edfeab7b363cdb57f7b6ac2"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-policy-interface-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/19-authority-policy-interface-red-20261102.txt.source",
+      "bytes": 1261,
+      "sha256": "3a9c31b89a2537eba7027cc348f99a3206b9477e258b4f1e2a52f55096bb6d05"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-cli-fenced-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/20-authority-cli-fenced-red-20261102.txt.source",
+      "bytes": 2514,
+      "sha256": "af55e7ff2019a21f5a54278f6049cd5abf7d30f962ca1458e5c5c4edb2a9470f"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-index-continued-causal-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/21-authority-index-continued-causal-red-20261102.txt.source",
+      "bytes": 3959,
+      "sha256": "02a01f75fb03c6d88746642d83e2eb38c718581ca7e2a6d005790d96e1d2b033"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-index-multiowner-revocation-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/22-authority-index-multiowner-revocation-red-20261102.txt.source",
+      "bytes": 2401,
+      "sha256": "a0121d960f19813b06b477c730f3798be6675bd419cad63db7d7d1bd7a1ec641"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-core-and-policy-green4-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/23-authority-core-and-policy-green4-20261102.txt.source",
+      "bytes": 10326,
+      "sha256": "b4aafd380937721ed60065d12f3dd276cbb20b833197b863fce6f2ef5e4121bb"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-final-coherence-red-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/24-authority-final-coherence-red-20261102.txt.source",
+      "bytes": 3492,
+      "sha256": "a83730cf8b476c66187d5823a3291d38faa85d4f8059fb6f0b1d8650c70fa32a"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-final-coherence-green-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/25-authority-final-coherence-green-20261102.txt.source",
+      "bytes": 774,
+      "sha256": "7829838386afa78bc5ee3223b68cc619b8f09596cbd11ccee819e25c6763b9d7"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-prerequisite-core-coverage-attempt1-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/26-authority-prerequisite-core-coverage-attempt1-20261102.txt.source",
+      "bytes": 25657,
+      "sha256": "6bd1519d4103e30cf7f3317d52359c2a65b25df4b5da6d426b5cc837808e2894"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-prerequisite-final-core-coverage-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/27-authority-prerequisite-final-core-coverage-20261102.txt.source",
+      "bytes": 26203,
+      "sha256": "d155c89bd9b1f1ef72eb52ebbc433eeff53ea359ee2a00abdc3ad9341f06ea2a"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-prerequisite-final-cli-lock-coverage-20261102.txt",
+      "path": "review/authority-index-source-v1-20261102/28-authority-prerequisite-final-cli-lock-coverage-20261102.txt.source",
+      "bytes": 3582,
+      "sha256": "c649057da0484214d5b39a9ff1194f5eb483d3077e935dc9d8025ab65f490b75"
+    }
+  ],
+  "changed_old_production": [
+    {
+      "path": "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "old_sha256": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac",
+      "current_sha256": "69f520e890fa3395c4e07a27c2753d6c76109c94073c39241782b2326444dde3",
+      "bytes": 20572
+    },
+    {
+      "path": "plugins/desk/mcp/src/factory/flush.js",
+      "old_sha256": "21321963746883b8d73bd4987e33df15c779ce40a563622106230f9f2868e9ee",
+      "current_sha256": "92c8ffb3fe1d4c7e14245d5fb31df508e55e78c2885c5cdfeaac0d45cb23c3ea",
+      "bytes": 102314
+    },
+    {
+      "path": "plugins/desk/mcp/scripts/factory.js",
+      "old_sha256": "f87cb467b55cccdbd973582a419f1c4f436d627759ed10bddcbb99a5d3e379a7",
+      "current_sha256": "481f3596a2659120d344a1d274d6849dfbea6a21447b2f90bae456bfe20cc75e",
+      "bytes": 42976
+    }
+  ],
+  "unchanged_outbox_sha256": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1",
+  "static_lock_body_equivalence_excluding_comments_whitespace": true,
+  "pre_source_manifest": "review/authority-index-pre-source-20261102/manifest.json"
+}

@@ -1,0 +1,315 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto"
+import * as path from "node:path"
+import { CONTRIBUTION_POLICY_MAX_BYTES, readContributionPolicyFile, withNamedLock, writeContributionPolicyFile } from "./outbox.js"
+import { stableStringify } from "./pipeline/normalize.js"
+import { checkedContributionAuthority } from "./contribution-authority.js"
+import { readContributionFiles } from "./contribution-storage.js"
+import { commitContributionImages, readContributionIndex, reconcileContributionTransaction } from "./contribution-index.js"
+import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
+
+// Inert until a checked integration supplies readAuthority. It must resolve immutable owner/source evidence,
+// existing consent, qualified compatibility and the existing secret independently of caller input.
+// observeRemote is read-only; neither adapter grants this module permission to publish or move queue files.
+const SCHEMA = "desk.factory.exclusion/1"
+const HEX = /^[0-9a-f]{64}$/u
+const SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const REMOTE = ["never_submitted", "submitted", "merged", "absent_confirmed", "unknown", "conflict"]
+const WITHDRAWAL = ["not_needed", "pending", "submitted", "withdrawn", "refused", "unknown"]
+const digest = value => createHash("sha256").update(stableStringify(value)).digest("hex")
+const mac = (key, value) => createHmac("sha256", key).update(stableStringify(value)).digest("hex")
+const same = (left, right) => typeof left === "string" && typeof right === "string" && HEX.test(left) && HEX.test(right) &&
+  timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"))
+const exact = (value, keys) => isPlainObject(value) && Object.keys(value).sort().join() === [...keys].sort().join()
+const integer = value => Number.isSafeInteger(value) && value >= 0
+const unavailable = () => ({ state: "unavailable", code: "policy_unavailable" })
+const result = code => ({ result: code })
+
+function requestValid(value) {
+  return exact(value, ["store", "host", "session", "deskRoot", "personPrefix"]) && PATTERNS.prRepo.test(value.store) &&
+    ENUMS.host.includes(value.host) && SESSION.test(value.session) && typeof value.deskRoot === "string" &&
+    path.isAbsolute(value.deskRoot) && typeof value.personPrefix === "string" &&
+    /^(?:|desks\/[a-zA-Z0-9][a-zA-Z0-9_-]*)$/u.test(value.personPrefix)
+}
+
+// No live authority adapter is registered here. Integrations must supply independently checked source/owner evidence.
+async function authorityFor(env, request, dependencies) {
+  if (!isPlainObject(request)) return result("invalid_request")
+  if (typeof dependencies.readAuthority !== "function") return result("ownership_unknown")
+  let authority
+  try { authority = await dependencies.readAuthority(env, request) } catch (error) {
+    if (["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(error.code)) return result("ownership_unknown")
+    throw error
+  }
+  const nativeAuthority = checkedContributionAuthority(authority) === null ? null : authority
+  if (nativeAuthority !== null) {
+    const checked = checkedContributionAuthority(nativeAuthority)
+    authority = { ...checked.local, key: checked.key }
+  }
+  if (!isPlainObject(authority) || !Buffer.isBuffer(authority.key) || authority.key.length !== 32) return result("ownership_unknown")
+  const { owner, target, evidence, consent, compatibility, key } = authority
+  if (!exact(owner, ["deskRoot", "personPrefix", "machine"]) || typeof owner.deskRoot !== "string" || !path.isAbsolute(owner.deskRoot) ||
+      !HEX.test(owner.machine) || typeof owner.personPrefix !== "string" ||
+      !exact(target, ["store", "host", "session"]) || !PATTERNS.prRepo.test(target.store) ||
+      !ENUMS.host.includes(target.host) || !SESSION.test(target.session)) return result("ownership_unknown")
+  const store = target.store.toLowerCase()
+  const ownerScope = mac(key, { owner, store })
+  if (request.store?.toLowerCase() !== store || request.ownerScope !== undefined && request.ownerScope !== ownerScope ||
+      request.host !== undefined && request.host !== target.host || request.session !== undefined && request.session !== target.session ||
+      request.deskRoot !== undefined && request.deskRoot !== owner.deskRoot ||
+      request.personPrefix !== undefined && request.personPrefix !== owner.personPrefix) return result("ownership_mismatch")
+  if (!exact(evidence, ["ownerScope", "kind", "digest"]) || evidence.ownerScope !== ownerScope ||
+      !["source", "delivery"].includes(evidence.kind) || !HEX.test(evidence.digest)) return result("ownership_unknown")
+  if (!exact(consent, ["store", "contribute"]) || typeof consent.store !== "string") return result("ownership_unknown")
+  if (consent.store.toLowerCase() !== store || consent.contribute !== true) return result("not_opted_in")
+  if (!exact(compatibility, ["protocol", "publisher", "storeWitness"]) || compatibility.protocol !== 1 ||
+      !HEX.test(compatibility.publisher) || !HEX.test(compatibility.storeWitness)) return result("compatibility_unqualified")
+  return { key: Buffer.from(key), ownerScope, store, nativeAuthority,
+    local: structuredClone({ owner, target: { ...target, store }, evidence, consent, compatibility }) }
+}
+
+function sealed(key, value) {
+  return { ...value, seal: mac(key, value) }
+}
+
+function openSealed(bytes, key) {
+  const record = JSON.parse(bytes)
+  if (!isPlainObject(record)) throw new Error("contribution_seal_invalid")
+  const { seal, ...value } = record
+  if (!same(seal, mac(key, value))) throw new Error("contribution_seal_invalid")
+  return value
+}
+
+function remoteValid(value) {
+  return isPlainObject(value) && REMOTE.includes(value.state) && Object.keys(value).every(key => ["state", "pr", "head", "code"].includes(key)) &&
+    (value.pr === undefined || Number.isSafeInteger(value.pr) && value.pr > 0) &&
+    (value.head === undefined || /^[0-9a-f]{40}$/u.test(value.head)) &&
+    (value.code === undefined || value.state === "unknown" && value.code === "observation_failed")
+}
+
+function effectValid(value) {
+  return exact(value, ["remote", "withdrawal"]) && remoteValid(value.remote) && WITHDRAWAL.includes(value.withdrawal) &&
+    (value.withdrawal !== "withdrawn" || value.remote.state === "absent_confirmed") &&
+    (value.remote.state !== "unknown" || value.withdrawal === "unknown") &&
+    (value.remote.state !== "conflict" || value.withdrawal === "refused")
+}
+
+function intentValid(intent, generation) {
+  return exact(intent, ["target", "localDigest", "observedRemoteDigest", "tokenHash", "generation", "revision", "remote", "withdrawal", "effects"]) &&
+    exact(intent.target, ["host", "session"]) && ENUMS.host.includes(intent.target.host) &&
+    typeof intent.target.session === "string" && SESSION.test(intent.target.session) &&
+    [intent.localDigest, intent.observedRemoteDigest, intent.tokenHash].every(value => typeof value === "string" && HEX.test(value)) &&
+    integer(intent.generation) && intent.generation >= 1 && intent.generation <= generation && integer(intent.revision) &&
+    effectValid({ remote: intent.remote, withdrawal: intent.withdrawal }) &&
+    Array.isArray(intent.effects) && intent.effects.length <= 64 && intent.effects.every(effectValid)
+}
+
+function policyValid(value) {
+  return exact(value, ["schema", "ownerScope", "store", "generation", "exclusions"]) && value.schema === SCHEMA &&
+    typeof value.ownerScope === "string" && HEX.test(value.ownerScope) && typeof value.store === "string" &&
+    PATTERNS.prRepo.test(value.store) && value.store === value.store.toLowerCase() && integer(value.generation) &&
+    isPlainObject(value.exclusions) && Object.keys(value.exclusions).length <= 256 &&
+    Object.entries(value.exclusions).every(([id, intent]) => HEX.test(id) && intentValid(intent, value.generation))
+}
+
+async function observe(dependencies) {
+  if (typeof dependencies.observeRemote !== "function") return { state: "unknown" }
+  try {
+    const remote = await dependencies.observeRemote()
+    return remoteValid(remote) ? structuredClone(remote) : { state: "unknown", code: "observation_failed" }
+  } catch (error) {
+    if (!["ETIMEDOUT", "ENOENT", "EACCES", "ECONNRESET", "ENETUNREACH"].includes(error.code)) throw error
+    return { state: "unknown", code: "observation_failed" }
+  }
+}
+
+async function readState(env, authority, dependencies) {
+  try {
+    let ledgerBytes, activationBytes
+    if (authority.nativeAuthority !== null) {
+      const index = await readContributionIndex(authority.nativeAuthority)
+      if (index.state !== "ready") return unavailable()
+      const checked = checkedContributionAuthority(authority.nativeAuthority)
+      const read = await readContributionFiles(checked.root, [{ role: "ledger" }, { role: "activation" }])
+      if (read.state !== "ready") return unavailable()
+      ledgerBytes = read.files.ledger
+      activationBytes = read.files.activation
+      const expected = index.index.owners[authority.ownerScope]
+      if (expected !== undefined && (ledgerBytes === null || activationBytes === null ||
+          createHash("sha256").update(ledgerBytes).digest("hex") !== expected.ledger ||
+          createHash("sha256").update(activationBytes).digest("hex") !== expected.activation)) return unavailable()
+      if ((index.index.owners[authority.ownerScope]?.generation ?? 0) !==
+          (ledgerBytes === null ? 0 : openSealed(ledgerBytes, authority.key).generation)) return unavailable()
+    } else {
+      ledgerBytes = await readContributionPolicyFile(env, authority.ownerScope, "ledger", dependencies)
+      activationBytes = await readContributionPolicyFile(env, authority.ownerScope, "activation", dependencies)
+    }
+    if (ledgerBytes === null && activationBytes === null) {
+      if (dependencies.expectedGeneration !== undefined && dependencies.expectedGeneration !== 0) return unavailable()
+      return { state: "ready", schema: SCHEMA, store: authority.store, ownerScope: authority.ownerScope, generation: 0, exclusions: {} }
+    }
+    if (ledgerBytes === null || activationBytes === null) return unavailable()
+    const ledger = openSealed(ledgerBytes, authority.key)
+    const activation = openSealed(activationBytes, authority.key)
+    if (!policyValid(ledger) || ledger.ownerScope !== authority.ownerScope || ledger.store !== authority.store ||
+        !exact(activation, ["schema", "ownerScope", "store", "generation"]) || activation.schema !== SCHEMA ||
+        activation.ownerScope !== authority.ownerScope || activation.store !== authority.store ||
+        activation.generation !== ledger.generation || (dependencies.expectedGeneration ?? 0) > ledger.generation) return unavailable()
+    return { state: "ready", schema: SCHEMA, store: authority.store, ownerScope: authority.ownerScope,
+      generation: ledger.generation, exclusions: ledger.exclusions }
+  } catch (error) {
+    if (error instanceof SyntaxError || error.message.startsWith("contribution_") || error.message.startsWith("desk_factory:") ||
+        ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "ELOOP"].includes(error.code)) return unavailable()
+    throw error
+  }
+}
+
+export async function readContributionPolicy(env, options, dependencies = {}) {
+  const authority = await authorityFor(env, options, dependencies)
+  return authority.result ? unavailable() : readState(env, authority, dependencies)
+}
+
+export function contributionAllowed(snapshot, identity) {
+  if (!isPlainObject(snapshot) || snapshot.state !== "ready") return { allowed: false, code: "policy_unavailable" }
+  const { state: _state, ...value } = snapshot
+  if (!policyValid(value)) return { allowed: false, code: "policy_unavailable" }
+  if (!isPlainObject(identity) || typeof identity.store !== "string" || snapshot.store !== identity.store.toLowerCase() ||
+      !ENUMS.host.includes(identity.host) || !SESSION.test(identity.session))
+    return { allowed: false, code: "ownership_mismatch" }
+  const excluded = Object.values(snapshot.exclusions).some(intent => intent.target.host === identity.host && intent.target.session === identity.session)
+  return { allowed: !excluded, code: excluded ? "session_excluded" : "allowed" }
+}
+
+export async function planSessionExclusion(env, request, dependencies = {}) {
+  if (!requestValid(request)) return result("invalid_request")
+  request = structuredClone(request)
+  const authority = await authorityFor(env, request, dependencies)
+  if (authority.result) return authority
+  const state = await readState(env, authority, dependencies)
+  if (state.state !== "ready") return result(state.code)
+  const remote = await observe(dependencies)
+  const value = { version: 1, localDigest: mac(authority.key, { local: authority.local, generation: state.generation }),
+    observedRemoteDigest: mac(authority.key, remote) }
+  const planToken = Buffer.from(JSON.stringify(sealed(authority.key, value))).toString("base64url")
+  return { result: "planned", planToken, generation: state.generation, local: "planned", remote: { state: remote.state } }
+}
+
+function tokenValue(token, key) {
+  if (typeof token !== "string" || token.length > 1024 || !/^[A-Za-z0-9_-]+$/u.test(token)) return null
+  try {
+    const value = openSealed(Buffer.from(token, "base64url"), key)
+    return exact(value, ["version", "localDigest", "observedRemoteDigest"]) && value.version === 1 &&
+      HEX.test(value.localDigest) && HEX.test(value.observedRemoteDigest) ? value : null
+  } catch (error) {
+    if (error instanceof SyntaxError || error.message === "contribution_seal_invalid") return null
+    throw error
+  }
+}
+
+const withdrawalOf = remote => remote.state === "conflict" ? "refused" : remote.state === "unknown" ? "unknown" :
+  ["never_submitted", "absent_confirmed"].includes(remote.state) ? "not_needed" : "pending"
+const summary = (code, intentId, intent, generation) => ({ result: code, intentId, generation, revision: intent.revision,
+  local: "excluded", remote: structuredClone(intent.remote), withdrawal: intent.withdrawal })
+
+async function writeState(env, authority, generation, exclusions, dependencies) {
+  const identity = { schema: SCHEMA, ownerScope: authority.ownerScope, store: authority.store, generation }
+  const activation = sealed(authority.key, identity)
+  const ledger = sealed(authority.key, { ...identity, exclusions })
+  if ([activation, ledger].some(value => Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8") > CONTRIBUTION_POLICY_MAX_BYTES)) return false
+  if (authority.nativeAuthority !== null) {
+    const target = checkedContributionAuthority(authority.nativeAuthority).local.target
+    const intentId = Object.keys(exclusions).find(id => exclusions[id].target.host === target.host && exclusions[id].target.session === target.session)
+    const stored = await commitContributionImages(authority.nativeAuthority, { ledger, activation, intentId })
+    if (stored.result === "policy_limit") return false
+    if (!["committed", "already_committed"].includes(stored.result))
+      throw Object.assign(new Error("contribution_index_refused"), { contributionResult: stored.result })
+    return stored.result
+  }
+  await writeContributionPolicyFile(env, authority.ownerScope, "activation", activation, dependencies)
+  await writeContributionPolicyFile(env, authority.ownerScope, "ledger", ledger, dependencies)
+  return true
+}
+
+export async function applySessionExclusion(env, input, dependencies = {}) {
+  if (!exact(input, ["request", "expectedPlan"])) return result("invalid_request")
+  const { request, expectedPlan } = input
+  if (!requestValid(request)) return result("invalid_request")
+  const target = structuredClone(request)
+  const initial = await authorityFor(env, target, dependencies)
+  if (initial.result) return initial
+  const token = tokenValue(expectedPlan, initial.key)
+  if (token === null) return result("invalid_plan")
+  try {
+    const operation = async () => {
+    if (initial.nativeAuthority !== null) {
+      const index = await readContributionIndex(initial.nativeAuthority)
+      if (index.state === "transaction_pending") {
+        const recovered = await reconcileContributionTransaction(initial.nativeAuthority)
+        if (!["committed", "already_committed"].includes(recovered.result)) return result(recovered.result)
+      }
+    }
+    const authority = await authorityFor(env, target, dependencies)
+      if (authority.result) return authority
+      if (authority.ownerScope !== initial.ownerScope || !same(mac(authority.key, initial.local), mac(initial.key, initial.local)))
+        return result("plan_changed")
+      const state = await readState(env, authority, dependencies)
+      if (state.state !== "ready") return result(state.code)
+      const intentId = mac(authority.key, { ownerScope: authority.ownerScope, host: target.host, session: target.session, reason: "proof" })
+      const existing = state.exclusions[intentId]
+      const currentDigest = mac(authority.key, { local: authority.local, generation: state.generation })
+      if (existing && (same(existing.tokenHash, digest(expectedPlan)) || same(token.localDigest, currentDigest)))
+        return summary("already_excluded", intentId, existing, state.generation)
+      if (!same(token.localDigest, currentDigest)) return result("plan_changed")
+      if (state.generation === Number.MAX_SAFE_INTEGER || Object.keys(state.exclusions).length >= 256) return result("policy_limit")
+      const remote = await observe(dependencies)
+      const late = await authorityFor(env, target, dependencies)
+      if (late.result) return late
+      if (late.ownerScope !== authority.ownerScope || !same(mac(late.key, late.local), mac(authority.key, authority.local)))
+        return result("plan_changed")
+      const intent = { target: { host: target.host, session: target.session }, localDigest: token.localDigest,
+        observedRemoteDigest: token.observedRemoteDigest, tokenHash: digest(expectedPlan), generation: state.generation + 1,
+        revision: 0, remote, withdrawal: withdrawalOf(remote), effects: [] }
+      const stored = await writeState(env, authority, intent.generation, { ...state.exclusions, [intentId]: intent }, dependencies)
+      if (!stored)
+        return result("policy_limit")
+      return summary(stored === "already_committed" ? "already_excluded" : "excluded", intentId, intent, intent.generation)
+    }
+    return initial.nativeAuthority !== null ? await operation() : await withNamedLock(env, "contribution-policy", operation, dependencies)
+  } catch (error) {
+    if (error.contributionResult) return result(error.contributionResult)
+    if (["EIO", "ENOSPC", "EROFS", "EACCES", "EPERM"].includes(error.code)) return result("storage_failed")
+    throw error
+  }
+}
+
+export async function recordContributionEffect(env, input, dependencies = {}) {
+  if (!isPlainObject(input) || !HEX.test(input.intentId) || !integer(input.expectedRevision) || !effectValid(input.effect))
+    return result("invalid_effect")
+  input = structuredClone(input)
+  const authority = await authorityFor(env, input, dependencies)
+  if (authority.result) return authority
+  const operation = async () => {
+    const current = await authorityFor(env, input, dependencies)
+    if (current.result) return current
+    if (current.ownerScope !== authority.ownerScope || !same(mac(current.key, current.local), mac(authority.key, authority.local)))
+      return result("plan_changed")
+    const state = await readState(env, current, dependencies)
+    if (state.state !== "ready") return result(state.code)
+    const before = state.exclusions[input.intentId]
+    if (!before) return result("intent_unknown")
+    if (before.target.host !== current.local.target.host || before.target.session !== current.local.target.session)
+      return result("ownership_mismatch")
+    if (before.revision !== input.expectedRevision) return result("revision_changed")
+    if (before.effects.length >= 64 || before.revision === Number.MAX_SAFE_INTEGER) return result("policy_limit")
+    const intent = { ...before, ...structuredClone(input.effect), revision: before.revision + 1,
+      effects: [...before.effects, structuredClone(input.effect)] }
+    if (!await writeState(env, current, state.generation, { ...state.exclusions, [input.intentId]: intent }, dependencies))
+      return result("policy_limit")
+    return { result: "recorded", revision: intent.revision }
+  }
+  try {
+    return authority.nativeAuthority !== null ? await operation() : await withNamedLock(env, "contribution-policy", operation, dependencies)
+  } catch (error) {
+    if (error.contributionResult) return result(error.contributionResult)
+    throw error
+  }
+}

@@ -1,0 +1,425 @@
+// Pure supplemental DATA checks only: no live provenance, capability grant, IO or registered authority.
+import { TextDecoder, types } from "node:util"
+import {
+  ENUMS, LIMITS, PATTERNS, addError, enumField, isPlainObject, objectField,
+  patternField, rangeIntField, customField, validateCanonicalBytes, validateObject,
+} from "./schema.js"
+import { SESSION_ID_V4, validatePublished } from "./published-schema.js"
+import { CONTEXT_MAX_BYTES, validateContext } from "./context-schema.js"
+import { validateLabels } from "./label-schema.js"
+import { CAPTURE_MAX_BYTES, validateCapture } from "./capture-schema.js"
+import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
+
+const ENVELOPE = "desk.factory.contribution/1"
+const WITHDRAWAL = "desk.factory.withdrawal/1"
+const BYTE_CAP = 4096
+const ROW_CAP = 500
+const SNAPSHOT_BYTE_CAP = 24 * 1024 * 1024
+const SNAPSHOT_NODE_CAP = 10000
+const SNAPSHOT_DEPTH_CAP = 16
+const NONCE = /^[0-9a-f]{16}$/u
+const ACTOR = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/u
+const ENVELOPE_PATH = /^contributions\/[0-9a-f]{16}\.json$/u
+const answer = errors => ({ ok: errors.length === 0, errors })
+const refuse = (code, path = "") => answer([{ code, path }])
+const exact = (value, required, optional = []) => isPlainObject(value) &&
+  required.every(key => Object.hasOwn(value, key)) && Object.keys(value).every(key => [...required, ...optional].includes(key))
+const sha = value => typeof value === "string" && PATTERNS.commitSha.test(value)
+const byteInput = value => typeof value === "string" || Buffer.isBuffer(value)
+const sameBytes = (left, right) => Buffer.from(left).equals(Buffer.from(right))
+const safePath = value => typeof value === "string" && value.length <= 1024 && value.length > 0 &&
+  !/^[\/\\]|[\\\u0000-\u001f\u007f]/u.test(value) && value.split("/").every(part => part && part !== "." && part !== "..")
+
+class DataInputError extends Error {
+  constructor(code) { super(code); this.code = code }
+}
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
+const byteLengthOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get
+const backingOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get
+const copyBytes = Uint8Array.prototype.set
+const bufferHooks = ["toString", "toJSON", "valueOf", "utf8Slice", "length", "byteLength", "byteOffset", "buffer"]
+
+// Inspect descriptors first; never use a receiver getter, iterator, toJSON or clone hook to reject input.
+function snapshotData(input, byteCap = SNAPSHOT_BYTE_CAP) {
+  let bytes = 0
+  let nodes = 0
+  const active = new WeakSet()
+  const seen = new WeakMap()
+  const reserve = length => {
+    bytes += length
+    if (bytes > byteCap) throw new DataInputError("too_large")
+  }
+  const inspect = (value, depth) => {
+    if (depth > SNAPSHOT_DEPTH_CAP) throw new DataInputError("too_deep")
+    if (++nodes > SNAPSHOT_NODE_CAP) throw new DataInputError("too_many")
+    if (typeof value === "string") { reserve(Buffer.byteLength(value, "utf8")); return { kind: "scalar", value } }
+    if (value === null || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))
+      return { kind: "scalar", value }
+    if (typeof value !== "object" || types.isProxy(value)) throw new DataInputError("non_data_input")
+    if (active.has(value)) throw new DataInputError("non_data_input")
+    if (seen.has(value)) return seen.get(value)
+    if (Buffer.isBuffer(value)) {
+      if (!types.isUint8Array(value) || Object.getPrototypeOf(value) !== Buffer.prototype || types.isSharedArrayBuffer(backingOf.call(value)) ||
+          bufferHooks.some(key => Object.getOwnPropertyDescriptor(value, key) !== undefined))
+        throw new DataInputError("non_data_input")
+      const length = byteLengthOf.call(value)
+      reserve(length)
+      const plan = { kind: "bytes", value, length }
+      seen.set(value, plan)
+      return plan
+    }
+    const array = Array.isArray(value)
+    const prototype = Object.getPrototypeOf(value)
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null)
+      throw new DataInputError("non_data_input")
+    let length
+    if (array) {
+      length = Object.getOwnPropertyDescriptor(value, "length").value
+      if (length > ROW_CAP) throw new DataInputError("too_many")
+    }
+    const keys = Reflect.ownKeys(value)
+    if (keys.some(key => typeof key !== "string") || (array ? keys.length !== length + 1 : keys.length > 64))
+      throw new DataInputError("non_data_input")
+    const plan = { kind: array ? "array" : "object", entries: [] }
+    seen.set(value, plan)
+    active.add(value)
+    const names = array ? Array.from({ length }, (_, index) => String(index)) : keys
+    for (const key of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new DataInputError("non_data_input")
+      reserve(Buffer.byteLength(key, "utf8"))
+      plan.entries.push([key, inspect(descriptor.value, depth + 1)])
+    }
+    active.delete(value)
+    return plan
+  }
+  const copies = new Map()
+  const materialize = plan => {
+    if (plan.kind === "scalar") return plan.value
+    if (copies.has(plan)) return copies.get(plan)
+    if (plan.kind === "bytes") {
+      const copy = Buffer.alloc(plan.length)
+      try { copyBytes.call(copy, plan.value) }
+      catch (error) {
+        if (error instanceof TypeError) throw new DataInputError("non_data_input")
+        throw error
+      }
+      copies.set(plan, copy)
+      return copy
+    }
+    const value = plan.kind === "array" ? [] : Object.create(null)
+    copies.set(plan, value)
+    for (const [key, child] of plan.entries)
+      Object.defineProperty(value, key, { value: materialize(child), enumerable: true, writable: false, configurable: false })
+    return value
+  }
+  try {
+    const plan = inspect(input, 0)
+    payloadBudgets(plan)
+    return { ok: true, value: materialize(plan) }
+  } catch (error) {
+    if (error instanceof DataInputError) return refuse(error.code, "input")
+    throw error
+  }
+}
+
+function payloadBudgets(plan) {
+  const field = (object, key) => object?.kind === "object" ? object.entries.find(entry => entry[0] === key)?.[1] : undefined
+  const size = (object, cap) => {
+    const payload = field(object, "bytes")
+    if (payload === undefined) return 0
+    const length = payload.kind === "bytes" ? payload.length :
+      payload.kind === "scalar" && typeof payload.value === "string" ? Buffer.byteLength(payload.value, "utf8") : null
+    if (length === null) throw new DataInputError("type")
+    if (length > cap) throw new DataInputError("too_large")
+    return length
+  }
+  for (const name of ["baseEnvelope", "proposedEnvelope"]) size(field(plan, name), BYTE_CAP)
+  for (const wrapper of [plan, field(plan, "currentWithdrawals")]) {
+    const records = field(wrapper, "records")
+    if (records?.kind === "array") for (const [, record] of records.entries) size(record, BYTE_CAP)
+  }
+  const changes = field(plan, "changes")
+  let total = 0
+  if (changes?.kind === "array") for (const [, change] of changes.entries) {
+    const path = field(change, "path")
+    const kind = path?.kind === "scalar" && typeof path.value === "string" ? pathKind(path.value) : null
+    const cap = ["envelope", "withdrawal"].includes(kind) ? BYTE_CAP :
+      kind === "capture" ? CAPTURE_MAX_BYTES : kind === "context" ? CONTEXT_MAX_BYTES : LIMITS.maxBytes
+    total += size(change, cap)
+    if (total > LIMITS.maxBytes) throw new DataInputError("too_large")
+  }
+}
+
+const envelopeSpec = {
+  schema: enumField([ENVELOPE]),
+  protocol: rangeIntField(1, 1),
+  sequence: rangeIntField(1, Number.MAX_SAFE_INTEGER),
+  policy_generation: rangeIntField(0, Number.MAX_SAFE_INTEGER),
+}
+const withdrawalSpec = {
+  schema: enumField([WITHDRAWAL]),
+  session: objectField({ host: enumField(ENUMS.host), id: patternField(SESSION_ID_V4) }),
+  previous: objectField({
+    path: customField((value, path, errors) => {
+      if (isFactsPath(value)) return true
+      addError(errors, "pattern", path)
+      return false
+    }),
+    blob: patternField(PATTERNS.commitSha),
+  }),
+  reason: enumField(["proof"]),
+}
+const factsPath = session => factsPathsForSession(session.id).find(path => path.startsWith(`facts/${session.host}-`))
+const withdrawalPath = value => factsPath(value.session).replace(/^facts\//u, "withdrawals/")
+
+function decode(bytes, validate, cap) {
+  if (!byteInput(bytes)) return refuse("type")
+  if (Buffer.byteLength(bytes) > cap) return refuse("too_large")
+  let text
+  try { text = typeof bytes === "string" ? bytes : new TextDecoder("utf-8", { fatal: true }).decode(bytes) }
+  catch (error) { if (error instanceof TypeError) return refuse("json"); throw error }
+  let value
+  let checked
+  try {
+    checked = validateCanonicalBytes(text, parsed => { value = parsed; return validate(parsed) })
+  } catch (error) {
+    if (error instanceof RangeError) return refuse("too_deep")
+    throw error
+  }
+  return checked.ok ? { ...checked, value } : checked
+}
+
+function schemaValidator(spec, post) {
+  return value => {
+    const errors = []
+    validateObject(value, "", spec, errors)
+    if (errors.length === 0 && post) post(value, errors)
+    return answer(errors)
+  }
+}
+
+const readEnvelope = bytes => decode(bytes, schemaValidator(envelopeSpec), BYTE_CAP)
+const readWithdrawal = bytes => decode(bytes, schemaValidator(withdrawalSpec, (value, errors) => {
+  if (value.previous.path !== factsPath(value.session)) addError(errors, "session_mismatch", "previous.path")
+}), BYTE_CAP)
+
+function publicBytes(bytes, read) {
+  if (typeof bytes !== "string" && (typeof bytes !== "object" || bytes === null || types.isProxy(bytes) || !Buffer.isBuffer(bytes)))
+    return refuse("type")
+  const captured = snapshotData(bytes, BYTE_CAP)
+  if (!captured.ok) return captured
+  const { value: _value, ...checked } = read(captured.value)
+  return checked
+}
+
+export function validateContributionBytes(bytes) {
+  return publicBytes(bytes, readEnvelope)
+}
+
+export function validateWithdrawalBytes(bytes) {
+  return publicBytes(bytes, readWithdrawal)
+}
+
+function withdrawalRecords(input) {
+  if (!exact(input, ["state", "base", "records"]) || input.state !== "complete" || !sha(input.base) ||
+      !Array.isArray(input.records)) return { ...refuse("source_unknown"), sessions: null }
+  if (input.records.length > ROW_CAP) return { ...refuse("too_many", "records"), sessions: null }
+  const sessions = new Set()
+  const byPath = new Map()
+  for (const [index, record] of input.records.entries()) {
+    const at = `records.${index}`
+    if (!exact(record, ["path", "bytes"])) return { ...refuse("type", at), sessions: null }
+    const checked = readWithdrawal(record.bytes)
+    if (!checked.ok) return { ...refuse("withdrawal_invalid", at), sessions: null }
+    const value = checked.value
+    if (record.path !== withdrawalPath(value)) return { ...refuse("path_mismatch", at), sessions: null }
+    if (sessions.has(value.session.id) || byPath.has(record.path)) return { ...refuse("duplicate", at), sessions: null }
+    sessions.add(value.session.id)
+    byPath.set(record.path, value)
+  }
+  return { ok: true, errors: [], sessions, byPath }
+}
+
+export function withdrawnPublicSessions(input) {
+  const captured = snapshotData(input)
+  if (!captured.ok) return { ...captured, sessions: null }
+  const { byPath: _byPath, ...result } = withdrawalRecords(captured.value)
+  return result
+}
+
+function lineageData(value) {
+  if (!exact(value, ["state", "intake", "branch", "base", "actor", "currentPublic"]) || value.state !== "verified" ||
+      typeof value.intake !== "string" || !NONCE.test(value.intake) || value.branch !== `intake/${value.intake}` ||
+      !sha(value.base) || typeof value.actor !== "string" || !ACTOR.test(value.actor) ||
+      !exact(value.currentPublic, ["state", "records"]) || value.currentPublic.state !== "complete" ||
+      !Array.isArray(value.currentPublic.records)) return { ...refuse("source_unknown", "verifiedLineage") }
+  if (value.currentPublic.records.length > ROW_CAP) return refuse("too_many", "verifiedLineage")
+  const current = new Map()
+  for (const record of value.currentPublic.records) {
+    if (!exact(record, ["path", "blob", "actor"]) || !safePath(record.path) || !sha(record.blob) ||
+        typeof record.actor !== "string" || !ACTOR.test(record.actor)) return refuse("source_unknown", "verifiedLineage")
+    if (current.has(record.path)) return refuse("lineage_ambiguous", "verifiedLineage")
+    current.set(record.path, record)
+  }
+  return { ok: true, current }
+}
+
+function pathKind(path) {
+  if (isFactsPath(path)) return "facts"
+  if (labelsPathParts(path)) return "labels"
+  if (contextPathParts(path)) return "context"
+  if (isCapturePath(path)) return "capture"
+  if (ENVELOPE_PATH.test(path)) return "envelope"
+  if (path.startsWith("withdrawals/")) return "withdrawal"
+  if (["facts", "labels", "context", "capture", "contributions", "withdrawals"].some(prefix => path === prefix || path.startsWith(`${prefix}/`)))
+    return "invalid"
+  return "code"
+}
+
+function ownedCurrent(change, current, actor, at, unpublished = "ownership_unknown") {
+  const record = current.get(change.path)
+  if (!record) return refuse(unpublished, at)
+  if (record.actor !== actor) return refuse("ownership_mismatch", at)
+  if (!sha(change.previousBlob) || change.previousBlob !== record.blob) return refuse("source_changed", at)
+  return { ok: true }
+}
+
+/** Successful validation is not authorization. Every source/lineage observation is explicitly supplied data. */
+export function checkContributionIntake(input) {
+  const captured = snapshotData(input)
+  if (!captured.ok) return captured
+  input = captured.value
+  if (!exact(input, ["capability", "baseEnvelope", "proposedEnvelope", "currentWithdrawals", "changes", "verifiedLineage"], ["maintenance"]) ||
+      input.maintenance !== undefined && typeof input.maintenance !== "boolean") return refuse("type", "input")
+  const capability = input.capability
+  if (exact(capability, ["state"]) && capability.state === "absent") return refuse("contribution_unsupported", "capability")
+  if (!exact(capability, ["state", "value"]) || capability.state !== "supported" ||
+      !exact(capability.value, ["contribution_control"]) || capability.value.contribution_control !== 1)
+    return refuse("contribution_unavailable", "capability")
+  const lineage = lineageData(input.verifiedLineage)
+  if (!lineage.ok) return lineage
+  const withdrawals = withdrawalRecords(input.currentWithdrawals)
+  if (!withdrawals.ok) return refuse("withdrawals_unknown", "currentWithdrawals")
+  const base = input.baseEnvelope
+  const info = input.verifiedLineage
+  const expectedPath = `contributions/${info.intake}.json`
+  if (input.currentWithdrawals.base !== info.base ||
+      !(exact(base, ["state", "base"]) && base.state === "absent" ||
+        exact(base, ["state", "base", "path", "bytes"]) && base.state === "present") || base.base !== info.base)
+    return refuse("source_unknown", "baseEnvelope")
+  let previous = null
+  if (base.state === "present") {
+    const checked = readEnvelope(base.bytes)
+    if (base.path !== expectedPath || !checked.ok) return refuse("envelope_invalid", "baseEnvelope")
+    previous = checked.value
+  }
+  if (!Array.isArray(input.changes)) return refuse("type", "changes")
+  if (input.changes.length > ROW_CAP) return refuse("too_many", "changes")
+  const changes = []
+  const paths = new Set()
+  let totalBytes = 0
+  for (const [index, change] of input.changes.entries()) {
+    const at = `changes.${index}`
+    if (!exact(change, ["path", "status"], ["bytes", "previousBlob"]) || !safePath(change.path) ||
+        !["added", "modified", "removed"].includes(change.status)) return refuse("type", at)
+    if (paths.has(change.path)) return refuse("duplicate", at)
+    paths.add(change.path)
+    if (change.bytes !== undefined) {
+      if (!byteInput(change.bytes)) return refuse("type", at)
+      totalBytes += Buffer.byteLength(change.bytes)
+      if (totalBytes > LIMITS.maxBytes) return refuse("too_large", "changes")
+    }
+    const kind = pathKind(change.path)
+    if (kind === "invalid") return refuse("path", at)
+    if (kind !== "code" && change.status !== "removed" && !byteInput(change.bytes)) return refuse("type", at)
+    changes.push({ ...change, kind, at })
+  }
+  if (changes.every(change => change.kind === "code")) {
+    if (input.proposedEnvelope !== null) return refuse("envelope_unexpected", "proposedEnvelope")
+    return { ok: true, errors: [], mode: "maintenance" }
+  }
+  const proposed = input.proposedEnvelope
+  const envelopeChange = changes.find(change => change.path === expectedPath)
+  if (!exact(proposed, ["path", "bytes"]) || !envelopeChange ||
+      !["added", "modified"].includes(envelopeChange.status)) return refuse("envelope_required", "proposedEnvelope")
+  const nextEnvelope = readEnvelope(proposed.bytes)
+  if (proposed.path !== expectedPath || !nextEnvelope.ok ||
+      !byteInput(envelopeChange.bytes) || !sameBytes(proposed.bytes, envelopeChange.bytes))
+    return refuse("envelope_invalid", "proposedEnvelope")
+  if (!changes.some(change => !["code", "envelope"].includes(change.kind))) return refuse("empty_contribution", "changes")
+  const next = nextEnvelope.value
+  if (previous?.sequence === Number.MAX_SAFE_INTEGER) return refuse("sequence_overflow", "baseEnvelope")
+  if (next.sequence !== (previous?.sequence ?? 0) + 1) return refuse("sequence_changed", "proposedEnvelope")
+  if (next.policy_generation < (previous?.policy_generation ?? 0)) return refuse("policy_downgrade", "proposedEnvelope")
+  if (envelopeChange.status !== (previous === null ? "added" : "modified")) return refuse("envelope_changed", "changes")
+
+  const sessions = new Set(withdrawals.sessions)
+  for (const change of changes.filter(entry => entry.kind === "withdrawal")) {
+    if (change.status !== "added" || withdrawals.byPath.has(change.path)) return refuse("withdrawal_immutable", change.at)
+    const checked = readWithdrawal(change.bytes)
+    if (!checked.ok) return refuse("withdrawal_invalid", change.at)
+    const value = checked.value
+    if (change.path !== withdrawalPath(value)) return refuse("path_mismatch", change.at)
+    if (sessions.has(value.session.id)) return refuse("withdrawal_immutable", change.at)
+    const current = lineage.current.get(value.previous.path)
+    if (!current) return refuse("withdrawal_not_public", change.at)
+    if (current.actor !== info.actor) return refuse("ownership_mismatch", change.at)
+    if (current.blob !== value.previous.blob) return refuse("source_changed", change.at)
+    const removal = changes.find(entry => entry.path === value.previous.path && entry.status === "removed" && entry.previousBlob === value.previous.blob)
+    if (!removal) return refuse("withdrawal_removal_missing", change.at)
+    sessions.add(value.session.id)
+  }
+  let meaningful = changes.some(change => change.kind === "withdrawal")
+  for (const change of changes) {
+    if (change.kind === "code" || change.kind === "withdrawal") continue
+    if (change.kind === "envelope") {
+      if (change.path !== expectedPath || change.status === "removed") return refuse("envelope_mismatch", change.at)
+      continue
+    }
+    if (change.status === "removed") {
+      const owned = ownedCurrent(change, lineage.current, info.actor, change.at)
+      if (!owned.ok) return owned
+      meaningful = true
+      continue
+    }
+    if (change.kind === "capture") {
+      if (change.path !== `capture/${info.intake}.json`) return refuse("ownership_mismatch", change.at)
+      const checked = decode(change.bytes, validateCapture, CAPTURE_MAX_BYTES)
+      if (!checked.ok) return refuse("capture_invalid", change.at)
+      const current = lineage.current.get(change.path)
+      if (current && current.actor !== info.actor) return refuse("ownership_mismatch", change.at)
+      if (current || Object.keys(checked.value.hosts).length > 0) meaningful = true
+      continue
+    }
+    if (change.kind === "facts") {
+      if (sessions.has(change.path.slice(-41, -5))) return refuse("session_withdrawn", change.at)
+      const checked = decode(change.bytes, validatePublished, LIMITS.maxBytes)
+      if (!checked.ok) return refuse("facts_invalid", change.at)
+      const value = checked.value
+      if (change.path !== factsPath({ host: value.session.host, id: value.session.id })) return refuse("session_mismatch", change.at)
+      meaningful = true
+    }
+    if (change.kind === "labels") {
+      const parts = labelsPathParts(change.path)
+      if (sessions.has(parts.session)) return refuse("session_withdrawn", change.at)
+      const checked = decode(change.bytes, validateLabels, LIMITS.maxBytes)
+      if (!checked.ok) return refuse("labels_invalid", change.at)
+      const value = checked.value
+      if (value.session !== parts.session) return refuse("session_mismatch", change.at)
+      if (value.job !== parts.job) return refuse("job_mismatch", change.at)
+      meaningful = true
+    }
+    if (change.kind === "context") {
+      const checked = decode(change.bytes, validateContext, CONTEXT_MAX_BYTES)
+      if (!checked.ok) return refuse("context_invalid", change.at)
+      const value = checked.value
+      if (value.job !== contextPathParts(change.path).job) return refuse("job_mismatch", change.at)
+      if (value.sources.some(source => sessions.has(source.session))) return refuse("session_withdrawn", change.at)
+      meaningful = true
+    }
+  }
+  if (!meaningful) return refuse("empty_contribution", "changes")
+  return { ok: true, errors: [], mode: "data" }
+}

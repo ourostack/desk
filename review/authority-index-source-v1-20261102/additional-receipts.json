@@ -1,0 +1,25 @@
+{
+  "packet_sha256": "9b893f3e5fa8189d2cfc22e2a9a7b0677f24385e5c693b5c2c01caa069c44e64",
+  "additional": [
+    {
+      "name": "authority-index-storage-reader-green1-20261102.txt",
+      "bytes": 2660,
+      "sha256": "d1960b57c24152ddaa211dfe5bc6fbda73cd05a6febd17c2b3607781ea367565"
+    },
+    {
+      "name": "authority-index-storage-reader-green2-20261102.txt",
+      "bytes": 11239,
+      "sha256": "41dc8b34e56e91dd0b6d2b4ee31dd314a15c7c841a8e6f707f8038cd9b38caf2"
+    },
+    {
+      "name": "authority-index-initial-read-diagnostic-20261102.txt",
+      "bytes": 1224,
+      "sha256": "c48afbf55e7c61625140dea7744ff4aae8833078b923eaa4d8c1d86822d085ef"
+    },
+    {
+      "name": "authority-index-initial-read-diagnostic2-20261102.txt",
+      "bytes": 1210,
+      "sha256": "470b2b9ae7589eb61d1f30f3c4d0bc7cde0edccc6262dce9e1a5d584389fe90d"
+    }
+  ]
+}

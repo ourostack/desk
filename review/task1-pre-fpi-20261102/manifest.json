@@ -1,0 +1,35 @@
+{
+  "scope": "Explicit pre-FPI preservation only; no source/test execution or OS/Git probe",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-policy.js",
+      "destination": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/contribution-policy.js.source",
+      "bytes": 16907,
+      "sha256": "0302c50c252701a6fb39ac604f6819f83b7b71bc1f58cc8e53143058a885f277"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/outbox.js",
+      "destination": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/outbox.js.source",
+      "bytes": 119127,
+      "sha256": "5085df265958fe397e75a107412dd99d46e60a4ec2e09fc49988e813b472a934"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "destination": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/contribution_policy.test.js.source",
+      "bytes": 25845,
+      "sha256": "806e3867db9818f53660dc566188617d9edc10e0baf3d9430565c196b4f4e644"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-final-unit-coverage.txt",
+      "destination": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/retained-53-unit-coverage.txt",
+      "bytes": 17934,
+      "sha256": "50413f4f870fcf853222cc649c3a4f92096173f0d4ec8e470898c04b8ce85ed6"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-policy-task1-source-review-20261102.json",
+      "destination": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/prior-source-review-packet.json",
+      "bytes": 11036,
+      "sha256": "24391dda61b63ca47e2006407cf6e032a5757962cf88eabbc040ed05dc2d4e60"
+    }
+  ]
+}

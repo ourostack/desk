@@ -74,8 +74,11 @@ import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
+import { readContributionAuthority, readContributionRequest } from "../src/factory/contribution-authority.js"
+import { applySessionExclusion, planSessionExclusion, readContributionPolicy } from "../src/factory/contribution-policy.js"
+import { readContributionIndex } from "../src/factory/contribution-index.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "contribution-plan", "contribution-status", "contribution-exclude"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -655,6 +658,39 @@ export async function runConsentCommand({ argv, env }) {
   return { store, ...consent.stores[store] }
 }
 
+async function contributionCommand({ argv, env }, mode) {
+  const options = parseOptions(argv)
+  const allowed = mode === "exclude" ? ["request", "expected-plan"] : ["request"]
+  if (options === null || allowed.some(name => !options.has(name)) ||
+      [...options.keys()].some(name => !allowed.includes(name)) ||
+      !path.isAbsolute(options.get("request") ?? "") ||
+      mode === "exclude" && !/^[A-Za-z0-9_-]{1,1024}$/u.test(options.get("expected-plan") ?? ""))
+    throw new Error(`Usage: factory.js contribution-${mode} --request <private file>${mode === "exclude" ? " --expected-plan <opaque token>" : ""}`)
+  const input = await readContributionRequest(options.get("request"))
+  if (input.result !== "request_read") return { result: input.result }
+  const checked = await readContributionAuthority(env, input.request)
+  if (checked.result !== "qualified") return { result: checked.result }
+  if (mode !== "exclude") {
+    const index = await readContributionIndex(checked.authority)
+    if (index.state !== "ready") return { result: index.code }
+  }
+  const dependencies = {
+    readAuthority: async () => (await readContributionAuthority(env, input.request)).authority,
+  }
+  if (mode === "plan") return planSessionExclusion(env, input.request, dependencies)
+  if (mode === "exclude") return applySessionExclusion(env, {
+    request: input.request, expectedPlan: options.get("expected-plan"),
+  }, dependencies)
+  const policy = await readContributionPolicy(env, input.request, dependencies)
+  return policy.state === "ready" ? {
+    result: "policy_ready", generation: policy.generation, excluded: Object.keys(policy.exclusions).length,
+  } : { result: policy.code }
+}
+
+export const runContributionPlanCommand = options => contributionCommand(options, "plan")
+export const runContributionStatusCommand = options => contributionCommand(options, "status")
+export const runContributionExcludeCommand = options => contributionCommand(options, "exclude")
+
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
 export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, runner = undefined, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   const [subcommand, ...rest] = argv
@@ -679,10 +715,15 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
       loop: runLoopCommand,
+      "contribution-plan": runContributionPlanCommand,
+      "contribution-status": runContributionStatusCommand,
+      "contribution-exclude": runContributionExcludeCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    const contributionFailed = subcommand.startsWith("contribution-") &&
+      !["planned", "policy_ready", "excluded", "already_excluded"].includes(result.result)
+    const failed = contributionFailed || ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)

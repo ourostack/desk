@@ -1,0 +1,59 @@
+{
+  "scope": "Before AIX3; v2 and119+4 exact, older generations retained",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-index.js",
+      "path": "review/authority-index-pre-aix3-20261102/00-contribution-index.js",
+      "sha256": "63aa8622f1756882ee6e6794b35f0dd4b43e688ef8c6679dc6a17354a9c9d38a",
+      "bytes": 17158
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-authority.js",
+      "path": "review/authority-index-pre-aix3-20261102/01-contribution-authority.js",
+      "sha256": "1d13c94e3e32212caea352e1d561d0f3070ba78eaa5286805f81835177792f3c",
+      "bytes": 11756
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "path": "review/authority-index-pre-aix3-20261102/02-factory-contribution-schema.md",
+      "sha256": "0007c392783a3384243e3bdd461e3c916c50f68894e70c6eedf3f807fe72800f",
+      "bytes": 12993
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_index.test.js",
+      "path": "review/authority-index-pre-aix3-20261102/03-contribution_index.test.js",
+      "sha256": "b1c495e2d8e5fafb85d39032382e3ddb01b361a9eb99f3dbaa6a0323995f70db",
+      "bytes": 24378
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_authority.test.js",
+      "path": "review/authority-index-pre-aix3-20261102/04-contribution_authority.test.js",
+      "sha256": "63fbdff4ffb181beae0759b10bbbe6100bf692632e15f16f071e157dd78a5d31",
+      "bytes": 10781
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-index-aix-source-review-v2-20261102.json",
+      "path": "review/authority-index-pre-aix3-20261102/05-authority-index-aix-source-review-v2-20261102.json",
+      "sha256": "120548ded1220153c099791c57e4f42e9f72ba3fef17e7df7f806e85d6e444d0",
+      "bytes": 5956
+    },
+    {
+      "source": "review/authority-index-aix-source-v2-20261102/manifest.json",
+      "path": "review/authority-index-pre-aix3-20261102/06-manifest.json",
+      "sha256": "7f958b0f405ffba9a1c10aa66069b0f1fa1bef09ba26482ab5cff293f26432df",
+      "bytes": 5569
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix-core-coverage-20261102.txt",
+      "path": "review/authority-index-pre-aix3-20261102/07-authority-aix-core-coverage-20261102.txt",
+      "sha256": "14a1560c8a66f9bdf5d55b0b400ac506808dc6a84d719929f6732fa0a8cd9fe8",
+      "bytes": 26672
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix-cli-lock-20261102.txt",
+      "path": "review/authority-index-pre-aix3-20261102/08-authority-aix-cli-lock-20261102.txt",
+      "sha256": "a2d193205fbe46db8ef225725d1f7487611f47ac7481737a5141cd005b884faf",
+      "bytes": 997
+    }
+  ]
+}

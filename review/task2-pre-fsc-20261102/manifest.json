@@ -1,0 +1,35 @@
+{
+  "scope": "Exact pre-FSC preservation only; no Git/OS/live state probe",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/contribution-schema.js.source",
+      "bytes": 14493,
+      "sha256": "35cd1396e5ffdccb31cc65bedd8db2744a315bd2b6428bf5928416f3cdf31922"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/contribution_schema.test.js.source",
+      "bytes": 21732,
+      "sha256": "e864f3a70d4d66d41776425275b16aefb0458d9548263e0b29f0bb2b2ffa4850"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/docs/factory-contribution-schema.md",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/factory-contribution-schema.md.source",
+      "bytes": 5474,
+      "sha256": "433f41d699866280d09cd4f89b8c0742ef4b7ca889a62c41c10893b24c0f1fa5"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-review2-fenced-coverage.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/retained-114-coverage.txt",
+      "bytes": 31139,
+      "sha256": "675d1438457c55355afe47de369027318866d1431698e51a3d27973ba1128d4f"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-source-review-20261102.json",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-pre-fsc-20261102/prior-source-review-packet.json",
+      "bytes": 10530,
+      "sha256": "ee096e86dd73ef519fb376d31eacf50cee9e0a900fee0447a836659dccf3b817"
+    }
+  ]
+}

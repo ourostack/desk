@@ -1,0 +1,41 @@
+{
+  "scope": "Corrected pure Task2 FSC source/receipts; Task1 preserved unchanged; local copies, no Git/config/OS proof",
+  "saved": [
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/mcp/src/factory/contribution-schema.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/contribution-schema.js.source",
+      "bytes": 19970,
+      "sha256": "ba2805ebee579490f9da4b64b8c70d0795ca4605106cf9200c8c96c7959f1ff3"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/tests/desk/mcp/__tests__/factory/contribution_schema.test.js",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/contribution_schema.test.js.source",
+      "bytes": 29797,
+      "sha256": "fb68b82dfdc0184c5add299a1cd21c9af501157ef94b9e691907228a6e6fefee"
+    },
+    {
+      "source": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/plugins/desk/docs/factory-contribution-schema.md",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/factory-contribution-schema.md.source",
+      "bytes": 6989,
+      "sha256": "fd0f4dfd9d7a03741151f9e2cdbe0d277946c6122029b05c18e62935bec2eccc"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-fenced-red.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/fsc-red.txt",
+      "bytes": 24417,
+      "sha256": "5f1ca2d4a7d3616a745d7eb584237b43d45488ec0d749b8b77a691726a6eda74"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-fenced-green-attempt1.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/fsc-green.txt",
+      "bytes": 3342,
+      "sha256": "bbac4ff0acc84453bedc44a7158693937a20660346f82b0dcaf69ca2f1642200"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/proof-schema-task2-fsc-review-fenced-coverage.txt",
+      "path": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task2-fsc-corrected-20261102/combined-green-coverage.txt",
+      "bytes": 35678,
+      "sha256": "95272d34cffa850428f3eea739b3bc8d7ce9825310b0a5e3149616823ca88488"
+    }
+  ]
+}

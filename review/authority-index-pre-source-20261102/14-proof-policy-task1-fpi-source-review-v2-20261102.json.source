@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "canonical_task": "desk-plugin/factory-intake-matches-real-work/task.md",
+  "issue": "https://github.com/ourostack/desk/issues/578",
+  "status": "FPI-1/2/3 author corrections ready for independent affected source review; no independent discharge or Task 2 authority",
+  "scope": "Same inert Task 1 engine and dedicated outbox protected-file primitives; no contribution-flow wiring",
+  "authority": {
+    "source_reservation": "proof-policy-task1-reservation-20261102.txt",
+    "distinct_fenced_validation_admission": "proof-policy-task1-fenced-validation-go-20261102.txt",
+    "admission_sha256": "924c128bb50883ad008f9384603f41990f8e9da7fb978d88684e52994ec67781",
+    "not_authorized": "Knip/npm/native tool runners, Task 2/integration, CLI/store protocol/activation, real state/queue/destination/observer, source commit/push/PR/CI, account/global changes"
+  },
+  "preserved_inputs": {
+    "original_review_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-pre-fpi-20261102/manifest.json",
+    "historical_53_receipt": "proof-policy-task1-final-unit-coverage.txt",
+    "historical_53_qualification": "No-Git/no-native claim remains invalidated: maintained isolation had an unfenced checkoutConfig Git probe. New fenced results do not retroactively qualify that run.",
+    "prior_packet": "proof-policy-task1-source-review-20261102.json"
+  },
+  "corrected_source": {
+    "root": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "branch_previously_reconciled": "user/arimendelow/factory-context-optional-card-20261027",
+    "base_head_previously_reconciled": "cdccc0de13501f210cf8f65f43752709a741f7f7",
+    "git_ref_refresh": "Not repeated under the validation hold/admission; no Git probe is implied by these recorded refs",
+    "publication": "Uncommitted, unstaged by this work, not pushed",
+    "frozen_copy_manifest": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027/review/task1-fpi-corrected-20261102/manifest.json",
+    "files": [
+      { "path": "plugins/desk/mcp/src/factory/contribution-policy.js", "bytes": 17454, "sha256": "77b6bc193435acbe05f262ad86e7a301243835fc2625909d19913852ddfae2ac" },
+      { "path": "plugins/desk/mcp/src/factory/outbox.js", "bytes": 119881, "sha256": "67dfde460ffe9a1d79c428dbfc840d5a3ba2e5cee103d263492cd7db4bc810c1" },
+      { "path": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js", "bytes": 38279, "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804" }
+    ]
+  },
+  "finding_dispositions": [
+    {
+      "id": "FPI-1",
+      "author_status": "addressed; independent recheck pending",
+      "change": "Shared unchanged 1MiB bound. Seal both prospective records, measure actual JSON UTF-8 bytes including seal/newline, and refuse policy_limit before either write. The dedicated writer serializes exactly once, checks that data before root/temp effects and writes those same bytes.",
+      "causal_red": "Actual valid below-limit ledger produced recorded/excluded and oversized primitive writes did not reject.",
+      "green_controls": "Journal append and new intent crossing the sealed cap return policy_limit; both files/evidence byte-identical and prior state remains ready. Exact-limit UTF-8/seal/newline accepted and one extra byte rejected for activation and ledger. Count and integer limits are not the cause of the byte refusals."
+    },
+    {
+      "id": "FPI-2",
+      "author_status": "addressed; independent recheck pending",
+      "change": "Shared strict policy/intent validators now serve authenticated reads and contributionAllowed. Ready snapshots carry schema explicitly. Validate schema/store/owner scope/generation, every intent key, target and consumed entry before deciding absence.",
+      "causal_red": "Ready-flag malformed target was allowed instead of policy_unavailable.",
+      "green_controls": "Empty/missing/invalid target fields, malformed key/revision/schema refuse; valid nonexcluded and excluded targets retain allowed/session_excluded. Structural validation is not claimed as live authority-adapter authentication."
+    },
+    {
+      "id": "FPI-3",
+      "author_status": "addressed; independent recheck pending",
+      "change": "Held descriptor uses bounded positional FileHandle.read into initial-size-plus-one sentinel buffer, never greater than 1MiB+1; checks actual counts, EOF/size and drift, preserves no-follow/identity/parent guards and finally-close. No handle.readFile fallback.",
+      "causal_red": "Same-inode growth triggered real returned bytes above the cap despite post-read refusal.",
+      "green_controls": "Controlled growth refuses within the bounded budget without repair; exact-size/partial chunks establish EOF and return exact bytes; truncation and read error refuse and close. Original evidence and parent identity/mode/owner remain unchanged."
+    }
+  ],
+  "validation": {
+    "node": "v22.23.3",
+    "fence": {
+      "path": "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+      "sha256": "a19b5a09477b1c0b5a49b7061574936197e7afa40007973014f173ea58e4ce14",
+      "bytes": 2059,
+      "ordering": "Exact fence hash checked before each test startup. Fence is first --import; maintained isolation second; in-process single-worker Task 1 file only.",
+      "owner_file": "Read-only reused; never edited",
+      "limits": "Builtin process-call fence/source ordering, not an OS sandbox or independent OS effect trace. Git spawnSync is explicit synthetic status128; maintained isolation configSnapshot becomes null. Real repository-config guard is UNQUALIFIED, never reported unchanged."
+    },
+    "full_command_argv": [
+      "node",
+      "--import",
+      "/Users/microsoft/.copilot/session-state/cce332d0-f036-45fa-b661-7c65412e68ef/files/576-process-fence-v2.preload.mjs",
+      "--import",
+      "./tests/desk/mcp/__tests__/_isolated_env.mjs",
+      "--experimental-test-isolation=none",
+      "--experimental-test-coverage",
+      "--test-coverage-include=plugins/desk/mcp/src/factory/contribution-policy.js",
+      "--test-coverage-include=plugins/desk/mcp/src/factory/outbox.js",
+      "--test",
+      "--test-concurrency=1",
+      "tests/desk/mcp/__tests__/factory/contribution_policy.test.js"
+    ],
+    "working_directory": "/Users/microsoft/code/desk-worktrees/factory-context-emission-20261027",
+    "causal_red": {
+      "log": "proof-policy-task1-fpi-fenced-red.txt",
+      "sha256": "6633c7941056aac8c6e601f5330c914d3da4a30e1c40f39c27d1fa0fcf0840ee",
+      "tests": 7,
+      "failed": 7,
+      "reason": "The specified FPI assertions failed, not preload mismatch or native-forbidden errors"
+    },
+    "causal_green": {
+      "log": "proof-policy-task1-fpi-fenced-green.txt",
+      "sha256": "6a059431c2d92dfae49d6d92627fc7886392a31a9d12ca4cbe4166d8a405ddfb",
+      "tests": 7,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0
+    },
+    "full_unit_selection": {
+      "log": "proof-policy-task1-fpi-fenced-full-coverage.txt",
+      "sha256": "2c099a71293cbe09635cd468317a2fa1ea42ccad2cd5718b9c048119e4438ff3",
+      "tests": 66,
+      "passed": 66,
+      "failed": 0,
+      "skipped": 0,
+      "additional_controls": "Partial-read/EOF and truncation/read-error guaranteed-close cases supplement the causal growth RED"
+    },
+    "v8_coverage": {
+      "policy": { "line_percent": 97.74, "branch_percent": 94.09, "function_percent": 100 },
+      "whole_outbox_in_this_unit_selection": { "line_percent": 48.95, "branch_percent": 68.42, "function_percent": 10 },
+      "not_claimed": "Maintained complete 100% changed-file gate, whole repository regression, native/platform, OS-effect or end-to-end qualification"
+    },
+    "static_runners": "No Knip/npm/native-tool rerun after the hold; pre-FPI successful output is historical only",
+    "dependencies": "No new dependencies, manifest/lock changes or installation",
+    "unexpected_forbidden_call": "None surfaced in the retained selected test receipts; this is not an independent OS absence trace"
+  },
+  "protected_io_delta": [
+    "Only dedicated contribution policy file read/write additions and their shared bound changed; no generic factoryStateRoot/request/atomic writer beforeEffect gate was added.",
+    "No broader archive/cce ownership claim or zero-terminal-effects guarantee.",
+    "Default live authority adapter remains unregistered; no derive/capture/context/flush/CLI/store consumer was wired.",
+    "Linux-mode synthetic filesystem cases only. Darwin native ACL and Windows protection remain unqualified; Windows readonly path still refuses explicitly.",
+    "Torn multi-file storage still fails closed; no automatic recovery or complete self-healing claim is added."
+  ],
+  "review_questions": [
+    "Does this add waste?",
+    "Is the error made impossible or only discouraged?",
+    "Does anything need a human hand?",
+    "Can a wrong or missing value read as a right one?",
+    "Does the loop stop at noticing or filing?",
+    "Does it break a Lean principle or the terrarium?",
+    "Do the exact prospective-byte preflight, shared consumed-snapshot validation and bounded held-FD reads close FPI-1/2/3 without widening authority?"
+  ],
+  "resources_and_next": {
+    "resources": "Existing source checkout plus explicitly retained pre-FPI/corrected review-copy directories; exclude review directories from any later product staging",
+    "processes": "All own bounded test/metadata/preservation commands completed; no new helper service/worker/worktree/branch",
+    "durability": "Local/uncommitted source and private desk reports only; no canonical task update, commit, push or off-host backup claimed",
+    "next": "Independent affected source recheck of FPI-1/2/3 at these fingerprints. Task 2, integration, whole-Factory completion, publication and live application remain held."
+  }
+}

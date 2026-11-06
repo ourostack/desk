@@ -44,6 +44,31 @@ import { osEnv } from "../_os_env.js"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
 
+test("ContributionAuthority_CliClosedHandlersRejectIdentityFlagsBeforeAnyRead", async () => {
+  const api = await import("../../../../../plugins/desk/mcp/scripts/factory.js")
+  for (const [name, argv] of [
+    ["runContributionPlanCommand", ["--session", "PRIVATE_SENTINEL"]],
+    ["runContributionStatusCommand", []],
+    ["runContributionExcludeCommand", ["--request", "/synthetic/private-request.json"]],
+  ]) {
+    assert.equal(typeof api[name], "function", "closed private contribution CLI handler is missing")
+    await assert.rejects(api[name]({ argv, env: {} }), /Usage: factory\.js contribution-/)
+  }
+})
+
+test("ContributionAuthority_CliUnavailableProtectionIsExplicitFailureWithoutPayload", async () => {
+  const output = [], errors = []
+  const code = await main({
+    argv: ["contribution-status", "--request", "/synthetic/private-request.json"], env: {},
+    write: value => output.push(value), logError: value => errors.push(value),
+  })
+  assert.deepEqual(errors, [])
+  assert.equal(code, 1)
+  const result = JSON.parse(output[0])
+  assert.equal(result.result, process.platform === "linux" ? "invalid_request" : "platform_unqualified")
+  assert.ok(!output[0].includes("private-request"))
+})
+
 test("the requested context CLI requires one exact store and job", async () => {
   const { runContextRequestCommand } = await import("../../../../../plugins/desk/mcp/scripts/factory.js")
   assert.equal(typeof runContextRequestCommand, "function", "requested context needs an explicit CLI entry")

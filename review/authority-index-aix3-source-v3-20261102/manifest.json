@@ -1,0 +1,113 @@
+{
+  "scope": "AIX3 only; all other v2 source/test/doc pins unchanged",
+  "saved": [
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-storage.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/00-contribution-storage.js",
+      "bytes": 14450,
+      "sha256": "95ff183ac9668b56ef30aeb93feec6ed628dbb67bd3b5b65774e245cf10e7004"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-index.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/01-contribution-index.js",
+      "bytes": 17356,
+      "sha256": "286e32d40d84ec2867439cf88933c8f5250e5eb9dcbac0441b9dc68642a93793"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-authority.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/02-contribution-authority.js",
+      "bytes": 11756,
+      "sha256": "1d13c94e3e32212caea352e1d561d0f3070ba78eaa5286805f81835177792f3c"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/flush-lock.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/03-flush-lock.js",
+      "bytes": 1391,
+      "sha256": "90a32df4fbf33add0d84db0187e56eabe82899fb3125ce46b6e337981c8331d1"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/contribution-policy.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/04-contribution-policy.js",
+      "bytes": 20572,
+      "sha256": "69f520e890fa3395c4e07a27c2753d6c76109c94073c39241782b2326444dde3"
+    },
+    {
+      "source": "plugins/desk/mcp/src/factory/flush.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/05-flush.js",
+      "bytes": 102314,
+      "sha256": "92c8ffb3fe1d4c7e14245d5fb31df508e55e78c2885c5cdfeaac0d45cb23c3ea"
+    },
+    {
+      "source": "plugins/desk/mcp/scripts/factory.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/06-factory.js",
+      "bytes": 42976,
+      "sha256": "481f3596a2659120d344a1d274d6849dfbea6a21447b2f90bae456bfe20cc75e"
+    },
+    {
+      "source": "plugins/desk/docs/factory-contribution-schema.md",
+      "path": "review/authority-index-aix3-source-v3-20261102/07-factory-contribution-schema.md",
+      "bytes": 13230,
+      "sha256": "176737f81ee24d848e6e576ebf34482d766c037ce16b892f4ed647061d3c3cf7"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_storage.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/08-contribution_storage.test.js",
+      "bytes": 8416,
+      "sha256": "1ccebecbdb632f2656ce69609605dbf522c5164a07ca66cf961d358d6d8c8b10"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_index.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/09-contribution_index.test.js",
+      "bytes": 26579,
+      "sha256": "fae4feaefc7c226958ffe01075fa60ed228fc6520261cefa1cc349ac0fc4f0df"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_authority.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/10-contribution_authority.test.js",
+      "bytes": 10781,
+      "sha256": "63fbdff4ffb181beae0759b10bbbe6100bf692632e15f16f071e157dd78a5d31"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/factory_cli.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/11-factory_cli.test.js",
+      "bytes": 81445,
+      "sha256": "68c2d6570208dcec73ee49c7a7de7963b54ed669ef37d64148edccdce952fccc"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/flush.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/12-flush.test.js",
+      "bytes": 117594,
+      "sha256": "58ad53ea02950d88a5987ce6d80a33b7b90704d2d01a765d4284381dfd160350"
+    },
+    {
+      "source": "tests/desk/mcp/__tests__/factory/contribution_policy.test.js",
+      "path": "review/authority-index-aix3-source-v3-20261102/13-contribution_policy.test.js",
+      "bytes": 38279,
+      "sha256": "75dbd911fea3192dc539e94b389004a19f2d1b3e161d69f0593954f3e2747804"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix3-red-20261102.txt",
+      "path": "review/authority-index-aix3-source-v3-20261102/14-authority-aix3-red-20261102.txt",
+      "bytes": 4655,
+      "sha256": "f3151da1ff4e79196cf2983caee399f3b4de20af601392777033d4c7baaff7b2"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix3-green-20261102.txt",
+      "path": "review/authority-index-aix3-source-v3-20261102/15-authority-aix3-green-20261102.txt",
+      "bytes": 1069,
+      "sha256": "c61e3384b4756f0e52443275964e3d3e69bae529b1728c9f9178145122c0d619"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix3-core-20261102.txt",
+      "path": "review/authority-index-aix3-source-v3-20261102/16-authority-aix3-core-20261102.txt",
+      "bytes": 26610,
+      "sha256": "17fe35eecf83ef8a48629e8645612e5fa444c7617deba5c9aee6d382b06bb265"
+    },
+    {
+      "source": "/Users/microsoft/personal-desk/desk-plugin/factory-intake-matches-real-work/factory/2026-10-27-session-intelligence/authority-aix3-cli-lock-20261102.txt",
+      "path": "review/authority-index-aix3-source-v3-20261102/17-authority-aix3-cli-lock-20261102.txt",
+      "bytes": 995,
+      "sha256": "9d4e427572cd8106b324c18b9e6c46f09465595a01597badb83ab391276ad034"
+    }
+  ]
+}
