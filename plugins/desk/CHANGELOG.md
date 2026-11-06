@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.64 — 2026-11-06
+
+Crew's `join` now offers a verified way to finish setting up a member folder that already holds work but has no registry row. `crew.js join --adopt-existing <reviewed-commit>` keeps every existing file, adds only the missing template paths, checks that the publishing account is the member and that the full history shows no conflicting owner, and registers the member through the shared-write protocol. Changed contents, conflicting reservations or pending claims, symlinks and untracked files still refuse, so nothing is overwritten or claimed silently. The join-crew skill describes the review-and-confirm steps and the canonical filing that follows ([#539](https://github.com/ourostack/desk/issues/539)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.63 — 2026-11-06
 
 Startup now warns about staged or untracked paths, changed tracked-file metadata, commits ahead of upstream, and commits absent from locally cached `origin/main` in a bound Crew workspace and its linked worktrees. The [metadata-only check](mcp/src/runtime/unsaved-work.js) never compares content through clean/process filters or enters submodules; it reports those content checks as unverified. It shares the existing wall-clock boot budget with index snapshots, reports incomplete coverage, and shows counts without private paths or branch names. It never publishes or cleans up work; local Git evidence does not establish current remote or pull-request state.
