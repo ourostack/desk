@@ -29,10 +29,13 @@ import { indexEntries, readBackCommit } from "./git-stage.js"
 
 const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 const GIT_TIMEOUT_MS = 10_000
+// The finish runs from a shell, not inside a tool call, and a slow hook is what left the commit unfinished: the one commit
+// dispatch gets room for it. A dispatch cut off still ends in the read-back below, never in a second dispatch.
+const COMMIT_TIMEOUT_MS = 600_000
 const ZERO = "0".repeat(40)
 
-function git(spawnGit, root, args, { env, input } = {}) {
-  const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, env, input })
+function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
+  const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
   return { ok: !answer.error && answer.status === 0, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
@@ -111,7 +114,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     if (!branchNow.ok || branchNow.stdout.trim() !== branch || (headNow.ok ? headNow.stdout.trim() : "") !== head)
       return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`)
     // The one dispatch that changes anything: a plain commit, so Git moves the branch and runs every hook the repository has.
-    const made = git(spawnGit, root, ["commit", "-q", "-m", message], { env: own })
+    const made = git(spawnGit, root, ["commit", "-q", "-m", message], { env: own, timeout: COMMIT_TIMEOUT_MS })
     const afterRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
     const after = afterRead.ok ? afterRead.stdout.trim() : null
     if (after === null) return { state: "unknown", reason: `Git could not read HEAD after the commit dispatch${made.ok ? "" : ` (${made.stderr})`}; read back before anything else` }
@@ -134,7 +137,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
 }
 
 /** Exit codes the route's steps branch on: done (committed or finished), ready (read-only run, nothing changed), held, unknown, bad usage. */
-export const FINISH_EXIT = { done: 0, ready: 3, held: 4, unknown: 5, usage: 2 }
+const FINISH_EXIT = { done: 0, ready: 3, held: 4, unknown: 5, usage: 2 }
 
 /** `--root R --branch B --before H --message M --path P... --entry "mode sha<TAB>path"... [--commit]`: prints the answer as JSON and returns its exit code. */
 export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = spawnSync, env = process.env, out = process.stdout } = {}) {
