@@ -479,3 +479,47 @@ test("Git unable to say whether an operation is in progress is unknown, and noth
   assert.match(answer.reason, /in progress/u)
   assert.deepEqual(snapshot(root, ["notes.md"]), before)
 })
+
+// 0972 #3 on ae1395e4: post-commit runs after the branch moved, so its outcome is a separate fact. The finish reads the branch
+// and HEAD again after it; a hook that moved or replaced the commit, failed or was cut off makes the answer unknown, naming
+// the commit that was made and the hook's outcome. Nothing is replayed.
+function postCommit(root, script) {
+  writeFileSync(path.join(root, ".git", "hooks", "post-commit"), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
+}
+
+test("a post-commit hook that moves the branch back or replaces the commit is unknown, naming the commit made", () => {
+  const scripts = {
+    back: "git update-ref refs/heads/main HEAD~1",
+    replaced: "c=$(echo replaced | git commit-tree HEAD~1^{tree} -p HEAD~1) && git update-ref refs/heads/main $c",
+  }
+  for (const [name, script] of Object.entries(scripts)) {
+    const root = repo()
+    writeFileSync(path.join(root, "notes.md"), "mine\n")
+    const committed = capturedFailure(root, ["notes.md"], "save notes")
+    postCommit(root, script)
+    const refs = []
+    const spy = (cmd, args, opts) => { if (args[2] === "update-ref") refs.push(args); return spawnSync(cmd, args, opts) }
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: spy })
+    assert.equal(answer.state, "unknown", `${name}: ${answer.reason}`)
+    assert.match(answer.commit, /^[0-9a-f]{40}$/u, `${name}: the commit made is named`)
+    assert.equal(answer.post_commit, "ran", `${name}: the hook's own outcome is reported apart`)
+    assert.notEqual(head(root), answer.commit, `${name}: the hook moved the branch`)
+    assert.equal(answer.head, head(root), `${name}: the reply names where HEAD is now`)
+    assert.equal(refs.length, 1, `${name}: one ref dispatch, never replayed`)
+  }
+})
+
+test("a post-commit hook that fails or is cut off is unknown: the commit stands, and the hook's outcome is reported apart", () => {
+  for (const outcome of ["failed", "cut"]) {
+    const root = repo()
+    writeFileSync(path.join(root, "notes.md"), "mine\n")
+    const committed = capturedFailure(root, ["notes.md"], "save notes")
+    postCommit(root, "echo lfs push broke >&2; exit 1")
+    const cut = (cmd, args, opts) => (outcome === "cut" && args.includes("post-commit") ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, opts))
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: cut })
+    assert.equal(answer.state, "unknown", `${outcome}: ${answer.reason}`)
+    assert.equal(answer.commit, head(root), `${outcome}: the commit was made and the branch holds it`)
+    assert.match(answer.post_commit, outcome === "cut" ? /cut off at the 600 s bound/u : /failed: lfs push broke/u)
+    assert.equal(finish(root, ["notes.md"], "save notes", committed).state, "committed", `${outcome}: a read-back says committed; nothing replays`)
+  }
+})

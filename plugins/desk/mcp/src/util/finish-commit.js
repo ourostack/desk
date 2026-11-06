@@ -4,6 +4,7 @@
 // that change stands and, only when asked and only when every check passes, commits exactly it once.
 //
 // What it reads, in order, all without changing anything:
+//   - no merge, cherry-pick, revert or rebase is in progress (git commit has its own rules for those; a finish never applies them);
 //   - the checkout is still on the branch the call committed on (the tool's branch refusal, checked again);
 //   - HEAD already holds exactly the captured entries at those paths: `committed`, so there is nothing left but to publish;
 //   - HEAD moved: Desk's own read-back. A commit of this call's that landed but is not what HEAD holds now is `held`
@@ -14,15 +15,19 @@
 // When all of that passes the answer is `ready`.
 //
 // With `commit: true` and a `ready` answer it builds a private temporary index (the HEAD it read plus exactly the captured
-// entries), reads the branch and HEAD again, and makes the commit the way git commit does, with every step Git's own: the
+// entries, with every leaf HEAD holds under a captured folder that the capture does not keep removed), checks the whole tree
+// it built against the capture, reads the branch and HEAD again, and makes the commit the way git commit does, with every step Git's own: the
 // pre-commit, prepare-commit-msg and commit-msg hooks through `git hook run` on that private index (so the card guard still
 // refuses a hand commit of a live task card; a hook that changes what would be committed is held), the message cleaned by
 // `git stripspace`, the commit object by `git commit-tree` on the qualified HEAD (signed when commit.gpgSign says so). The one
 // dispatch that moves anything is `git update-ref` of the branch from exactly the qualified HEAD, a compare-and-swap: a
 // branch another writer moved after the read is refused and their commit stands, never undone (git commit itself would take
-// whatever HEAD is when it starts as the parent). Then post-commit runs. The shared index and the working tree are never
-// written. The hooks, commit-tree and the branch update get a 600 s bound, since a slow hook is what left the commit
-// unfinished; every read keeps 10 s. A hook or branch update cut off at that bound is `unknown`. One dispatch, never repeated.
+// whatever HEAD is when it starts as the parent). Then post-commit runs, and HEAD is read again: the commit, the hook's
+// outcome and where HEAD is afterwards are reported apart, and only all three as wanted is `finished`. The shared index and the
+// working tree are never written. Each hook, commit-tree and the branch update get their own 600 s bound (not one total), since
+// a slow hook is what left the commit unfinished; every read keeps 10 s. A hook before the commit cut off at its bound is
+// `unknown` with the branch unmoved; a commit-tree that fails is `held`; a branch update cut off is `unknown`, naming the
+// commit; a post-commit hook that fails, is cut off or moves HEAD is `unknown`, naming the commit. One dispatch, never repeated.
 
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -178,16 +183,28 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     const moved = git(spawnGit, root, ["update-ref", "-m", `commit${head === "" ? " (initial)" : ""}: ${subject}`, ref, commitId, head === "" ? ZERO : head], { timeout: COMMIT_TIMEOUT_MS })
     const nowRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", ref])
     const now = nowRead.ok ? nowRead.stdout.trim() : null
-    if (now === commitId) {
-      hook("post-commit")
-      return { state: "finished", reason: "committed exactly the captured change", commit: commitId }
-    }
+    if (now === commitId) return afterPostCommit({ spawnGit, root, branch, commitId, post: hook("post-commit") })
     if (moved.ok || moved.cut || now === null)
       return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound` : moved.ok ? "reported success" : "failed"} and ${ref} does not hold ${commitId.slice(0, 12)}; read back before anything else`, commit: commitId }
     return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// post-commit runs after the branch moved, so the commit, the hook's outcome and where HEAD is afterwards are three facts, read
+// apart (0972 #3 on ae1395e4). Only all three as wanted is `finished`; anything else is `unknown`, naming the commit, and is
+// never replayed: the commit stands, and only a read-back says what is in effect.
+function afterPostCommit({ spawnGit, root, branch, commitId, post }) {
+  const post_commit = post.ok ? "ran" : post.cut ? `cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running` : `failed: ${post.stderr || "no reason given"}`
+  const branchAfter = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
+  const headAfter = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+  const at = headAfter.ok ? headAfter.stdout.trim() : null
+  const facts = { commit: commitId, post_commit, head: at }
+  if (!branchAfter.ok || branchAfter.stdout.trim() !== branch || at !== commitId)
+    return { state: "unknown", reason: `the commit was made, but after the post-commit hook ${at === null ? "Git could not read HEAD" : `HEAD is ${at.slice(0, 12)} on ${branchAfter.ok ? branchAfter.stdout.trim() : "no branch"}, not the commit on ${branch}`}; read back before anything else and never commit it again`, ...facts }
+  if (!post.ok) return { state: "unknown", reason: `the commit was made and HEAD holds it, but the post-commit hook ${post_commit}; read back before anything else and never commit it again`, ...facts }
+  return { state: "finished", reason: "committed exactly the captured change", ...facts }
 }
 
 const inScope = (scope, name) => scope.some((p) => p === "." || name === p || name.startsWith(`${p}/`))
