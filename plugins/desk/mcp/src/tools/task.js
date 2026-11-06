@@ -472,19 +472,20 @@ function relPath(deskRoot, absPath) {
 const INCLUDED_CHANGES_NOTE = "This card already held uncommitted changes before this call (an earlier commit that failed, a card taken out of a hand commit, or an edit made outside Desk's tools); this commit includes them."
 const CONFLICTED_CARD_REASON = "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again."
 
-// The route for a card Git holds as a conflict: resolving it is a Git operation the card guard lets through, then task_update commits the card.
+// The route for a card Git holds as a conflict. Whose merge this is cannot be proven, and marking it resolved writes the shared
+// index (R1, R2, 0972 on #625), so the route only reads and stops: the person who owns the merge resolves it, then task_update
+// commits the card.
 function conflictedCardRoute(filePath, track, slug) {
   const dir = path.dirname(filePath)
   const name = path.basename(filePath)
   return {
-    summary: "Resolve the conflict in the card, then let task_update commit it. Never commit the card with its conflict markers in it.",
+    summary: "Git holds the card as a conflict. Read it, change nothing, and report: the person who owns the merge resolves it, then task_update commits the card. Never commit the card with its conflict markers in it.",
     steps: [
-      { step: "Read back the conflict: this lists the card as unmerged (U) while the conflict stands.", argv: ["git", "-C", dir, "ls-files", "-u", "--", name] },
-      { step: `Edit ${filePath}: keep the lines that are right from each side and delete every <<<<<<<, ======= and >>>>>>> line.` },
-      { step: "Mark the conflict resolved.", argv: ["git", "-C", dir, "add", "--", name] },
-      { step: `Call task_update for ${track}/${slug} with a one-line note: Desk commits the card and schedules its push.`, tool: "task_update", arguments: { track, slug, note: "Resolved the card's merge conflict." } },
+      { step: "Read back the conflict: this lists the card as unmerged (U) while the conflict stands. It changes nothing.", argv: ["git", "-C", dir, "ls-files", "-u", "--", name] },
+      { step: `Stop here: change nothing, and report the conflict in ${filePath}. Resolving it and marking it resolved belong to the person who owns the merge; once they have, call task_update for ${track}/${slug} with a one-line note, and Desk commits the card and schedules its push.` },
     ],
     committed_locally_when: { argv: ["git", "-C", dir, "status", "--porcelain", "--", name], expect: "prints nothing" },
+    held: true,
   }
 }
 
