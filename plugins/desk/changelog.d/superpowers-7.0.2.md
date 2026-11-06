@@ -1,0 +1,1 @@
+Superpowers refresh: Desk now ships Superpowers 7.0.2, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/22f0b463e7a5e579904dd6211a520321035526f7) (upstream version 7.0.2) copied byte for byte. Selected files: 16 changed, 1 added, 5 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.
