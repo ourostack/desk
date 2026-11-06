@@ -82,6 +82,7 @@ export function commitFailure({ root, paths, message, committed, card = null, de
   return {
     status: readback === "absent" ? "failed" : "unknown",
     reason: committed.stderr,
+    ...(committed.landed ? { landed: committed.landed } : {}),
     route_around: commitRoute({ root, paths, message, readback, card, deskRoot }),
   }
 }
@@ -123,6 +124,8 @@ function heldFileRoute({ dir, prefix, names, message, branch, head, change, work
 
 /** How a reply says why a commit step left the change uncommitted: a commit that did not land is not one Desk cannot read back. */
 export function commitFailureWords(commit) {
+  if (commit.status === "unknown" && commit.landed)
+    return `Desk's commit ${commit.landed.commit.slice(0, 12)} landed (${commit.reason}), but HEAD ${commit.landed.head.slice(0, 12)} no longer holds it, so Desk cannot tell whether it is in effect; route_around reads it back and changes nothing on its own`
   return commit.status === "unknown"
     ? `Desk cannot tell whether the commit landed (${commit.reason}); route_around reads it back before anything is committed again`
     : `the commit failed: ${commit.reason}; route_around finishes it`

@@ -104,11 +104,14 @@ test("lesson_add: a commit that timed out before landing is failed, not in effec
 test("lesson_add: a commit Desk cannot read back is unknown, and its route reads back before committing again", async () => {
   const root = await repo()
   const result = await lesson({ deskRoot: root, spawnGit: unreadable(), schedulePush: () => assert.fail("no push for an unknown commit") })
-  assert.equal(result.in_effect, false)
+  // R5 (0972 on #625): unknown stays unknown in the fields and the words. `in_effect` is null, never a false that claims
+  // absence (and never a truthy value an old `if (in_effect)` would read as done).
+  assert.equal(result.in_effect, null)
   assert.equal(result.commit.status, "unknown")
   assertRoute(result.route_around)
   assert.ok(result.route_around.steps[0].argv.includes("status"), "step 1 is the read-back, never a second commit")
   assert.match(result.message, /cannot tell whether the commit landed/u)
+  assert.doesNotMatch(result.message, /not committed|not in effect|do not have it/u)
 })
 
 test("lesson_add: a file that held another session's edit gets a route that keeps that edit out of the commit", async () => {
