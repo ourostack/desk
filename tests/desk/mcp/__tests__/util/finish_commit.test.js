@@ -523,3 +523,58 @@ test("a post-commit hook that fails or is cut off is unknown: the commit stands,
     assert.equal(finish(root, ["notes.md"], "save notes", committed).state, "committed", `${outcome}: a read-back says committed; nothing replays`)
   }
 })
+
+// 0972 #5 on ae1395e4: a first commit on an unborn branch is captured with before "". The finish treats HEAD as unborn only on
+// positive proof (the checkout is on the branch, and Git lists no such branch while HEAD does not resolve); any other failure to
+// read HEAD stays unknown.
+function unbornWithOrigin() {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "finish-unborn-")))
+  const origin = `${root}-origin.git`
+  git(root, ["init", "-q", "-b", "main"])
+  git(root, ["config", "user.name", "t"])
+  git(root, ["config", "user.email", "t@example.com"])
+  spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin], { encoding: "utf8", env })
+  git(root, ["remote", "add", "origin", origin])
+  return { root, origin }
+}
+
+test("the first commit on an unborn branch is ready, then finished, and reaches an initially empty origin", () => {
+  const { root, origin } = unbornWithOrigin()
+  writeFileSync(path.join(root, "notes.md"), "first\n")
+  const committed = capturedFailure(root, ["notes.md"], "first notes")
+  assert.equal(committed.capture.before, "", "captured on an unborn branch")
+  assert.equal(finish(root, ["notes.md"], "first notes", committed).state, "ready")
+  const done = finish(root, ["notes.md"], "first notes", committed, { commit: true })
+  assert.equal(done.state, "finished", done.reason)
+  assert.equal(git(root, ["rev-list", "--count", "HEAD"]).trim(), "1", "one root commit")
+  assert.equal(finish(root, ["notes.md"], "first notes", committed).state, "committed")
+  git(root, ["push", "-q", "-u", "origin", "main"])
+  assert.equal(spawnSync("git", ["--git-dir", origin, "show", "main:notes.md"], { encoding: "utf8", env }).stdout, "first\n", "the origin holds the content")
+})
+
+test("HEAD that will not resolve while the branch exists is unknown, never treated as unborn", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const before = snapshot(root, ["notes.md"])
+  const blind = (cmd, args, opts) => (args.includes("rev-parse") && args.at(-1) === "HEAD" ? { status: 1, stdout: "", stderr: "" } : spawnSync(cmd, args, opts))
+  for (const commit of [false, true]) assert.equal(finish(root, ["notes.md"], "save notes", committed, { commit, spawnGit: blind }).state, "unknown")
+  const broken = (cmd, args, opts) => (args.includes("for-each-ref") ? { status: 128, stdout: "", stderr: "fatal" } : spawnSync(cmd, args, opts))
+  const { root: unborn } = unbornWithOrigin()
+  writeFileSync(path.join(unborn, "notes.md"), "first\n")
+  const first = capturedFailure(unborn, ["notes.md"], "first notes")
+  assert.equal(finish(unborn, ["notes.md"], "first notes", first, { spawnGit: broken }).state, "unknown", "no positive proof of unborn: unknown")
+  assert.deepEqual(snapshot(root, ["notes.md"]), before)
+})
+
+test("a branch that is unborn now but had a HEAD when the change was captured is unknown, never restarted from a root commit", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  git(root, ["update-ref", "-d", "refs/heads/main"])
+  for (const commit of [false, true]) {
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit })
+    assert.equal(answer.state, "unknown", answer.reason)
+  }
+  assert.equal(spawnSync("git", ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], { env }).status, 1, "the branch is still unborn")
+})

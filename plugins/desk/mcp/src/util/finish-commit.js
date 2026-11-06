@@ -45,7 +45,7 @@ const ZERO = "0".repeat(40)
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, cut: Boolean(answer.error || answer.signal), stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
 function treeLines(spawnGit, root, commit, paths) {
@@ -71,6 +71,18 @@ function operationAnswer(spawnGit, root) {
   return found ? held(`${found[1]} is in progress in this checkout; git commit has its own rules for it, so Desk does not finish the change by hand and nothing was committed`) : null
 }
 
+/**
+ * HEAD's hash; `""` only on positive proof that `branch` is unborn (HEAD does not resolve, with no error, and Git lists no such
+ * branch); null for anything else, which callers answer `unknown` (0972 #5 on ae1395e4).
+ */
+function headOf(spawnGit, root, branch) {
+  const read = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+  if (read.ok) return read.stdout.trim()
+  if (read.cut || !/^1$/u.test(String(read.status)) || read.stdout.trim() !== "") return null
+  const listed = git(spawnGit, root, ["for-each-ref", "--format=%(refname)", `refs/heads/${branch}`])
+  return listed.ok && listed.stdout.trim() === "" ? "" : null
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
 
@@ -91,10 +103,9 @@ export function finishCommit({ root, paths, expected, before, branch, message, c
   const onBranch = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
   if (!onBranch.ok) return held("the checkout is not on a branch now")
   if (onBranch.stdout.trim() !== branch) return held(`the checkout is on ${onBranch.stdout.trim()} now, not ${branch}, where the change was made`)
-  const headRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
-  const head = headRead.ok ? headRead.stdout.trim() : null
+  const head = headOf(spawnGit, root, branch)
   if (head === null) return { state: "unknown", reason: "Git could not read HEAD" }
-  const now = treeLines(spawnGit, root, head, paths)
+  const now = head === "" ? [] : treeLines(spawnGit, root, head, paths)
   if (now === null) return { state: "unknown", reason: "Git could not read HEAD's entries at these paths" }
   if (same(now, wanted)) return { state: "committed", reason: "HEAD holds exactly the captured change at these paths", head }
   if (head !== before) {
@@ -139,8 +150,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     if (!update.ok) return held(`nothing was committed: building the private index failed: ${update.stderr}`)
     // Read again before running anything: the private index is HEAD plus this change, so it is right only on that HEAD.
     const branchNow = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
-    const headNow = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
-    if (!branchNow.ok || branchNow.stdout.trim() !== branch || (headNow.ok ? headNow.stdout.trim() : "") !== head)
+    if (!branchNow.ok || branchNow.stdout.trim() !== branch || headOf(spawnGit, root, branch) !== head)
       return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`)
     const tree = git(spawnGit, root, ["write-tree"], { env: own })
     if (!tree.ok) return held(`nothing was committed: git write-tree failed: ${tree.stderr}`)
