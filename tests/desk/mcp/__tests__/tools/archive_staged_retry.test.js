@@ -270,3 +270,45 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
     assert.ok(absent, "owned hook process must retire before fixture cleanup")
   }
 })
+
+// R3 (0972 on #625): the archive's admitted entries travel with its route, with their modes. With core.symlinks=false a link is
+// a placeholder file holding its target; a route that committed the path from disk would make it a regular file (100644).
+const runArgv = (argv) => spawnSync(argv[0], argv.slice(1), { encoding: "utf8" })
+const companion = "t/_archive/mode-proof/companion.txt"
+
+test("an archive commit that timed out before landing is finished by its route with the admitted link entry, once", async () => {
+  const f = await archiveFixture({ symlinks: false, mode: "120000" })
+  const result = await retry(f, { spawnGit(command, args, options) {
+    if (args[2] === "commit") return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }
+    return spawnSync(command, args, options)
+  } })
+  assert.equal(result.status, "archive_pending")
+  const [check, finish] = result.route_around.steps.map((step) => step.argv)
+  assert.ok(check.includes(`120000 ${f.sha}\t${companion}`), "the route carries the admitted link entry")
+  assert.equal(runArgv(check).status, 3, "ready")
+  const done = runArgv(finish)
+  assert.equal(done.status, 0, done.stdout)
+  assert.match(git(f.root, "ls-tree", "HEAD", "--", companion), new RegExp(`^120000 blob ${f.sha}\\t`), "a link kept a link")
+  assert.equal(git(f.root, "rev-parse", "HEAD~1"), f.head, "exactly one commit")
+  assert.equal(git(f.root, "diff", "--cached", "--name-only"), "", "the shared index agrees with HEAD")
+  assert.equal(runArgv(check).status, 0, "read back: committed")
+})
+
+test("an archive whose link metadata could not be staged carries the admitted entries in a route that is held and changes nothing", async () => {
+  const f = await archiveFixture({ symlinks: false, mode: "120000" })
+  const result = await retry(f, { spawnGit(command, args, options) {
+    if (args[2] === "update-index" && args.includes("--index-info") && !options?.env?.GIT_INDEX_FILE) return { status: 1, stdout: "", stderr: "update-index failed" }
+    return spawnSync(command, args, options)
+  } })
+  assert.equal(result.status, "archive_pending")
+  const route = result.route_around
+  const check = route.steps[0].argv
+  assert.ok(String(check[1]).endsWith("finish-commit.js") && !check.includes("--commit"), "step 1 reads where the admitted change stands")
+  assert.ok(check.includes(`120000 ${f.sha}\t${companion}`), "the route carries the admitted link entry, never the placeholder's 100644")
+  assert.equal(route.steps.some((step) => step.tool === "desk_save"), false, "never a save of what disk holds")
+  const head = git(f.root, "rev-parse", "HEAD"), index = git(f.root, "ls-files", "-s"), status = git(f.root, "status", "--porcelain")
+  const read = runArgv(check)
+  assert.equal(read.status, 4, `held while the shared index holds the placeholder: ${read.stdout}`)
+  assert.equal(runArgv([...check, "--commit"]).status, 4, "held with --commit too: nothing is committed")
+  assert.deepEqual([git(f.root, "rev-parse", "HEAD"), git(f.root, "ls-files", "-s"), git(f.root, "status", "--porcelain")], [head, index, status])
+})
