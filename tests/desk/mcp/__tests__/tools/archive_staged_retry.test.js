@@ -180,8 +180,23 @@ async function closeHookFixture({ hook, entered, control, holdStartup, phase, t 
   try {
     hookPid = Number(await fs.readFile(entered, "utf8"))
     assert.ok(Number.isInteger(hookPid) && hookPid > 0)
-    try { process.kill(hookPid, "SIGTERM") } catch (error) { if (error.code !== "ESRCH") throw error }
-    t.diagnostic(`Exact owned ${phase} fixture PID ${hookPid}; independent shell receipt; SIGTERM attempted before control validation.`)
+    try { process.kill(hookPid, "SIGKILL") } catch (error) { if (error.code !== "ESRCH") throw error }
+    const deadline = Date.now() + 1000
+    for (;;) {
+      try { process.kill(hookPid, 0) } catch (error) {
+        if (error.code !== "ESRCH") throw error
+        break
+      }
+      if (process.platform === "linux") {
+        let stat
+        try { stat = await fs.readFile(`/proc/${hookPid}/stat`, "utf8") }
+        catch (error) { if (error.code !== "ENOENT") throw error }
+        if (stat?.slice(stat.lastIndexOf(")") + 2).split(" ")[0] === "Z") break
+      }
+      assert.ok(Date.now() < deadline, `owned hook ${hookPid} did not terminate within its bounded settlement window`)
+      await delay(10)
+    }
+    t.diagnostic(`Exact owned ${phase} fixture PID ${hookPid}; independent shell receipt; SIGKILL retirement observed before control validation.`)
   } catch (error) { cleanupFailure = error }
   try { await fs.unlink(hook) } catch (error) { cleanupFailure ??= error }
   if (cleanupFailure) throw cleanupFailure
@@ -192,6 +207,38 @@ async function closeHookFixture({ hook, entered, control, holdStartup, phase, t 
   }
   return { hookPid, controlPid, receiptMissing: false }
 }
+
+test("hook cleanup awaits retirement when a SIGTERM handler cannot run during owned Atomics startup", async t => {
+  if (process.platform === "win32") return t.skip("POSIX signal/exec fixture; portable recovery controls remain active")
+  const f = await archiveFixture(), hook = path.join(f.root, ".git/hooks/owned-blocked-exit")
+  const entered = path.join(f.root, ".git/owned-blocked-pid"), delivered = path.join(f.root, ".git/owned-term-delivered")
+  const body = `const fs = require("node:fs");\nprocess.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(delivered)}, "handled"); process.exit(0) });\nfs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n`
+  await fs.writeFile(hook, `#!/bin/sh\nexec ${shellQuote(process.execPath)} -e ${shellQuote(body)}\n`, { mode: 0o755 })
+  const child = spawn("/bin/sh", [hook], { cwd: f.root, stdio: "ignore" })
+  const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve) })
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  })
+  const deadline = Date.now() + 3000
+  while (!(await fs.stat(entered).then(() => true, error => { if (error.code !== "ENOENT") throw error; return false }))) {
+    assert.ok(Date.now() < deadline, "owned child must acknowledge its installed handler before the causal signal")
+    await delay(10)
+  }
+  const pid = Number(await fs.readFile(entered, "utf8"))
+  assert.equal(pid, child.pid)
+  process.kill(pid, "SIGTERM")
+  const result = await closeHookFixture({ hook, entered, holdStartup: false, phase: "blocked-exit", t })
+  assert.equal(result.hookPid, pid)
+  assert.equal(await Promise.race([exited.then(() => true), delay(1000).then(() => false)]), true,
+    "returning from cleanup must acknowledge actual owned retirement, not a queued SIGTERM")
+  assert.equal(child.signalCode, "SIGKILL")
+  await assert.rejects(fs.lstat(delivered), { code: "ENOENT" },
+    "Atomics startup prevented the installed JS SIGTERM handler from completing")
+  await assert.rejects(fs.lstat(hook), { code: "ENOENT" })
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+  t.diagnostic(`Owned blocked-exit PID ${pid} retired; SIGTERM handler remained blocked, no child or descendant was left running.`)
+})
 
 for (const evidence of ["absent", "invalid", "mismatched"]) test(`hook cleanup settles its owned process before reporting ${evidence} startup control evidence`, async t => {
   if (process.platform === "win32") return t.skip("POSIX exec ownership fixture; portable recovery controls remain active")
