@@ -9,7 +9,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
-import { unlinkSync } from "node:fs"
+import { unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -422,6 +422,30 @@ for (const indexed of [false, true]) {
     assert.equal(counter.commits, 1)
   })
 
+  // R4 (0972 on #625): "it happened" and "it is in effect now" are separate proofs. A commit of ours that a later commit overwrote before the
+  // read-back is not completion, and nothing is replayed.
+  test(`a ${kind} commit that lands but is overwritten before the read-back is unknown, never committed or replayed`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    const spawn = (command, args, options) => {
+      const actual = spawnSync(command, args, options)
+      if (args[2] !== "commit") return actual
+      counter.commits++
+      assert.equal(actual.status, 0, actual.stderr)
+      writeFileSync(path.join(root, "a.txt"), "someone else\n")
+      git(root, ["commit", "-q", "-m", "someone else", "--", "a.txt"])
+      return etimedoutResult()
+    }
+    const result = commit(root, spawn)
+    assert.equal(result.ok, false)
+    assert.equal(result.readback, "unknown")
+    assert.equal(result.stderr, "timeout")
+    assert.equal(result.landed.head, git(root, ["rev-parse", "HEAD"]).trim())
+    assert.equal(git(root, ["log", "-1", "--format=%s", result.landed.commit]).trim(), "save")
+    assert.equal(counter.commits, 1)
+  })
+
   test(`a ${kind} commit Git refused with an error is read back as absent`, async () => {
     const root = await repoWithChange()
     await staged(root)
@@ -443,7 +467,9 @@ test("a path commit from a subfolder that lands but times out is read back as co
   assert.equal(counter.commits, 1)
 })
 
-test("a path commit that lands with an edit the working tree no longer holds is read back as unknown", async () => {
+// R4 (0972 on #625): what a path commit meant is captured before it is dispatched, never rebuilt from the working tree afterwards. A later edit
+// to the working tree is someone's change after ours, not evidence about ours; a commit that landed with other bytes than the captured ones is not ours.
+test("a path commit that lands as captured is committed even when the working tree changes before the read-back", async () => {
   const root = await repoWithChange()
   await fs.writeFile(path.join(root, "a.txt"), "two\n")
   git(root, ["add", "--", "a.txt"])
@@ -453,7 +479,28 @@ test("a path commit that lands with an edit the working tree no longer holds is 
     unlinkSync(path.join(root, "a.txt"))
     return etimedoutResult()
   }
-  assert.deepEqual(commitPaths(root, ["a.txt"], "save", spawn), { ok: false, stderr: "timeout", readback: "unknown" })
+  const result = commitPaths(root, ["a.txt"], "save", spawn)
+  assert.equal(result.ok, true)
+  assert.equal(result.readback, "committed")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("a path commit that lands with bytes other than the ones captured before dispatch is unknown, even when the working tree now matches them", async () => {
+  const root = await repoWithChange()
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "--", "a.txt"])
+  let commits = 0
+  const spawn = (command, args, options) => {
+    if (args[2] !== "commit") return spawnSync(command, args, options)
+    commits++
+    writeFileSync(path.join(root, "a.txt"), "rewritten by a hook\n")
+    const actual = spawnSync(command, args, options)
+    assert.equal(actual.status, 0, actual.stderr)
+    return etimedoutResult()
+  }
+  const result = commitPaths(root, ["a.txt"], "save", spawn)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.equal(commits, 1)
 })
 
 test("a real post-commit hook that outlasts the bound: the commit lands, Git is killed, and the read-back says committed", { skip: process.platform === "win32" ? "a POSIX sleep hook" : false }, async t => {
