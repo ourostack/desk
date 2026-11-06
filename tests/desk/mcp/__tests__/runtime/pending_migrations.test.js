@@ -1,13 +1,19 @@
-import { test } from "node:test"
+import { mock, test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
+import fs from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
-import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { createMigrationRecorder } from "./_migration_recorder.js"
 import {
   MIGRATION_BUDGET_MS,
+  bashHint,
   migrationCommand,
   migrationLine,
   parseMigration,
@@ -108,15 +114,77 @@ test("Desk's own migrations all parse", () => {
   assert.equal(readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").agentWork, true)
 })
 
+test("the real tidy instructions finish on the selected bash and preserve literal text and expanded commands", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-instructions-")
+  const report = "Tidy claim: fixture-token fixture-time\ntrack_missing_scope: billing-disputes"
+  // Only the report is controlled: execute the shipped instruction block, including its shell expansions.
+  const reporter = 'node() { printf \'%s\\n\' "$TIDY_TEST_REPORT"; }\n'
+  const pluginRoot = '/fixture/plugin "quoted" $literal `uname` %s\\n'
+  const toolsRoot = '/fixture/desk "quoted" $literal `uname` %s\\n'
+  for (const person of ["", 'fixture "person" $USER %s']) {
+    const result = await runBlock(reporter + blocks.Migrate, {
+      env: { ...process.env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: toolsRoot, DESK_TOOLS_PERSON: person, TIDY_TEST_REPORT: report },
+      cwd: root, timeoutMs: 10_000, outputChars: Infinity,
+    })
+    assert.equal(result.timedOut, false, "the instructions must not block before their reader starts")
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, "")
+    assert.ok(result.stdout.startsWith(`${report}\n\nTidy this desk now, as ordinary work in this session.`))
+    const flags = ` --root '${toolsRoot}'${person ? ` --person '${person}'` : ""} --claim 'fixture-token'`
+    assert.ok(result.stdout.includes(`run: node '${pluginRoot}/mcp/scripts/tidy-status.js' --defer '<one-line reason>'${flags}\n`))
+    assert.ok(result.stdout.includes(`with: node '${pluginRoot}/mcp/scripts/tidy-status.js' --write-record${flags}\n`))
+    assert.ok(result.stdout.includes('in the form "<what belongs>; not <what doesn\'t>".'))
+    assert.ok(result.stdout.includes("a bare `git add -A`"))
+    assert.ok(result.stdout.includes("the trailer `Desk-Tidy: true`"))
+    assert.ok(result.stdout.endsWith("a hand git commit is refused for them.\n"))
+  }
+})
+
+test("the real tidy instructions leave a held report alone and print no steps", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-held-instructions-")
+  const result = await runBlock('node() { printf \'%s\\n\' "I left my desk untidied for now."; return 1; }\n' + blocks.Migrate, {
+    env: { ...process.env, DESK_PLUGIN_ROOT: "/fixture/plugin" }, cwd: root, timeoutMs: 10_000, outputChars: Infinity,
+  })
+  assert.deepEqual(result, { status: 0, stdout: "I left my desk untidied for now.\n", stderr: "", timedOut: false, unavailable: false })
+})
+
+test("the real tidy instructions survive the native MSYS quoted-argument limit without losing their tail", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-msys-arguments-")
+  const block = 'node() { printf \'%s\\n\' "$TIDY_TEST_REPORT"; }\n' + blocks.Migrate
+  const env = {
+    ...process.env,
+    DESK_PLUGIN_ROOT: '/fixture/plugin "quoted" $literal `uname` %s\\n',
+    DESK_TOOLS_ROOT: '/fixture/desk "quoted" $literal `uname` %s\\n',
+    DESK_TOOLS_PERSON: 'fixture "person" $USER %s',
+    TIDY_TEST_REPORT: "Tidy claim: fixture-token fixture-time\ntrack_missing_scope: billing-disputes",
+  }
+  const options = { env, cwd: root, timeoutMs: 10_000, outputChars: Infinity }
+  const normal = await runBlock(block, options)
+  assert.equal(normal.status, 0, normal.stderr)
+  assert.ok(normal.stdout.endsWith("a hand git commit is refused for them.\n"))
+  // MSYS glob.cc uses 8192 wide characters, reserving MB_CUR_MAX (up to 6) while decoding a quoted native argument.
+  // Model only that transport boundary; the selected Bash still executes the real, unmodified migration.
+  const nativeArguments = (command, args, settings) => spawn(command, args.map((arg) =>
+    /[ \t"]/u.test(arg) ? Array.from(arg).slice(0, 8186).join("") : arg), settings)
+  const windows = await runBlock(block, { ...options, platform: "win32", bash: resolveBash(), spawn: nativeArguments })
+  assert.equal(windows.timedOut, false)
+  assert.equal(windows.status, 0, windows.stderr)
+  assert.equal(windows.stderr, "")
+  assert.equal(windows.stdout, normal.stdout, "native argument handling must preserve every instruction and expanded value")
+})
+
 test("the tidy commit and its revert both go through desk_save tidy, which adds the Desk-Tidy trailer", () => {
-  const text = readFileSync(path.join(deskPluginRoot, "migrations", "02-tidy-desk.md"), "utf8")
+  const text = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").blocks.Migrate
   const step7 = text.slice(text.indexOf("\n7. Check, record and commit."), text.indexOf("\nThen send the Announce line"))
-  const revert = text.slice(text.indexOf("If the human objects"), text.indexOf("\nSTEPS"))
+  const revert = text.slice(text.indexOf("If the human objects"))
   for (const [label, part] of [["step 7", step7], ["the revert", revert]]) {
     assert.ok(part.length > 100, label)
     assert.match(part, /desk_save \(tidy: true/u, label)
   }
-  // The steps sit in a heredoc the shell expands, so the source escapes each backtick; the agent reads `Desk-Tidy: true`.
+  // The quoted instruction argument escapes each backtick; the agent reads `Desk-Tidy: true`.
   assert.match(step7, /desk_save ends it with the trailer \\`Desk-Tidy: true\\`/u)
   assert.equal(text.split("Desk-Tidy: true").length - 1, 1, "the tool adds the trailer, so the text names it once")
 })
@@ -125,27 +193,403 @@ test("the tidy commit and its revert both go through desk_save tidy, which adds 
 
 const noBash = (command, args, options) => spawn("/nonexistent/bash", args, options)
 
-test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async () => {
-  const ran = await runBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+function transportedSource(args) {
+  assert.equal(args[0], "-c")
+  assert.match(args[1], /^\. '/u, "Windows must read the source from its owned file, not a native source argument")
+  return args[1].slice(3, -1).replaceAll("'\\''", "'")
+}
+
+function timeoutChild() {
+  const child = new EventEmitter()
+  Object.assign(child, { pid: 2 ** 22 + 45678, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true })
+  return child
+}
+
+// On this host model Windows tree termination with an owned POSIX group, not a PATH taskkill shim.
+const windowsTimeoutOptions = process.platform === "win32" ? {} : {
+  execFile: (_command, args, options, callback) => execFile(process.execPath, ["-e", 'process.kill(-Number(process.argv[1]), "SIGKILL")', args[1]], options, callback),
+}
+const windowsTimeoutSpawn = (command, args, options) => spawn(command, args, { ...options, detached: process.platform !== "win32" })
+
+test("runBlock Windows timeout waits for exact-PID tree termination and close in either order", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  for (const closeFirst of [false, true]) {
+    const child = timeoutChild()
+    let callback
+    let source
+    let settled = false
+    const result = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: (command, args, options, done) => {
+        assert.ok(path.win32.isAbsolute(command))
+        assert.equal(path.win32.basename(command).toLowerCase(), "taskkill.exe")
+        assert.deepEqual(args, ["/PID", String(child.pid), "/T", "/F"])
+        assert.equal(options.timeout, 1000)
+        assert.equal(options.maxBuffer, 16_384)
+        assert.equal(options.windowsHide, true)
+        callback = done
+        return timeoutChild()
+      },
+    }).then((value) => { settled = true; return value })
+    t.after(async () => { child.emit("close", null); await result })
+    child.stdout.emit("data", "before-deadline\n")
+    t.mock.timers.tick(199)
+    assert.equal(callback, undefined)
+    t.mock.timers.tick(1)
+    assert.equal(typeof callback, "function", "the deadline must start a tree operation, not kill only the launcher")
+    if (closeFirst) child.emit("close", null)
+    else callback(null, "", "")
+    await Promise.resolve()
+    assert.equal(settled, false, "neither helper success nor close alone qualifies termination")
+    if (closeFirst) callback(null, "", "")
+    else child.emit("close", null)
+    assert.deepEqual(await result, { status: null, stdout: "before-deadline\n", stderr: "", timedOut: true, unavailable: false })
+    assert.equal(existsSync(path.dirname(source)), false)
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+    t.mock.timers.tick(1001)
+  }
+})
+
+test("runBlock Windows timeout rejects every termination failure and releases handles without claiming cleanup", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  for (const outcome of ["missing", "throw", "nonzero", "signal", "helper-timeout", "no-close", "child-error", "callback-then-throw"]) {
+    const child = timeoutChild()
+    const helper = timeoutChild()
+    let source
+    let callback
+    const run = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: (_command, _args, _options, done) => {
+        callback = done
+        if (outcome === "throw") throw new Error("owned synchronous launch refusal")
+        if (outcome === "missing") done(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }), "", "")
+        if (outcome === "nonzero") done(Object.assign(new Error("exit 5"), { code: 5 }), "", "access refused")
+        if (outcome === "signal") done(Object.assign(new Error("signal SIGTERM"), { signal: "SIGTERM" }), "", "")
+        if (outcome === "callback-then-throw") {
+          done(new Error("owned first failure"), "", "")
+          throw new Error("owned subsequent failure")
+        }
+        if (outcome === "no-close" || outcome === "child-error") done(null, "", "")
+        return helper
+      },
+    })
+    const rejected = assert.rejects(run, (error) => {
+      assert.match(error.message, /tree cleanup UNQUALIFIED/u)
+      assert.ok(error.message.includes(String(child.pid)), "failure must identify the owned process")
+      if (outcome === "nonzero") assert.match(error.message, /access refused/u)
+      return true
+    })
+    t.mock.timers.tick(200)
+    if (outcome === "child-error") child.emit("error", new Error("child stream operation failed"))
+    t.mock.timers.tick(1000)
+    await rejected
+    assert.equal(child.stdout.destroyed, true)
+    assert.equal(child.stderr.destroyed, true)
+    assert.equal(existsSync(path.dirname(source)), false)
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+    if (callback !== undefined) callback(null, "", "")
+    t.mock.timers.tick(1001)
+  }
+})
+
+test("runBlock Windows termination locates the OS executable independently of block env and PATH", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const saved = Object.entries(process.env).filter(([key]) => /^(systemroot|windir)$/iu.test(key))
+  for (const key of Object.keys(process.env)) if (/^(systemroot|windir)$/iu.test(key)) delete process.env[key]
+  try {
+    for (const [values, expected] of [
+      [{}, "C:\\Windows\\System32\\taskkill.exe"],
+      [{ sYsTeMrOoT: " D:\\Operating System ", WINDIR: "E:\\Other" }, "D:\\Operating System\\System32\\taskkill.exe"],
+      [{ SystemRoot: "relative", wInDiR: "E:\\Windows" }, "E:\\Windows\\System32\\taskkill.exe"],
+    ]) {
+      Object.assign(process.env, values)
+      const child = timeoutChild()
+      const run = runBlock("while :; do :; done", {
+        env: { PATH: "untrusted", SystemRoot: "Z:\\NotTheOS" }, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+        spawn: () => child,
+        execFile: (command, _args, _options, callback) => {
+          assert.equal(command, expected)
+          callback(new Error("fixture refusal"), "", "")
+          return timeoutChild()
+        },
+      })
+      const rejected = assert.rejects(run, /fixture refusal/u)
+      t.mock.timers.tick(200)
+      await rejected
+      for (const key of Object.keys(values)) delete process.env[key]
+    }
+  } finally {
+    for (const [key, value] of saved) process.env[key] = value
+  }
+})
+
+test("runBlock Windows normal close cancels the deadline and does not start termination", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const child = timeoutChild()
+  let source
+  const run = runBlock("printf complete", {
+    env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+    spawn: (_command, args) => { source = transportedSource(args); return child },
+    execFile: () => assert.fail("normal close must cancel the timeout"),
+  })
+  child.emit("close", 0)
+  assert.deepEqual(await run, { status: 0, stdout: "", stderr: "", timedOut: false, unavailable: false })
+  t.mock.timers.tick(1201)
+  assert.equal(existsSync(path.dirname(source)), false)
+  assert.equal(child.listenerCount("error"), 0)
+})
+
+test("runBlock Windows preserves both termination and source-cleanup errors", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let source
+  const child = timeoutChild()
+  const remove = fs.rmSync
+  const stub = t.mock.method(fs, "rmSync", (target, options) => {
+    if (source !== undefined && path.resolve(target) === path.resolve(path.dirname(source))) throw new Error("owned cleanup refused")
+    return remove(target, options)
+  })
+  syncBuiltinESMExports()
+  try {
+    const run = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: () => { throw new Error("owned termination refused") },
+    })
+    const rejected = assert.rejects(run, (error) => {
+      assert.ok(error instanceof AggregateError)
+      assert.equal(error.errors.length, 2)
+      assert.match(error.errors[0].message, /owned termination refused/u)
+      assert.match(error.errors[1].message, /owned cleanup refused/u)
+      return true
+    })
+    t.mock.timers.tick(200)
+    await rejected
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+    remove(path.dirname(source), { recursive: true, force: true })
+  }
+})
+
+test("runBlock on Windows executes source well above 8 KB with unchanged shell context and ignored stdin", async () => {
+  const root = await mkTempRoot("desk-windows-block-")
+  const bash = resolveBash()
+  const payload = "complete-source-".repeat(1200) + ' "quote" \'apostrophe\' $literal `text` %s\\n \u{1f642}'
+  const env = { ...process.env, TRANSPORT_VALUE: 'literal "$value" `text` %s\\n' }
+  const context = 'printf \'%s\\n\' "$0" "$#" "$TRANSPORT_VALUE" "$PWD"; if read -r line; then echo unexpected-input; else echo stdin-eof; fi'
+  const reference = spawnSync(bash, ["-c", context], { env, cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+  assert.equal(reference.status, 0, reference.stderr)
+  let source
+  const block = `printf '%s\\n' ${shellQuote(payload)}\n${context}\nprintf 'source-error\\n' >&2\nexit 7`
+  const result = await runBlock(block, {
+    env, cwd: root, timeoutMs: 10_000, outputChars: Infinity, platform: "win32", bash,
+    spawn: (command, args, options) => {
+      source = transportedSource(args)
+      assert.equal(readFileSync(source, "utf8"), block, "every source byte must reach Bash")
+      return spawn(command, args, options)
+    },
+  })
+  assert.deepEqual(result, { status: 7, stdout: `${payload}\n${reference.stdout}`, stderr: "source-error\n", timedOut: false, unavailable: false })
+  assert.equal(existsSync(path.dirname(source)), false, "nonzero execution must remove the owned source directory")
+})
+
+test("runBlock on Windows fails loudly for missing or unreadable source and removes the owned directory", async () => {
+  const root = await mkTempRoot("desk-windows-missing-source-")
+  for (const unreadable of [false, true]) {
+    let source
+    const result = await runBlock("echo must-not-run", {
+      env: process.env, cwd: root, timeoutMs: 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        unlinkSync(source)
+        // A directory cannot be read as a shell source on either OS; no ACL or root-dependent chmod fixture.
+        if (unreadable) mkdirSync(source)
+        return spawn(command, args, options)
+      },
+    })
+    assert.notEqual(result.status, 0, result.stderr)
+    assert.equal(result.timedOut, false)
+    assert.equal(result.unavailable, false)
+    assert.equal(result.stdout, "")
+    assert.notEqual(result.stderr, "")
+    assert.equal(existsSync(path.dirname(source)), false)
+  }
+})
+
+test("runBlock on Windows quotes its source path without expanding special characters", async () => {
+  const root = await mkTempRoot("desk-windows-source-path-")
+  const allocate = fs.mkdtempSync
+  const stub = mock.method(fs, "mkdtempSync", () => allocate(path.join(root, "source 'quoted' $literal `text` \u{1f642}-")))
+  syncBuiltinESMExports()
+  let source
+  try {
+    const result = await runBlock("printf 'complete\\n'", {
+      env: process.env, cwd: root, timeoutMs: 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        return spawn(command, args, options)
+      },
+    })
+    assert.deepEqual(result, { status: 0, stdout: "complete\n", stderr: "", timedOut: false, unavailable: false })
+    assert.equal(existsSync(path.dirname(source)), false)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+  }
+})
+
+test("runBlock on Windows cleans its source after success, timeout and asynchronous or synchronous launch failure", async () => {
+  const root = await mkTempRoot("desk-windows-source-cleanup-")
+  for (const outcome of ["success", "timeout", "spawn-error", "throw"]) {
+    let source
+    const run = runBlock(outcome === "timeout" ? "while :; do :; done" : "printf 'complete\\n'", {
+      ...windowsTimeoutOptions,
+      env: process.env, cwd: root, timeoutMs: outcome === "timeout" ? 200 : 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        if (outcome === "throw") throw new Error("owned launch failure")
+        return windowsTimeoutSpawn(outcome === "spawn-error" ? "/nonexistent/bash" : command, args, options)
+      },
+    })
+    if (outcome === "throw") {
+      await assert.rejects(run, /owned launch failure/u)
+    } else {
+      const result = await run
+      assert.deepEqual(result, {
+        status: outcome === "success" ? 0 : null,
+        stdout: outcome === "success" ? "complete\n" : "", stderr: "",
+        timedOut: outcome === "timeout", unavailable: outcome === "spawn-error",
+      })
+    }
+    assert.equal(existsSync(path.dirname(source)), false, outcome)
+  }
+})
+
+test("runBlock on Windows rejects a source write failure and removes its allocated directory", async () => {
+  let source
+  const write = fs.writeFileSync
+  const stub = mock.method(fs, "writeFileSync", (file, ...args) => {
+    if (path.basename(file) !== "block.sh") return write(file, ...args)
+    source = file
+    throw new Error("source write refused")
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(runBlock("echo must-not-run", {
+      env: process.env, cwd: process.cwd(), timeoutMs: 1000, platform: "win32", bash: resolveBash(),
+      spawn: () => assert.fail("a failed source write must not launch Bash"),
+    }), /source write refused/u)
+    assert.equal(existsSync(path.dirname(source)), false)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+  }
+})
+
+test("runBlock on Windows rejects an exhausted source cleanup failure instead of reporting success", async () => {
+  let source
+  const remove = fs.rmSync
+  const stub = mock.method(fs, "rmSync", (target, options) => {
+    if (source === undefined || path.resolve(target) !== path.resolve(path.dirname(source))) return remove(target, options)
+    throw Object.assign(new Error("source cleanup refused"), { code: "EIO" })
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(runBlock("echo complete", {
+      env: process.env, cwd: process.cwd(), timeoutMs: 1000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        return spawn(command, args, options)
+      },
+    }), /source cleanup refused/u)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+    remove(path.dirname(source), { recursive: true, force: true })
+  }
+  assert.equal(existsSync(path.dirname(source)), false)
+})
+
+test("runBlock reports a vanished timeout target without issuing native PID operations", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const posixChild = timeoutChild()
+  const kill = t.mock.method(process, "kill", () => {
+    throw Object.assign(new Error("owned process group already absent"), { code: "ESRCH" })
+  })
+  const posix = runBlock("sleep 1", {
+    env: {}, cwd: process.cwd(), timeoutMs: 100, platform: "darwin", bash: "fixture-bash",
+    spawn: () => posixChild,
+  })
+  t.mock.timers.tick(100)
+  posixChild.emit("close", null)
+  assert.deepEqual(await posix, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
+  assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [[-posixChild.pid, "SIGKILL"]])
+
+  const windowsChild = timeoutChild()
+  const helper = timeoutChild()
+  let source
+  let callback
+  const windows = runBlock("sleep 1", {
+    env: {}, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "fixture-bash",
+    spawn: (_command, args) => { source = transportedSource(args); return windowsChild },
+    execFile: (command, args, _options, done) => {
+      assert.equal(path.win32.basename(command).toLowerCase(), "taskkill.exe")
+      assert.deepEqual(args, ["/PID", String(windowsChild.pid), "/T", "/F"])
+      callback = done
+      return helper
+    },
+  })
+  const rejected = assert.rejects(windows, (error) => {
+    assert.match(error.message, /tree cleanup UNQUALIFIED/u)
+    assert.match(error.message, /owned tree target already absent: controlled missing target/u)
+    assert.ok(error.message.includes(String(windowsChild.pid)))
+    return true
+  })
+  t.mock.timers.tick(100)
+  windowsChild.emit("close", null)
+  callback(Object.assign(new Error("owned tree target already absent"), { code: 128 }), "", "controlled missing target")
+  await rejected
+  assert.equal(existsSync(path.dirname(source)), false)
+  for (const child of [posixChild, windowsChild]) {
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+  }
+  for (const child of [windowsChild, helper]) {
+    assert.equal(child.stdout.destroyed, true)
+    assert.equal(child.stderr.destroyed, true)
+  }
+  t.mock.timers.tick(1001)
+  assert.equal(kill.mock.callCount(), 1, "Windows must not fall back to signalling a fabricated native PID")
+})
+
+test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async (t) => {
+  const recorder = createMigrationRecorder({
+    context: "run-block",
+    cases: ["exit-output", "descendant-timeout", "missing-bash", "windows-descendants", "bounded-output"].map((label) => ({ label })),
+    diagnostic: (line) => t.diagnostic(line),
+  })
+  t.after(() => { recorder.dispose(); recorder.publish() })
+  const recordedRunBlock = recorder.wrapRunBlock(runBlock)
+  const ran = await recordedRunBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.deepEqual(ran, { status: 4, stdout: "out\n", stderr: "err\n", timedOut: false, unavailable: false })
   const root = await mkTempRoot("desk-pending-block-")
   const marker = path.join(root, "grandchild.pid")
-  const slow = await runBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
+  const slow = await recordedRunBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
   assert.equal(slow.timedOut, true)
   assert.equal(slow.status, null)
   assert.equal(slow.unavailable, false)
   const grandchild = Number(execFileSync("cat", [marker], { encoding: "utf8" }).trim())
   await new Promise((resolve) => setTimeout(resolve, 100))
-  // Windows has no process groups, so runBlock kills the block itself there (the last assertion below) and a grandchild it started can outlive it. That is a known limit of the product, so the grandchild check runs where groups exist.
-  if (process.platform !== "win32") assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
-  const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
+  assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
+  const missing = await recordedRunBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
-  const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "bash" })
-  assert.equal(windows.timedOut, true, "without process groups the block itself is killed")
-  // A block that exits between its timer and its close event is not killed twice.
-  const gone = await runBlock("sleep 1", { env: process.env, cwd: process.cwd(), timeoutMs: 100, spawn: (command, args, options) => Object.defineProperty(spawn(command, args, options), "pid", { value: 2 ** 22 + 12345 }) })
-  assert.equal(gone.timedOut, true)
-  const chatty = await runBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+  const windows = await recordedRunBlock("sleep 5", { ...windowsTimeoutOptions, env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: resolveBash(), spawn: windowsTimeoutSpawn })
+  assert.equal(windows.timedOut, true, "Windows termination must include the shell's descendants")
+  const chatty = await recordedRunBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.ok(chatty.stdout.length < 100_000, "output is kept bounded")
 })
 
@@ -212,6 +656,8 @@ test("a bash that is not the relay and exits 1 with no output is a real Detect r
 })
 
 test("the bash hint names Git for Windows only on Windows, in both lines", async () => {
+  assert.equal(bashHint("win32"), "on Windows, install Git for Windows")
+  assert.equal(bashHint("linux"), "install bash")
   const entry = [{ id: "09-x", state: "bash_unavailable" }]
   assert.match(migrationLine(entry, "/p", "win32"), /\(on Windows, install Git for Windows; the WSL bash\.exe with no distro cannot run Desk's scripts\)/u)
   for (const platform of ["darwin", "linux"]) {
@@ -288,13 +734,27 @@ test("pendingMigrations sorts every fired Detect into what the startup line asks
   assert.ok(realpathSync(path.join(root, "ran")), "a safe, restart-free migration runs in the hook")
 })
 
-test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget are unchecked or left to the agent", async () => {
+test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget are unchecked or left to the agent", async (t) => {
   const root = await plugin([
     { id: "01-slow-detect", detect: "sleep 5" },
     { id: "02-slow-check", check: "sleep 5" },
     { id: "03-slow-migrate", migrate: "sleep 5" },
   ])
-  const slow = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, blockLimitMs: 1_500 })
+  const recorder = createMigrationRecorder({
+    context: "budget",
+    cases: [
+      { label: "01-slow-detect:detect", source: "sleep 5" },
+      { label: "02-slow-check:detect", source: "exit 0" },
+      { label: "03-slow-migrate:detect", source: "exit 0" },
+      { label: "02-slow-check:safety-check", source: "sleep 5" },
+      { label: "03-slow-migrate:safety-check", source: "exit 0" },
+      { label: "03-slow-migrate:migrate", source: "sleep 5" },
+    ],
+    diagnostic: (line) => t.diagnostic(line),
+  })
+  t.after(() => { recorder.dispose(); recorder.publish() })
+  const recordedPendingMigrations = recorder.wrapPendingMigrations(pendingMigrations)
+  const slow = await recordedPendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, blockLimitMs: 1_500 })
   assert.deepEqual(slow, [
     { id: "01-slow-detect", state: "unchecked" },
     { id: "02-slow-check", state: "run", reason: "its Safety check did not finish in time" },

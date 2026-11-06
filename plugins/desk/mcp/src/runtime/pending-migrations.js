@@ -35,13 +35,14 @@
 // and imports nothing outside Node's built-ins, because the hooks run in
 // whatever Node the host puts first on PATH.
 
-import { readdirSync, readFileSync, statSync } from "node:fs"
-import { spawn as spawnChild, spawnSync } from "node:child_process"
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { execFile as execFileChild, spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
+import { removeWithRetry } from "../util/remove-retry.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
 // get this long. The Copilot hook has 5 s in all and the registry's boot
@@ -135,46 +136,135 @@ export function readMigrations(pluginRoot) {
 // prints only the localized "no installed distributions" sentence, which cannot be matched across languages, so a relay is also recognised by its path.
 const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
-export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
-  return new Promise((resolve) => {
+function windowsTaskkill() {
+  const root = ["systemroot", "windir"].map((name) => {
+    const key = Object.keys(process.env).find((candidate) => candidate.toLowerCase() === name)
+    return key === undefined ? "" : process.env[key].trim()
+  }).find((value) => path.win32.isAbsolute(value)) ?? "C:\\Windows"
+  return path.win32.join(root, "System32", "taskkill.exe")
+}
+
+export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, execFile = execFileChild, platform = process.platform, bash = resolveBash({ platform }) }) {
+  let temporary
+  let failure
+  return new Promise((resolve, reject) => {
     if (bash === null) {
       resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
       return
     }
-    // On Windows there are no process groups to kill; the block itself is killed.
     const posix = platform !== "win32"
-    const child = spawn(bash, ["-c", block], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    let command = block
+    if (!posix) {
+      // Native MSYS argument decoding can truncate long quoted source before Bash parses it.
+      temporary = mkdtempSync(path.join(os.tmpdir(), "desk-migration-"))
+      const source = path.join(temporary, "block.sh")
+      writeFileSync(source, block, { encoding: "utf8", mode: 0o600 })
+      command = `. ${shellQuote(source.replace(/\\/gu, "/"))}`
+    }
+    const child = spawn(bash, ["-c", command], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     let timedOut = false
+    let settled = false
+    let closed = false
+    let closeCode
+    let terminated = false
+    let helper
+    let terminationTimer
     const keep = (text, chunk) => (text.length < outputChars ? text + chunk : text)
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
     child.stdout.on("data", (chunk) => { stdout = keep(stdout, chunk) })
     child.stderr.on("data", (chunk) => { stderr = keep(stderr, chunk) })
-    const timer = setTimeout(() => {
-      timedOut = true
-      try {
-        process.kill(posix ? -child.pid : child.pid, "SIGKILL")
-      } catch {
-        // Already gone between the timer and its close event.
+    const detach = () => {
+      clearTimeout(timer)
+      clearTimeout(terminationTimer)
+      child.removeListener("error", onError)
+      child.removeListener("close", onClose)
+    }
+    const failTermination = (error) => {
+      if (settled) return
+      settled = true
+      detach()
+      // Releasing handles on this error path does not prove that the shell tree ended.
+      child.stdout.destroy()
+      child.stderr.destroy()
+      if (helper !== undefined) {
+        helper.kill("SIGKILL")
+        helper.stdout.destroy()
+        helper.stderr.destroy()
       }
-    }, Math.max(1, Math.floor(timeoutMs)))
-    child.once("error", () => {
-      clearTimeout(timer)
-      resolve({ status: null, stdout, stderr, timedOut: false, unavailable: true })
-    })
-    child.once("close", (code) => {
-      clearTimeout(timer)
+      reject(new Error(`Migration termination failed for PID ${child.pid}; tree cleanup UNQUALIFIED: ${error.message}`))
+    }
+    const complete = () => {
+      if (!closed || (timedOut && !posix && !terminated)) return
+      settled = true
+      detach()
       // A relay with a working distro runs the block for real: exit 0, or a non-zero exit that printed something, is a genuine result. A relay that
       // failed with nothing on stdout is treated as unavailable, even though a distro that has bash and a Detect that legitimately exits 1 with no
       // output looks the same. That ambiguity resolves toward the loud degraded state ("could not be checked") over a silent "not needed", because
       // a skipped migration nobody hears about is the worse failure. Desk never picks the relay itself (`resolveBash` returns null instead), so
       // this only matters when a caller injects one. Any other bash is judged by the relay's debug line alone.
-      const failed = !timedOut && code !== 0
+      const failed = !timedOut && closeCode !== 0
       const relay = failed && ((isWslRelay(bash) && stdout === "") || RELAY_FAILURE.test(`${stderr}\n${stdout}`))
-      resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: relay })
-    })
+      resolve({ status: timedOut ? null : closeCode, stdout, stderr, timedOut, unavailable: relay })
+    }
+    const onError = (error) => {
+      if (timedOut && !posix) {
+        failTermination(error)
+        return
+      }
+      settled = true
+      detach()
+      resolve({ status: null, stdout, stderr, timedOut: false, unavailable: true })
+    }
+    const onClose = (code) => {
+      closed = true
+      closeCode = code
+      complete()
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      if (posix) {
+        try {
+          process.kill(-child.pid, "SIGKILL")
+        } catch {
+          // Already gone between the timer and its close event.
+        }
+        return
+      }
+      // Kill the tree before its launcher: once the launcher dies, its shell loses that ancestry.
+      // This adds up to 1000 ms of terminal latency after the execution deadline, plus source cleanup.
+      terminationTimer = setTimeout(() => failTermination(new Error("tree operation or output close exceeded 1000 ms")), 1000)
+      try {
+        helper = execFile(windowsTaskkill(), ["/PID", String(child.pid), "/T", "/F"], {
+          timeout: 1000, killSignal: "SIGKILL", maxBuffer: 16_384, encoding: "utf8", windowsHide: true,
+        }, (error, _stdout, diagnostic) => {
+          if (settled) return
+          if (error !== null) {
+            failTermination(new Error(`${error.message}${diagnostic ? `: ${diagnostic}` : ""}`))
+            return
+          }
+          terminated = true
+          complete()
+        })
+        helper.stdin.end()
+      } catch (error) {
+        failTermination(error)
+      }
+    }, Math.max(1, Math.floor(timeoutMs)))
+    child.once("error", onError)
+    child.once("close", onClose)
+  }).catch((error) => {
+    failure = error
+    throw error
+  }).finally(() => {
+    try {
+      if (temporary !== undefined) removeWithRetry(temporary, { recursive: true, force: true })
+    } catch (error) {
+      if (failure !== undefined) throw new AggregateError([failure, error], "Migration execution and source cleanup both failed")
+      throw error
+    }
   })
 }
 

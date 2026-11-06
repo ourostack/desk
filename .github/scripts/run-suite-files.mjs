@@ -9,6 +9,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
 import { assignShards, loadDurations } from "./suite-shards.mjs"
+import { collectMigrationRecorder } from "./migration-recorder.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -84,6 +85,7 @@ const runFile = (file) => new Promise((resolve) => {
       exitCode: code, timedOut, ms: Date.now() - started,
       pass: count("pass"), fail: count("fail"), skipped: count("skipped"), failedTests: [...new Set(failed)],
       failures: failures(output, relativeFile),
+      ...(relativeFile === "runtime/pending_migrations.test.js" ? { migrationRecorder: collectMigrationRecorder(output, relativeFile) } : {}),
       stuck, tail: timedOut ? output.slice(-2500) : "",
       // A file that exits non-zero with no failing assertion (a native abort) leaves its reason only in the raw output.
       outputTail: code !== 0 && !timedOut ? output.slice(-4000) : "",
