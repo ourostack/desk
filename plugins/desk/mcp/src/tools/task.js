@@ -509,13 +509,13 @@ function stagingAllowed(filePath, spawnGit) {
 // response shape.
 // A failure carries `route_around` (#561, #623); `card` names a live card (`<track>/<slug>`), which the route commits
 // through task_update because the card guard refuses a hand commit of it. A commit that timed out but landed is `undefined`.
-function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = [], card = null) {
+function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = [], card = null, deskRoot = path.dirname(filePath)) {
   const dir = path.dirname(filePath)
   const paths = [path.basename(filePath), ...alsoRelative]
   const staged = stagePaths(dir, paths, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths, message, readback: "absent", card }) }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths, message, readback: "absent", card, deskRoot }) }
   const committed = commitPaths(dir, paths, message, spawnGit)
-  return committed.ok ? undefined : commitFailure({ root: dir, paths, message, committed, card })
+  return committed.ok ? undefined : commitFailure({ root: dir, paths, message, committed, card, deskRoot })
 }
 
 // The next step as `report_as` shows it: credential-like text redacted (the card's text is the agent's own, and the sentence
@@ -794,7 +794,7 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   await writeMarkdown(filePath, data, body)
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
-    commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit, [], `${track}/${slug}`)
+    commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit, [], `${track}/${slug}`, deskRoot)
     if (!commit) schedulePush({ root: deskRoot })
   }
   search?.noteChange(relPath(deskRoot, filePath))
@@ -1174,7 +1174,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   }
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
-  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON, route_around: conflictedCardRoute(filePath, track, slug) } : undefined
+  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`, deskRoot) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON, route_around: conflictedCardRoute(filePath, track, slug) } : undefined
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   if (stage && !commit) schedulePush({ root: deskRoot })
@@ -1302,7 +1302,7 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
   let publication
   try {
     publication = await prepareArchivedCardPublication({
-      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit,
+      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), deskRoot, file: archivedFile, before, spawnGit,
     })
     await publication.assertBefore()
   } catch (error) {
@@ -1524,7 +1524,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
     try {
-      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
+      prepared = await prepareArchiveState({ effectiveRoot, deskRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
       trackPlan = prepared.trackPlan
     } catch (error) {
       if (!relocated) throw error

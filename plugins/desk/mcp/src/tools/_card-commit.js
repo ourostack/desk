@@ -31,16 +31,16 @@ export function stagingAllowed(filePath, spawnGit) {
  * failure ever throws away the write: it comes back as the return value, which the caller attaches to its result
  * under `commit` only on failure. Undefined on success.
  */
-export function stageAndCommitFile(filePath, message, spawnGit) {
-  return stageAndCommitFiles(path.dirname(filePath), [path.basename(filePath)], message, spawnGit)
+export function stageAndCommitFile(filePath, message, spawnGit, deskRoot) {
+  return stageAndCommitFiles(path.dirname(filePath), [path.basename(filePath)], message, spawnGit, deskRoot)
 }
 
-/** `stageAndCommitFile` for several files in one folder (`names` relative to `dir`), in one commit. */
-export function stageAndCommitFiles(dir, names, message, spawnGit) {
+/** `stageAndCommitFile` for several files in one folder (`names` relative to `dir`), in one commit. `deskRoot` is the root a success schedules its push for; a route publishes exactly it. */
+export function stageAndCommitFiles(dir, names, message, spawnGit, deskRoot = dir) {
   const staged = stagePaths(dir, names, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: names, message, readback: "absent" }) }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: names, message, readback: "absent", deskRoot }) }
   const committed = commitPaths(dir, names, message, spawnGit)
-  return committed.ok ? undefined : commitFailure({ root: dir, paths: names, message, committed })
+  return committed.ok ? undefined : commitFailure({ root: dir, paths: names, message, committed, deskRoot })
 }
 
 /** The fixed commit message for a card: `improvement: <verb> <card file name>`; never any title text. `verb` is a short lowercase word. */

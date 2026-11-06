@@ -62,6 +62,15 @@ function unreadable() {
 }
 
 const subject = (root) => git(root, ["log", "-1", "--format=%s"]).trim()
+
+// R6 (0972 on #625): the route hands the push to Desk's worker with exactly the root a successful call schedules (deskRoot), never the
+// nested folder a card or lesson was committed from. The worker's lock and delivery state are keyed by that literal root, so any other
+// root would start a second worker for the same repository instead of taking its turn behind the first.
+function publishRoots(route) {
+  return route.steps.flatMap((step) => (Array.isArray(step.argv?.[0]) ? step.argv : step.argv ? [step.argv] : []))
+    .filter((argv) => argv.some((arg) => String(arg).endsWith("sync-push.js")))
+    .map((argv) => argv[argv.indexOf("--root") + 1])
+}
 const clean = (root, rel) => git(root, ["status", "--porcelain", "--", rel]) === ""
 
 // ── lesson_add (the case the operator hit) ─────────────────────────────────
@@ -88,6 +97,7 @@ test("lesson_add: a commit that timed out before landing is failed, not in effec
   assert.equal(result.commit.status, "failed")
   assertRoute(result.commit.route_around)
   assert.deepEqual(result.route_around, result.commit.route_around, "the route is at the top of the result too")
+  assert.deepEqual(publishRoots(result.route_around), [root])
   assert.deepEqual(pushes, [])
 })
 
@@ -163,6 +173,7 @@ for (const c of cases) {
     const result = await c.run(root, timedOutBeforeCommit, (opts) => pushes.push(opts))
     assert.equal(result.commit?.status, "failed")
     assertRoute(result.commit.route_around)
+    assert.deepEqual(publishRoots(result.commit.route_around), [root], "the route publishes the desk root a success would schedule")
     assert.equal(clean(root, c.rel), false, "the write is kept")
     assert.deepEqual(pushes, [])
   })
