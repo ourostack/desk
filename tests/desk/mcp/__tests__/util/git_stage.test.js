@@ -714,19 +714,30 @@ test("#632: the refused commit's capture finishes later on top of the other writ
   assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n")
 })
 
+// What the commit holds is exactly the selected entries, as the index holds them, and HEAD's own entries everywhere else; the shared index is untouched.
+const treeLine = (entry, at = entry.path) => `${entry.mode} blob ${entry.sha}\t${at}\n`
+
 test("#632: a desk in a subfolder of the repository commits its paths there, not at the repository's top", async () => {
   const top = await mkTempRepo()
   const desk = path.join(top, "desk")
   await fs.mkdir(desk)
   await fs.writeFile(path.join(desk, "a.txt"), "one\n")
-  git(top, ["add", "--", "desk/a.txt"])
+  await fs.writeFile(path.join(top, "top.txt"), "top\n")
+  git(top, ["add", "--", "desk/a.txt", "top.txt"])
   git(top, ["commit", "-q", "-m", "first"])
+  const outside = git(top, ["ls-tree", "HEAD", "--", "top.txt"])
   await fs.writeFile(path.join(desk, "a.txt"), "two\n")
   git(desk, ["add", "--", "a.txt"])
-  const result = commitIndexPaths(desk, ["a.txt"], indexEntries(desk, ["a.txt"], spawnSync), "save", spawnSync)
+  await fs.writeFile(path.join(desk, "b.txt"), "someone's staged selection\n")
+  git(desk, ["add", "--", "b.txt"])
+  const index = git(top, ["ls-files", "-s"])
+  const entries = indexEntries(desk, ["a.txt"], spawnSync)
+  const result = commitIndexPaths(desk, ["a.txt"], entries, "save", spawnSync)
   assert.equal(result.ok, true, result.stderr)
   assert.equal(git(top, ["show", "HEAD:desk/a.txt"]), "two\n")
-  assert.equal(git(top, ["ls-tree", "--name-only", "HEAD"]).trim(), "desk", "nothing lands at the repository's top")
+  assert.equal(git(top, ["ls-tree", "-r", "HEAD"]), `${treeLine(entries[0], "desk/a.txt")}${outside}`, "the selected entry lands under the desk with its mode and blob; nothing lands at the repository's top")
+  assert.equal(git(top, ["ls-files", "-s"]), index, "the shared index is as it was")
+  assert.deepEqual(git(top, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["desk/b.txt"], "the other staged selection stays staged and uncommitted")
 })
 
 async function docsChange(change) {
@@ -734,11 +745,14 @@ async function docsChange(change) {
   await fs.mkdir(path.join(root, "docs"))
   await fs.writeFile(path.join(root, "docs", "keep.txt"), "keep\n")
   await fs.writeFile(path.join(root, "docs", "old.txt"), "old\n")
-  git(root, ["add", "--", "docs"])
+  await fs.writeFile(path.join(root, "out.txt"), "outside\n")
+  git(root, ["add", "--", "docs", "out.txt"])
   git(root, ["commit", "-q", "-m", "first"])
   await fs.writeFile(path.join(root, "docs", "keep.txt"), "kept and edited\n")
   git(root, ["add", "--", "docs/keep.txt"])
   change(root)
+  await fs.writeFile(path.join(root, "staged.txt"), "someone's staged selection\n")
+  git(root, ["add", "--", "staged.txt"])
   return root
 }
 
@@ -748,9 +762,16 @@ for (const [label, change, leaves] of [
 ]) {
   test(`#632: a folder path with ${label} is committed as the index holds it: no leaf HEAD held under it survives`, async () => {
     const root = await docsChange(change)
-    const result = commitIndexPaths(root, ["docs"], indexEntries(root, ["docs"], spawnSync), "save", spawnSync)
+    const outside = git(root, ["ls-tree", "HEAD", "--", "out.txt"])
+    const index = git(root, ["ls-files", "-s"])
+    const entries = indexEntries(root, ["docs"], spawnSync)
+    assert.deepEqual(entries.map((entry) => entry.path), leaves)
+    const result = commitIndexPaths(root, ["docs"], entries, "save", spawnSync)
     assert.equal(result.ok, true, result.stderr)
-    assert.deepEqual(git(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n"), leaves)
+    assert.deepEqual(git(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n"), [...leaves, "out.txt"])
+    assert.equal(git(root, ["ls-tree", "-r", "HEAD"]), `${entries.map((entry) => treeLine(entry)).join("")}${outside}`, "each selected leaf with its mode and blob, and HEAD's entry outside the folder")
+    assert.equal(git(root, ["ls-files", "-s"]), index, "the shared index is as it was")
+    assert.deepEqual(git(root, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["staged.txt"], "the other staged selection stays staged and uncommitted")
   })
 }
 
