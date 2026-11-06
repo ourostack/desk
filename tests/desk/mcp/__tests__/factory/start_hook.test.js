@@ -48,7 +48,9 @@ test("the registry runs its checks in order: factory, then labels, then desk-hea
   assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })
 
-test("no line from any check means no output at all; lines join into exactly one Desk boot line", async () => {
+test("no line from any check means no output at all; lines join into exactly one Desk boot line", async (t) => {
+  // This asserts output semantics, not the registry budget; a frozen clock keeps a cold runner from spending the 300ms total before a check runs.
+  t.mock.method(performance, "now", () => 0)
   const order = []
   const silent = await runBootChecks({ ...quiet, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return { line: "   " } })] })
   assert.equal(silent, "")
@@ -56,6 +58,18 @@ test("no line from any check means no output at all; lines join into exactly one
   const spoken = await runBootChecks({ ...quiet, checks: [check("a", async () => ({ line: "first\nhalf" })), check("b", () => undefined), check("c", async () => ({ line: "second" }))] })
   assert.equal(spoken, "Desk boot pre-checks: first half; second")
   assert.equal(spoken.split("\n").length, 1)
+})
+
+test("an exhausted registry budget skips the checks it has no time for with total_budget", async (t) => {
+  let tick = 0
+  t.mock.method(performance, "now", () => (tick += 1000))
+  const order = []
+  const recorded = []
+  const out = await runBootChecks({ ...quiet, record: async (_env, skipped) => { recorded.push(skipped) }, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return {} })] })
+  assert.equal(out, "")
+  assert.ok(!order.includes("b"))
+  assert.equal(recorded.length, 1)
+  assert.ok(recorded[0].some((entry) => entry.id === "b" && entry.reason === "total_budget"))
 })
 
 test("repairs start detached after every check has run, and a repair that cannot start is ignored", async () => {
