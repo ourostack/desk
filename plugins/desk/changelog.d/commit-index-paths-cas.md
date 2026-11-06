@@ -2,7 +2,7 @@ Desk's commits from a temporary index, which `task_archive` and the desk tidy (`
 
 What changes for these commits:
 
-- They hold while a merge, cherry-pick, revert, rebase or sequencer operation is in progress, and commit nothing. Undoing a tidy with `git revert --no-commit` therefore needs `git revert --quit`, which keeps the reverted changes staged, before `desk_save`.
+- They hold while a merge, cherry-pick, revert, rebase or sequencer operation is in progress, and commit nothing. That includes the tidy migration's undo, which runs `desk_save` straight after `git revert --no-commit`: it now holds instead of committing. A revert that applied cleanly and was ended with `git revert --quit`, which keeps its changes staged, commits as before.
 - A pre-commit hook that changes what is staged holds the commit instead of committing what it changed.
 - The whole commit, hooks and reads included, has one 10-second budget, not 10 seconds for each Git call.
 - A branch update that is cut off, or a commit that landed before its post-commit hook failed or was cut off, is never read back as not committed: Desk reads back what the branch holds and answers `committed` or `unknown`, naming the commit it made. Nothing is ever repeated.

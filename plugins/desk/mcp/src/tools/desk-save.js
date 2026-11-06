@@ -162,7 +162,7 @@ async function writeFiles(checked) {
  * unstaged changes are staged here. A task card is never staged here, and it is accepted only as a staged pure rename (`R100`) or deletion, so a
  * card edit cannot ride through. The commit is limited to `paths`, so other staged work stays staged, and the message ends with the
  * `Desk-Tidy: true` trailer (added when missing) so reports count it as housekeeping. The same call commits the undo of a tidy after
- * `git revert --no-commit` and `git revert --quit`; while the revert is still in progress it holds and commits nothing (#632).
+ * `git revert --no-commit` once a revert that applied cleanly is ended with `git revert --quit`; while the revert is still in progress it holds and commits nothing (#632).
  *
  * Refuses (throws) any path that resolves outside the resolved --person
  * write prefix — a crew participant can commit only their own paths.
