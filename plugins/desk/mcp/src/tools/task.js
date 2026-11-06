@@ -862,15 +862,13 @@ async function archiveTrackPlan(trackFile, slug, status) {
   return after === before ? null : { file: trackFile, before, after }
 }
 
-// The route for an archive whose publication is pending or unknown: commit the move of exactly this task's folder (the
-// archived card is not a live card, and the guard lets a deleted live card through), publish, then reconcile with task_archive.
+// The route for an archive whose publication is pending or unknown when no captured commit travels with it (R2): Desk holds
+// no proof of the move's exact entries, so the route reads the move of exactly this task's folder and stops; it never commits it.
 function archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication }) {
-  const route = commitRoute({
+  return commitRoute({
     root: deskRoot, paths: [relPath(deskRoot, srcDir), relPath(deskRoot, archiveDir)], message: `task_archive: ${track}/${slug}`,
     readback: publication.status === "unknown" ? "unknown" : "absent",
   })
-  if (!route.held) route.steps.push({ step: `Call task_archive for ${track}/${slug} again: it finds the published move and finishes the track row and report link without moving anything.`, tool: "task_archive", arguments: { track, slug } })
-  return route
 }
 
 // The commit's own status travels as it is (R5): a commit Desk cannot classify stays `unknown` in the commit and the
