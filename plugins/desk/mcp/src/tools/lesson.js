@@ -29,6 +29,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
+import { commitFailureWords, heldFileRouteFor } from "../util/route-around.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { installedPlugins } from "./lesson-owners.js"
@@ -115,11 +116,12 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     const names = changes.map(([changed]) => path.basename(changed))
     const stage = git && names.length > 0 && !hasUnstagedWork(path.dirname(file), names, spawnGit)
     // The same lesson again (same words, same day) changes nothing: it is as committed as the files already are.
-    if (changes.length === 0) return { ...outcome, git, committed: git && !hasUnstagedWork(path.dirname(file), [path.basename(file), SHELF_FILE], spawnGit), commit: undefined, held: [where, shelfWhere] }
+    const message = `lesson_add: personal ${slugify(topic)}`
+    if (changes.length === 0) return { ...outcome, git, committed: git && !hasUnstagedWork(path.dirname(file), [path.basename(file), SHELF_FILE], spawnGit), commit: undefined, held: [where, shelfWhere], heldNames: [path.basename(file), SHELF_FILE], line, message }
     for (const [changed, , after] of changes) await fs.writeFile(changed, after, "utf8")
-    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, `lesson_add: personal ${slugify(topic)}`, spawnGit) : undefined
+    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, message, spawnGit, deskRoot) : undefined
     const changed = changes.map(([each]) => deskRelativePath(deskRoot, each))
-    return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed }
+    return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed, heldNames: names, line, message }
   })
   if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
   const changed = written.changed ?? []
@@ -127,8 +129,22 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   for (const each of changed) search?.noteChange(each)
   const unloaded = notLoaded(await personOf({ deskRoot, env, now: now ?? Date.now() }), prefix)
   const home = written.tier === "shelf" ? shelfWhere : where
-  const uncommitted = written.git && !written.committed
-    ? `it is not committed (${written.commit === undefined ? `${written.held.join(" or ")} already held changes from elsewhere, so Desk left it for you to commit` : `the commit failed: ${written.commit.reason}`}), so other machines do not have it`
+  // A commit Desk cannot read back is unknown in the words and the fields alike (R5): never "not committed", never a false
+  // `in_effect` that claims absence.
+  const unknownCommit = written.commit?.status === "unknown"
+  const uncommitted = written.git && !written.committed && !unknownCommit
+    ? `it is not committed (${written.commit === undefined ? `${written.held.join(" or ")} already held changes from elsewhere, so Desk left it for you to commit without them; route_around says how` : commitFailureWords(written.commit)}), so other machines do not have it`
+    : null
+  const unconfirmed = unknownCommit ? `${commitFailureWords(written.commit)}, so it may not have reached other machines` : null
+  // Every lesson that is not committed carries the way to finish it (#561, #623): the commit's own route, or, for a file
+  // that already held another session's edit, reads only, then desk_save once the files hold nothing but this lesson's whole
+  // change: the line, where it went, and any older lessons it moved to the shelf, a new shelf file included (R1, R7).
+  const movedTopics = written.moved.map((moved) => moved.topic)
+  const routeAround = written.git && !written.committed
+    ? written.commit?.route_around ?? heldFileRouteFor({
+      dir: path.dirname(file), names: written.heldNames, message: written.message, deskRoot,
+      change: `the lesson line ${JSON.stringify(written.line)} ${written.tier === "shelf" ? `on ${SHELF_FILE}` : `in ${path.basename(file)}`}${movedTopics.length > 0 ? `, and the older ${movedTopics.length === 1 ? "lesson" : "lessons"} on ${topicList(movedTopics, MESSAGE_TOPIC_CHARS)} moved from ${path.basename(file)} to ${SHELF_FILE}` : ""}`,
+    })
     : null
   const problems = [uncommitted, unloaded].filter((problem) => problem !== null)
   const topics = written.moved.map((moved) => moved.topic)
@@ -141,13 +157,16 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     scope: "personal",
     path: home,
     tier: written.tier,
-    in_effect: problems.length === 0,
-    message: problems.length === 0
-      ? `In effect: the lesson is in ${loads}.${shelvedNote}`
-      : `Written to ${home}, but not in effect: ${problems.join("; and ")}.${shelvedNote}`,
+    in_effect: problems.length > 0 ? false : unconfirmed === null ? true : null,
+    message: problems.length > 0
+      ? `Written to ${home}, but not in effect: ${[...problems, ...(unconfirmed === null ? [] : [unconfirmed])].join("; and ")}.${shelvedNote}`
+      : unconfirmed === null
+        ? `In effect: the lesson is in ${loads}.${shelvedNote}`
+        : `Written to ${home}; whether it is in effect is unknown: ${unconfirmed}.${shelvedNote}`,
   }
   if (topics.length > 0) result.shelved = { path: shelfWhere, topics }
   if (written.commit !== undefined) result.commit = written.commit
+  if (routeAround !== null) result.route_around = routeAround
   return result
 }
 
