@@ -348,3 +348,20 @@ test("the command line prints JSON and exits 0 done, 3 ready, 4 held, 5 unknown,
   assert.equal(run(["--bogus", "x"]).code, 2)
   assert.equal(run(["--root", root, "--branch", "main", "--before", "", "--message", "m"]).code, 4, "no captured change: held")
 })
+
+test("the command line answers unknown, exit 5, and changes nothing when the finish itself throws before it can commit", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const args = ["--root", root, "--branch", committed.capture.branch, "--before", committed.capture.before, "--message", "save notes", "--path", "notes.md", ...committed.capture.expected.flatMap((line) => ["--entry", line])]
+  const before = snapshot(root, ["notes.md"])
+  // The private index lives under the temporary folder; one that does not exist makes the finish throw before any dispatch.
+  const missing = path.join(root, "no-such-tmp")
+  const script = path.resolve(import.meta.dirname, "../../../../../plugins/desk/mcp/scripts/finish-commit.js")
+  const cli = spawnSync(process.execPath, [script, ...args, "--commit"], { encoding: "utf8", env: { ...env, TMPDIR: missing, TMP: missing, TEMP: missing } })
+  assert.equal(cli.status, 5, cli.stderr)
+  const answer = JSON.parse(cli.stdout)
+  assert.equal(answer.state, "unknown")
+  assert.match(answer.reason, /ENOENT/)
+  assert.deepEqual(snapshot(root, ["notes.md"]), before, "HEAD, index and working tree are as they were")
+})
