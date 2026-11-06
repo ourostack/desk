@@ -61,13 +61,13 @@ function stagingAllowed(filePath, spawnGit) {
 // function's return value, which a caller attaches to its result under
 // `commit` only on failure, so a normal, silent success stays byte-identical
 // to today's response shape.
-function stageAndCommitTrackCard(filePath, message, spawnGit) {
+function stageAndCommitTrackCard(filePath, message, spawnGit, deskRoot) {
   const dir = path.dirname(filePath)
   const basename = path.basename(filePath)
   const staged = stagePaths(dir, [basename], spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: [basename], message, readback: "absent" }) }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: [basename], message, readback: "absent", deskRoot }) }
   const committed = commitPaths(dir, [basename], message, spawnGit)
-  return committed.ok ? undefined : commitFailure({ root: dir, paths: [basename], message, committed })
+  return committed.ok ? undefined : commitFailure({ root: dir, paths: [basename], message, committed, deskRoot })
 }
 
 /**
@@ -151,7 +151,7 @@ export async function track_create({ deskRoot, input, person = null, search, spa
   await writeMarkdown(filePath, data, values.body ?? "")
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
-    commit = stageAndCommitTrackCard(filePath, `track_create: ${slug}`, spawnGit)
+    commit = stageAndCommitTrackCard(filePath, `track_create: ${slug}`, spawnGit, deskRoot)
     if (!commit) schedulePush({ root: deskRoot })
   }
   search?.noteChange(relPath(deskRoot, filePath))
@@ -234,7 +234,7 @@ export async function track_update({ deskRoot, input, person = null, search, spa
 
   const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
-  const commit = stage ? stageAndCommitTrackCard(filePath, `track_update: ${slug}`, spawnGit) : undefined
+  const commit = stage ? stageAndCommitTrackCard(filePath, `track_update: ${slug}`, spawnGit, deskRoot) : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
   search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
