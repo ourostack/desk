@@ -1,0 +1,5 @@
+Session-start sync now permits only fast-forwards, with rebase and autostash disabled. Startup and background push preserve existing Git operations, pending edits and autostashes instead of aborting or resetting over them. Exact-path untracked quarantine remains available after a known refusal with unchanged branch, HEAD and index; partial failures report the paths already moved.
+
+Background push distinguishes confirmed rejection from authentication, network and unknown outcomes, and never rewrites the source or replays an uncertain push. Unknown outgoing effects remain visible for source/remote readback before retry. This is a safety fix for [#396](https://github.com/ourostack/desk/issues/396), not complete tracked-history conflict recovery.
+
+Outcome reservation and settlement now compare the attempt's own ID under an exclusive status lock. Lock contention cannot authorize an unlocked safety write, a successful push cannot erase incoming uncertainty, and boot timeouts or missing results report unverified effects.

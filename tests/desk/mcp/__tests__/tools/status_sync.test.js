@@ -109,6 +109,37 @@ test("desk_status treats a blocked status with no reason or paths recorded as bl
   assert.deepEqual(body.sync, { blocked: true, reason: null, paths: [] })
 })
 
+test("desk_status preserves an unknown outgoing effect even when local history is up to date", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, { blocked: true, reason: "push_failed", cause: "deadline", paths: [],
+    effects: { push: "unknown" }, cleanup: { state: "not_attempted", reason: "preserve_pending_work" } })
+  const body = await desk_status({ deskRoot: cloneA, env })
+  assert.equal(body.sync.blocked, true)
+  assert.deepEqual(body.sync.effects, { push: "unknown" })
+  assert.equal(body.sync.cause, "deadline")
+  assert.equal(body.sync.cleanup.state, "not_attempted")
+})
+
+test("removing a remote does not hide an earlier unknown push outcome", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, { blocked: true, reason: "push_failed", effects: { push: "unknown" } })
+  git(cloneA, ["remote", "remove", "origin"])
+  const body = await desk_status({ deskRoot: cloneA, env })
+  assert.equal(body.sync.effects?.push, "unknown")
+  assert.equal(body.sync.blocked, true)
+})
+
+test("desk_status reports an unreadable outcome instead of treating it as empty history", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, {})
+  const file = syncStatusPath({ root: cloneA, env })
+  await fs.writeFile(file, "{broken outcome\n")
+  const body = await desk_status({ deskRoot: cloneA, env })
+  assert.equal(body.sync.blocked, true)
+  assert.equal(body.sync.reason, "sync_status_unavailable")
+  assert.equal(await fs.readFile(file, "utf8"), "{broken outcome\n")
+})
+
 test("off-thread DB inspection preserves a recorded failed pull even when local counts are clean", async () => {
   const { cloneA } = await mkOriginWithClone()
   const lastPull = { state: "unresolved", at: new Date().toISOString(), cause: "merge_conflict", message: "fixture conflict" }
@@ -179,4 +210,3 @@ test("the close wait for a desk_status call that never settles ends in an error"
   // Once the call has settled, the next wait for the same run resolves.
   await waitForStatusInspection(run.signal, { callSettleMs: 50 })
 })
-

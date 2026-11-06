@@ -20,6 +20,14 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
+## Cooperative custody for `desk_save`
+
+`desk_save` holds the existing exact repository/branch/worktree claim before writing supplied `files` or staging `paths`, including `tidy`, through commit and local commit readback. A held claim refuses another cooperating caller without waiting or touching its source files or index. Internal nested calls reuse an explicit, same-owner capability that expires when its outer call settles; tool arguments cannot supply it. [Claim implementation](src/runtime/workspace-claim.js), [write boundary](src/runtime/workspace-write.js), [handler](src/tools/desk-save.js).
+
+An admitted session rechecks its branch and write authority under that claim. Without an explicit state branch, the session keeps the named branch observed at admission; `origin/HEAD` does not choose a different branch for it. Detached HEAD, later branch drift, uncertain Git metadata and inherited Git location overrides refuse before file mutation. Positively non-Git folders keep their existing file-write behavior. Card, person-prefix, symlink and commit-hook checks still apply. [Session gate](src/runtime/desk-session.js), [branch rules](src/runtime/state-branch.js), [write boundary](src/runtime/workspace-write.js).
+
+This custody covers `desk_save`, including direct server and handler calls, not every Desk tool, CLI, background sync or external editor. It does not authorize automatic tracked-history recovery. Commit failure can leave supplied bytes pending; a changed or unreadable claim is retained for owner reconciliation rather than stolen on age. Read back the source and Git outcome before retrying an uncertain call. Background push stays asynchronous and is not delivery proof. [Handler](src/tools/desk-save.js), [claim release](src/runtime/workspace-claim.js).
+
 ## Validated local recovery after a confirmed transport mismatch
 
 Use this command only after the agent has confirmed a requested/actual desk mismatch, refused the misrouted mutation, and established the intended existing desk. A missing-card error alone is not a mismatch. Permission, validation, containment and genuinely missing-card refusals remain refusals; this command is not an override or a machine-binding repair. [Issue #301](https://github.com/ourostack/desk/issues/301) records a motivating observed mismatch, not a selection bug fixed by this transport.

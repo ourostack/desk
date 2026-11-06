@@ -1065,30 +1065,29 @@ function movedPathsInstruction(sync, root) {
   return `Sync moved ${moved.length === 1 ? "1 untracked file" : `${moved.length} untracked files`} that the pull would have overwritten, under ${root.path}: ${pairs.join("; ")}. Another session may own them: tell the operator in one line, and leave them for their owner to restore.`
 }
 
-// What a failed sync means for the agent, by why it failed. A conflict or an unknown failure sends the agent to
-// `git status`; an unreachable or refusing origin must not, because `git status` then reads clean and the
-// degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
+// An unresolved result cannot authorize destructive replay or establish a clean source from an unavailable remote.
 function syncInstruction(sync, root) {
   if (sync?.state !== "unresolved") return null
   const where = sync.remote ? `origin ${sync.remote}` : "origin"
   const why = sync.error ? ` (${sync.error})` : ""
+  const readback = "Read back the source and retained remote outcome before retrying this sync. Do not rebase, autostash, reset or abort shared work as an automatic retry."
   if (sync.cause === "unreachable") {
-    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
+    return `The desk could not verify sync: ${where} is unreachable${why}. Work continues on local state; report the unresolved outcome. Local Git status does not establish remote delivery. ${readback}`
   }
   if (sync.cause === "auth_failed") {
-    return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
+    return `The desk could not verify sync: ${where} refused this host's credentials${why}. Verify the existing sign-in/account route without switching identities to bypass the denial. ${readback}`
   }
   if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
-    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
+    return `Sync did not produce a verified result before the deadline${where === "origin" ? "" : ` with ${where}`}. An expired wait does not establish whether effects occurred. ${readback}`
   }
   if (sync.cause === "deadline") {
-    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
+    return `The desk sync ran out of time before verification finished. Work continues on local state; its effects remain unverified. ${readback}`
   }
   if (sync.cause === "diverged") {
-    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
+    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Inspect \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\` without changing either history. Tracked-history recovery remains unresolved. ${readback}`
   }
   const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-  return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
+  return `The desk's Git sync is unresolved${paths}. Inspect \`git status\` in ${root.path}; leave retained operations and pending bytes untouched while checking their recorded owner and outcome. ${readback}`
 }
 
 // A push route worth telling the agent about: no account can deliver, the route goes through a fork, or the only
@@ -1291,8 +1290,10 @@ const CLOSING_RULES = "In every reply: if the next step needs something that is 
 
 // What the reply must open with when the sync did not go cleanly, from the sync summary's own words (never a placeholder): a failed sync, or a pull that worked but left the desk's uncommitted changes in conflict.
 function syncOpening(summary) {
-  const failed = /^sync failed: (.+?); nothing was pulled or pushed;/u.exec(summary)
+  const failed = /^sync (?:failed|unresolved): (.+?); (?:nothing was pulled or pushed|incoming update was not applied|source\/remote effects are unverified);/u.exec(summary)
   if (failed !== null) return { say: `Desk could not sync with origin (${failed[1]}); working from local state`, lead: "Desk could not sync" }
+  const paused = /^sync paused before pulling \((.+?)\);/u.exec(summary)
+  if (paused !== null) return { say: `Desk did not attempt incoming sync (${paused[1]}); retained work needs inspection before retry`, lead: "Desk paused sync" }
   const conflict = /^sync: the pull succeeded, but (.+)$/u.exec(summary)
   if (conflict !== null) return { say: `Desk pulled from origin, but ${conflict[1]}`, lead: "Desk pulled but could not finish syncing" }
   return null
@@ -1464,9 +1465,12 @@ export async function bootOnce({
     const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env }), syncBudgetMs, { timedOut: true })
     if (synced.timedOut === true) {
       syncTimedOut = true
+      sync = { state: "unresolved", reason: "boot_sync_wait_expired", cause: "deadline", effects: { pull: "unknown" } }
       pending.push("sync: boot_budget_exceeded")
-    } else sync = synced
+    } else if (["synced", "quarantined", "unresolved", "skipped"].includes(synced.state)) sync = synced
+    else sync = { state: "unresolved", reason: "boot_sync_result_unavailable", cause: "other", effects: { pull: "unknown" } }
   } catch (error) {
+    sync = { state: "unresolved", reason: "boot_sync_result_unavailable", cause: "other", effects: { pull: "unknown" } }
     degraded.push(`sync: ${error.message}`)
   }
 

@@ -34,6 +34,7 @@ const LAST_PULL_TTL_MS = 24 * 60 * 60 * 1000
  */
 export function pullStillFailing({ lastPull, lastPushAt = null, fetchedAt = null, now = Date.now() }) {
   if (lastPull?.state !== "unresolved") return false
+  if (lastPull.effects?.pull === "unknown") return true
   const failedAt = Date.parse(lastPull.at)
   if (Number.isNaN(failedAt) || now - failedAt > LAST_PULL_TTL_MS) return false
   // A fetch proves reachability only, so it clears only a failure caused by reachability; a conflict, a divergence or an

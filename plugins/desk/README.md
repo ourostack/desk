@@ -120,6 +120,14 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - checkpoint-type annotations on each transition (GATE / CHECKPOINT / AUTO / CONFIRM / NOTIFY)
 - session start / resumption / archival workflow
 
+### synchronization safety
+
+Session-start sync permits only fast-forwards and explicitly disables rebase and autostash. A retained Git operation or unmerged index leaves sync unresolved without source cleanup. After a known untracked-file refusal, Desk can still move only the named untracked paths into `_cache/` and retry a fast-forward when the branch, HEAD and index are unchanged; partial quarantine failures report every path already moved.
+
+Background push never rebases, resets or aborts the source after a failed push. It distinguishes confirmed rejection from authentication, network and unknown outcomes. An unknown outgoing effect requires actual source/remote readback before another push; an empty unmerged index or a later startup does not establish recovery. Automatic tracked-history reconciliation remains unresolved.
+
+Incoming and outgoing attempts reserve and settle their own IDs under the outcome lock. A busy or unreadable outcome refuses safety dispatch instead of falling back to an unlocked write, and pushing never erases an incoming outcome. Boot reports unverified effects when it stops waiting or receives no recognized result.
+
 ### the card guard
 Desk installs a git `pre-commit` hook in the desk (marker line `# desk-card-commit-guard`) that refuses a hand `git commit` adding or modifying a live task card; cards are written with `task_update`, `task_create`, `task_move` and `task_archive`, which commit for you. It passes while a merge, cherry-pick or revert is in progress and for a card whose frontmatter does not parse. A hook that was already there is kept as `pre-commit.desk-chained` and runs after the check; a `core.hooksPath` that holds tracked files is never modified (boot says so and gives the manual remedy).
 
