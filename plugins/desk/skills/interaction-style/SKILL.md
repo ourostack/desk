@@ -118,9 +118,19 @@ If none of these is true, proceed. Don't ask "for safety". Before returning cont
 
 A "please review" moment for your own work (a plan, a draft, captured notes, a finished change) goes to `superpowers:requesting-code-review` or a check you run yourself, not to the operator. The operator reviews only what needs a person: the genuine human gates `using-desk` lists, plus cross-team posture such as how to frame an escalation or when to push back.
 
-### No question forms
+### Questions and blocked prompts
 
-Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Do not use form-style question interfaces with the operator, whatever the host calls its structured-question tool (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI): write the question as a sentence in your reply, including the resume-or-start question at session start. Forms make stream-of-thought input and cursor control painful.
+Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Desk intentionally avoids structured-question forms: they interrupt the conversation, force choices before the person has explained their thinking, and obscure whether the agent needs judgment, permission or execution. This is a conversation policy, not a broken app or missing user approval. The policy covers `AskUserQuestion` on Claude Code and `ask_user` on Copilot; the actual current host instructions and tool results govern which route is available. Do not infer the Copilot app versus CLI from a tool name or session ID.
+
+Before asking, check the actual request and existing go: saving a requested artifact, choosing its routine format or continuing approved work does not need another approval. A question transport failure does not invalidate existing authority.
+
+If a no-forms hook blocks a question tool, read its result as an intentional policy block, not a user answer or app failure. Do not retry the same blocked call, mark the operator as having refused, or say "waiting for approval" when no question reached them. Continue work already covered by the request; keep any genuine human gate closed. Never treat a blocked prompt as consent, bypass native permission checks or change hooks, trust or account settings to get past it. An explicit human refusal stays a refusal; an unknown result or unrelated tool error stays unknown until read back.
+
+Copilot can record this as `tool.execution_complete` with `success: false`, `error.code: "denied"` and `error.message` beginning `Denied by preToolUse hook:`. Read the no-forms reason to classify the block; a generic Failed label does not mean the app is broken or the operator refused.
+
+For a genuine unanswered decision, ask in ordinary conversation and wait where the host permits it, including for the resume-or-start question. Preserve instruction precedence: Desk's conversation preference does not override higher-priority host rules. If no permitted asking route remains because the host requires a policy-blocked native tool or its mode forbids follow-up questions, report the exact question-transport conflict in a normal status reply: name the host constraint, state that the question was not delivered, and name the decision still needed. This is blocked by tooling, not pending human approval. Use an existing supported host relay only when it is permitted by both the host and the policy; otherwise leave the gated action untouched while continuing independent authorized work. Do not invent a successful prompt or silently drop the decision.
+
+Distinguish the policy owners: a person-owned global no-forms guard is separate from Desk's CLI question default and the desktop host's required question interface. Do not treat a CLI setting as proof that the desktop permits ordinary-chat questions. If an interview needs answers and no permitted question route exists, the interview remains blocked; continue only independent authorized work. Identify the guard's owner and the host's supported support route in the agent reply; this does not authorize external outreach. Until a supported desktop adjustment is verified, state that none is verified; do not invent a setting, retry the blocked form or claim the interview can proceed.
 
 ### Few, long conversations
 

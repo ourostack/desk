@@ -9,7 +9,7 @@ A Desk mechanism just failed at its own job. This skill turns that into the stan
 
 ## The block format
 
-Every migrated mechanism emits the same five-field block, in this order, whenever it cannot complete its job the normal way — after it has already tried the deterministic fix:
+Retain the same five-field block in diagnostic evidence when a mechanism cannot complete normally, after its safe recovery attempt. Routine background work and verified recovery stay quiet; surface unresolved failures, unknown effects and consequential changes once.
 
 ```
 Desk problem: <mechanism> — <short symptom>
@@ -20,27 +20,32 @@ Desk problem: <mechanism> — <short symptom>
   tell: <one line, ready to relay to the operator verbatim>
 ```
 
-Worked example, from a real incident:
+Illustrative recovered search:
 
 ```
-Desk problem: session-sync — git pull --rebase failed
-  broke: `git pull --rebase --quiet origin main` exited 1: "cannot pull with rebase: Your index contains uncommitted changes."
-  means: two staged files from another session are blocking this desk's sync; it hasn't pulled in this session.
-  fix: left the other session's staged paths untouched; read the local task and continued independent work without retrying a conflicting write.
-  file: https://github.com/ourostack/desk/issues/123 — filed (no existing fingerprint match)
-  tell: Sync is blocked by another session's staged files. I preserved them and continued the task using local state; sync remains unhealthy. Filed ourostack/desk#123.
+Desk problem: search-index — warm index transaction failed
+  broke: SQLITE_IOERR while refreshing the in-memory index.
+  means: indexed search failed; the authorized source files remain readable.
+  fix: the search engine executed directLexicalSearch and returned the fresh matching file; a later indexed query verified restoration.
+  file: not filed: illustrative example
+  tell: Search recovered through current files; indexed search was subsequently verified.
 ```
 
 ## The procedure
 
 1. **Recognize.** A Desk mechanism failed to do its designed job — not the operator's task. If this is a bug in the code the operator asked for help with, or a failing test in their project, this skill does not apply. It does not apply either when Desk reports a state it did not cause and repairs it as designed, such as a checkout someone moved off its branch that `desk_doctor` switched back: that is the mechanism working (`friction-management` says how to tell whose state it is).
-2. **Bounded operational recovery.** For a mutation with partial or unknown effects, read back its actual files, commit and push state before considering a retry; an error or timeout does not establish no effect. Classify confirmed applied, confirmed absent or unknown; preserve pending pushes and uncertainty. Retry only when safe under the destination's duplicate-suppression or confirmed-absence semantics. Use an already-known repair within this task's authority, never move or unstage another writer's files, and never bypass an actually refused protected mutation. If it resolves the fault, report exactly what readback established.
-3. **Continue the task, not a maintenance project.** When safe operational recovery is unavailable, use available authorized tools or transports for the supplied task. A checker, missing MCP, save failure or stale index does not revoke task authority. A fallback does not qualify or fix the failed helper. Record what could not be saved and where recoverable work remains; never invent a successful save or discard applied effects. Respect real authentication, source trust, protected writes, permission denials and conflicting writers; stop only the dependent operation and continue independent safe work. Do not spawn a repair child, take an improvement card, edit tooling source or open a repair PR unless that repair is explicitly in this task's scope. Preserve evidence for the existing repair owner.
-4. **Emit the block locally**, always, regardless of whether step 2 fully worked. This is what the operator sees and what the session transcript carries, independent of whether an issue gets filed.
-5. **Check for a known issue before filing.** This step and the next are what `fileDeskProblem` (`plugins/desk/mcp/src/factory/desk-problem-file.js`) does: it computes the failure fingerprint and searches `ourostack/desk` issues labeled `desk-problem` with `state: "all"` (not just open — a closed-as-shipped or closed-as-wontfix issue is still known, and refiling it is pure noise) for a body containing the matching fingerprint marker.
-6. **File, or mark known.** A match: `file:` says `known: <url>`, nothing new is filed. No match: `fileDeskProblem` opens a new issue via the public-safe template below, embedding the fingerprint marker; `file:` carries the new URL. A held cap, no suitable account, or `gh` unavailable are all `not filed: <reason>` — never a thrown error, and never a reason to hold up step 4's block.
-7. **Leave repair ownership distinct.** The loop can route a filed or known problem to an improvement card (`desk_problem:ourostack/desk#<n>`). Reporting the fault during an ordinary task does not assign that card to this agent or authorize source repair. A separately authorized repair owner follows `desk:curator`; do not duplicate another controller's work. Card closure and release remain separate from this task's completion. The card closes after 7 days quiet once released and the issue is closed: `closed_confirmed` when the known-hit reading is measured and shows no hit, `closed_unverified` otherwise.
-8. **Tell the operator**, once, in plain words — the `tell:` line, said in normal conversation, never a form-style prompt.
+2. **Own recovery without blocking startup.** Session entry has a 3000 ms foreground budget. Sync, migrations, index work, deep checks and recovery belong in the background, not a serial repair loop before the supplied task. When the runtime acknowledges a recovery worker, retain its operation identity and use its supported local status/readback rather than dispatch a replacement or wait for settlement. A queued request or elapsed timeout is not custody or recovery proof. If custody is unknown, inspect it without blindly restarting. Routine pending work is neither degradation nor synchronization.
+3. **Execute and verify the supported route.** Within existing authority, execute a known safe repair or trusted alternate that preserves the intended root, destination, identity and policy; naming a tool, discovering it or scheduling work is not recovery. Use the actual installed tool contract, never an invented CLI, raw handler, security downgrade or permission change. For a mutation with partial or unknown effects, read back its actual files, commit and push state before considering another dispatch; an error or timeout does not establish no effect. Classify confirmed applied, confirmed absent or unknown; preserve pending pushes and uncertainty. Retry only under duplicate-suppression or confirmed-absence semantics. Never move or unstage another writer's files or retry a protected refusal through a different route. For sync, verify incoming graph, outgoing delivery, local source and required bytes separately against the captured destination; a fetch or push alone is not synchronization.
+4. **Keep the task and recovery distinct.** A checker, missing MCP, save failure or stale index does not revoke task authority. Continue independent authorized work while the recovery owner works; that progress is not proof of recovery, a successful save or current source. If no permitted recovery route exists, name the actual barrier and unresolved dependent operation. User-only authentication and conflicting writers cannot be guaranteed away. Preserve root/admission, source trust, authentication and protected-write gates on affected operations. Do not spawn a repair child, take an improvement card, edit tooling source or open a repair PR unless repair is explicitly in scope. Preserve evidence for the existing repair owner.
+5. **Retain the block locally**, regardless of recovery outcome, independent of issue filing. Keep routine verified recovery out of the first reply.
+6. **Check for a known issue before filing.** This step and the next are what `fileDeskProblem` (`plugins/desk/mcp/src/factory/desk-problem-file.js`) does: it computes the failure fingerprint and searches `ourostack/desk` issues labeled `desk-problem` with `state: "all"` (not just open — a closed-as-shipped or closed-as-wontfix issue is still known, and refiling it is pure noise) for a body containing the matching fingerprint marker.
+7. **File, or mark known.** A match: `file:` says `known: <url>`, nothing new is filed. No match: `fileDeskProblem` opens a new issue via the public-safe template below, embedding the fingerprint marker; `file:` carries the new URL. A held cap, no suitable account, or `gh` unavailable are all `not filed: <reason>` — never a thrown error, and never a reason to hold up the supplied task.
+8. **Leave repair ownership distinct.** The loop can route a filed or known problem to an improvement card (`desk_problem:ourostack/desk#<n>`). Reporting the fault during an ordinary task does not assign that card to this agent or authorize source repair. A separately authorized repair owner follows `desk:curator`; do not duplicate another controller's work. Card closure and release remain separate from this task's completion. The card closes after 7 days quiet once released and the issue is closed: `closed_confirmed` when the known-hit reading is measured and shows no hit, `closed_unverified` otherwise.
+9. **Tell the operator about unresolved or consequential outcomes**, once, in plain words, never a form-style prompt. Routine successful recovery needs no warning or health report.
+
+## Search recovery
+
+The engine routes supported exact-word and timeline requests through `directLexicalSearch` after classified in-memory index faults. It reads current files with the existing exclusions and tombstones; thread and meaning-based requests keep their own contracts. `searchStatus()` identifies `index_unavailable`, the actual lexical backend and the index error code. File results prove that request recovered, not that the index was repaired. A later successful indexed request establishes restoration. Filesystem, authorization, policy and unknown errors remain errors; do not turn an unreadable source into empty results.
 
 ## Confirmed desk mismatch: validated local recovery
 
