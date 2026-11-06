@@ -885,7 +885,7 @@ function archivePendingAnswer(path, publication, routeAround, commit = null) {
     commit: commit
       ? { status: commit.status, reason: commit.reason, ...(commit.landed ? { landed: commit.landed } : {}) }
       : { status: publication.status === "unknown" ? "unknown" : "failed", reason: publication.reason },
-    ...(routeAround ? { route_around: routeAround } : {}),
+    route_around: routeAround,
     next_action: "Keep the archived folder intact and do not repeat the directory move or the commit blind. Follow route_around, which reads back before anything changes, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
   }
 }
