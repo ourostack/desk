@@ -88,6 +88,7 @@ test("Superpowers context prints exact paths without introducing a second progre
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+      "Desk tools only help. When one fails, times out or refuses, finish the job another way, by its route_around when it gives one, keeping every guard that protects someone else's work; read back to prove it worked, then report the tool failure. A tool failure is never a reason to stop, put the work off or say it is not in effect.",
       "Capture visual proof as you go: whenever the work touches something a person sees (a screen, a setting before and after, an agent's reply, a refusal, an error, a result), save bounded screenshots, never secrets or private content, into your own folder `evidence/<brief name>/` beside your brief file, named after the brief file without its extension (or, when the brief is not a file, `evidence/<a short name for your assignment>/` in the task's desk folder), so children whose briefs share a folder never overwrite each other's files, and return an Evidence list beside Resources that names each file and what it shows, or says why nothing was visible. A brief's silence never waives this.",
     ],
     cleanupPaths: [],
@@ -548,7 +549,7 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule an
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
     assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
-    assert.equal(briefRules.length, 5)
+    assert.equal(briefRules.length, 6)
   }
 })
 
@@ -564,6 +565,22 @@ test("the brief a Superpowers mapping produces forbids task_signoff", async () =
     seedCanonicalFiles(moved)
     assert.equal((await resolve(moved)).briefRules[0], "Never call task_signoff.", "a task path the binder would not accept still carries the sign-off rule")
   }
+})
+
+// A child follows its brief, not the foundation, so the brief carries using-desk's "Desk tools only help" rule itself (#623).
+test("every mapped brief tells the child that Desk tools only help: finish another way, read back, report; never stop", async () => {
+  const { TOOLS_ONLY_HELP_RULE } = await import("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js")
+  for (const input of [context(), context({ person: null })]) {
+    const { briefRules } = await resolve(input)
+    assert.equal(briefRules.at(-2), TOOLS_ONLY_HELP_RULE, "just before the visual-proof rule, which stays last")
+  }
+  assert.match(TOOLS_ONLY_HELP_RULE, /^Desk tools only help\./u)
+  assert.match(TOOLS_ONLY_HELP_RULE, /fails, times out or refuses, finish the job another way/u)
+  assert.match(TOOLS_ONLY_HELP_RULE, /keeping every guard that protects someone else's work/u)
+  assert.match(TOOLS_ONLY_HELP_RULE, /read back to prove it worked, then report the tool failure/u)
+  assert.match(TOOLS_ONLY_HELP_RULE, /never a reason to stop/u)
+  const skill = readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/skills/using-superpowers-with-desk/SKILL.md", import.meta.url)), "utf8")
+  assert.ok(skill.includes("Desk tools only help"), "using-superpowers-with-desk tells the root to copy it into every brief")
 })
 
 // work-orchestration tells a root that writes its own brief to carry the same sentence, so the two must not drift.

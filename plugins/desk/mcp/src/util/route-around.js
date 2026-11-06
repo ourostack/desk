@@ -19,16 +19,16 @@ import { fileURLToPath } from "node:url"
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
 
 /** The argv that hands `root` to Desk's own push worker, which never forces, takes its turn behind a push already running and replays in a private worktree. */
-function publishArgv(root) {
+export function publishArgv(root) {
   return [process.execPath, SYNC_PUSH_SCRIPT, "--root", root, "--debounce-ms", "0"]
 }
 
-function readbacks(root, paths) {
+export function readbacks(root, paths) {
   return {
     committed_locally_when: { argv: ["git", "-C", root, "status", "--porcelain", "--", ...paths], expect: "prints nothing" },
     published_when: {
       argv: [["git", "-C", root, "fetch", "--quiet"], ["git", "-C", root, "diff", "--exit-code", "HEAD", "@{u}", "--", ...paths]],
-      expect: "both exit 0 and the second prints nothing; a desk with no remote has nothing to publish, and committed_locally_when is the whole proof",
+      expect: "both exit 0 and the second prints nothing. If the diff still shows the change, a push for this root may still be running (Desk waits a moment before it pushes): wait a few seconds, run the publish step again (it never forces) and read back again. A desk with no remote has nothing to publish, and committed_locally_when is the whole proof",
     },
   }
 }

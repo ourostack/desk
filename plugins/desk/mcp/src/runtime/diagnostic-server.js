@@ -1,5 +1,7 @@
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { startFrontDoor } from "./front-door.js"
+import { isHosted } from "./hosted.js"
+import { routedCallTool } from "../util/tool-route.js"
 
 // Tools that answer in diagnostic mode; every other tool is listed but gated.
 const diagnosticToolNames = ["desk_status", "desk_doctor"]
@@ -16,7 +18,11 @@ export function startDiagnosticServer({
     output,
     serverName: "desk-mcp-diagnostic",
     serverVersion,
-    callTool: ({ name, input: toolInput }) => diagnosticToolResult({ diagnostic, toolName: name, input: toolInput }),
+    // A gated tool's refusal carries route_around like any other Desk failure; this mode knows no desk root, so the route starts by finding it.
+    callTool: routedCallTool(
+      ({ name, input: toolInput }) => diagnosticToolResult({ diagnostic, toolName: name, input: toolInput }),
+      () => ({ root: null, person: null, stateBranch: null, hosted: isHosted(process.env) }),
+    ),
   }).closed
 }
 

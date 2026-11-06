@@ -19,7 +19,8 @@ import { validateAdmissionAuthority, verifyAdmissionAuthority } from "../activat
 import { createAdmission, exceptionOutcome } from "./admission.js"
 import { redactMachineText } from "./argv-safe-reason.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
-import { hostedRefusal } from "./hosted.js"
+import { hostedRefusal, isHosted } from "./hosted.js"
+import { routedCallTool } from "../util/tool-route.js"
 import { deskSkill } from "./skills.js"
 import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
@@ -880,7 +881,7 @@ export function createDeskSession(deps) {
     return degradedResult(name, {
       state: admission.snapshot().state,
       code: "tool_exception",
-      fix: `${name} failed unexpectedly (${message}). Desk is still serving; retry the call, and if it fails the same way call desk_doctor and report the message.`,
+      fix: `${name} failed unexpectedly (${message}). Desk is still serving. The call may have done part of its work, so do not repeat it blind: route_around reads back what happened and finishes the job another way. Then report the message.`,
       observed: { name: error instanceof Error ? error.name : "unknown", message },
     }, null)
   }
@@ -1144,7 +1145,13 @@ export function createDeskSession(deps) {
   return {
     admission,
     context,
-    callTool,
+    // Every answer leaves through here, so a refusal before the tool, the tool's own failure and an exception all carry route_around.
+    callTool: routedCallTool(callTool, () => ({
+      root: context.root?.root ?? null,
+      person: context.person ?? null,
+      stateBranch: context.stateBranchName ?? null,
+      hosted: isHosted(env),
+    })),
     recordException,
     start: () => {
       scheduleLeftoverRemoval()

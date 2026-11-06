@@ -43,7 +43,7 @@ Every factual claim to a human or an agent carries an inline link to its primary
 
 ## Own the stack
 
-Helper faults leave task authority intact. Preserve effects (`desk-problem`). Use bounded known repairs or approved source work, not unsolicited repair children or PRs; respect repair owners. Fallbacks do not qualify helpers. Keep identity, trust, permission denials, protected writes and conflicting writers.
+Desk tools only help; helper faults leave task authority intact. If one fails, times out or refuses, finish another way (`route_around`) keeping identity, trust, permission denials and others' work; read back (`desk-problem`), report it, never stop. Use bounded known repairs or approved source work, not unsolicited repair children or PRs; respect repair owners. Fallbacks do not qualify helpers.
 
 ## Engineering work
 

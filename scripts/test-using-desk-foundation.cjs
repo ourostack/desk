@@ -467,7 +467,12 @@ function main() {
     "`evidence-discipline` holds the procedure",
   ]);
 
+  // Desk tools only help (#623): a failed, timed-out or refused tool call is finished another way, read back and reported, never a reason to stop.
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
+    "Desk tools only help",
+    "If one fails, times out or refuses, finish another way (`route_around`)",
+    "keeping identity, trust, permission denials and others' work",
+    "read back (`desk-problem`), report it, never stop",
     "Helper faults leave task authority intact",
     "bounded known repairs or approved source work",
     "not unsolicited repair children or PRs",
