@@ -62,6 +62,20 @@ test("Claude validates the actual alpha declaration without injecting a legacy p
   assert.equal(validateActivationManifest(activation()).ok, true)
   assert.deepEqual(validateClaudePackagingContract(claude()), [])
 })
+test("qualified Superpowers 7.0.1 satisfies the maintained activation and Claude range", () => {
+  const input = claude()
+  input.activation.dependencies.find((entry) => entry.id === "superpowers").lock.version = "7.0.1"
+  input.superpowersPlugin.version = "7.0.1"
+  assert.equal(validateActivationManifest(input.activation).ok, true)
+  assert.deepEqual(validateClaudePackagingContract(input), [])
+})
+test("the qualified Superpowers range still rejects the next unqualified major", () => {
+  const value = activation()
+  value.dependencies.find((entry) => entry.id === "superpowers").lock.version = "8.0.0"
+  const result = validateActivationManifest(value)
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((error) => error.message === "locked dependency version does not satisfy version_range"))
+})
 test("Claude selected-provider mismatch adds its own diagnostic", () => {
   const input = claude()
   const baseline = validateClaudePackagingContract(input)

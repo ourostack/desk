@@ -16,11 +16,12 @@
 
 const INDEX_TRACE_TIMEOUT_MS = 1000
 
-function run(spawnGit, root, args) {
+function run(spawnGit, root, args, timeoutMs) {
   return spawnGit("git", ["-C", root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { windowsHide: true,
     encoding: "utf8",
-    timeout: INDEX_TRACE_TIMEOUT_MS,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    timeout: Math.max(1, Math.floor(Math.min(INDEX_TRACE_TIMEOUT_MS, timeoutMs))),
+    killSignal: "SIGKILL",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
   })
 }
 
@@ -32,10 +33,11 @@ function run(spawnGit, root, args) {
  * unknown "before" as empty — that would turn a merely-failed read into a
  * false positive naming every already-staged path as new.
  */
-export function snapshotStagedPaths({ root, spawnGit }) {
+export function snapshotStagedPaths({ root, spawnGit, timeoutMs = INDEX_TRACE_TIMEOUT_MS }) {
+  if (timeoutMs < 1) return null
   let result
   try {
-    result = run(spawnGit, root, ["diff", "--cached", "--name-only"])
+    result = run(spawnGit, root, ["diff", "--cached", "--name-only", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"], timeoutMs)
   } catch {
     return null
   }

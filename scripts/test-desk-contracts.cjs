@@ -486,6 +486,8 @@ contract("interaction-style maps host commands to their Desk owners", () => {
   for (const row of ["store_memory", "/plan", "/tasks", "/review", "/autopilot", "/init"]) assert.ok(body.includes(row), row);
   assert.match(body, /desk:using-superpowers-with-desk/u);
   assert.match(body, /superpowers:requesting-code-review/u);
+  assert.match(body, /`~\/\.copilot\/session-state\/<id>\/`[^\n]+\| the repository for code and docs; the desk for private work product\./u);
+  assert.match(body, /a new dot folder \(`~\/\.<name>`\)[^\n]+\| the operating system's standard app-data folder/u);
 });
 requires(
   "plugins/desk/skills/interaction-style/SKILL.md",
@@ -1379,6 +1381,9 @@ contract("resuming a named task continues its recorded next step, plans live in 
   assert.match(skill, /never into the desk root/u);
   assert.match(skill, /Choose the execution method[^.]*yourself[^.]*not a question for the operator/u);
   assert.match(skill, /`writing-plans` is a skill that writes a plan file\. It is not the host's Plan mode/u);
+  // Superpowers 7 brainstorming decides where files go without asking and defaults to the code repository; the
+  // operator's preference, which upstream says overrides it, is the iteration folder.
+  assert.match(skill, /A brainstorming design doc goes in the same iteration folder as `design\.md`[^.]*\(no `docs\/superpowers\/specs\/` there\)/u);
 });
 contract("every write to an existing task card goes through task_update", () => {
   const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
@@ -1614,7 +1619,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["work-orchestration", /A child brief bounds the work and leaves the method to the child; a handoff to a peer that owns its task is not a brief\. A handoff never tells that agent how to do its work[\s\S]+you do not know its state[\s\S]+Do not presume what it has done, where it stopped or what blocks it[\s\S]+what your own side changed and intends to touch, what was decided, where the edges are, what you would like from it, and how to reach you[\s\S]+No step lists, no commands\. Keep the message short and point to the task card/u, "Choosing and briefing agents"],
     ["work-orchestration", /A worker must not end its turn while any child it launched is still running\. An interim child notification[\s\S]+is not a terminal result[\s\S]+blocking on a foreground wait or monitor until each child returns a terminal result[\s\S]+which children are still running, what each owns[\s\S]+the exact next action on each result/u, "Waiting for children"],
     ["work-orchestration", /Before ending any turn, list the children still running\. If any exist, wait for them or do the recorded handoff/u, "Waiting for children"],
-    ["work-orchestration", /Near a usage limit, run fewer children in parallel\. Prefer one child per independent unit, and resume an existing child with its context rather than spawning a fresh one/u, "Waiting for children"],
+    ["work-orchestration", /Never cap pace, parallelism or the number of active lanes to save money, and never enforce a spending limit by parking work; priorities decide what runs\. A hard limit the host enforces, such as a quota or rate limit that would fail requests, is a separate case: when one is hit, switch to another account or provider where you can, rather than wait it out\. Switch only to an account or provider already authorized for the same task, repository and data, keeping the personal and work routing and the host's controls; a quota or rate error on its own never permits switching identity, tenant or credentials\. Where you can't, run fewer children in parallel near that limit so requests don't fail\. Prefer one child per independent unit, and resume an existing child with its context rather than spawning a fresh one/u, "Waiting for children"],
     ["work-orchestration", /If a repository will let you merge, merge when confident[\s\S]+does not by itself require their approval[\s\S]+unless the repository or platform itself enforces a human approval[\s\S]+exact reviewed head and status and resume after it[\s\S]+prepare the PR, wait for checks, review, merge, deploy, smoke, clean up, and never report completion while the PR remains open/u, "Merging and the terminal state"],
     ["work-orchestration", /invoke `factory-work` first\. Start from Lean[\s\S]+"Lean reading" section in every factory design and plan/u, "The factory itself"],
     ["factory-work", /Lean is the starting point for every question about the factory, not a lens applied when the operator asks/u],
@@ -1654,8 +1659,20 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["interaction-style", /Contacting people means outreach addressed to them on any channel, and a channel named in the exception \("via Teams", "by email"\) never narrows it/u],
     ["operator-voice-comments", /A recorded standing grant that names a kind of send in the operator's own words[\s\S]+is that approval for sends of that kind only[\s\S]+the voice tests and zero-context review below still run before a granted send/u],
     ["evidence-discipline", /Put the proof inline where the reader looks[\s\S]+not only as a link to an artifact/u],
+    ["evidence-discipline", /Every picture says what to notice\. Give each one a short caption: where to look, and what changed or what it proves[\s\S]+A picture without a "what to notice" caption isn't proof/u, "Visual proof"],
+    ["interaction-style", /Write the question in your message, with enough context for the operator to explore it, disagree or take it somewhere unexpected[\s\S]+Never call one, even where a hook blocks it/u],
+    ["interaction-style", /### An update is your last message\n\nWhen the operator asks for an update, the whole update is your last message[\s\S]+one message, with no tool calls after it, that covers all of their work in flight[\s\S]+If children you launched are still running, record the handoff/u],
+    ["work-orchestration", /\*\*Work smart, not hard\.\*\* Ambitious quality work needs no justification[\s\S]+don't loop on reruns or rounds of rewording, don't duplicate another lane's work, and stop work whose goal has been superseded/u, "Parallelize and fast-follow"],
+    ["work-orchestration", /A fleet steward[\s\S]+watches every session and every pull request, never a fixed list[\s\S]+one blocked on a recorded wait for children, CI or a poll is working, not hung\. Otherwise, busy but silent for an hour or more is hung[\s\S]+Idle for two hours or more without reporting done is stalled[\s\S]+every open pull request older than a day to merged, closed or a named owner/u, "Waiting for children"],
+    ["work-orchestration", /A child or another session going idle or sending a routine notification is not news[\s\S]+Never send "nothing new", "still quiet" or "X went idle" as an update/u, "Waiting for children"],
+    ["work-orchestration", /Spend less per piece of work, never by slowing the work\. Pick the cheapest model that does the job well, keep each context small[\s\S]+Never cap pace, parallelism or the number of active lanes to save money/u, "Waiting for children"],
+    ["work-orchestration", /Finished work merges\. Never leave a finished pull request sitting unmerged, in any repository/u, "Merging and the terminal state"],
+    ["content-routing", /## A move is finished when everyone can see it\n\nWhen you move, split or rename a repository, package or folder that other agents work in, the old home says what moved, where it went and the rule for new work, in its README and AGENTS\.md, in the same change[\s\S]+open an issue labelled `moved` in each old repository/u],
   ];
   const failures = [];
+  if (/Near a usage limit, run fewer children/u.test(text(skill("work-orchestration")))) {
+    failures.push("work-orchestration: a bare usage-limit slowdown contradicts never capping pace or parallelism to save money");
+  }
   for (const [name, pattern, heading] of rules) {
     let body = text(skill(name));
     if (heading) {

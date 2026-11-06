@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, mkdirSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
@@ -58,7 +58,7 @@ test("a new member joins: own desk pushed first, then the roster row merged; too
   assert.deepEqual(readCrewRoster(repo.clone).map((row) => row.alias), ["test-founder", "newbie"])
   assert.equal(onMain(repo.bare, "desks/newbie/AGENTS.md"), onMain(repo.bare, "desks/_template/AGENTS.md").replaceAll("{{alias}}", "newbie"))
   // The desk commit is on main before the roster commit: the row never points at a missing desk.
-  const log = git(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
+  const log = bareGit(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
   assert.deepEqual(log, ["Crew: add newbie to the roster (#12)", "Crew: add newbie's desk"])
   // Only the roster row went through the pull request.
   const created = calls.find((args) => args[0] === "pr" && args[1] === "create")
@@ -226,6 +226,6 @@ test("a join whose own-desk push is refused stops before the roster", async () =
   assert.equal(readCrewRoster(repo.clone).some((row) => row.alias === "newbie"), false)
   // Nothing half-done is left: the clone is back where it started, and nothing reached main.
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
-  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), git(repo.bare, ["rev-parse", "main"]))
+  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), bareGit(repo.bare, ["rev-parse", "main"]))
   await assert.rejects(fs.access(path.join(repo.clone, "desks", "newbie")))
 })

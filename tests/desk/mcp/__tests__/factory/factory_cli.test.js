@@ -5,10 +5,13 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { AsyncLocalStorage, createHook } from "node:async_hooks"
+import { execFileSync, spawn } from "node:child_process"
+import { once } from "node:events"
 import { cpSync, existsSync, mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { setImmediate as nextTurn } from "node:timers/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
@@ -85,12 +88,86 @@ async function scratch(run) {
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-cli-"))
   const base = await fs.realpath(rawBase)
   const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
+  const owner = new AsyncLocalStorage()
+  const processes = new Set()
+  const hook = createHook({
+    init(id, type) {
+      if (type === "PROCESSWRAP" && owner.getStore()) processes.add(id)
+    },
+    destroy(id) { processes.delete(id) },
+  }).enable()
   try {
-    return await run(env)
+    return await owner.run(true, () => run(env))
   } finally {
+    try {
+      // Child close can precede native handle destruction; the copied gh.exe
+      // belongs to this fixture until those owned handles have been released.
+      while (processes.size) await nextTurn()
+    } finally {
+      hook.disable()
+      owner.disable()
+    }
     rmSync(base, { recursive: true, force: true })
   }
 }
+
+for (const fails of [false, true]) test(`scratch keeps the fixture until its child's native process handle is destroyed when the callback ${fails ? "fails" : "succeeds"}`, async () => {
+  let base, processId, spawning = false, existedAtDestroy
+  const failure = new Error("synthetic fixture failure")
+  const hook = createHook({
+    init(id, type) {
+      if (spawning && type === "PROCESSWRAP") processId = id
+    },
+    destroy(id) {
+      if (id !== processId) return
+      existedAtDestroy = existsSync(base)
+    },
+  }).enable()
+  try {
+    const operation = scratch(async (env) => {
+      base = env.HOME
+      let child
+      spawning = true
+      try {
+        child = spawn(process.execPath, ["-e", ""], { cwd: base, stdio: "ignore" })
+      } finally {
+        spawning = false
+      }
+      assert.notEqual(processId, undefined, "the native process handle must be observed")
+      assert.deepEqual(await once(child, "close"), [0, null])
+      if (fails) throw failure
+      return "fixture result"
+    })
+    if (fails) await assert.rejects(operation, (error) => error === failure)
+    else assert.equal(await operation, "fixture result")
+    while (existedAtDestroy === undefined) await nextTurn()
+    assert.equal(existedAtDestroy, true, "fixture removal must follow native process handle destruction, not just child close")
+    assert.equal(existsSync(base), false, "scratch still removes its owned fixture")
+  } finally {
+    hook.disable()
+  }
+})
+
+test("scratch does not wait for an unrelated process created while its fixture is active", async () => {
+  let start, child, closed
+  const started = new Promise((resolve) => { start = resolve }).then(() => {
+    child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] })
+    closed = once(child, "close")
+  })
+  try {
+    await scratch(async (env) => {
+      start()
+      await started
+      assert.equal(existsSync(env.HOME), true)
+    })
+    assert.equal(child.exitCode, null, "an unrelated process must not block fixture cleanup")
+  } finally {
+    if (child) {
+      child.stdin.end()
+      assert.deepEqual(await closed, [0, null])
+    }
+  }
+})
 
 // validate-pr asks Git for its version, the head's own merge commits and the
 // merge result's tree before it lists changes. `mergeGit` answers those three

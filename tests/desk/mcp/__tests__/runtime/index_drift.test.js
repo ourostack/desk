@@ -71,6 +71,19 @@ test("snapshotStagedPaths hardens and bounds its own git call: fsmonitor and hoo
   assert.equal(options.env.GIT_OPTIONAL_LOCKS, "0")
 })
 
+test("snapshotStagedPaths caps its process timeout at the caller's remaining allowance and skips an exhausted allowance", () => {
+  const calls = []
+  const spawnGit = (_command, _args, options) => {
+    calls.push(options)
+    return { status: 0, stdout: "" }
+  }
+  assert.deepEqual(snapshotStagedPaths({ root: "/unused", spawnGit, timeoutMs: 120 }), [])
+  assert.equal(calls[0].timeout, 120)
+  assert.equal(calls[0].killSignal, "SIGKILL")
+  assert.equal(snapshotStagedPaths({ root: "/unused", spawnGit, timeoutMs: 0 }), null)
+  assert.equal(calls.length, 1)
+})
+
 test("diffStagedPaths returns only the paths newly present in after", () => {
   assert.deepEqual(diffStagedPaths(["a.md"], ["a.md", "b.png"]), ["b.png"])
   assert.deepEqual(diffStagedPaths([], []), [])
