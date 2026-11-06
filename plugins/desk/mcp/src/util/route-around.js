@@ -136,7 +136,7 @@ export function heldFileRouteFor({ dir, names, message, change, deskRoot = dir }
   return {
     summary: `${files} already held another session's uncommitted edit, so Desk did not commit. Nothing here changes that edit: read what the files hold, and commit this change through desk_save only once they hold nothing else; otherwise stop and report.`,
     steps: [
-      { step: `Read what ${files} hold beyond HEAD (a new file shows in the second read). ${READS_ONLY}`, argv: [["git", "-C", dir, "diff", "HEAD", "--", ...names], ["git", "-C", dir, "status", "--porcelain", "--", ...names]] },
+      { step: `Read what ${files} hold beyond HEAD. ${READS_ONLY} A file the second read marks \`??\` is new: neither read shows its content, so read it whole at ${names.map((name) => path.join(dir, name)).join(" or ")}.`, argv: [["git", "-C", dir, "diff", "HEAD", "--", ...names], ["git", "-C", dir, "status", "--porcelain", "--", ...names]] },
       { step: `Only once step 1 shows nothing but this call's change (${change}): commit exactly these files through desk_save. While anything else is there, stop, change nothing, and report it with the tool's failure.`, tool: "desk_save", arguments: { paths: deskPaths(dir, deskRoot, names), message } },
       { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
     ],

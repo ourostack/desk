@@ -567,6 +567,9 @@ test("the route for a held lesson that opens a new shelf file reads both files a
   const shown = runArgv(route.steps[0].argv)
   for (const ran of shown) assert.equal(ran.status, 0, ran.stderr)
   assert.match(shown[1].stdout, /\?\? LESSONS\.md/u, "step 1 shows the new shelf file")
+  // 0972 on ae1395e4: neither read shows a new file's content, so step 1 says so and names the file to read whole.
+  assert.match(route.steps[0].step, /`\?\?` is new/u, "step 1 says a file marked ?? is new and has no diff")
+  for (const name of ["AGENTS.md", "LESSONS.md"]) assert.ok(route.steps[0].step.includes(path.join(root, name)), `step 1 names ${name} to read whole`)
   const text = await fs.readFile(path.join(root, "AGENTS.md"), "utf8")
   await fs.writeFile(path.join(root, "AGENTS.md"), text.replace("\nAnother session's edit.\n", ""), "utf8")
   await followRoute(route, { desk_save: async (args) => assert.equal((await desk_save({ deskRoot: root, input: args, schedulePush: () => {} })).status, "committed") })
