@@ -14,7 +14,8 @@ On October 25, 2026 Desk's browser became two choices, `fresh` and `mine`, run h
 
 ## Known gap
 
-- **All sign-ins in `mine` on Windows while Edge is open:** Windows locks Edge's cookie file and a few others while Edge runs, so Desk copies everything else and skips them. The Microsoft work sign-in still carries over through the Windows account, but ordinary site sign-ins do not, and `browser_context` says so. Closing Edge first carries them all. Reading the locked files would need an administrator-only snapshot or touching the running Edge, and Desk does neither.
+- **Unavailable essential session files:** `mine` refuses linked, unreadable or unqualified `Local State`/cookie files rather than claiming a protected signed-in copy. Files held by the running browser can therefore prevent a copy. Desk does not use administrator snapshots, read credential stores or modify the original profile to work around that refusal.
+- **Broader authenticated native output:** the first owned producer supports a single main document and qualified light-DOM actions. Child/OOPIF coverage, closed-shadow handling and open-shadow actions require their own qualified mechanisms; unsupported scope refuses rather than reverting to raw CLI output. Native/browser-build/installed qualification remains separate from synthetic source tests.
 
 ## Out of scope
 

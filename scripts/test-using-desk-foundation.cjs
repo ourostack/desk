@@ -263,6 +263,7 @@ function main() {
   const drain = read(path.join(pluginRoot, "skills", "draining-issues", "SKILL.md"));
   assert.match(drain, /^name: draining-issues$/mu);
   assert.match(drain, /^description: Use when .*draining issues.*issue drain.*prompt requests/mu);
+  assert.match(drain, /^description: .*intake acknowledgements.*claims/mu, "intake/claim assignments must discover the same drain method");
   assert.match(drain, /^description: .*watching for new issues/mu, "issue-watcher assignments must discover the same drain method");
   const watching = section(drain, "Watch without idle model turns");
   for (const phrase of [
@@ -281,7 +282,7 @@ function main() {
   // Refresh from the canonical library and review its behavior before updating this digest.
   assert.equal(
     crypto.createHash("sha256").update(drain).digest("hex"),
-    "d8f59da579481c3c22f5ae5b8dc884bd3480e47a2b603bdea199e6b93bbc9aa4",
+    "e3e353ad7ed46bf950289f5225a228881246e0c3685538c174dfd2b12db8e8cb",
     "draining-issues must match the reviewed canonical library copy",
   );
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
