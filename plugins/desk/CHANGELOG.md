@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.67 — 2026-11-06
+
+Superpowers refresh: Desk now ships Superpowers 7.0.2, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/22f0b463e7a5e579904dd6211a520321035526f7) (upstream version 7.0.2) copied byte for byte. Selected files: 16 changed, 1 added, 5 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.66 — 2026-11-06
 
 Delivering Desk's commits no longer acknowledges a commit made while the fetch ran (#567): the commits it counts as delivered are bounded to the head it captured and pushed, so a commit that arrived at that moment stays owed and the next push worker delivers it instead of suppressing it as already delivered.
