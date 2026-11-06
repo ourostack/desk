@@ -330,7 +330,10 @@ for (const fault of ["journal", "directory"]) {
 
 test("nested unknown candidate recovery survives enclosing refresh cleanup", (t) => {
   const f = fixture(t)
-  f.incoming.set("hooks/run-hook.cmd", Buffer.from(f.incoming.get("hooks/run-hook.cmd").toString().replace("REM Try Git", "REM Changed Git")))
+  const original = f.incoming.get("hooks/run-hook.cmd").toString()
+  const changed = original.replace("@echo off\n", "@echo off\nREM Fixture upstream change\n")
+  assert.notEqual(changed, original)
+  f.incoming.set("hooks/run-hook.cmd", Buffer.from(changed))
   const io = { ...fs, renameSync(from, to) {
     if (to.includes("superpowers-hook-candidate-") && to.endsWith("run-hook-compat.provenance.json")) {
       fs.writeFileSync(path.join(path.dirname(to), "run-hook.cmd"), "foreign nested output")

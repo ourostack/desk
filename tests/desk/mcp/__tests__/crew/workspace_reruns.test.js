@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, mkdirSync, promises as fs, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
@@ -97,7 +97,7 @@ test("a start the clone holds but GitHub does not, such as a local start given a
   assert.equal(offline.stage, "fetch")
   const pushed = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })
   assert.equal(pushed.state, "published", pushed.message)
-  assert.equal(git(repo.bare, ["rev-parse", "main"]), local.commit)
+  assert.equal(bareGit(repo.bare, ["rev-parse", "main"]), local.commit)
   // Once GitHub has it, a rerun has nothing to do.
   assert.equal((await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })).state, "already_crew")
 })
@@ -122,7 +122,7 @@ test("start run again after it left a pull request open reuses that pull request
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
   })
   const start = (now) => startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fake.gh, wait: noWait, now, apply: true, tooling: { repo: "acme/team-tooling" } })
   const first = await start(NOW)
@@ -147,7 +147,7 @@ test("a reused pull request that conflicts is rebuilt on its own branch", async 
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : blocked ? { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } : { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : blocked ? { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } : { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) }),
   })
   const start = (now) => startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fake.gh, wait: noWait, now, apply: true, tooling: { repo: "acme/team-tooling" } })
   assert.equal((await start(NOW)).state, "pr_open")
@@ -308,7 +308,7 @@ test("join run again after it left the roster row's pull request open reuses it;
       state.merged = true
       return { code: 0, stdout: "", stderr: "" }
     },
-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
+    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
   })
   const first = await joinWorkspace(join(repo, { apply: true, gh: fake.gh }))
   assert.equal(first.state, "pr_open")

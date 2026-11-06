@@ -11,7 +11,7 @@
 // desk and process here is a throwaway fixture; nothing reaches the real
 // HOME or the network -- `launchRepair` is the same test seam
 // `index_drift` boot checks already use.
-import { test, after } from "node:test"
+import { test, after, beforeEach } from "node:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -27,6 +27,8 @@ const isolatedEnv = () => {
 }
 after(() => { for (const home of tempHomes) rmSync(home, { recursive: true, force: true }) })
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
+// These cases test error classification, not cold import or filesystem latency.
+beforeEach((t) => { t.mock.method(performance, "now", () => 0) })
 
 test("a check that throws produces a Desk problem: <id> block, queues the detached filer, and never throws itself", async () => {
   const launched = []
@@ -68,7 +70,8 @@ test("a check that only overruns its own budget (boot_check_budget) is skipped w
   assert.doesNotMatch(line, /Desk problem/)
 })
 
-test("a check that genuinely times out (never settles) is skipped with no Desk problem: block", async () => {
+test("a check that genuinely times out (never settles) is skipped with no Desk problem: block", async (t) => {
+  t.mock.restoreAll()
   const line = await runBootChecks({
     ...quiet,
     env: isolatedEnv(),
@@ -76,6 +79,26 @@ test("a check that genuinely times out (never settles) is skipped with no Desk p
   })
   assert.equal(line, "")
   assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("cold setup consumes the registry deadline before any error-classification check can run", async (t) => {
+  let now = 0
+  t.mock.method(performance, "now", () => now)
+  let ran = false
+  const recorded = []
+  const line = await runBootChecks({
+    ...quiet,
+    env: isolatedEnv(),
+    loadArgvSafeReason: async () => {
+      now = 300
+      return { argvSafeReason: (value) => value }
+    },
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { ran = true; throw new Error("must not run after setup exhausts the budget") } }],
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+  })
+  assert.equal(line, "")
+  assert.equal(ran, false)
+  assert.deepEqual(recorded, [{ id: "probe", reason: "total_budget" }])
 })
 
 test("several checks that each throw produce a block per check, in order, alongside any well-behaved check's own line", async () => {

@@ -1,31 +1,31 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.62",
+  "version": "3.2.64",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.62",
+      "version": "3.2.64",
       "provenance": {
         "source": "plugins/desk/.claude-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.62",
+        "version": "3.2.64",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
     {
       "id": "superpowers",
       "kind": "plugin",
-      "version_range": "^6.3.0",
+      "version_range": "^7.0.1",
       "provenance": {
         "source": "plugins/superpowers/.claude-plugin/plugin.json",
         "package": "obra/superpowers"
       },
       "lock": {
-        "version": "6.4.6",
+        "version": "7.0.1",
         "integrity": "sha256-a6ce3a2accf90ec523f7f35be2a76142b94b7178dcbf688d10b756a45f1a2fd0"
       }
     },
@@ -189,7 +189,7 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.4.6",
+          "version": "7.0.1",
           "resolution": "native"
         },
         "plain-language": {

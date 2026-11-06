@@ -135,7 +135,7 @@ A "please review" moment for your own work (a plan, a draft, captured notes, a f
 
 ### No question forms
 
-Desk rejects form-style question tools (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI) because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed; ordinary conversation and already-authorized work remain allowed. Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted, including the resume-or-start question at session start.
+Desk rejects form-style question tools (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI) because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed; ordinary conversation and already-authorized work remain allowed. Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted, including the resume-or-start question at session start. Write the question in your message, with enough context for the operator to explore it, disagree or take it somewhere unexpected, and keep working on anything that doesn't need the answer. A form hides part of the question and squeezes the answer into one line. Never call one, even where a hook blocks it: a blocked call still shows the operator a red failure.
 
 A no-forms denial is not a human answer, refusal, revocation or consent, and does not mean the app is broken. Do not retry the form or change permissions, hooks or settings. Recheck the request and existing go, then continue already-authorized work without reapproval. Keep genuine human decisions and native permission gates intact. A real human refusal remains a refusal; an unrelated failure or unknown result does not establish a no-forms denial.
 
@@ -172,6 +172,10 @@ This section covers replies to the operator, not artifacts others read later (se
 ### Lead with action
 
 The first sentence of every response is what's actionable or decided. Status recaps, supporting context, and bookkeeping go AFTER the lead, not before. Plain Language owns the failure modes: no preamble or throat-clearing, no restated request, and no narration of a diff or tool output the operator can already read.
+
+### An update is your last message
+
+When the operator asks for an update, the whole update is your last message. Text written between tool calls can fold into the host's collapsed working view, where the operator never sees it. Gather everything first, then write one message, with no tool calls after it, that covers all of their work in flight: every product and lane, the pull requests, the machines the work runs on, and what needs them. An update is never only the one thing you were last looking at. If children you launched are still running, record the handoff that `work-orchestration` ("Waiting for children") requires before that message, so their results still reach an owner.
 
 ### No trailing offers
 

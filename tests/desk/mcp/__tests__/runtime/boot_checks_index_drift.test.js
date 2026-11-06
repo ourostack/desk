@@ -36,13 +36,23 @@ function fixture(t) {
 }
 
 test("a check that stages a file mid-run produces a Desk problem: index-drift block, without accusing the check of it", async (t) => {
+  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const snapshots = []
   const line = await runBootChecks({
     ...quiet,
     env,
+    // Real staging data, without a second wall-clock race; snapshot timeout behavior is tested separately.
+    spawnGit: (command, args) => {
+      assert.equal(args[1], repo)
+      const stdout = execFileSync(command, args, { env, encoding: "utf8" })
+      snapshots.push(stdout)
+      return { status: 0, stdout, stderr: "" }
+    },
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
   })
+  assert.deepEqual(snapshots, ["", "stray.txt\n"], "both snapshots must observe the fixture's real staging transition")
   assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
   assert.match(line, /stray\.txt/)
   assert.match(line, /it may have staged it, or another session may have staged it at the same time/)
@@ -134,15 +144,7 @@ test("the five real boot checks produce zero false-positive drift blocks against
   assert.doesNotMatch(line, /Desk problem: index-drift/)
 })
 
-// ── A snapshot's own cost never eats the check's budget (fix round 2) ──────
-//
-// Independent review reproduced: with the before/after snapshot inside the
-// check's own elapsed measurement, a check with no index change lost its
-// line to a false "over budget" 2/3 local runs — the snapshot's own git call
-// cost was being charged against the check's tiny budget (as little as
-// 20 ms). Both below prove it is excluded: one with a synthetic timed-out
-// git call (what a real hang eventually resolves to), one with a real,
-// deliberately slow git call bounded well under the check's own budget.
+// Snapshots share the whole-start deadline, but not a check's own work allowance.
 
 test("a git call that reports a timeout mid-snapshot never drops the check's line, and adds no drift block", async (t) => {
   const { env } = fixture(t)
@@ -172,14 +174,13 @@ test("a before-snapshot that fails skips the after-snapshot entirely — it neve
   assert.doesNotMatch(line, /Desk problem/)
 })
 
-test("a snapshot slower than the check's own tiny budget never drops the check's line — its cost is never charged to it", async (t) => {
+test("snapshots longer than a check allowance preserve its line when they fit the whole-start deadline", async (t) => {
   const { env } = fixture(t)
-  // Every snapshot call (before and after) actually takes real wall-clock
-  // time, well past the check's own 20 ms budget, then reports "nothing
-  // staged" — proving the check's own elapsed measurement excludes it.
+  let now = 0
+  t.mock.method(performance, "now", () => now)
   const slowSpawnGit = (command, args) => {
     if (args.includes("rev-parse")) return { status: 0, stdout: "true\n", stderr: "" }
-    execFileSync("bash", ["-c", "sleep 0.15"])
+    now += 100
     return { status: 0, stdout: "", stderr: "" }
   }
   const line = await runBootChecks({
@@ -189,4 +190,5 @@ test("a snapshot slower than the check's own tiny budget never drops the check's
     checks: [{ id: "quiet-check", budgetMs: 20, run: async () => ({ line: "fine" }) }],
   })
   assert.equal(line, "Desk boot pre-checks: fine")
+  assert.equal(now, 200)
 })
