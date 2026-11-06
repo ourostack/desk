@@ -112,7 +112,7 @@ test("an archive commit that landed but HEAD no longer holds is unknown in the c
       assert.equal(answer.status, 0, answer.stderr)
       const other = spawnSync("git", ["-C", f.root, "rm", "-q", "--cached", "--", "t/track.md"], { encoding: "utf8" })
       assert.equal(other.status, 0, other.stderr)
-      const theirs = spawnSync("git", ["-C", f.root, "commit", "-q", "-m", "someone else", "--", "t/track.md"], { encoding: "utf8" })
+      const theirs = spawnSync("git", ["-C", f.root, "commit", "-q", "-m", "someone else"], { encoding: "utf8" })
       assert.equal(theirs.status, 0, theirs.stderr)
       return { status: null, signal: "SIGTERM", stdout: "", stderr: "",
         error: Object.assign(new Error("owned commit timeout"), { code: "ETIMEDOUT" }) }
@@ -121,6 +121,7 @@ test("an archive commit that landed but HEAD no longer holds is unknown in the c
   assert.equal(result.status, "archive_pending")
   assert.equal(result.commit.status, "unknown")
   assert.equal(result.publication.status, "unknown")
+  assert.ok(result.commit.landed?.commit, "the answer says the archive's commit happened, separately from what HEAD holds now")
   assert.ok(result.route_around, "an unknown archive carries route_around")
   assert.doesNotMatch(JSON.stringify(result.route_around.summary), /did not land/u)
 })

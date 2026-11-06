@@ -872,12 +872,21 @@ function archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication }
   return route
 }
 
-function archivePendingAnswer(path, publication, routeAround) {
+// The commit's own status travels as it is (R5): a commit Desk cannot classify stays `unknown` in the commit and the
+// publication alike, never `failed` or `pending`, and keeps `landed` when it happened but HEAD no longer holds it.
+/** A commit step's failure as the archive's publication: `unknown` stays unknown; only a commit that did not land is pending. */
+function publicationOf(commit) {
+  return { status: commit.status === "unknown" ? "unknown" : "pending", reason: commit.reason }
+}
+
+function archivePendingAnswer(path, publication, routeAround, commit = null) {
   return {
     status: "archive_pending", path, publication,
-    commit: { status: "failed", reason: publication.reason },
+    commit: commit
+      ? { status: commit.status, reason: commit.reason, ...(commit.landed ? { landed: commit.landed } : {}) }
+      : { status: publication.status === "unknown" ? "unknown" : "failed", reason: publication.reason },
     ...(routeAround ? { route_around: routeAround } : {}),
-    next_action: "Keep the archived folder intact and do not repeat the directory move. Resolve the named publication or change-recording failure through its supported repair, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
+    next_action: "Keep the archived folder intact and do not repeat the directory move or the commit blind. Follow route_around, which reads back before anything changes, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
   }
 }
 
@@ -1435,8 +1444,9 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
       if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
         ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
-          refilled.publication ?? { status: "pending", reason: refilled.commit.reason },
-          refilled.commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: { status: "pending" } })),
+          refilled.publication ?? publicationOf(refilled.commit),
+          refilled.commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: publicationOf(refilled.commit) }),
+          refilled.commit),
       })
       let pending = null
       try {
@@ -1607,8 +1617,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (published) schedulePush({ root: deskRoot })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
     const result = commit
-      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason },
-        commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: { status: "pending" } }))
+      ? archivePendingAnswer(relPath(deskRoot, filePath), publicationOf(commit),
+        commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: publicationOf(commit) }), commit)
       : { status: "archived", path: relPath(deskRoot, filePath) }
     if (!commit) {
       if (delivered !== null) Object.assign(result, delivered)
