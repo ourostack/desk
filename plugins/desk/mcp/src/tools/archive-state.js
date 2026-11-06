@@ -130,10 +130,19 @@ function differsRoute(git, paths, message) {
   route.summary = "These paths changed after Desk admitted them, so Desk did not commit, and no step here commits: read the differences, change nothing, and report them."
   return route
 }
+// A failure before the commit dispatch carries the admitted entries themselves (R3): their modes and blobs, on the HEAD
+// preflight read and the branch it is on. The route's finish-commit check requalifies them, and commits exactly them only when
+// the shared index already holds exactly them; it never commits what disk holds, so a link kept as a placeholder stays a link.
+function admittedRoute(git, paths, expected, message) {
+  const branch = git.spawnGit("git", ["-C", git.root, "symbolic-ref", "--short", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
+  const name = branch.status === 0 ? String(branch.stdout).trim() : ""
+  const capture = name && git.head ? { before: git.head, branch: name, expected: [...expected].map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}`).sort() } : null
+  return commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot, capture })
+}
 function publishExpected(git, paths, expected, message, stagingPaths = paths) {
   assertGitState(git)
   const staged = stagePaths(git.root, stagingPaths, git.spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot }) }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: admittedRoute(git, paths, expected, message) }
   let entries = indexEntries(git.root, paths, git.spawnGit)
   const normalStage = new Map([...expected].map(([file, entry]) => [file, { sha: entry.stageSha, mode: entry.stageMode }]))
   if (!indexMatches(entries, normalStage))
@@ -143,7 +152,7 @@ function publishExpected(git, paths, expected, message, stagingPaths = paths) {
     const input = metadata.map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}\0`).join("")
     const updated = git.spawnGit("git", ["-C", git.root, "update-index", "-z", "--index-info"],
       { windowsHide: true, encoding: "utf8", timeout: 10000, input })
-    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed", route_around: commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot }) }
+    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed", route_around: admittedRoute(git, paths, expected, message) }
     entries = indexEntries(git.root, paths, git.spawnGit)
   }
   if (!indexMatches(entries, expected))
