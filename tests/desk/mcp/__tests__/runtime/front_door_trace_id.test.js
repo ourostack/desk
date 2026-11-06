@@ -71,10 +71,15 @@ function fakeChild(onMove, { fail = false, staged = true } = {}) {
 }
 
 // Real front door -> real session -> real runtime callTool over a real git desk. `slugs` names the done tasks to archive.
-async function productionDoor(t, { env, fail = false, slugs = ["s"] }) {
+async function productionDoor(t, { env, fail = false, slugs = ["s"], refuseCommits = false }) {
   const fixture = await makeGitDesk("front-door-trace-")
   const root = fixture.desk
   for (const slug of slugs) await task_create({ deskRoot: root, input: { track: "t", slug, title: slug, status: "done" }, schedulePush() {} })
+  if (refuseCommits) {
+    const hook = path.join(root, ".git", "hooks", "pre-commit")
+    await fs.mkdir(path.dirname(hook), { recursive: true })
+    await fs.writeFile(hook, "#!/bin/sh\necho DESK_TEST_COMMIT_REFUSED >&2\nexit 1\n", { mode: 0o755 })
+  }
   const original = TOOL_IMPLS.task_archive
   TOOL_IMPLS.task_archive = (args) => task_archive({ ...args, schedulePush() {}, openArchiveMove: () => {
     const source = path.join(root, "t", args.input.slug), destination = path.join(root, "t", "_archive", args.input.slug)
@@ -118,11 +123,18 @@ async function productionDoor(t, { env, fail = false, slugs = ["s"] }) {
   return { send, answer, frames, root }
 }
 
-// The fake native child performed the move; publishing that move to git is the git fixture's business and may legitimately report archive_pending on Windows.
-async function archivedByNative(root, reply) {
-  const body = JSON.parse(reply.result.content[0].text)
-  assert.ok(["archived", "archive_pending"].includes(body.status), JSON.stringify(body))
-  await fs.access(path.join(root, "t", "_archive", "s"))
+// What the fake native child's move left on disk: the task's card under _archive, and nothing at the original path.
+async function assertMoved(root, slug = "s") {
+  const card = await fs.readFile(path.join(root, "t", "_archive", slug, "task.md"), "utf8")
+  assert.match(card, new RegExp(`^title: ${slug}$`, "mu"), "the archived card is the task that was moved")
+  await assert.rejects(fs.access(path.join(root, "t", slug)), { code: "ENOENT" }, "the original task folder is gone")
+}
+const body = (reply) => JSON.parse(reply.result.content[0].text)
+// `archived` is the expected answer. The Windows CI run of this test once answered archive_pending with the cause not recorded, so a pending answer is accepted only with the move verified and its full body in the failure message; its cause is unproven.
+async function assertArchived(root, reply, slug = "s") {
+  const answer = body(reply)
+  await assertMoved(root, slug)
+  assert.ok(answer.status === "archived" || (answer.status === "archive_pending" && typeof answer.publication?.reason === "string"), JSON.stringify(answer))
 }
 
 const archiveCall = (id, slug = "s") => ({ id, method: "tools/call", params: { name: "task_archive", arguments: { track: "t", slug } } })
@@ -131,30 +143,44 @@ test("through the real front door and session, a gated task_archive emits one st
   const { send, answer, frames, root } = await productionDoor(t, { env: GATE })
   send(archiveCall(41))
   const reply = await answer(41)
-  await archivedByNative(root, reply)
+  await assertArchived(root, reply)
   assert.deepEqual(frames.map((frame) => frame.requestId), [41])
   assert.equal(frames[0].receipt.nativeStages.length, 5)
 })
 
+test("a commit refused after the fake native move is archive_pending with that reason, and the frame still carries its request id", async (t) => {
+  const { send, answer, frames, root } = await productionDoor(t, { env: GATE, refuseCommits: true })
+  send(archiveCall(55))
+  const answered = body(await answer(55))
+  assert.equal(answered.status, "archive_pending", JSON.stringify(answered))
+  assert.equal(answered.publication.status, "pending")
+  assert.match(answered.publication.reason, /DESK_TEST_COMMIT_REFUSED/u)
+  await assertMoved(root)
+  assert.deepEqual(frames.map((frame) => frame.requestId), [55])
+})
+
 test("interleaved gated calls each get exactly their own request id", async (t) => {
-  const { send, answer, frames } = await productionDoor(t, { env: GATE, slugs: ["a", "b"] })
+  const { send, answer, frames, root } = await productionDoor(t, { env: GATE, slugs: ["a", "b"] })
   send(archiveCall(5, "a")); send(archiveCall(9, "b"))
-  await Promise.all([answer(5), answer(9)])
+  const [ra, rb] = await Promise.all([answer(5), answer(9)])
+  await assertArchived(root, ra, "a"); await assertArchived(root, rb, "b")
   assert.deepEqual(frames.map((frame) => frame.requestId).sort(), [5, 9])
 })
 
 test("a gated capture that never arrives keeps the original error and emits an error frame with the request id", async (t) => {
-  const { send, answer, frames } = await productionDoor(t, { env: GATE, fail: true })
+  const { send, answer, frames, root } = await productionDoor(t, { env: GATE, fail: true })
   send(archiveCall(77))
   const reply = await answer(77)
   assert.match(JSON.stringify(reply.result), /native handle capture readiness timeout/u)
+  await fs.access(path.join(root, "t", "s", "task.md"))
+  await assert.rejects(fs.access(path.join(root, "t", "_archive", "s")), { code: "ENOENT" }, "a capture that never arrived moves nothing")
   assert.deepEqual(frames.map((frame) => frame.requestId), [77])
 })
 
 test("with the gate off the call reaches the tool as before and no frame is written", async (t) => {
   const { send, answer, frames, root } = await productionDoor(t, { env: { CI: "", GITHUB_ACTIONS: "", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "", DESK_BLACKBOX_NATIVE_STAGE_TRACE: "" } })
   send(archiveCall(3))
-  await archivedByNative(root, await answer(3))
+  await assertArchived(root, await answer(3))
   assert.equal(frames.length, 0)
 })
 
