@@ -1,0 +1,446 @@
+﻿2026-10-31T01:11:07.1325796Z Current runner version: '2.338.2'
+2026-10-31T01:11:07.1355035Z ##[group]Runner Image Provisioner
+2026-10-31T01:11:07.1356074Z Hosted Compute Agent
+2026-10-31T01:11:07.1356749Z Version: 20261021.618
+2026-10-31T01:11:07.1357545Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+2026-10-31T01:11:07.1358455Z Build Date: 2026-10-21T00:45:21Z
+2026-10-31T01:11:07.1359194Z Worker ID: {6498336e-7bc3-438a-9196-8e9d20db0f78}
+2026-10-31T01:11:07.1360028Z Region: centralus
+2026-10-31T01:11:07.1360626Z Cloud: Azure
+2026-10-31T01:11:07.1361197Z ##[endgroup]
+2026-10-31T01:11:07.1362688Z ##[group]Operating System
+2026-10-31T01:11:07.1363400Z Microsoft Windows Server 2025
+2026-10-31T01:11:07.1364139Z 10.0.26100
+2026-10-31T01:11:07.1364698Z Datacenter
+2026-10-31T01:11:07.1365264Z ##[endgroup]
+2026-10-31T01:11:07.1365911Z ##[group]Runner Image
+2026-10-31T01:11:07.1366578Z Image: windows-2025-vs2026
+2026-10-31T01:11:07.1367295Z Version: 20261021.278.1
+2026-10-31T01:11:07.1369176Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20261021.278/images/windows/Windows2025-VS2026-Readme.md
+2026-10-31T01:11:07.1371338Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20261021.278
+2026-10-31T01:11:07.1372559Z ##[endgroup]
+2026-10-31T01:11:07.1373890Z ##[group]GITHUB_TOKEN Permissions
+2026-10-31T01:11:07.1375830Z Contents: read
+2026-10-31T01:11:07.1376485Z Metadata: read
+2026-10-31T01:11:07.1377065Z ##[endgroup]
+2026-10-31T01:11:07.1379496Z Secret source: Actions
+2026-10-31T01:11:07.1380576Z Cache mode: write
+2026-10-31T01:11:07.1381391Z Prepare workflow directory
+2026-10-31T01:11:07.1699831Z Prepare all required actions
+2026-10-31T01:11:07.1749843Z Getting action download info
+2026-10-31T01:11:07.4001781Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-31T01:11:07.6979949Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-31T01:11:07.9792794Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-10-31T01:11:08.4061084Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-10-31T01:11:08.7269614Z Complete job name: Windows standard (shard 10/16)
+2026-10-31T01:11:08.8630890Z ##[group]Run actions/checkout@v4
+2026-10-31T01:11:08.8632359Z with:
+2026-10-31T01:11:08.8632964Z   fetch-depth: 0
+2026-10-31T01:11:08.8633608Z   persist-credentials: false
+2026-10-31T01:11:08.8634332Z   repository: ourostack/desk
+2026-10-31T01:11:08.8640316Z   token: ***
+2026-10-31T01:11:08.8640907Z   ssh-strict: true
+2026-10-31T01:11:08.8641523Z   ssh-user: git
+2026-10-31T01:11:08.8642124Z   clean: true
+2026-10-31T01:11:08.8642759Z   sparse-checkout-cone-mode: true
+2026-10-31T01:11:08.8643499Z   fetch-tags: false
+2026-10-31T01:11:08.8644137Z   show-progress: true
+2026-10-31T01:11:08.8699135Z   lfs: false
+2026-10-31T01:11:08.8700044Z   submodules: false
+2026-10-31T01:11:08.8700937Z   set-safe-directory: true
+2026-10-31T01:11:08.8701795Z   allow-unsafe-pr-checkout: false
+2026-10-31T01:11:08.8702995Z ##[endgroup]
+2026-10-31T01:11:08.9924030Z Syncing repository: ourostack/desk
+2026-10-31T01:11:08.9926035Z ##[group]Getting Git version info
+2026-10-31T01:11:08.9926886Z Working directory is 'D:\a\desk\desk'
+2026-10-31T01:11:09.0555206Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-31T01:11:09.6115971Z git version 2.56.0.windows.2
+2026-10-31T01:11:09.6167920Z ##[endgroup]
+2026-10-31T01:11:09.6187090Z Temporarily overriding HOME='D:\a\_temp\0ab98797-c5c1-4186-a5aa-e2a3f3eda01a' before making global git config changes
+2026-10-31T01:11:09.6189797Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-31T01:11:09.6195816Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\desk\desk
+2026-10-31T01:11:09.6859906Z Deleting the contents of 'D:\a\desk\desk'
+2026-10-31T01:11:09.6866129Z ##[group]Initializing the repository
+2026-10-31T01:11:09.6873280Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\desk\desk
+2026-10-31T01:11:10.0718955Z Initialized empty Git repository in D:/a/desk/desk/.git/
+2026-10-31T01:11:10.0767125Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/ourostack/desk
+2026-10-31T01:11:10.2071045Z ##[endgroup]
+2026-10-31T01:11:10.2071478Z ##[group]Disabling automatic garbage collection
+2026-10-31T01:11:10.2079663Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-10-31T01:11:10.2395610Z ##[endgroup]
+2026-10-31T01:11:10.2396011Z ##[group]Setting up auth
+2026-10-31T01:11:10.2405819Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-31T01:11:10.2713935Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-31T01:11:12.3866372Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-31T01:11:12.4181081Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-31T01:11:12.8996929Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-31T01:11:12.9324426Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-31T01:11:13.4047880Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-10-31T01:11:13.4416605Z ##[endgroup]
+2026-10-31T01:11:13.4417535Z ##[group]Fetching the repository
+2026-10-31T01:11:13.4432597Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/* +729f2dd2779a5e2492ff8768c3cb109467fb2880:refs/remotes/pull/570/merge
+2026-10-31T01:11:17.1437175Z From https://github.com/ourostack/desk
+2026-10-31T01:11:17.1438100Z  * [new branch]        branding/public-narrative-opt-in         -> origin/branding/public-narrative-opt-in
+2026-10-31T01:11:17.1438921Z  * [new branch]        browser-native-qualification-20261020    -> origin/browser-native-qualification-20261020
+2026-10-31T01:11:17.1439617Z  * [new branch]        crew-teammate-notes                      -> origin/crew-teammate-notes
+2026-10-31T01:11:17.1440211Z  * [new branch]        delivery-proof-receipts                  -> origin/delivery-proof-receipts
+2026-10-31T01:11:17.1440665Z  * [new branch]        desk/boot-resume-list                    -> origin/desk/boot-resume-list
+2026-10-31T01:11:17.1441123Z  * [new branch]        desk/boot-round13-fixes                  -> origin/desk/boot-round13-fixes
+2026-10-31T01:11:17.1441678Z  * [new branch]        desk/bounded-fixture-storage             -> origin/desk/bounded-fixture-storage
+2026-10-31T01:11:17.1442390Z  * [new branch]        desk/browser-native-messaging            -> origin/desk/browser-native-messaging
+2026-10-31T01:11:17.1442892Z  * [new branch]        desk/browser-popup-targets               -> origin/desk/browser-popup-targets
+2026-10-31T01:11:17.1444180Z  * [new branch]        desk/copilot-web-namespace               -> origin/desk/copilot-web-namespace
+2026-10-31T01:11:17.1444651Z  * [new branch]        desk/factory-no-late-writes              -> origin/desk/factory-no-late-writes
+2026-10-31T01:11:17.1445198Z  * [new branch]        desk/late-workspace-reconciliation       -> origin/desk/late-workspace-reconciliation
+2026-10-31T01:11:17.1445698Z  * [new branch]        desk/native-release-dependencies         -> origin/desk/native-release-dependencies
+2026-10-31T01:11:17.1446777Z  * [new branch]        desk/web-first-call                      -> origin/desk/web-first-call
+2026-10-31T01:11:17.1447201Z  * [new branch]        desk/workspace-launch-context            -> origin/desk/workspace-launch-context
+2026-10-31T01:11:17.1447662Z  * [new branch]        diag/status-latency-lwp-load             -> origin/diag/status-latency-lwp-load
+2026-10-31T01:11:17.1448106Z  * [new branch]        diag/status-latency-lwp-load2            -> origin/diag/status-latency-lwp-load2
+2026-10-31T01:11:17.1448543Z  * [new branch]        diag/status-latency-lwp-load3            -> origin/diag/status-latency-lwp-load3
+2026-10-31T01:11:17.1448981Z  * [new branch]        diag/status-latency-lwp-main             -> origin/diag/status-latency-lwp-main
+2026-10-31T01:11:17.1449436Z  * [new branch]        docs/browser-interface-admission         -> origin/docs/browser-interface-admission
+2026-10-31T01:11:17.1449946Z  * [new branch]        docs/browser-scope-correction            -> origin/docs/browser-scope-correction
+2026-10-31T01:11:17.1450824Z  * [new branch]        factory/capture-honest-coverage          -> origin/factory/capture-honest-coverage
+2026-10-31T01:11:17.1451975Z  * [new branch]        factory/lean-walk-timeline               -> origin/factory/lean-walk-timeline
+2026-10-31T01:11:17.1452454Z  * [new branch]        factory/other-task-wait                  -> origin/factory/other-task-wait
+2026-10-31T01:11:17.1452899Z  * [new branch]        factory/v12-triage-contract              -> origin/factory/v12-triage-contract
+2026-10-31T01:11:17.1453379Z  * [new branch]        factory/v12-triage-reattest-lows         -> origin/factory/v12-triage-reattest-lows
+2026-10-31T01:11:17.1453851Z  * [new branch]        fix/admission-conditions-diag            -> origin/fix/admission-conditions-diag
+2026-10-31T01:11:17.1454379Z  * [new branch]        fix/admission-upgrade-wait-controller-exit -> origin/fix/admission-upgrade-wait-controller-exit
+2026-10-31T01:11:17.1454923Z  * [new branch]        fix/artifact-fixture-budgets             -> origin/fix/artifact-fixture-budgets
+2026-10-31T01:11:17.1455369Z  * [new branch]        fix/async-active-tasks-scan              -> origin/fix/async-active-tasks-scan
+2026-10-31T01:11:17.1456327Z  * [new branch]        fix/async-retrying-removal               -> origin/fix/async-retrying-removal
+2026-10-31T01:11:17.1456805Z  * [new branch]        fix/broker-lock-own-identity             -> origin/fix/broker-lock-own-identity
+2026-10-31T01:11:17.1457349Z  * [new branch]        fix/browser-acquisition-credential-refresh -> origin/fix/browser-acquisition-credential-refresh
+2026-10-31T01:11:17.1457927Z  * [new branch]        fix/browser-credential-boundary          -> origin/fix/browser-credential-boundary
+2026-10-31T01:11:17.1458387Z  * [new branch]        fix/browser-effortless-setup             -> origin/fix/browser-effortless-setup
+2026-10-31T01:11:17.1458889Z  * [new branch]        fix/browser-extension-reconnect          -> origin/fix/browser-extension-reconnect
+2026-10-31T01:11:17.1459377Z  * [new branch]        fix/browser-lease-pileup                 -> origin/fix/browser-lease-pileup
+2026-10-31T01:11:17.1459851Z  * [new branch]        fix/browser-production-contract          -> origin/fix/browser-production-contract
+2026-10-31T01:11:17.1460339Z  * [new branch]        fix/browser-stock-direct-recovery        -> origin/fix/browser-stock-direct-recovery
+2026-10-31T01:11:17.1460810Z  * [new branch]        fix/controller-start-order               -> origin/fix/controller-start-order
+2026-10-31T01:11:17.1461205Z  * [new branch]        fix/deflake-ci                           -> origin/fix/deflake-ci
+2026-10-31T01:11:17.1461566Z  * [new branch]        fix/deflake-tests                        -> origin/fix/deflake-tests
+2026-10-31T01:11:17.1462014Z  * [new branch]        fix/desk-problem-file-temp-roots         -> origin/fix/desk-problem-file-temp-roots
+2026-10-31T01:11:17.1462523Z  * [new branch]        fix/factory-managed-maintainer-logins    -> origin/fix/factory-managed-maintainer-logins
+2026-10-31T01:11:17.1463481Z  * [new branch]        fix/factory-v12-quota-recovery           -> origin/fix/factory-v12-quota-recovery
+2026-10-31T01:11:17.1464346Z  * [new branch]        fix/factory-v12-readiness                -> origin/fix/factory-v12-readiness
+2026-10-31T01:11:17.1465060Z  * [new branch]        fix/generic-question-tool-suppression    -> origin/fix/generic-question-tool-suppression
+2026-10-31T01:11:17.1465770Z  * [new branch]        fix/gpt-workflow-alignment               -> origin/fix/gpt-workflow-alignment
+2026-10-31T01:11:17.1466453Z  * [new branch]        fix/local-recovery-parity-diag           -> origin/fix/local-recovery-parity-diag
+2026-10-31T01:11:17.1467140Z  * [new branch]        fix/native-browser-lease-pileup          -> origin/fix/native-browser-lease-pileup
+2026-10-31T01:11:17.1467864Z  * [new branch]        fix/owned-page-init-nonblocking          -> origin/fix/owned-page-init-nonblocking
+2026-10-31T01:11:17.1468575Z  * [new branch]        fix/query-router-semantic-diag           -> origin/fix/query-router-semantic-diag
+2026-10-31T01:11:17.1469291Z  * [new branch]        fix/recovery-dispatch-deadline           -> origin/fix/recovery-dispatch-deadline
+2026-10-31T01:11:17.1470086Z  * [new branch]        fix/session-close-awaits-lost-controller -> origin/fix/session-close-awaits-lost-controller
+2026-10-31T01:11:17.1470951Z  * [new branch]        fix/status-latency-windows-stall         -> origin/fix/status-latency-windows-stall
+2026-10-31T01:11:17.1471743Z  * [new branch]        fix/tooling-p0-integrated-ci-20261020    -> origin/fix/tooling-p0-integrated-ci-20261020
+2026-10-31T01:11:17.1472533Z  * [new branch]        fix/tooling-recovery-p0-20261020         -> origin/fix/tooling-recovery-p0-20261020
+2026-10-31T01:11:17.1473320Z  * [new branch]        fix/windows-artifact-per-attempt         -> origin/fix/windows-artifact-per-attempt
+2026-10-31T01:11:17.1474074Z  * [new branch]        fix/windows-core-20261001                -> origin/fix/windows-core-20261001
+2026-10-31T01:11:17.1474807Z  * [new branch]        hosted/public-pages-front-door           -> origin/hosted/public-pages-front-door
+2026-10-31T01:11:17.1475658Z  * [new branch]        hosted/v1b-1-identity                    -> origin/hosted/v1b-1-identity
+2026-10-31T01:11:17.1476320Z  * [new branch]        hosted/v1b2-ci-reliability               -> origin/hosted/v1b2-ci-reliability
+2026-10-31T01:11:17.1477042Z  * [new branch]        hosted/v1b2-entra-admin-scope            -> origin/hosted/v1b2-entra-admin-scope
+2026-10-31T01:11:17.1477707Z  * [new branch]        hosted/v1b2-fix-delta                    -> origin/hosted/v1b2-fix-delta
+2026-10-31T01:11:17.1478299Z  * [new branch]        hosted/v1b2-fix-flows                    -> origin/hosted/v1b2-fix-flows
+2026-10-31T01:11:17.1478913Z  * [new branch]        hosted/v1b2-fix-runtime                  -> origin/hosted/v1b2-fix-runtime
+2026-10-31T01:11:17.1479527Z  * [new branch]        hosted/v1b2-multiuser                    -> origin/hosted/v1b2-multiuser
+2026-10-31T01:11:17.1480311Z  * [new branch]        hosted/v1b2-private-context-fixture-history -> origin/hosted/v1b2-private-context-fixture-history
+2026-10-31T01:11:17.1481139Z  * [new branch]        hosted/v1b2-prod-identity                -> origin/hosted/v1b2-prod-identity
+2026-10-31T01:11:17.1481851Z  * [new branch]        hosted/v1b2-provision-multiuser          -> origin/hosted/v1b2-provision-multiuser
+2026-10-31T01:11:17.1482545Z  * [new branch]        hosted/v1b2-t3-browser-admin             -> origin/hosted/v1b2-t3-browser-admin
+2026-10-31T01:11:17.1483186Z  * [new branch]        hosted/v1b2-t4-github-link               -> origin/hosted/v1b2-t4-github-link
+2026-10-31T01:11:17.1483792Z  * [new branch]        hosted/v1b2-t5-desk-init                 -> origin/hosted/v1b2-t5-desk-init
+2026-10-31T01:11:17.1484606Z  * [new branch]        hosted/v1b2-t8-isolation-e2e             -> origin/hosted/v1b2-t8-isolation-e2e
+2026-10-31T01:11:17.1485458Z  * [new branch]        hosted/v1b2-windows-browser              -> origin/hosted/v1b2-windows-browser
+2026-10-31T01:11:17.1486117Z  * [new branch]        hosted/v1b2-windows-flake                -> origin/hosted/v1b2-windows-flake
+2026-10-31T01:11:17.1486819Z  * [new branch]        hosted/v1b2-windows-qualification        -> origin/hosted/v1b2-windows-qualification
+2026-10-31T01:11:17.1487561Z  * [new branch]        human-owned-work-933bafb6                -> origin/human-owned-work-933bafb6
+2026-10-31T01:11:17.1488246Z  * [new branch]        macos-15-runtime-pack                    -> origin/macos-15-runtime-pack
+2026-10-31T01:11:17.1488805Z  * [new branch]        main                                     -> origin/main
+2026-10-31T01:11:17.1489312Z  * [new branch]        shard2-probe                             -> origin/shard2-probe
+2026-10-31T01:11:17.1489887Z  * [new branch]        superpowers-upstream                     -> origin/superpowers-upstream
+2026-10-31T01:11:17.1490732Z  * [new branch]        user/arimendelow/archive-native-control-20261020 -> origin/user/arimendelow/archive-native-control-20261020
+2026-10-31T01:11:17.1491813Z  * [new branch]        user/arimendelow/boot-and-task-tools-say-what-helps -> origin/user/arimendelow/boot-and-task-tools-say-what-helps
+2026-10-31T01:11:17.1492936Z  * [new branch]        user/arimendelow/browser-command-guidance-20261022 -> origin/user/arimendelow/browser-command-guidance-20261022
+2026-10-31T01:11:17.1493974Z  * [new branch]        user/arimendelow/browser-managed-edge-20261022 -> origin/user/arimendelow/browser-managed-edge-20261022
+2026-10-31T01:11:17.1495054Z  * [new branch]        user/arimendelow/browser-managed-main-validation-20261024 -> origin/user/arimendelow/browser-managed-main-validation-20261024
+2026-10-31T01:11:17.1496191Z  * [new branch]        user/arimendelow/browser-normal-bootstrap-20261020 -> origin/user/arimendelow/browser-normal-bootstrap-20261020
+2026-10-31T01:11:17.1497181Z  * [new branch]        user/arimendelow/browser-normal-controller-20261020 -> origin/user/arimendelow/browser-normal-controller-20261020
+2026-10-31T01:11:17.1498238Z  * [new branch]        user/arimendelow/browser-owned-contexts-20261016 -> origin/user/arimendelow/browser-owned-contexts-20261016
+2026-10-31T01:11:17.1499316Z  * [new branch]        user/arimendelow/browser-owner-20261021  -> origin/user/arimendelow/browser-owner-20261021
+2026-10-31T01:11:17.1500262Z  * [new branch]        user/arimendelow/browser-setup-missing-helper -> origin/user/arimendelow/browser-setup-missing-helper
+2026-10-31T01:11:17.1500918Z  * [new branch]        user/arimendelow/browser-signed-in-contexts-20261016 -> origin/user/arimendelow/browser-signed-in-contexts-20261016
+2026-10-31T01:11:17.1501592Z  * [new branch]        user/arimendelow/browser-terminal-retirement-20261020 -> origin/user/arimendelow/browser-terminal-retirement-20261020
+2026-10-31T01:11:17.1502307Z  * [new branch]        user/arimendelow/browser-worker-windows-diagnostic-20261018 -> origin/user/arimendelow/browser-worker-windows-diagnostic-20261018
+2026-10-31T01:11:17.1502982Z  * [new branch]        user/arimendelow/ci-darwin-runner-568-20261030 -> origin/user/arimendelow/ci-darwin-runner-568-20261030
+2026-10-31T01:11:17.1503630Z  * [new branch]        user/arimendelow/controller-workspace-ready-20261022 -> origin/user/arimendelow/controller-workspace-ready-20261022
+2026-10-31T01:11:17.1504547Z  * [new branch]        user/arimendelow/desk-native-memory-off-20261021 -> origin/user/arimendelow/desk-native-memory-off-20261021
+2026-10-31T01:11:17.1505122Z  * [new branch]        user/arimendelow/desk-repos-live-on-main -> origin/user/arimendelow/desk-repos-live-on-main
+2026-10-31T01:11:17.1505643Z  * [new branch]        user/arimendelow/drain-operator-rules    -> origin/user/arimendelow/drain-operator-rules
+2026-10-31T01:11:17.1506235Z  * [new branch]        user/arimendelow/eng-workflow-v2-integration-20261018 -> origin/user/arimendelow/eng-workflow-v2-integration-20261018
+2026-10-31T01:11:17.1507517Z  * [new branch]        user/arimendelow/eng-workflow-v2-main-candidate-20261020 -> origin/user/arimendelow/eng-workflow-v2-main-candidate-20261020
+2026-10-31T01:11:17.1508232Z  * [new branch]        user/arimendelow/factory-batched-acl-inspection-20261025 -> origin/user/arimendelow/factory-batched-acl-inspection-20261025
+2026-10-31T01:11:17.1509005Z  * [new branch]        user/arimendelow/factory-cold-discovery-unit-20261024 -> origin/user/arimendelow/factory-cold-discovery-unit-20261024
+2026-10-31T01:11:17.1509788Z  * [new branch]        user/arimendelow/factory-context-discovery-balance-20261023 -> origin/user/arimendelow/factory-context-discovery-balance-20261023
+2026-10-31T01:11:17.1510586Z  * [new branch]        user/arimendelow/factory-context-emission-20261027 -> origin/user/arimendelow/factory-context-emission-20261027
+2026-10-31T01:11:17.1511257Z  * [new branch]        user/arimendelow/factory-context-native-handoff-20261021 -> origin/user/arimendelow/factory-context-native-handoff-20261021
+2026-10-31T01:11:17.1511982Z  * [new branch]        user/arimendelow/factory-context-optional-card-20261027 -> origin/user/arimendelow/factory-context-optional-card-20261027
+2026-10-31T01:11:17.1512716Z  * [new branch]        user/arimendelow/factory-context-preparation-budget-20261022 -> origin/user/arimendelow/factory-context-preparation-budget-20261022
+2026-10-31T01:11:17.1513442Z  * [new branch]        user/arimendelow/factory-context-ready-budget-20261023 -> origin/user/arimendelow/factory-context-ready-budget-20261023
+2026-10-31T01:11:17.1514146Z  * [new branch]        user/arimendelow/factory-context-recommendations-20261027 -> origin/user/arimendelow/factory-context-recommendations-20261027
+2026-10-31T01:11:17.1514836Z  * [new branch]        user/arimendelow/factory-context-whole-turn-20261027 -> origin/user/arimendelow/factory-context-whole-turn-20261027
+2026-10-31T01:11:17.1515541Z  * [new branch]        user/arimendelow/factory-discovery-identity-budget-20261024 -> origin/user/arimendelow/factory-discovery-identity-budget-20261024
+2026-10-31T01:11:17.1516275Z  * [new branch]        user/arimendelow/factory-full-preparation-window-20261024 -> origin/user/arimendelow/factory-full-preparation-window-20261024
+2026-10-31T01:11:17.1517625Z  * [new branch]        user/arimendelow/factory-git-profile-14f-20261015 -> origin/user/arimendelow/factory-git-profile-14f-20261015
+2026-10-31T01:11:17.1518668Z  * [new branch]        user/arimendelow/factory-lean-context-20261020 -> origin/user/arimendelow/factory-lean-context-20261020
+2026-10-31T01:11:17.1519667Z  * [new branch]        user/arimendelow/factory-preparation-first-20261024 -> origin/user/arimendelow/factory-preparation-first-20261024
+2026-10-31T01:11:17.1520611Z  * [new branch]        user/arimendelow/fresh-root-status-20261022 -> origin/user/arimendelow/fresh-root-status-20261022
+2026-10-31T01:11:17.1521568Z  * [new branch]        user/arimendelow/fresh-session-desk-binding-20261021 -> origin/user/arimendelow/fresh-session-desk-binding-20261021
+2026-10-31T01:11:17.1522618Z  * [new branch]        user/arimendelow/join-interview-20261027 -> origin/user/arimendelow/join-interview-20261027
+2026-10-31T01:11:17.1523539Z  * [new branch]        user/arimendelow/late-resolver-fixture-20261022 -> origin/user/arimendelow/late-resolver-fixture-20261022
+2026-10-31T01:11:17.1524831Z  * [new branch]        user/arimendelow/lexical-fallback-remediation-20261022 -> origin/user/arimendelow/lexical-fallback-remediation-20261022
+2026-10-31T01:11:17.1525848Z  * [new branch]        user/arimendelow/live-binding-442-20261021 -> origin/user/arimendelow/live-binding-442-20261021
+2026-10-31T01:11:17.1526872Z  * [new branch]        user/arimendelow/metadata-report-observation-20261019 -> origin/user/arimendelow/metadata-report-observation-20261019
+2026-10-31T01:11:17.1527978Z  * [new branch]        user/arimendelow/native-go-child-fixture-20261018 -> origin/user/arimendelow/native-go-child-fixture-20261018
+2026-10-31T01:11:17.1529111Z  * [new branch]        user/arimendelow/native-go-fixture-portability-20261020 -> origin/user/arimendelow/native-go-fixture-portability-20261020
+2026-10-31T01:11:17.1530549Z  * [new branch]        user/arimendelow/native-initial-binding-diagnostic-20261022 -> origin/user/arimendelow/native-initial-binding-diagnostic-20261022
+2026-10-31T01:11:17.1531640Z  * [new branch]        user/arimendelow/native-transition-capture-20261018 -> origin/user/arimendelow/native-transition-capture-20261018
+2026-10-31T01:11:17.1532290Z  * [new branch]        user/arimendelow/no-harness-local-stores-20261022 -> origin/user/arimendelow/no-harness-local-stores-20261022
+2026-10-31T01:11:17.1532898Z  * [new branch]        user/arimendelow/polish-endhook-speed-20261026 -> origin/user/arimendelow/polish-endhook-speed-20261026
+2026-10-31T01:11:17.1533549Z  * [new branch]        user/arimendelow/polish-factory-triage-outbox-20261025 -> origin/user/arimendelow/polish-factory-triage-outbox-20261025
+2026-10-31T01:11:17.1534201Z  * [new branch]        user/arimendelow/powershell-test-startup-time -> origin/user/arimendelow/powershell-test-startup-time
+2026-10-31T01:11:17.1535216Z  * [new branch]        user/arimendelow/rc-browser-producer-preflight-20261021 -> origin/user/arimendelow/rc-browser-producer-preflight-20261021
+2026-10-31T01:11:17.1536303Z  * [new branch]        user/arimendelow/rc-browser-producer-source-20261021 -> origin/user/arimendelow/rc-browser-producer-source-20261021
+2026-10-31T01:11:17.1537419Z  * [new branch]        user/arimendelow/rc-initial-degraded-diagnostic-20261021 -> origin/user/arimendelow/rc-initial-degraded-diagnostic-20261021
+2026-10-31T01:11:17.1538489Z  * [new branch]        user/arimendelow/recall-ready-across-builds -> origin/user/arimendelow/recall-ready-across-builds
+2026-10-31T01:11:17.1539529Z  * [new branch]        user/arimendelow/recorded-release-authority-20261022 -> origin/user/arimendelow/recorded-release-authority-20261022
+2026-10-31T01:11:17.1540474Z  * [new branch]        user/arimendelow/release-queue-20261026  -> origin/user/arimendelow/release-queue-20261026
+2026-10-31T01:11:17.1541366Z  * [new branch]        user/arimendelow/release-skip-proof2-20261026 -> origin/user/arimendelow/release-skip-proof2-20261026
+2026-10-31T01:11:17.1542856Z  * [new branch]        user/arimendelow/search-follows-desk-build -> origin/user/arimendelow/search-follows-desk-build
+2026-10-31T01:11:17.1543857Z  * [new branch]        user/arimendelow/semantic-proof-refresh-20261021 -> origin/user/arimendelow/semantic-proof-refresh-20261021
+2026-10-31T01:11:17.1544961Z  * [new branch]        user/arimendelow/session-label-diagnostics-562-20261030 -> origin/user/arimendelow/session-label-diagnostics-562-20261030
+2026-10-31T01:11:17.1546070Z  * [new branch]        user/arimendelow/session-label-producer-20261018 -> origin/user/arimendelow/session-label-producer-20261018
+2026-10-31T01:11:17.1547086Z  * [new branch]        user/arimendelow/sync-leaves-other-work-alone -> origin/user/arimendelow/sync-leaves-other-work-alone
+2026-10-31T01:11:17.1548053Z  * [new branch]        user/arimendelow/v2-rc-release-line-20261020 -> origin/user/arimendelow/v2-rc-release-line-20261020
+2026-10-31T01:11:17.1549041Z  * [new branch]        user/arimendelow/v2-tooling-integration-20261022 -> origin/user/arimendelow/v2-tooling-integration-20261022
+2026-10-31T01:11:17.1549977Z  * [new branch]        user/arimendelow/version-apart-20261026  -> origin/user/arimendelow/version-apart-20261026
+2026-10-31T01:11:17.1551003Z  * [new branch]        user/arimendelow/windows-archive-handle-qualify-20261018 -> origin/user/arimendelow/windows-archive-handle-qualify-20261018
+2026-10-31T01:11:17.1552180Z  * [new branch]        user/arimendelow/windows-archive-handle-source-20261018 -> origin/user/arimendelow/windows-archive-handle-source-20261018
+2026-10-31T01:11:17.1553371Z  * [new branch]        user/arimendelow/windows-archive-move-qualify-20261018 -> origin/user/arimendelow/windows-archive-move-qualify-20261018
+2026-10-31T01:11:17.1554483Z  * [new branch]        user/arimendelow/windows-archive-race-observe-20261018 -> origin/user/arimendelow/windows-archive-race-observe-20261018
+2026-10-31T01:11:17.1555635Z  * [new branch]        user/arimendelow/windows-generation-acl-timing-20261018 -> origin/user/arimendelow/windows-generation-acl-timing-20261018
+2026-10-31T01:11:17.1556320Z  * [new branch]        user/arimendelow/windows-native-guard-stage-20261022 -> origin/user/arimendelow/windows-native-guard-stage-20261022
+2026-10-31T01:11:17.1557047Z  * [new branch]        user/arimendelow/windows-native-startup-observation-20261022 -> origin/user/arimendelow/windows-native-startup-observation-20261022
+2026-10-31T01:11:17.1557827Z  * [new branch]        user/arimendelow/windows-private-generation-node2421-20261022 -> origin/user/arimendelow/windows-private-generation-node2421-20261022
+2026-10-31T01:11:17.1558596Z  * [new branch]        user/arimendelow/windows-private-generation-observer-20261022 -> origin/user/arimendelow/windows-private-generation-observer-20261022
+2026-10-31T01:11:17.1559365Z  * [new branch]        user/arimendelow/windows-readonly-refusal-diagnostic-20261022 -> origin/user/arimendelow/windows-readonly-refusal-diagnostic-20261022
+2026-10-31T01:11:17.1560006Z  * [new branch]        user/arimendelow/windows-speed-20261026  -> origin/user/arimendelow/windows-speed-20261026
+2026-10-31T01:11:17.1560544Z  * [new branch]        user/arimendelow/windows-speed-exp-20261026 -> origin/user/arimendelow/windows-speed-exp-20261026
+2026-10-31T01:11:17.1561126Z  * [new branch]        user/arimendelow/windows-status-latency-20261022 -> origin/user/arimendelow/windows-status-latency-20261022
+2026-10-31T01:11:17.1561759Z  * [new branch]        user/arimendelow/windows-triage-native-root-20261022 -> origin/user/arimendelow/windows-triage-native-root-20261022
+2026-10-31T01:11:17.1562767Z  * [new branch]        user/arimendelow/windows-triage-policy-diagnostic-20261022 -> origin/user/arimendelow/windows-triage-policy-diagnostic-20261022
+2026-10-31T01:11:17.1563435Z  * [new branch]        user/arimendelow/wip-before-reboot-20261028 -> origin/user/arimendelow/wip-before-reboot-20261028
+2026-10-31T01:11:17.1564052Z  * [new branch]        user/arimendelow/wip-before-reboot-20261028-crew518 -> origin/user/arimendelow/wip-before-reboot-20261028-crew518
+2026-10-31T01:11:17.1564786Z  * [new branch]        user/arimendelow/workflow-archive-cue-20261018 -> origin/user/arimendelow/workflow-archive-cue-20261018
+2026-10-31T01:11:17.1565415Z  * [new branch]        user/arimendelow/workflow-archive-handoff-20261018 -> origin/user/arimendelow/workflow-archive-handoff-20261018
+2026-10-31T01:11:17.1566076Z  * [new branch]        user/arimendelow/workflow-archive-native-move-20261018 -> origin/user/arimendelow/workflow-archive-native-move-20261018
+2026-10-31T01:11:17.1566722Z  * [new branch]        user/arimendelow/workflow-core-delivery-20261019 -> origin/user/arimendelow/workflow-core-delivery-20261019
+2026-10-31T01:11:17.1567333Z  * [new branch]        user/arimendelow/workflow-intake-context-20261017 -> origin/user/arimendelow/workflow-intake-context-20261017
+2026-10-31T01:11:17.1567877Z  * [new branch]        worker-waits-for-children                -> origin/worker-waits-for-children
+2026-10-31T01:11:17.1568274Z  * [new ref]           729f2dd2779a5e2492ff8768c3cb109467fb2880 -> pull/570/merge
+2026-10-31T01:11:17.1569202Z ##[endgroup]
+2026-10-31T01:11:17.1569496Z ##[group]Determining the checkout info
+2026-10-31T01:11:17.1569799Z ##[endgroup]
+2026-10-31T01:11:17.1570012Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-10-31T01:11:17.2393485Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-10-31T01:11:17.2705326Z ##[group]Checking out the ref
+2026-10-31T01:11:17.2713483Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/570/merge
+2026-10-31T01:11:17.7673082Z Note: switching to 'refs/remotes/pull/570/merge'.
+2026-10-31T01:11:17.7673414Z 
+2026-10-31T01:11:17.7673968Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-31T01:11:17.7674524Z changes and commit them, and you can discard any commits you make in this
+2026-10-31T01:11:17.7675026Z state without impacting any branches by switching back to a branch.
+2026-10-31T01:11:17.7675355Z 
+2026-10-31T01:11:17.7675569Z If you want to create a new branch to retain commits you create, you may
+2026-10-31T01:11:17.7675900Z do so (now or later) by using -c with the switch command. Example:
+2026-10-31T01:11:17.7676088Z 
+2026-10-31T01:11:17.7676186Z   git switch -c <new-branch-name>
+2026-10-31T01:11:17.7676324Z 
+2026-10-31T01:11:17.7676396Z Or undo this operation with:
+2026-10-31T01:11:17.7676515Z 
+2026-10-31T01:11:17.7676573Z   git switch -
+2026-10-31T01:11:17.7676671Z 
+2026-10-31T01:11:17.7676823Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-31T01:11:17.7677057Z 
+2026-10-31T01:11:17.7677367Z HEAD is now at 729f2dd2 Merge 6bfa5bb61c477b9cfeb384a1b292fe60d1116054 into b9a8bdf46e52104b675c4e9334c7d27bab14c54d
+2026-10-31T01:11:17.7760936Z ##[endgroup]
+2026-10-31T01:11:17.8150954Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-10-31T01:11:17.8438018Z 729f2dd2779a5e2492ff8768c3cb109467fb2880
+2026-10-31T01:11:17.8478540Z ##[group]Removing auth
+2026-10-31T01:11:17.8488511Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-31T01:11:17.8799757Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-31T01:11:18.3359556Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-31T01:11:18.3629872Z http.https://github.com/.extraheader
+2026-10-31T01:11:18.3667645Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-10-31T01:11:18.4023577Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-31T01:11:18.9058217Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-31T01:11:18.9377249Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-31T01:11:19.3957651Z ##[endgroup]
+2026-10-31T01:11:19.4317693Z ##[group]Run actions/setup-node@v4
+2026-10-31T01:11:19.4317944Z with:
+2026-10-31T01:11:19.4318430Z   node-version: 24.18.0
+2026-10-31T01:11:19.4318598Z   cache: npm
+2026-10-31T01:11:19.4318808Z   cache-dependency-path: plugins/desk/mcp/package-lock.json
+2026-10-31T01:11:19.4319068Z   always-auth: false
+2026-10-31T01:11:19.4319242Z   check-latest: false
+2026-10-31T01:11:19.4321333Z   token: ***
+2026-10-31T01:11:19.4321483Z ##[endgroup]
+2026-10-31T01:11:19.5698369Z Attempting to download 24.18.0...
+2026-10-31T01:11:19.5844299Z (node:2492) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-31T01:11:19.5845004Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-31T01:11:20.3015240Z Acquiring 24.18.0 - x64 from https://github.com/actions/node-versions/releases/download/24.18.0-28070977815/node-24.18.0-win32-x64.7z
+2026-10-31T01:11:20.7943180Z Extracting ...
+2026-10-31T01:11:22.7345376Z Adding to the cache ...
+2026-10-31T01:11:25.7374182Z ##[group]Environment details
+2026-10-31T01:11:26.9798142Z node: v24.18.0
+2026-10-31T01:11:26.9798675Z npm: 11.16.0
+2026-10-31T01:11:26.9798865Z yarn: 1.22.22
+2026-10-31T01:11:26.9799331Z ##[endgroup]
+2026-10-31T01:11:27.0186537Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\24.18.0\x64\npm.cmd config get cache"
+2026-10-31T01:11:27.2956440Z C:\npm\cache
+2026-10-31T01:11:27.5722739Z Cache hit for: node-cache-Windows-x64-npm-f8983062ca4777c2dc8dee5ee8b49cc16d7f7ad7f50e944bc61e0ea8e0f91b65
+2026-10-31T01:11:27.5823137Z (node:2492) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-31T01:11:28.1423935Z Received 12549337 of 12549337 (100.0%), 26.5 MBs/sec
+2026-10-31T01:11:28.1425559Z Cache Size: ~12 MB (12549337 B)
+2026-10-31T01:11:28.1452524Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/ce504609-d352-4b0c-9b2e-f08d13af0757/cache.tzst -P -C D:/a/desk/desk --force-local --use-compress-program "zstd -d"
+2026-10-31T01:11:33.1239577Z Cache restored successfully
+2026-10-31T01:11:33.1260069Z Cache restored from key: node-cache-Windows-x64-npm-f8983062ca4777c2dc8dee5ee8b49cc16d7f7ad7f50e944bc61e0ea8e0f91b65
+2026-10-31T01:11:33.2486258Z ##[group]Run actions/cache@v4
+2026-10-31T01:11:33.2486521Z with:
+2026-10-31T01:11:33.2486924Z   path: plugins/desk/mcp/node_modules
+2026-10-31T01:11:33.2487408Z   key: desk-mcp-node-modules-Windows-X64-node-24.18.0-f8983062ca4777c2dc8dee5ee8b49cc16d7f7ad7f50e944bc61e0ea8e0f91b65
+2026-10-31T01:11:33.2487857Z   enableCrossOsArchive: false
+2026-10-31T01:11:33.2488042Z   fail-on-cache-miss: false
+2026-10-31T01:11:33.2488223Z   lookup-only: false
+2026-10-31T01:11:33.2488373Z   save-always: false
+2026-10-31T01:11:33.2488521Z ##[endgroup]
+2026-10-31T01:11:33.3549215Z (node:8964) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-31T01:11:33.3550063Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-31T01:11:33.5389790Z Cache hit for: desk-mcp-node-modules-Windows-X64-node-24.18.0-f8983062ca4777c2dc8dee5ee8b49cc16d7f7ad7f50e944bc61e0ea8e0f91b65
+2026-10-31T01:11:33.5477829Z (node:8964) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-31T01:11:34.2014224Z Received 26885671 of 26885671 (100.0%), 51.7 MBs/sec
+2026-10-31T01:11:34.2015932Z Cache Size: ~26 MB (26885671 B)
+2026-10-31T01:11:34.2036620Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/5537fefb-aeaf-4d8f-9b32-f890ed34e399/cache.tzst -P -C D:/a/desk/desk --force-local --use-compress-program "zstd -d"
+2026-10-31T01:11:38.4783827Z Cache restored successfully
+2026-10-31T01:11:38.4895931Z Cache restored from key: desk-mcp-node-modules-Windows-X64-node-24.18.0-f8983062ca4777c2dc8dee5ee8b49cc16d7f7ad7f50e944bc61e0ea8e0f91b65
+2026-10-31T01:11:38.5173240Z ##[group]Run whoami
+2026-10-31T01:11:38.5173534Z [36;1mwhoami[0m
+2026-10-31T01:11:38.5173797Z [36;1m$id = [Security.Principal.WindowsIdentity]::GetCurrent()[0m
+2026-10-31T01:11:38.5174325Z [36;1m$admin = ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)[0m
+2026-10-31T01:11:38.5174782Z [36;1m"runner is administrator: $admin"[0m
+2026-10-31T01:11:38.5908542Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-31T01:11:38.5908856Z ##[endgroup]
+2026-10-31T01:11:38.9209891Z runnervmdaln5\runneradmin
+2026-10-31T01:11:38.9437013Z runner is administrator: True
+2026-10-31T01:11:39.0529375Z ##[group]Run $command = 'node .github\scripts\run-suite-files.mjs --shard 10/16 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+2026-10-31T01:11:39.0530293Z [36;1m$command = 'node .github\scripts\run-suite-files.mjs --shard 10/16 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT[0m
+2026-10-31T01:11:39.0531105Z [36;1m./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command[0m
+2026-10-31T01:11:39.0593992Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-31T01:11:39.0594265Z env:
+2026-10-31T01:11:39.0594417Z   ONLY_FILES: 
+2026-10-31T01:11:39.0594564Z   REPEAT: 1
+2026-10-31T01:11:39.0594703Z ##[endgroup]
+2026-10-31T01:17:17.5325394Z whoami: 
+2026-10-31T01:17:17.5326050Z runnervmdaln5\deskstd
+2026-10-31T01:17:17.5328278Z token elevation and integrity level: 
+2026-10-31T01:17:17.5329788Z Everyone                               Well-known group S-1-1-0      Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5331524Z BUILTIN\Users                          Alias            S-1-5-32-545 Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5334301Z NT AUTHORITY\INTERACTIVE               Well-known group S-1-5-4      Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5337210Z CONSOLE LOGON                          Well-known group S-1-2-1      Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5349895Z NT AUTHORITY\Authenticated Users       Well-known group S-1-5-11     Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5352880Z NT AUTHORITY\This Organization         Well-known group S-1-5-15     Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5355637Z NT AUTHORITY\Local account             Well-known group S-1-5-113    Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5357920Z LOCAL                                  Well-known group S-1-2-0      Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5359303Z NT AUTHORITY\NTLM Authentication       Well-known group S-1-5-64-10  Mandatory group, Enabled by default, Enabled group
+2026-10-31T01:17:17.5360621Z Mandatory Label\Medium Mandatory Level Label            S-1-16-8192                                                    
+2026-10-31T01:17:17.5362208Z shard 10/16: 27 files, predicted 4 min; all shards predicted (min): 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4
+2026-10-31T01:17:17.5392681Z ##[warning]30 test files are not in suite-durations.json and use the default weight of 8s; refresh the table: desk/crew_member.test.js, tools/lesson_team.test.js, factory/context_run_lifecycle.test.js, factory/context_recommendations.test.js, crew/workspace_recovery.test.js
+2026-10-31T01:17:17.5408246Z acl probe: {"powershellStartMs":[2147,156,150],"desk_acl_provider_ms":[2147,0,0]}
+2026-10-31T01:17:17.5409227Z ok      activation/activation_api_coverage.test.js pass=2 fail=0 222ms
+2026-10-31T01:17:17.5409965Z ok      activation/claude_packaging.test.js pass=13 fail=0 1421ms
+2026-10-31T01:17:17.5410688Z ok      activation/v2_alpha_boundary.test.js pass=3 fail=0 196ms
+2026-10-31T01:17:17.5411378Z ok      ci/factory_maintainer_login.test.js pass=6 fail=0 2442ms
+2026-10-31T01:17:17.5412052Z ok      coverage/coverage_gate.test.js pass=29 fail=0 6299ms
+2026-10-31T01:17:17.5412658Z ok      crew/workspace_join.test.js pass=12 fail=0 72781ms
+2026-10-31T01:17:17.5413278Z ok      docs/scratch_hygiene.test.js pass=3 fail=0 442ms
+2026-10-31T01:17:17.5413966Z ok      factory/derive_common.test.js pass=6 fail=0 534ms
+2026-10-31T01:17:17.5414621Z ok      factory/desk_problem_file.test.js pass=34 fail=0 4885ms
+2026-10-31T01:17:17.5415301Z ok      factory/pipeline/compare.test.js pass=11 fail=0 332ms
+2026-10-31T01:17:17.5415929Z ok      factory/release_version.test.js pass=16 fail=0 213ms
+2026-10-31T01:17:17.5416575Z ok      factory/stop_hook_deadline.test.js pass=5 fail=0 10073ms
+2026-10-31T01:17:17.5419921Z ok      runtime/admission_conditions.test.js pass=17 fail=0 62319ms
+2026-10-31T01:17:17.5420633Z ok      runtime/boot.test.js pass=144 fail=0 16591ms
+2026-10-31T01:17:17.5421162Z ok      runtime/boot_round8.test.js pass=10 fail=0 2990ms
+2026-10-31T01:17:17.5421738Z ok      runtime/consent_mentioned.test.js pass=4 fail=0 209ms
+2026-10-31T01:17:17.5422322Z ok      runtime/controller_exit.test.js pass=4 fail=0 346ms
+2026-10-31T01:17:17.5423002Z ok      runtime/copilot_session_binding.test.js pass=19 fail=0 1881ms
+2026-10-31T01:17:17.5423890Z ok      runtime/overlay_onboarding.test.js pass=5 fail=0 487ms
+2026-10-31T01:17:17.5424481Z ok      runtime/session_label.test.js pass=72 fail=0 232ms
+2026-10-31T01:17:17.5425063Z ok      runtime/session_sync.test.js pass=37 fail=0 44968ms
+2026-10-31T01:17:17.5425592Z ok      runtime/sync_health.test.js pass=19 fail=0 18811ms
+2026-10-31T01:17:17.5426160Z ok      tools/doctor.test.js pass=13 fail=0 1020ms
+2026-10-31T01:17:17.5426655Z ok      tools/factory_status.test.js pass=22 fail=0 4299ms
+2026-10-31T01:17:17.5427221Z FAIL    tools/local_only.test.js pass=21 fail=1 50230ms
+2026-10-31T01:17:17.5427931Z         not ok: task_archive also applies the rule: an old commit is refused, a new one in a recorded clone passes
+2026-10-31T01:17:17.5428651Z           'task_archive: native handle capture readiness timeout'
+2026-10-31T01:17:17.5430023Z           at problem (plugins/desk/mcp/src/tools/archive-native-session.js:309:42) | Timeout.<anonymous> (plugins/desk/mcp/src/tools/archive-native-session.js:352:39) | listOnTimeout (node:internal/timers:605:17)
+2026-10-31T01:17:17.5431256Z ok      tools/task_boot_tools_help.test.js pass=11 fail=0 774ms
+2026-10-31T01:17:17.5431833Z ok      util/remove_retry.test.js pass=10 fail=0 487ms
+2026-10-31T01:17:17.5432096Z 
+2026-10-31T01:17:17.5432427Z files=27 failing-files=1 timeouts=0 tests-pass=548 tests-fail=1
+2026-10-31T01:17:17.5749659Z ##[error]Process completed with exit code 1.
+2026-10-31T01:17:17.5965230Z ##[group]Run "### Windows standard, shard 10/16" | Add-Content $env:GITHUB_STEP_SUMMARY
+2026-10-31T01:17:17.5965931Z [36;1m"### Windows standard, shard 10/16" | Add-Content $env:GITHUB_STEP_SUMMARY[0m
+2026-10-31T01:17:17.5966662Z [36;1mif (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }[0m
+2026-10-31T01:17:17.6026696Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-31T01:17:17.6027057Z ##[endgroup]
+2026-10-31T01:17:17.9430116Z ##[group]Run actions/upload-artifact@v4
+2026-10-31T01:17:17.9430468Z with:
+2026-10-31T01:17:17.9430654Z   name: windows-standard-shard-10-attempt-1
+2026-10-31T01:17:17.9430940Z   path: results.json
+2026-10-31T01:17:17.9431196Z   if-no-files-found: warn
+2026-10-31T01:17:17.9431433Z   compression-level: 6
+2026-10-31T01:17:17.9431659Z   overwrite: false
+2026-10-31T01:17:17.9431911Z   include-hidden-files: false
+2026-10-31T01:17:17.9432150Z ##[endgroup]
+2026-10-31T01:17:18.1098023Z (node:3912) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-31T01:17:18.1099152Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-31T01:17:18.1144000Z With the provided path, there will be 1 file uploaded
+2026-10-31T01:17:18.1149154Z Artifact name is valid!
+2026-10-31T01:17:18.1150684Z Root directory input is valid!
+2026-10-31T01:17:18.4118198Z Beginning upload of artifact content to blob storage
+2026-10-31T01:17:18.4275604Z (node:3912) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-31T01:17:18.5413595Z Uploaded bytes 2196
+2026-10-31T01:17:18.5780150Z Finished uploading artifact content to blob storage!
+2026-10-31T01:17:18.5781172Z SHA256 digest of uploaded artifact zip is f9d230ab06547f83c300a8e46b100f7caf72eca141e4feebdd2b90fd1742fe4d
+2026-10-31T01:17:18.5783263Z Finalizing artifact upload
+2026-10-31T01:17:19.0335848Z Artifact windows-standard-shard-10-attempt-1.zip successfully finalized. Artifact ID 13024796957
+2026-10-31T01:17:19.0337306Z Artifact windows-standard-shard-10-attempt-1 has been successfully uploaded! Final size is 2196 bytes. Artifact ID is 13024796957
+2026-10-31T01:17:19.0344850Z Artifact download URL: https://github.com/ourostack/desk/actions/runs/41152305735/artifacts/13024796957
+2026-10-31T01:17:19.1510843Z Post job cleanup.
+2026-10-31T01:17:19.2970416Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-31T01:17:19.3249995Z git version 2.56.0.windows.2
+2026-10-31T01:17:19.3303201Z Temporarily overriding HOME='D:\a\_temp\b14d57bd-d73c-4bf3-8a4b-0fcff0793bd0' before making global git config changes
+2026-10-31T01:17:19.3304345Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-31T01:17:19.3312198Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\desk\desk
+2026-10-31T01:17:19.3642638Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-31T01:17:19.3959696Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-31T01:17:19.8950425Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-31T01:17:19.9270527Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-31T01:17:20.4551878Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-31T01:17:20.4870004Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-31T01:17:21.2569009Z Cleaning up orphan processes
+2026-10-31T01:17:21.3191600Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

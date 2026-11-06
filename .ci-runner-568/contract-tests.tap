@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: every required check is a plain job name in a workflow that runs on every pull request
+ok 1 - every required check is a plain job name in a workflow that runs on every pull request
+  ---
+  duration_ms: 28.196125
+  type: 'test'
+  ...
+# Subtest: the CI gate job waits for every other job in its workflow and fails unless each succeeded
+ok 2 - the CI gate job waits for every other job in its workflow and fails unless each succeeded
+  ---
+  duration_ms: 2.128875
+  type: 'test'
+  ...
+# Subtest: only a deploy key may push past the ruleset, and a repository admin may bypass it only through a pull request
+ok 3 - only a deploy key may push past the ruleset, and a repository admin may bypass it only through a pull request
+  ---
+  duration_ms: 0.173042
+  type: 'test'
+  ...
+# Subtest: the release push job reads the deploy key from the release environment, in a step of its own
+ok 4 - the release push job reads the deploy key from the release environment, in a step of its own
+  ---
+  duration_ms: 0.571917
+  type: 'test'
+  ...
+# Subtest: the runtime packs are built for every platform
+ok 5 - the runtime packs are built for every platform
+  ---
+  duration_ms: 6.978875
+  type: 'test'
+  ...
+# Subtest: the Darwin runtime pack selects a supported standard Apple-silicon image
+ok 6 - the Darwin runtime pack selects a supported standard Apple-silicon image
+  ---
+  duration_ms: 4.750333
+  type: 'test'
+  ...
+# Subtest: the real browser check runs on Linux, Windows and macOS
+ok 7 - the real browser check runs on Linux, Windows and macOS
+  ---
+  duration_ms: 3.880709
+  type: 'test'
+  ...
+# Subtest: the Crew member-binding tests run on Linux, macOS and Windows, Windows with CRLF checkouts, and gate main
+ok 8 - the Crew member-binding tests run on Linux, macOS and Windows, Windows with CRLF checkouts, and gate main
+  ---
+  duration_ms: 2.109458
+  type: 'test'
+  ...
+# Subtest: desk-mcp-tests.yml cancels superseded pull-request runs and lets main and dispatched runs finish
+ok 9 - desk-mcp-tests.yml cancels superseded pull-request runs and lets main and dispatched runs finish
+  ---
+  duration_ms: 1.547125
+  type: 'test'
+  ...
+# Subtest: validate-skills.yml cancels superseded pull-request runs and lets main and dispatched runs finish
+ok 10 - validate-skills.yml cancels superseded pull-request runs and lets main and dispatched runs finish
+  ---
+  duration_ms: 0.227333
+  type: 'test'
+  ...
+# Subtest: the release workflow is never cancelled by a later run
+ok 11 - the release workflow is never cancelled by a later run
+  ---
+  duration_ms: 0.870625
+  type: 'test'
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 246.001208

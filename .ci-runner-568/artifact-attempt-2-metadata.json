@@ -1,0 +1,20 @@
+{
+  "id": 13025620741,
+  "node_id": "MDg6QXJ0aWZhY3QxMzAyNTYyMDc0MQ==",
+  "name": "desk-runtime-pack-darwin-arm64-node-127",
+  "size_in_bytes": 2696615,
+  "url": "https://api.github.com/repos/ourostack/desk/actions/artifacts/13025620741",
+  "archive_download_url": "https://api.github.com/repos/ourostack/desk/actions/artifacts/13025620741/zip",
+  "expired": false,
+  "digest": "sha256:ff4cc24f379ca20373987622d1e807f7eea1f8e5a7e29008fde8211c324dbde7",
+  "created_at": "2026-10-31T01:42:06Z",
+  "updated_at": "2026-10-31T01:42:06Z",
+  "expires_at": "2026-11-07T01:42:03Z",
+  "workflow_run": {
+    "id": 41152306038,
+    "repository_id": 1386529300,
+    "head_repository_id": 1386529300,
+    "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+    "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054"
+  }
+}

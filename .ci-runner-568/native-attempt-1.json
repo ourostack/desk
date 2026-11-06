@@ -1,0 +1,71 @@
+{
+  "status": "pass",
+  "source_head": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+  "artifact_id": 13023798731,
+  "artifact_name": "desk-runtime-pack-darwin-arm64-node-127",
+  "artifact_digest": "sha256:1ee54a9b27e1b9c3e9bf009fd7a3059ca98cdb00ba2510654012a3021781f9f8",
+  "artifact_bytes": 2696614,
+  "pack_archive_sha256": "734cf48e00e739e7a1e0a14c23a43f432ea1743e8b5c170dfa496ed04a05637c",
+  "pack_platform": {
+    "os": "darwin",
+    "arch": "arm64",
+    "node_abi": "127"
+  },
+  "production_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+  "native_files": {
+    "node_modules/better-sqlite3/build/Release/better_sqlite3.node": {
+      "format": "Mach-O64",
+      "machine": "0x0100000c",
+      "sha256": "56614c9ed32228ef2c498281bb288e0586ba37c81987cdcbce35d4011bd32fe8",
+      "deployment": [
+        {
+          "command": "LC_BUILD_VERSION",
+          "platform": 1,
+          "minimum": [
+            11,
+            0,
+            0
+          ],
+          "sdk": [
+            14,
+            5,
+            0
+          ]
+        }
+      ],
+      "baseline_minimum": [
+        11,
+        0,
+        0
+      ],
+      "byte_identical_to_baseline": true
+    },
+    "node_modules/sqlite-vec-darwin-arm64/vec0.dylib": {
+      "format": "Mach-O64",
+      "machine": "0x0100000c",
+      "sha256": "193e480c50b59a55977d166f4aaf0e1bc8832d6963516e5950f39e4d2ce0b793",
+      "deployment": [
+        {
+          "command": "LC_BUILD_VERSION",
+          "platform": 1,
+          "minimum": [
+            14,
+            0,
+            0
+          ],
+          "sdk": [
+            14,
+            5,
+            0
+          ]
+        }
+      ],
+      "baseline_minimum": [
+        14,
+        0,
+        0
+      ],
+      "byte_identical_to_baseline": true
+    }
+  }
+}

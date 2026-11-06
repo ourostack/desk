@@ -1,0 +1,50 @@
+{
+  "checked_at_utc": "2026-10-31T01:46:36.031808+00:00",
+  "source_head": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+  "checkout_merge_sha": "729f2dd2779a5e2492ff8768c3cb109467fb2880",
+  "native_and_deployment_validation": "pass",
+  "executions": [
+    {
+      "attempt": 1,
+      "job_id": 124391371318,
+      "runner": "GitHub Actions 1000154501",
+      "native_status": "pass",
+      "artifact_id": 13023798731,
+      "artifact_digest": "sha256:1ee54a9b27e1b9c3e9bf009fd7a3059ca98cdb00ba2510654012a3021781f9f8"
+    },
+    {
+      "attempt": 2,
+      "job_id": 124403246547,
+      "runner": "GitHub Actions 1000155132",
+      "native_status": "pass",
+      "artifact_id": 13025620741,
+      "artifact_digest": "sha256:ff4cc24f379ca20373987622d1e807f7eea1f8e5a7e29008fde8211c324dbde7"
+    }
+  ],
+  "mcp_attempt_1": "34/34 success",
+  "mcp_attempt_2": "34/34 success; 32 carried forward, only Darwin and gate newly executed",
+  "all_pr_checks": {
+    "SUCCESS": 50,
+    "FAILURE": 3
+  },
+  "full_pr_ci": "failure",
+  "failures": [
+    {
+      "name": "Windows standard (shard 10/16)",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/ourostack/desk/actions/runs/41152305735/job/124391370066"
+    },
+    {
+      "name": "Windows standard (shard 15/16)",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/ourostack/desk/actions/runs/41152305735/job/124391370102"
+    },
+    {
+      "name": "Windows suite",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/ourostack/desk/actions/runs/41152305735/job/124398992829"
+    }
+  ],
+  "source_changes_after_root_review": false,
+  "merge_performed": false
+}

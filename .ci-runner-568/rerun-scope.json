@@ -1,0 +1,233 @@
+{
+  "status": "pass",
+  "requested_job_id": 124391371318,
+  "new_darwin_job_id": 124403246547,
+  "request_accepted_at": "2026-10-31T01:36:18Z",
+  "carried_success_count": 32,
+  "carried_successes": [
+    {
+      "name": "offline eval tests (shard 3)",
+      "original_job": 124391371285,
+      "carried_record": 124403247694,
+      "started_at": "2026-10-31T01:11:18Z",
+      "completed_at": "2026-10-31T01:13:18Z"
+    },
+    {
+      "name": "Browser fresh and mine (ubuntu-latest)",
+      "original_job": 124391371190,
+      "carried_record": 124403248003,
+      "started_at": "2026-10-31T01:05:12Z",
+      "completed_at": "2026-10-31T01:06:23Z"
+    },
+    {
+      "name": "desk on native Windows",
+      "original_job": 124391371313,
+      "carried_record": 124403248194,
+      "started_at": "2026-10-31T01:06:10Z",
+      "completed_at": "2026-10-31T01:07:04Z"
+    },
+    {
+      "name": "desk MCP tests (shard 9)",
+      "original_job": 124391371540,
+      "carried_record": 124403248582,
+      "started_at": "2026-10-31T01:15:25Z",
+      "completed_at": "2026-10-31T01:18:31Z"
+    },
+    {
+      "name": "Crew member binding (macos-latest)",
+      "original_job": 124391371336,
+      "carried_record": 124403248731,
+      "started_at": "2026-10-31T01:03:41Z",
+      "completed_at": "2026-10-31T01:04:10Z"
+    },
+    {
+      "name": "desk MCP tests (shard 11)",
+      "original_job": 124391371500,
+      "carried_record": 124403248825,
+      "started_at": "2026-10-31T01:16:27Z",
+      "completed_at": "2026-10-31T01:19:36Z"
+    },
+    {
+      "name": "desk MCP tests (shard 12)",
+      "original_job": 124391371425,
+      "carried_record": 124403248986,
+      "started_at": "2026-10-31T01:12:11Z",
+      "completed_at": "2026-10-31T01:14:50Z"
+    },
+    {
+      "name": "desk MCP tests (shard 8)",
+      "original_job": 124391371445,
+      "carried_record": 124403249190,
+      "started_at": "2026-10-31T01:12:23Z",
+      "completed_at": "2026-10-31T01:14:49Z"
+    },
+    {
+      "name": "desk MCP test suite",
+      "original_job": 124399364773,
+      "carried_record": 124403249538,
+      "started_at": "2026-10-31T01:29:33Z",
+      "completed_at": "2026-10-31T01:29:56Z"
+    },
+    {
+      "name": "desk runtime pack (win32-x64-node-137)",
+      "original_job": 124391371403,
+      "carried_record": 124403271513,
+      "started_at": "2026-10-31T01:07:08Z",
+      "completed_at": "2026-10-31T01:09:31Z"
+    },
+    {
+      "name": "desk MCP tests (shard 5)",
+      "original_job": 124391371501,
+      "carried_record": 124403272621,
+      "started_at": "2026-10-31T01:18:42Z",
+      "completed_at": "2026-10-31T01:20:34Z"
+    },
+    {
+      "name": "desk MCP tests (shard 1)",
+      "original_job": 124391371214,
+      "carried_record": 124403273846,
+      "started_at": "2026-10-31T01:11:47Z",
+      "completed_at": "2026-10-31T01:13:31Z"
+    },
+    {
+      "name": "Browser fresh and mine (windows-latest)",
+      "original_job": 124391371153,
+      "carried_record": 124403274370,
+      "started_at": "2026-10-31T00:57:58Z",
+      "completed_at": "2026-10-31T00:59:07Z"
+    },
+    {
+      "name": "Crew member binding (ubuntu-latest)",
+      "original_job": 124391371205,
+      "carried_record": 124403275765,
+      "started_at": "2026-10-31T01:14:03Z",
+      "completed_at": "2026-10-31T01:14:19Z"
+    },
+    {
+      "name": "Black-box tester (windows-latest)",
+      "original_job": 124391371197,
+      "carried_record": 124403276196,
+      "started_at": "2026-10-31T01:04:40Z",
+      "completed_at": "2026-10-31T01:08:07Z"
+    },
+    {
+      "name": "desk runtime pack (linux-x64-node-127)",
+      "original_job": 124391371155,
+      "carried_record": 124403277762,
+      "started_at": "2026-10-31T01:07:06Z",
+      "completed_at": "2026-10-31T01:07:27Z"
+    },
+    {
+      "name": "desk MCP tests (shard 2)",
+      "original_job": 124391371496,
+      "carried_record": 124403279583,
+      "started_at": "2026-10-31T01:14:59Z",
+      "completed_at": "2026-10-31T01:16:33Z"
+    },
+    {
+      "name": "desk MCP tests (shard 3)",
+      "original_job": 124391371421,
+      "carried_record": 124403279854,
+      "started_at": "2026-10-31T01:11:59Z",
+      "completed_at": "2026-10-31T01:14:55Z"
+    },
+    {
+      "name": "Black-box tester (ubuntu-latest)",
+      "original_job": 124391371216,
+      "carried_record": 124403279932,
+      "started_at": "2026-10-31T01:19:06Z",
+      "completed_at": "2026-10-31T01:20:03Z"
+    },
+    {
+      "name": "Unused code",
+      "original_job": 124391371121,
+      "carried_record": 124403280039,
+      "started_at": "2026-10-31T01:03:13Z",
+      "completed_at": "2026-10-31T01:03:30Z"
+    },
+    {
+      "name": "Release dry run (stable)",
+      "original_job": 124391371452,
+      "carried_record": 124403280894,
+      "started_at": "2026-10-31T01:14:21Z",
+      "completed_at": "2026-10-31T01:14:57Z"
+    },
+    {
+      "name": "desk MCP tests (shard 6)",
+      "original_job": 124391371469,
+      "carried_record": 124403281749,
+      "started_at": "2026-10-31T01:17:41Z",
+      "completed_at": "2026-10-31T01:19:17Z"
+    },
+    {
+      "name": "Release dry run (rc)",
+      "original_job": 124391371250,
+      "carried_record": 124403283439,
+      "started_at": "2026-10-31T01:09:51Z",
+      "completed_at": "2026-10-31T01:10:29Z"
+    },
+    {
+      "name": "Browser fresh and mine (macos-latest)",
+      "original_job": 124391371222,
+      "carried_record": 124403284612,
+      "started_at": "2026-10-31T01:02:41Z",
+      "completed_at": "2026-10-31T01:03:25Z"
+    },
+    {
+      "name": "offline eval tests (shard 2)",
+      "original_job": 124391371225,
+      "carried_record": 124403284827,
+      "started_at": "2026-10-31T01:07:03Z",
+      "completed_at": "2026-10-31T01:08:01Z"
+    },
+    {
+      "name": "desk MCP tests (shard 7)",
+      "original_job": 124391371393,
+      "carried_record": 124403285586,
+      "started_at": "2026-10-31T01:12:50Z",
+      "completed_at": "2026-10-31T01:14:52Z"
+    },
+    {
+      "name": "offline eval tests (shard 1)",
+      "original_job": 124391371138,
+      "carried_record": 124403286105,
+      "started_at": "2026-10-31T01:06:46Z",
+      "completed_at": "2026-10-31T01:14:00Z"
+    },
+    {
+      "name": "desk MCP tests (shard 4)",
+      "original_job": 124391371416,
+      "carried_record": 124403286439,
+      "started_at": "2026-10-31T01:15:21Z",
+      "completed_at": "2026-10-31T01:17:35Z"
+    },
+    {
+      "name": "Release dry run (auto)",
+      "original_job": 124391371297,
+      "carried_record": 124403286794,
+      "started_at": "2026-10-31T01:10:04Z",
+      "completed_at": "2026-10-31T01:10:47Z"
+    },
+    {
+      "name": "offline eval tests (shard 4)",
+      "original_job": 124391371269,
+      "carried_record": 124403287098,
+      "started_at": "2026-10-31T01:08:09Z",
+      "completed_at": "2026-10-31T01:10:54Z"
+    },
+    {
+      "name": "desk MCP tests (shard 10)",
+      "original_job": 124391371465,
+      "carried_record": 124403287345,
+      "started_at": "2026-10-31T01:16:49Z",
+      "completed_at": "2026-10-31T01:18:46Z"
+    },
+    {
+      "name": "Crew member binding (windows-latest)",
+      "original_job": 124391371342,
+      "carried_record": 124403288284,
+      "started_at": "2026-10-31T01:06:46Z",
+      "completed_at": "2026-10-31T01:09:19Z"
+    }
+  ]
+}

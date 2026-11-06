@@ -1,0 +1,3605 @@
+{
+  "total_count": 34,
+  "jobs": [
+    {
+      "id": 124403246547,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLl0w",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403246547",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403246547",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:41:39Z",
+      "completed_at": "2026-10-31T01:42:10Z",
+      "name": "desk runtime pack (darwin-arm64-node-127)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:41:40Z",
+          "completed_at": "2026-10-31T01:41:41Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:41:41Z",
+          "completed_at": "2026-10-31T01:41:44Z"
+        },
+        {
+          "name": "Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:41:44Z",
+          "completed_at": "2026-10-31T01:41:55Z"
+        },
+        {
+          "name": "Confirm the runtime identity this pack will claim",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:41:55Z",
+          "completed_at": "2026-10-31T01:41:55Z"
+        },
+        {
+          "name": "Install dependencies from the committed lock",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:41:55Z",
+          "completed_at": "2026-10-31T01:42:01Z"
+        },
+        {
+          "name": "Build the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:42:01Z",
+          "completed_at": "2026-10-31T01:42:02Z"
+        },
+        {
+          "name": "Resolve the produced pack directory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:42:02Z",
+          "completed_at": "2026-10-31T01:42:02Z"
+        },
+        {
+          "name": "Verify the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:42:02Z",
+          "completed_at": "2026-10-31T01:42:02Z"
+        },
+        {
+          "name": "Confirm the pack manifest claims this exact host",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:42:02Z",
+          "completed_at": "2026-10-31T01:42:02Z"
+        },
+        {
+          "name": "Load the packed native code under this runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:42:02Z",
+          "completed_at": "2026-10-31T01:42:03Z"
+        },
+        {
+          "name": "Retain the verified native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:42:03Z",
+          "completed_at": "2026-10-31T01:42:05Z"
+        },
+        {
+          "name": "Post Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-10-31T01:42:05Z",
+          "completed_at": "2026-10-31T01:42:05Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-10-31T01:42:05Z",
+          "completed_at": "2026-10-31T01:42:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-10-31T01:42:06Z",
+          "completed_at": "2026-10-31T01:42:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403246547",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000155132,
+      "runner_name": "GitHub Actions 1000155132",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403247694,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLqTg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403247694",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403247694",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:11:18Z",
+      "completed_at": "2026-10-31T01:13:18Z",
+      "name": "offline eval tests (shard 3)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:11:19Z",
+          "completed_at": "2026-10-31T01:11:20Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:11:20Z",
+          "completed_at": "2026-10-31T01:11:23Z"
+        },
+        {
+          "name": "Decide whether this change can affect the offline eval tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:11:23Z",
+          "completed_at": "2026-10-31T01:11:23Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:11:23Z",
+          "completed_at": "2026-10-31T01:11:24Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:11:24Z",
+          "completed_at": "2026-10-31T01:11:31Z"
+        },
+        {
+          "name": "Run the offline eval unit tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:11:31Z",
+          "completed_at": "2026-10-31T01:13:06Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:13:06Z",
+          "completed_at": "2026-10-31T01:13:06Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:13:06Z",
+          "completed_at": "2026-10-31T01:13:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:13:06Z",
+          "completed_at": "2026-10-31T01:13:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403247694",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154630,
+      "runner_name": "GitHub Actions 1000154630",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248003,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLrgw",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248003",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248003",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:05:12Z",
+      "completed_at": "2026-10-31T01:06:23Z",
+      "name": "Browser fresh and mine (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:05:13Z",
+          "completed_at": "2026-10-31T01:05:13Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:05:13Z",
+          "completed_at": "2026-10-31T01:05:15Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:05:15Z",
+          "completed_at": "2026-10-31T01:05:15Z"
+        },
+        {
+          "name": "Allow the browser sandbox on Linux",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:05:15Z",
+          "completed_at": "2026-10-31T01:05:15Z"
+        },
+        {
+          "name": "Open, use and close real fresh and mine browsers",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:05:15Z",
+          "completed_at": "2026-10-31T01:06:21Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:06:21Z",
+          "completed_at": "2026-10-31T01:06:21Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:06:21Z",
+          "completed_at": "2026-10-31T01:06:21Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:06:21Z",
+          "completed_at": "2026-10-31T01:06:21Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248003",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154523,
+      "runner_name": "GitHub Actions 1000154523",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248194,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLsQg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248194",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248194",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:06:10Z",
+      "completed_at": "2026-10-31T01:07:04Z",
+      "name": "desk on native Windows",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:06:11Z",
+          "completed_at": "2026-10-31T01:06:12Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:06:12Z",
+          "completed_at": "2026-10-31T01:06:20Z"
+        },
+        {
+          "name": "Set up the shipped Windows Node ABI",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:06:20Z",
+          "completed_at": "2026-10-31T01:06:28Z"
+        },
+        {
+          "name": "Restore installed test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:06:28Z",
+          "completed_at": "2026-10-31T01:06:34Z"
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5,
+          "started_at": "2026-10-31T01:06:34Z",
+          "completed_at": "2026-10-31T01:06:34Z"
+        },
+        {
+          "name": "Verify source-bound evaluation contracts on Windows",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:06:34Z",
+          "completed_at": "2026-10-31T01:06:35Z"
+        },
+        {
+          "name": "Exercise real NTFS protection, the factory outbox and the source mirror",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:06:35Z",
+          "completed_at": "2026-10-31T01:06:46Z"
+        },
+        {
+          "name": "Complete an MCP handshake through the Desk bootstrap on Windows",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:06:46Z",
+          "completed_at": "2026-10-31T01:06:50Z"
+        },
+        {
+          "name": "Set up an older Node that the bootstrap must re-exec from",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:06:50Z",
+          "completed_at": "2026-10-31T01:06:59Z"
+        },
+        {
+          "name": "Complete an MCP handshake through the bootstrap's re-exec path on Windows",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:06:59Z",
+          "completed_at": "2026-10-31T01:07:00Z"
+        },
+        {
+          "name": "Post Set up an older Node that the bootstrap must re-exec from",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-31T01:07:00Z",
+          "completed_at": "2026-10-31T01:07:00Z"
+        },
+        {
+          "name": "Post Restore installed test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-10-31T01:07:00Z",
+          "completed_at": "2026-10-31T01:07:01Z"
+        },
+        {
+          "name": "Post Set up the shipped Windows Node ABI",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-10-31T01:07:01Z",
+          "completed_at": "2026-10-31T01:07:01Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-10-31T01:07:01Z",
+          "completed_at": "2026-10-31T01:07:03Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-10-31T01:07:03Z",
+          "completed_at": "2026-10-31T01:07:03Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248194",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000154539,
+      "runner_name": "GitHub Actions 1000154539",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248582,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLtxg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248582",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248582",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:15:25Z",
+      "completed_at": "2026-10-31T01:18:31Z",
+      "name": "desk MCP tests (shard 9)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:15:36Z",
+          "completed_at": "2026-10-31T01:15:36Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:15:36Z",
+          "completed_at": "2026-10-31T01:15:40Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:15:40Z",
+          "completed_at": "2026-10-31T01:15:42Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:15:42Z",
+          "completed_at": "2026-10-31T01:15:47Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:15:47Z",
+          "completed_at": "2026-10-31T01:18:26Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:18:26Z",
+          "completed_at": "2026-10-31T01:18:28Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:18:28Z",
+          "completed_at": "2026-10-31T01:18:28Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:18:28Z",
+          "completed_at": "2026-10-31T01:18:28Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:18:28Z",
+          "completed_at": "2026-10-31T01:18:28Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248582",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154714,
+      "runner_name": "GitHub Actions 1000154714",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248731,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLuWw",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248731",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248731",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:03:41Z",
+      "completed_at": "2026-10-31T01:04:10Z",
+      "name": "Crew member binding (macos-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:03:41Z",
+          "completed_at": "2026-10-31T01:03:42Z"
+        },
+        {
+          "name": "Use CRLF line endings, as Git for Windows does",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 2,
+          "started_at": "2026-10-31T01:03:42Z",
+          "completed_at": "2026-10-31T01:03:42Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:03:42Z",
+          "completed_at": "2026-10-31T01:03:46Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:03:46Z",
+          "completed_at": "2026-10-31T01:03:49Z"
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:03:49Z",
+          "completed_at": "2026-10-31T01:03:58Z"
+        },
+        {
+          "name": "Run the member-binding tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:03:58Z",
+          "completed_at": "2026-10-31T01:04:06Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:04:06Z",
+          "completed_at": "2026-10-31T01:04:07Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:04:07Z",
+          "completed_at": "2026-10-31T01:04:07Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:04:07Z",
+          "completed_at": "2026-10-31T01:04:08Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248731",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000154494,
+      "runner_name": "GitHub Actions 1000154494",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248825,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLuuQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248825",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248825",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:16:27Z",
+      "completed_at": "2026-10-31T01:19:36Z",
+      "name": "desk MCP tests (shard 11)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:16:28Z",
+          "completed_at": "2026-10-31T01:16:29Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:16:29Z",
+          "completed_at": "2026-10-31T01:16:33Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:16:33Z",
+          "completed_at": "2026-10-31T01:16:35Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:16:35Z",
+          "completed_at": "2026-10-31T01:16:41Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:16:41Z",
+          "completed_at": "2026-10-31T01:19:31Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:19:31Z",
+          "completed_at": "2026-10-31T01:19:33Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:19:33Z",
+          "completed_at": "2026-10-31T01:19:33Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:19:33Z",
+          "completed_at": "2026-10-31T01:19:33Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:19:33Z",
+          "completed_at": "2026-10-31T01:19:33Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248825",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154730,
+      "runner_name": "GitHub Actions 1000154730",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403248986,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLvWg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403248986",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403248986",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:12:11Z",
+      "completed_at": "2026-10-31T01:14:50Z",
+      "name": "desk MCP tests (shard 12)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:12:12Z",
+          "completed_at": "2026-10-31T01:12:13Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:12:13Z",
+          "completed_at": "2026-10-31T01:12:16Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:12:16Z",
+          "completed_at": "2026-10-31T01:12:17Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:12:17Z",
+          "completed_at": "2026-10-31T01:12:23Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:12:23Z",
+          "completed_at": "2026-10-31T01:14:47Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:14:47Z",
+          "completed_at": "2026-10-31T01:14:49Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:49Z",
+          "completed_at": "2026-10-31T01:14:49Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:14:49Z",
+          "completed_at": "2026-10-31T01:14:49Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:14:49Z",
+          "completed_at": "2026-10-31T01:14:49Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403248986",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154645,
+      "runner_name": "GitHub Actions 1000154645",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403249190,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLwJg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403249190",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403249190",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:12:23Z",
+      "completed_at": "2026-10-31T01:14:49Z",
+      "name": "desk MCP tests (shard 8)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:12:24Z",
+          "completed_at": "2026-10-31T01:12:25Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:12:25Z",
+          "completed_at": "2026-10-31T01:12:28Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:12:28Z",
+          "completed_at": "2026-10-31T01:12:30Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:12:30Z",
+          "completed_at": "2026-10-31T01:12:37Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:12:37Z",
+          "completed_at": "2026-10-31T01:14:45Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:14:45Z",
+          "completed_at": "2026-10-31T01:14:46Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:46Z",
+          "completed_at": "2026-10-31T01:14:47Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:14:47Z",
+          "completed_at": "2026-10-31T01:14:47Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:14:47Z",
+          "completed_at": "2026-10-31T01:14:47Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403249190",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154649,
+      "runner_name": "GitHub Actions 1000154649",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403249538,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wLxgg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403249538",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403249538",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:20Z",
+      "started_at": "2026-10-31T01:29:33Z",
+      "completed_at": "2026-10-31T01:29:56Z",
+      "name": "desk MCP test suite",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:29:33Z",
+          "completed_at": "2026-10-31T01:29:35Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:29:35Z",
+          "completed_at": "2026-10-31T01:29:38Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:29:38Z",
+          "completed_at": "2026-10-31T01:29:40Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:29:40Z",
+          "completed_at": "2026-10-31T01:29:44Z"
+        },
+        {
+          "name": "Collect the coverage shards",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:29:44Z",
+          "completed_at": "2026-10-31T01:29:46Z"
+        },
+        {
+          "name": "Run desk MCP coverage gate",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:29:46Z",
+          "completed_at": "2026-10-31T01:29:47Z"
+        },
+        {
+          "name": "Run the boot acceptance harness unit tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:29:47Z",
+          "completed_at": "2026-10-31T01:29:49Z"
+        },
+        {
+          "name": "Verify committed generated artifacts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:29:49Z",
+          "completed_at": "2026-10-31T01:29:49Z"
+        },
+        {
+          "name": "Verify Desk host manifests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:29:49Z",
+          "completed_at": "2026-10-31T01:29:49Z"
+        },
+        {
+          "name": "Validate Desk healthy-path docs",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:29:49Z",
+          "completed_at": "2026-10-31T01:29:49Z"
+        },
+        {
+          "name": "Check the factory store has text for every Desk reason",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:29:49Z",
+          "completed_at": "2026-10-31T01:29:50Z"
+        },
+        {
+          "name": "Build runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:29:50Z",
+          "completed_at": "2026-10-31T01:29:50Z"
+        },
+        {
+          "name": "Verify runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:29:50Z",
+          "completed_at": "2026-10-31T01:29:51Z"
+        },
+        {
+          "name": "Verify runtime support matrix",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-31T01:29:51Z",
+          "completed_at": "2026-10-31T01:29:51Z"
+        },
+        {
+          "name": "Publish the relevant-revision evaluation request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-31T01:29:51Z",
+          "completed_at": "2026-10-31T01:29:51Z"
+        },
+        {
+          "name": "Report relevant-revision evaluation status",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-31T01:29:51Z",
+          "completed_at": "2026-10-31T01:29:51Z"
+        },
+        {
+          "name": "Retain verified runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-31T01:29:51Z",
+          "completed_at": "2026-10-31T01:29:52Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33,
+          "started_at": "2026-10-31T01:29:52Z",
+          "completed_at": "2026-10-31T01:29:53Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 34,
+          "started_at": "2026-10-31T01:29:53Z",
+          "completed_at": "2026-10-31T01:29:53Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 35,
+          "started_at": "2026-10-31T01:29:53Z",
+          "completed_at": "2026-10-31T01:29:53Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403249538",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154947,
+      "runner_name": "GitHub Actions 1000154947",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403271513,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNHWQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403271513",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403271513",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:26Z",
+      "started_at": "2026-10-31T01:07:08Z",
+      "completed_at": "2026-10-31T01:09:31Z",
+      "name": "desk runtime pack (win32-x64-node-137)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:07:09Z",
+          "completed_at": "2026-10-31T01:07:10Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:07:10Z",
+          "completed_at": "2026-10-31T01:07:16Z"
+        },
+        {
+          "name": "Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:07:16Z",
+          "completed_at": "2026-10-31T01:07:31Z"
+        },
+        {
+          "name": "Confirm the runtime identity this pack will claim",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:07:31Z",
+          "completed_at": "2026-10-31T01:07:32Z"
+        },
+        {
+          "name": "Install dependencies from the committed lock",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:07:32Z",
+          "completed_at": "2026-10-31T01:09:18Z"
+        },
+        {
+          "name": "Build the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:09:18Z",
+          "completed_at": "2026-10-31T01:09:19Z"
+        },
+        {
+          "name": "Resolve the produced pack directory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:09:19Z",
+          "completed_at": "2026-10-31T01:09:20Z"
+        },
+        {
+          "name": "Verify the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:09:20Z",
+          "completed_at": "2026-10-31T01:09:21Z"
+        },
+        {
+          "name": "Confirm the pack manifest claims this exact host",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:09:21Z",
+          "completed_at": "2026-10-31T01:09:21Z"
+        },
+        {
+          "name": "Load the packed native code under this runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:09:21Z",
+          "completed_at": "2026-10-31T01:09:22Z"
+        },
+        {
+          "name": "Retain the verified native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:09:22Z",
+          "completed_at": "2026-10-31T01:09:25Z"
+        },
+        {
+          "name": "Post Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-10-31T01:09:25Z",
+          "completed_at": "2026-10-31T01:09:25Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-10-31T01:09:25Z",
+          "completed_at": "2026-10-31T01:09:28Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-10-31T01:09:28Z",
+          "completed_at": "2026-10-31T01:09:28Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403271513",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000154550,
+      "runner_name": "GitHub Actions 1000154550",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403272621,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNLrQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403272621",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403272621",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:26Z",
+      "started_at": "2026-10-31T01:18:42Z",
+      "completed_at": "2026-10-31T01:20:34Z",
+      "name": "desk MCP tests (shard 5)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:18:43Z",
+          "completed_at": "2026-10-31T01:18:44Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:18:44Z",
+          "completed_at": "2026-10-31T01:18:47Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:18:47Z",
+          "completed_at": "2026-10-31T01:18:49Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:18:49Z",
+          "completed_at": "2026-10-31T01:18:53Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:18:53Z",
+          "completed_at": "2026-10-31T01:20:31Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:20:31Z",
+          "completed_at": "2026-10-31T01:20:32Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:20:32Z",
+          "completed_at": "2026-10-31T01:20:32Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:20:32Z",
+          "completed_at": "2026-10-31T01:20:32Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:20:32Z",
+          "completed_at": "2026-10-31T01:20:33Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403272621",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154775,
+      "runner_name": "GitHub Actions 1000154775",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403273846,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNQdg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403273846",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403273846",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:26Z",
+      "started_at": "2026-10-31T01:11:47Z",
+      "completed_at": "2026-10-31T01:13:31Z",
+      "name": "desk MCP tests (shard 1)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:11:48Z",
+          "completed_at": "2026-10-31T01:11:48Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:11:48Z",
+          "completed_at": "2026-10-31T01:11:52Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:11:52Z",
+          "completed_at": "2026-10-31T01:11:53Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:11:53Z",
+          "completed_at": "2026-10-31T01:11:58Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:11:58Z",
+          "completed_at": "2026-10-31T01:13:28Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:13:28Z",
+          "completed_at": "2026-10-31T01:13:29Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:13:29Z",
+          "completed_at": "2026-10-31T01:13:30Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:13:30Z",
+          "completed_at": "2026-10-31T01:13:30Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:13:30Z",
+          "completed_at": "2026-10-31T01:13:30Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403273846",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154637,
+      "runner_name": "GitHub Actions 1000154637",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403274370,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNSgg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403274370",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403274370",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:27Z",
+      "started_at": "2026-10-31T00:57:58Z",
+      "completed_at": "2026-10-31T00:59:07Z",
+      "name": "Browser fresh and mine (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T00:57:59Z",
+          "completed_at": "2026-10-31T00:57:59Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T00:57:59Z",
+          "completed_at": "2026-10-31T00:58:06Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T00:58:06Z",
+          "completed_at": "2026-10-31T00:58:14Z"
+        },
+        {
+          "name": "Allow the browser sandbox on Linux",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4,
+          "started_at": "2026-10-31T00:58:14Z",
+          "completed_at": "2026-10-31T00:58:14Z"
+        },
+        {
+          "name": "Open, use and close real fresh and mine browsers",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T00:58:14Z",
+          "completed_at": "2026-10-31T00:59:04Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T00:59:04Z",
+          "completed_at": "2026-10-31T00:59:04Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T00:59:04Z",
+          "completed_at": "2026-10-31T00:59:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T00:59:06Z",
+          "completed_at": "2026-10-31T00:59:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403274370",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000154386,
+      "runner_name": "GitHub Actions 1000154386",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403275765,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNX9Q",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403275765",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403275765",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:27Z",
+      "started_at": "2026-10-31T01:14:03Z",
+      "completed_at": "2026-10-31T01:14:19Z",
+      "name": "Crew member binding (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:14:03Z",
+          "completed_at": "2026-10-31T01:14:04Z"
+        },
+        {
+          "name": "Use CRLF line endings, as Git for Windows does",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 2,
+          "started_at": "2026-10-31T01:14:04Z",
+          "completed_at": "2026-10-31T01:14:04Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:14:04Z",
+          "completed_at": "2026-10-31T01:14:06Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:14:06Z",
+          "completed_at": "2026-10-31T01:14:10Z"
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:14:10Z",
+          "completed_at": "2026-10-31T01:14:14Z"
+        },
+        {
+          "name": "Run the member-binding tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:14:14Z",
+          "completed_at": "2026-10-31T01:14:18Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:18Z",
+          "completed_at": "2026-10-31T01:14:18Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:14:18Z",
+          "completed_at": "2026-10-31T01:14:18Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:14:18Z",
+          "completed_at": "2026-10-31T01:14:18Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403275765",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154684,
+      "runner_name": "GitHub Actions 1000154684",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403276196,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNZpA",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403276196",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403276196",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:27Z",
+      "started_at": "2026-10-31T01:04:40Z",
+      "completed_at": "2026-10-31T01:08:07Z",
+      "name": "Black-box tester (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:04:40Z",
+          "completed_at": "2026-10-31T01:04:41Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:04:42Z",
+          "completed_at": "2026-10-31T01:04:51Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:04:51Z",
+          "completed_at": "2026-10-31T01:04:59Z"
+        },
+        {
+          "name": "Allow the browser sandbox on Linux",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4,
+          "started_at": "2026-10-31T01:04:59Z",
+          "completed_at": "2026-10-31T01:04:59Z"
+        },
+        {
+          "name": "Restore the downloaded search model and browser driver",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:04:59Z",
+          "completed_at": "2026-10-31T01:05:00Z"
+        },
+        {
+          "name": "Run the black-box tester on both hosts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:05:00Z",
+          "completed_at": "2026-10-31T01:08:03Z"
+        },
+        {
+          "name": "Keep the results",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:08:03Z",
+          "completed_at": "2026-10-31T01:08:04Z"
+        },
+        {
+          "name": "Show the results table",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:08:04Z",
+          "completed_at": "2026-10-31T01:08:04Z"
+        },
+        {
+          "name": "Post Restore the downloaded search model and browser driver",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-31T01:08:04Z",
+          "completed_at": "2026-10-31T01:08:04Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-31T01:08:04Z",
+          "completed_at": "2026-10-31T01:08:04Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-31T01:08:04Z",
+          "completed_at": "2026-10-31T01:08:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-31T01:08:06Z",
+          "completed_at": "2026-10-31T01:08:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403276196",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000154515,
+      "runner_name": "GitHub Actions 1000154515",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403277762,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNfwg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403277762",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403277762",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:27Z",
+      "started_at": "2026-10-31T01:07:06Z",
+      "completed_at": "2026-10-31T01:07:27Z",
+      "name": "desk runtime pack (linux-x64-node-127)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:07:07Z",
+          "completed_at": "2026-10-31T01:07:07Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:07:07Z",
+          "completed_at": "2026-10-31T01:07:10Z"
+        },
+        {
+          "name": "Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:07:10Z",
+          "completed_at": "2026-10-31T01:07:15Z"
+        },
+        {
+          "name": "Confirm the runtime identity this pack will claim",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:07:15Z",
+          "completed_at": "2026-10-31T01:07:15Z"
+        },
+        {
+          "name": "Install dependencies from the committed lock",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:07:15Z",
+          "completed_at": "2026-10-31T01:07:21Z"
+        },
+        {
+          "name": "Build the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:07:21Z",
+          "completed_at": "2026-10-31T01:07:21Z"
+        },
+        {
+          "name": "Resolve the produced pack directory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:07:21Z",
+          "completed_at": "2026-10-31T01:07:21Z"
+        },
+        {
+          "name": "Verify the native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:07:21Z",
+          "completed_at": "2026-10-31T01:07:22Z"
+        },
+        {
+          "name": "Confirm the pack manifest claims this exact host",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:07:22Z",
+          "completed_at": "2026-10-31T01:07:22Z"
+        },
+        {
+          "name": "Load the packed native code under this runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:07:22Z",
+          "completed_at": "2026-10-31T01:07:22Z"
+        },
+        {
+          "name": "Retain the verified native runtime dependency pack",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:07:22Z",
+          "completed_at": "2026-10-31T01:07:24Z"
+        },
+        {
+          "name": "Post Set up the exact pack Node runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-10-31T01:07:24Z",
+          "completed_at": "2026-10-31T01:07:24Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-10-31T01:07:24Z",
+          "completed_at": "2026-10-31T01:07:24Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-10-31T01:07:24Z",
+          "completed_at": "2026-10-31T01:07:24Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403277762",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154548,
+      "runner_name": "GitHub Actions 1000154548",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403279583,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNm3w",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403279583",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403279583",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:14:59Z",
+      "completed_at": "2026-10-31T01:16:33Z",
+      "name": "desk MCP tests (shard 2)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:15:00Z",
+          "completed_at": "2026-10-31T01:15:01Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:15:01Z",
+          "completed_at": "2026-10-31T01:15:04Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:15:04Z",
+          "completed_at": "2026-10-31T01:15:06Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:15:06Z",
+          "completed_at": "2026-10-31T01:15:10Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:15:10Z",
+          "completed_at": "2026-10-31T01:16:29Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:16:29Z",
+          "completed_at": "2026-10-31T01:16:31Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:16:31Z",
+          "completed_at": "2026-10-31T01:16:31Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:16:31Z",
+          "completed_at": "2026-10-31T01:16:31Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:16:31Z",
+          "completed_at": "2026-10-31T01:16:31Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403279583",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154704,
+      "runner_name": "GitHub Actions 1000154704",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403279854,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNn7g",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403279854",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403279854",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:11:59Z",
+      "completed_at": "2026-10-31T01:14:55Z",
+      "name": "desk MCP tests (shard 3)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:11:59Z",
+          "completed_at": "2026-10-31T01:12:00Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:12:00Z",
+          "completed_at": "2026-10-31T01:12:03Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:12:03Z",
+          "completed_at": "2026-10-31T01:12:05Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:12:05Z",
+          "completed_at": "2026-10-31T01:12:11Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:12:11Z",
+          "completed_at": "2026-10-31T01:14:42Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:14:42Z",
+          "completed_at": "2026-10-31T01:14:43Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:43Z",
+          "completed_at": "2026-10-31T01:14:44Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:14:44Z",
+          "completed_at": "2026-10-31T01:14:44Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:14:44Z",
+          "completed_at": "2026-10-31T01:14:44Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403279854",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154641,
+      "runner_name": "GitHub Actions 1000154641",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403279932,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNoPA",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403279932",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403279932",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:19:06Z",
+      "completed_at": "2026-10-31T01:20:03Z",
+      "name": "Black-box tester (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:19:06Z",
+          "completed_at": "2026-10-31T01:19:07Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:19:07Z",
+          "completed_at": "2026-10-31T01:19:09Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:19:09Z",
+          "completed_at": "2026-10-31T01:19:09Z"
+        },
+        {
+          "name": "Allow the browser sandbox on Linux",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:19:09Z",
+          "completed_at": "2026-10-31T01:19:09Z"
+        },
+        {
+          "name": "Restore the downloaded search model and browser driver",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:19:09Z",
+          "completed_at": "2026-10-31T01:19:11Z"
+        },
+        {
+          "name": "Run the black-box tester on both hosts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:19:11Z",
+          "completed_at": "2026-10-31T01:20:00Z"
+        },
+        {
+          "name": "Keep the results",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-31T01:20:00Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        },
+        {
+          "name": "Show the results table",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-31T01:20:01Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        },
+        {
+          "name": "Post Restore the downloaded search model and browser driver",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-31T01:20:01Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-31T01:20:01Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-31T01:20:01Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-31T01:20:01Z",
+          "completed_at": "2026-10-31T01:20:01Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403279932",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154783,
+      "runner_name": "GitHub Actions 1000154783",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403280039,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNopw",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403280039",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403280039",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:03:13Z",
+      "completed_at": "2026-10-31T01:03:30Z",
+      "name": "Unused code",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:03:13Z",
+          "completed_at": "2026-10-31T01:03:14Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:03:14Z",
+          "completed_at": "2026-10-31T01:03:16Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:03:16Z",
+          "completed_at": "2026-10-31T01:03:17Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:03:17Z",
+          "completed_at": "2026-10-31T01:03:19Z"
+        },
+        {
+          "name": "Find unused code",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:03:19Z",
+          "completed_at": "2026-10-31T01:03:28Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:03:28Z",
+          "completed_at": "2026-10-31T01:03:28Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:03:28Z",
+          "completed_at": "2026-10-31T01:03:28Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:03:28Z",
+          "completed_at": "2026-10-31T01:03:28Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403280039",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154485,
+      "runner_name": "GitHub Actions 1000154485",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403280894,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNr_g",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403280894",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403280894",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:14:21Z",
+      "completed_at": "2026-10-31T01:14:57Z",
+      "name": "Release dry run (stable)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:14:21Z",
+          "completed_at": "2026-10-31T01:14:22Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:14:22Z",
+          "completed_at": "2026-10-31T01:14:25Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:14:25Z",
+          "completed_at": "2026-10-31T01:14:26Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:14:26Z",
+          "completed_at": "2026-10-31T01:14:32Z"
+        },
+        {
+          "name": "Build and check the release without keeping it",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:14:32Z",
+          "completed_at": "2026-10-31T01:14:55Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:14:55Z",
+          "completed_at": "2026-10-31T01:14:56Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:14:56Z",
+          "completed_at": "2026-10-31T01:14:56Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:56Z",
+          "completed_at": "2026-10-31T01:14:56Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403280894",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154696,
+      "runner_name": "GitHub Actions 1000154696",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403281749,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wNvVQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403281749",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403281749",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:28Z",
+      "started_at": "2026-10-31T01:17:41Z",
+      "completed_at": "2026-10-31T01:19:17Z",
+      "name": "desk MCP tests (shard 6)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:17:42Z",
+          "completed_at": "2026-10-31T01:17:44Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:17:44Z",
+          "completed_at": "2026-10-31T01:17:47Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:17:47Z",
+          "completed_at": "2026-10-31T01:17:51Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:17:51Z",
+          "completed_at": "2026-10-31T01:17:55Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:17:55Z",
+          "completed_at": "2026-10-31T01:19:15Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:19:15Z",
+          "completed_at": "2026-10-31T01:19:16Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:19:16Z",
+          "completed_at": "2026-10-31T01:19:16Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:19:16Z",
+          "completed_at": "2026-10-31T01:19:16Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:19:16Z",
+          "completed_at": "2026-10-31T01:19:16Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403281749",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154760,
+      "runner_name": "GitHub Actions 1000154760",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403283439,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wN17w",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403283439",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403283439",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:29Z",
+      "started_at": "2026-10-31T01:09:51Z",
+      "completed_at": "2026-10-31T01:10:29Z",
+      "name": "Release dry run (rc)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:09:52Z",
+          "completed_at": "2026-10-31T01:09:53Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:09:53Z",
+          "completed_at": "2026-10-31T01:09:57Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:09:57Z",
+          "completed_at": "2026-10-31T01:09:58Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:09:58Z",
+          "completed_at": "2026-10-31T01:10:04Z"
+        },
+        {
+          "name": "Build and check the release without keeping it",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:10:04Z",
+          "completed_at": "2026-10-31T01:10:27Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:10:27Z",
+          "completed_at": "2026-10-31T01:10:27Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:10:27Z",
+          "completed_at": "2026-10-31T01:10:27Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:10:27Z",
+          "completed_at": "2026-10-31T01:10:27Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403283439",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154599,
+      "runner_name": "GitHub Actions 1000154599",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403284612,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wN6hA",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403284612",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403284612",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:29Z",
+      "started_at": "2026-10-31T01:02:41Z",
+      "completed_at": "2026-10-31T01:03:25Z",
+      "name": "Browser fresh and mine (macos-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:02:41Z",
+          "completed_at": "2026-10-31T01:02:42Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:02:42Z",
+          "completed_at": "2026-10-31T01:02:46Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:02:46Z",
+          "completed_at": "2026-10-31T01:02:47Z"
+        },
+        {
+          "name": "Allow the browser sandbox on Linux",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4,
+          "started_at": "2026-10-31T01:02:47Z",
+          "completed_at": "2026-10-31T01:02:47Z"
+        },
+        {
+          "name": "Open, use and close real fresh and mine browsers",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:02:47Z",
+          "completed_at": "2026-10-31T01:03:20Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:03:20Z",
+          "completed_at": "2026-10-31T01:03:21Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:03:21Z",
+          "completed_at": "2026-10-31T01:03:22Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:03:22Z",
+          "completed_at": "2026-10-31T01:03:23Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403284612",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000154474,
+      "runner_name": "GitHub Actions 1000154474",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403284827,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wN7Ww",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403284827",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403284827",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:29Z",
+      "started_at": "2026-10-31T01:07:03Z",
+      "completed_at": "2026-10-31T01:08:01Z",
+      "name": "offline eval tests (shard 2)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:07:04Z",
+          "completed_at": "2026-10-31T01:07:04Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:07:04Z",
+          "completed_at": "2026-10-31T01:07:08Z"
+        },
+        {
+          "name": "Decide whether this change can affect the offline eval tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:07:08Z",
+          "completed_at": "2026-10-31T01:07:08Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:07:08Z",
+          "completed_at": "2026-10-31T01:07:10Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:07:10Z",
+          "completed_at": "2026-10-31T01:07:16Z"
+        },
+        {
+          "name": "Run the offline eval unit tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:07:16Z",
+          "completed_at": "2026-10-31T01:07:59Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:07:59Z",
+          "completed_at": "2026-10-31T01:07:59Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:07:59Z",
+          "completed_at": "2026-10-31T01:07:59Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:07:59Z",
+          "completed_at": "2026-10-31T01:07:59Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403284827",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154547,
+      "runner_name": "GitHub Actions 1000154547",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403285586,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wN-Ug",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403285586",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403285586",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:29Z",
+      "started_at": "2026-10-31T01:12:50Z",
+      "completed_at": "2026-10-31T01:14:52Z",
+      "name": "desk MCP tests (shard 7)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:13:01Z",
+          "completed_at": "2026-10-31T01:13:02Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:13:02Z",
+          "completed_at": "2026-10-31T01:13:05Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:13:05Z",
+          "completed_at": "2026-10-31T01:13:06Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:13:06Z",
+          "completed_at": "2026-10-31T01:13:13Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:13:13Z",
+          "completed_at": "2026-10-31T01:14:50Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:14:50Z",
+          "completed_at": "2026-10-31T01:14:51Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:14:51Z",
+          "completed_at": "2026-10-31T01:14:51Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:14:51Z",
+          "completed_at": "2026-10-31T01:14:51Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:14:51Z",
+          "completed_at": "2026-10-31T01:14:51Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403285586",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154661,
+      "runner_name": "GitHub Actions 1000154661",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403286105,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wOAWQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403286105",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403286105",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:06:46Z",
+      "completed_at": "2026-10-31T01:14:00Z",
+      "name": "offline eval tests (shard 1)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:06:47Z",
+          "completed_at": "2026-10-31T01:06:47Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:06:47Z",
+          "completed_at": "2026-10-31T01:06:51Z"
+        },
+        {
+          "name": "Decide whether this change can affect the offline eval tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:06:51Z",
+          "completed_at": "2026-10-31T01:06:51Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:06:51Z",
+          "completed_at": "2026-10-31T01:06:53Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:06:53Z",
+          "completed_at": "2026-10-31T01:06:59Z"
+        },
+        {
+          "name": "Run the offline eval unit tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:06:59Z",
+          "completed_at": "2026-10-31T01:13:58Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:13:58Z",
+          "completed_at": "2026-10-31T01:13:58Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:13:58Z",
+          "completed_at": "2026-10-31T01:13:59Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:13:59Z",
+          "completed_at": "2026-10-31T01:13:59Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403286105",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154543,
+      "runner_name": "GitHub Actions 1000154543",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403286439,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wOBpw",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403286439",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403286439",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:15:21Z",
+      "completed_at": "2026-10-31T01:17:35Z",
+      "name": "desk MCP tests (shard 4)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:15:22Z",
+          "completed_at": "2026-10-31T01:15:23Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:15:23Z",
+          "completed_at": "2026-10-31T01:15:27Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:15:27Z",
+          "completed_at": "2026-10-31T01:15:29Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:15:29Z",
+          "completed_at": "2026-10-31T01:15:35Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:15:35Z",
+          "completed_at": "2026-10-31T01:17:30Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:17:30Z",
+          "completed_at": "2026-10-31T01:17:32Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:17:32Z",
+          "completed_at": "2026-10-31T01:17:32Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:17:32Z",
+          "completed_at": "2026-10-31T01:17:33Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:17:33Z",
+          "completed_at": "2026-10-31T01:17:33Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403286439",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154711,
+      "runner_name": "GitHub Actions 1000154711",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403286794,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wODCg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403286794",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403286794",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:10:04Z",
+      "completed_at": "2026-10-31T01:10:47Z",
+      "name": "Release dry run (auto)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:10:05Z",
+          "completed_at": "2026-10-31T01:10:06Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:10:06Z",
+          "completed_at": "2026-10-31T01:10:11Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:10:11Z",
+          "completed_at": "2026-10-31T01:10:14Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:10:14Z",
+          "completed_at": "2026-10-31T01:10:20Z"
+        },
+        {
+          "name": "Build and check the release without keeping it",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:10:20Z",
+          "completed_at": "2026-10-31T01:10:44Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-31T01:10:44Z",
+          "completed_at": "2026-10-31T01:10:44Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-31T01:10:44Z",
+          "completed_at": "2026-10-31T01:10:44Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:10:44Z",
+          "completed_at": "2026-10-31T01:10:44Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403286794",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154607,
+      "runner_name": "GitHub Actions 1000154607",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403287098,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wOEOg",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403287098",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403287098",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:08:09Z",
+      "completed_at": "2026-10-31T01:10:54Z",
+      "name": "offline eval tests (shard 4)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:08:10Z",
+          "completed_at": "2026-10-31T01:08:11Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:08:11Z",
+          "completed_at": "2026-10-31T01:08:14Z"
+        },
+        {
+          "name": "Decide whether this change can affect the offline eval tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:08:14Z",
+          "completed_at": "2026-10-31T01:08:15Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:08:15Z",
+          "completed_at": "2026-10-31T01:08:19Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:08:19Z",
+          "completed_at": "2026-10-31T01:08:27Z"
+        },
+        {
+          "name": "Run the offline eval unit tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:08:27Z",
+          "completed_at": "2026-10-31T01:10:51Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:10:51Z",
+          "completed_at": "2026-10-31T01:10:51Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:10:51Z",
+          "completed_at": "2026-10-31T01:10:52Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:10:52Z",
+          "completed_at": "2026-10-31T01:10:52Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403287098",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154574,
+      "runner_name": "GitHub Actions 1000154574",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403287345,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wOFMQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403287345",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403287345",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:16:49Z",
+      "completed_at": "2026-10-31T01:18:46Z",
+      "name": "desk MCP tests (shard 10)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:16:50Z",
+          "completed_at": "2026-10-31T01:16:51Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:16:51Z",
+          "completed_at": "2026-10-31T01:16:54Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:16:54Z",
+          "completed_at": "2026-10-31T01:16:56Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:16:56Z",
+          "completed_at": "2026-10-31T01:17:02Z"
+        },
+        {
+          "name": "Run desk MCP coverage shard",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:17:02Z",
+          "completed_at": "2026-10-31T01:18:43Z"
+        },
+        {
+          "name": "Retain the shard's raw coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:18:43Z",
+          "completed_at": "2026-10-31T01:18:44Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:18:44Z",
+          "completed_at": "2026-10-31T01:18:44Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:18:44Z",
+          "completed_at": "2026-10-31T01:18:45Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:18:45Z",
+          "completed_at": "2026-10-31T01:18:45Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403287345",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000154740,
+      "runner_name": "GitHub Actions 1000154740",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124403288284,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9wOI3A",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124403288284",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124403288284",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:36:30Z",
+      "started_at": "2026-10-31T01:06:46Z",
+      "completed_at": "2026-10-31T01:09:19Z",
+      "name": "Crew member binding (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:06:46Z",
+          "completed_at": "2026-10-31T01:06:47Z"
+        },
+        {
+          "name": "Use CRLF line endings, as Git for Windows does",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:06:47Z",
+          "completed_at": "2026-10-31T01:06:48Z"
+        },
+        {
+          "name": "Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:06:48Z",
+          "completed_at": "2026-10-31T01:06:55Z"
+        },
+        {
+          "name": "Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-31T01:06:55Z",
+          "completed_at": "2026-10-31T01:07:05Z"
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-31T01:07:05Z",
+          "completed_at": "2026-10-31T01:09:04Z"
+        },
+        {
+          "name": "Run the member-binding tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-31T01:09:04Z",
+          "completed_at": "2026-10-31T01:09:17Z"
+        },
+        {
+          "name": "Post Set up Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-31T01:09:17Z",
+          "completed_at": "2026-10-31T01:09:17Z"
+        },
+        {
+          "name": "Post Check out repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-31T01:09:17Z",
+          "completed_at": "2026-10-31T01:09:18Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-10-31T01:09:18Z",
+          "completed_at": "2026-10-31T01:09:18Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124403288284",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000154544,
+      "runner_name": "GitHub Actions 1000154544",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 124404686437,
+      "run_id": 41152306038,
+      "workflow_name": "desk MCP tests",
+      "head_branch": "user/arimendelow/ci-darwin-runner-568-20261030",
+      "run_url": "https://api.github.com/repos/ourostack/desk/actions/runs/41152306038",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOUqTCFM8AAAAc9xjeZQ",
+      "head_sha": "6bfa5bb61c477b9cfeb384a1b292fe60d1116054",
+      "url": "https://api.github.com/repos/ourostack/desk/actions/jobs/124404686437",
+      "html_url": "https://github.com/ourostack/desk/actions/runs/41152306038/job/124404686437",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-31T01:42:10Z",
+      "started_at": "2026-10-31T01:43:33Z",
+      "completed_at": "2026-10-31T01:43:37Z",
+      "name": "CI gate",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-31T01:43:34Z",
+          "completed_at": "2026-10-31T01:43:34Z"
+        },
+        {
+          "name": "Require every job to have succeeded",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-31T01:43:34Z",
+          "completed_at": "2026-10-31T01:43:35Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-31T01:43:35Z",
+          "completed_at": "2026-10-31T01:43:35Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/ourostack/desk/check-runs/124404686437",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000155185,
+      "runner_name": "GitHub Actions 1000155185",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}
