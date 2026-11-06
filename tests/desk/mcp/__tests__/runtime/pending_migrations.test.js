@@ -10,6 +10,7 @@ import { execFile, execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { createMigrationRecorder } from "./_migration_recorder.js"
 import {
   MIGRATION_BUDGET_MS,
   bashHint,
@@ -565,23 +566,30 @@ test("runBlock reports a vanished timeout target without issuing native PID oper
   assert.equal(kill.mock.callCount(), 1, "Windows must not fall back to signalling a fabricated native PID")
 })
 
-test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async () => {
-  const ran = await runBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async (t) => {
+  const recorder = createMigrationRecorder({
+    context: "run-block",
+    cases: ["exit-output", "descendant-timeout", "missing-bash", "windows-descendants", "bounded-output"].map((label) => ({ label })),
+    diagnostic: (line) => t.diagnostic(line),
+  })
+  t.after(() => { recorder.dispose(); recorder.publish() })
+  const recordedRunBlock = recorder.wrapRunBlock(runBlock)
+  const ran = await recordedRunBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.deepEqual(ran, { status: 4, stdout: "out\n", stderr: "err\n", timedOut: false, unavailable: false })
   const root = await mkTempRoot("desk-pending-block-")
   const marker = path.join(root, "grandchild.pid")
-  const slow = await runBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
+  const slow = await recordedRunBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
   assert.equal(slow.timedOut, true)
   assert.equal(slow.status, null)
   assert.equal(slow.unavailable, false)
   const grandchild = Number(execFileSync("cat", [marker], { encoding: "utf8" }).trim())
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
-  const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
+  const missing = await recordedRunBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
-  const windows = await runBlock("sleep 5", { ...windowsTimeoutOptions, env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: resolveBash(), spawn: windowsTimeoutSpawn })
+  const windows = await recordedRunBlock("sleep 5", { ...windowsTimeoutOptions, env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: resolveBash(), spawn: windowsTimeoutSpawn })
   assert.equal(windows.timedOut, true, "Windows termination must include the shell's descendants")
-  const chatty = await runBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+  const chatty = await recordedRunBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.ok(chatty.stdout.length < 100_000, "output is kept bounded")
 })
 
@@ -726,13 +734,27 @@ test("pendingMigrations sorts every fired Detect into what the startup line asks
   assert.ok(realpathSync(path.join(root, "ran")), "a safe, restart-free migration runs in the hook")
 })
 
-test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget are unchecked or left to the agent", async () => {
+test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget are unchecked or left to the agent", async (t) => {
   const root = await plugin([
     { id: "01-slow-detect", detect: "sleep 5" },
     { id: "02-slow-check", check: "sleep 5" },
     { id: "03-slow-migrate", migrate: "sleep 5" },
   ])
-  const slow = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, blockLimitMs: 1_500 })
+  const recorder = createMigrationRecorder({
+    context: "budget",
+    cases: [
+      { label: "01-slow-detect:detect", source: "sleep 5" },
+      { label: "02-slow-check:detect", source: "exit 0" },
+      { label: "03-slow-migrate:detect", source: "exit 0" },
+      { label: "02-slow-check:safety-check", source: "sleep 5" },
+      { label: "03-slow-migrate:safety-check", source: "exit 0" },
+      { label: "03-slow-migrate:migrate", source: "sleep 5" },
+    ],
+    diagnostic: (line) => t.diagnostic(line),
+  })
+  t.after(() => { recorder.dispose(); recorder.publish() })
+  const recordedPendingMigrations = recorder.wrapPendingMigrations(pendingMigrations)
+  const slow = await recordedPendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, blockLimitMs: 1_500 })
   assert.deepEqual(slow, [
     { id: "01-slow-detect", state: "unchecked" },
     { id: "02-slow-check", state: "run", reason: "its Safety check did not finish in time" },
