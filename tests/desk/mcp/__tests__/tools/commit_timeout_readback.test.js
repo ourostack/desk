@@ -134,11 +134,13 @@ test("lesson_add: a file that held another session's edit gets a route that keep
 const cases = [
   {
     name: "task_create",
+    card: true,
     rel: "europe-trip/book-flights/task.md",
     run: (root, spawnGit, schedulePush) => task_create({ deskRoot: root, input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" }, spawnGit, schedulePush }),
   },
   {
     name: "task_update",
+    card: true,
     rel: "t/book-flights/task.md",
     setup: (root) => task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} }),
     run: (root, spawnGit, schedulePush) => task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } }, spawnGit, schedulePush }),
@@ -179,7 +181,9 @@ for (const c of cases) {
     const result = await c.run(root, timedOutBeforeCommit, (opts) => pushes.push(opts))
     assert.equal(result.commit?.status, "failed")
     assertRoute(result.commit.route_around)
-    assert.deepEqual(publishRoots(result.commit.route_around), [root], "the route publishes the desk root a success would schedule")
+    // A live card's route is held and publishes nothing (0972 #2 on ae1395e4); every other route publishes the desk root.
+    if (c.card) assert.equal(result.commit.route_around.held, true)
+    assert.deepEqual(publishRoots(result.commit.route_around), c.card ? [] : [root], "the route publishes the desk root a success would schedule")
     assert.equal(clean(root, c.rel), false, "the write is kept")
     assert.deepEqual(pushes, [])
   })
@@ -393,6 +397,62 @@ test("the route of a task move that did not land, run by hand, commits the move 
   for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
   assert.notEqual(remoteShow(origin, "trip/old-name/task.md").status, 0, "the remote holds no copy at the old name")
   assert.equal(remoteShow(origin, "trip/new-name/notes.md").stdout, "notes\n")
+})
+
+// 0972 #2 on ae1395e4: a live card commits only through task_update, and a new task_update appends a new note and takes along
+// whatever the card holds by then, so it is never this captured change. The route for a card reads where the captured change
+// stands and stops: it calls no tool, commits nothing and publishes nothing, and another session's later staged and unstaged
+// edits to the card and its track.md stay exactly as they were.
+function assertCardHeld(route, card) {
+  assertRoute(route)
+  assert.equal(route.held, true, "the route of a live card is held")
+  for (const step of route.steps) {
+    assert.equal(step.tool, undefined, `no Desk tool step: ${step.step}`)
+    assert.ok(step.argv === undefined || readsOnly(step), `every step only reads: ${step.step}`)
+  }
+  assert.doesNotMatch(JSON.stringify(route), /sync-push\.js|finish-commit\.js[^"]*--commit/u, "nothing is published or committed")
+  assert.match(route.steps.at(-1).step, /^Stop here/u)
+  assert.match(route.steps.at(-1).step, new RegExp(`task_update for ${card}`, "u"))
+  assert.match(route.steps.at(-1).step, /not this captured change/u, "a new task_update is never presented as finishing the captured change")
+}
+
+async function cardTimedOut() {
+  const { root, origin } = await repoWithOrigin()
+  await track_create({ deskRoot: root, input: { slug: "t", title: "T", scope: SCOPE }, schedulePush: () => {} })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+  assert.equal(git(root, ["status", "--porcelain"]), "", "the fixture is committed")
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
+  assert.equal(result.commit?.status, "failed")
+  return { root, origin, route: result.commit.route_around }
+}
+
+const CARD = ["t/book-flights/task.md", "t/track.md"]
+
+test("the route of a live card whose commit did not land is held: it reads, calls no task_update, and commits nothing", async () => {
+  const { root, origin, route } = await cardTimedOut()
+  const before = indexState(root, CARD)
+  const remote = git(root, ["rev-parse", "@{u}"])
+  const { code, first } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
+  assert.equal(code, 3, first[0].stdout)
+  assertCardHeld(route, "t/book-flights")
+  assert.deepEqual(indexState(root, CARD), before, "HEAD, the index and the checkout are as they were")
+  assert.equal(spawnSync("git", ["--git-dir", origin, "rev-parse", "main"], { encoding: "utf8" }).stdout, remote, "nothing was published")
+  assert.notEqual(runArgv(route.committed_locally_when.argv)[0].status, 0, "the local read-back does not call it committed")
+})
+
+test("the route of a live card leaves another session's later staged and unstaged edits to the card and track.md exactly as they were", async () => {
+  const { root, route } = await cardTimedOut()
+  await fs.appendFile(path.join(root, "t", "track.md"), "\nAnother session's staged edit.\n", "utf8")
+  await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nAnother session's staged edit.\n", "utf8")
+  git(root, ["add", "--", ...CARD])
+  await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nAnother session's unstaged edit.\n", "utf8")
+  await fs.appendFile(path.join(root, "t", "track.md"), "\nAnother session's unstaged edit.\n", "utf8")
+  const before = indexState(root, CARD)
+  assertCardHeld(route, "t/book-flights")
+  const { code, first } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
+  assert.notEqual(code, 0, first[0].stdout)
+  assert.deepEqual(indexState(root, CARD), before, "the other session's staged and unstaged work is untouched")
+  assert.notEqual(runArgv(route.committed_locally_when.argv)[0].status, 0)
 })
 
 // R2 (0972 on #625): a clean status is no proof. The change was unstaged and its file removed after the failure: status is clean,

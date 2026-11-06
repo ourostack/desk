@@ -9,7 +9,8 @@
 // failure carries the change Desk captured before it dispatched (`capture`: the entries with their modes, the HEAD and the
 // branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
 // cannot qualify, builds the commit from a private index with the repository's hooks run through Git, and moves the branch
-// by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
+// by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). A live task card's captured change is held instead: only task_update
+// commits a card, and a new task_update is a new write, never the captured change (0972 #2). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
 //
 // What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
 // card guard's override variable, a hard-coded remote or branch (the published read-back compares with the checkout's own
@@ -49,24 +50,41 @@ function deskPaths(root, deskRoot, paths) {
 }
 
 /**
+ * The route for a live task card's captured change (0972 #2 on ae1395e4). The card guard refuses a hand commit of a live card, so
+ * only task_update commits one, and a new task_update appends a new note and takes along whatever the card and its track.md hold
+ * by then: a new write, never this captured change. So the route reads where the captured change stands and stops; it calls no
+ * tool, commits nothing and publishes nothing.
+ */
+function cardRoute({ root, paths, message, readback, card, capture }) {
+  const check = finishArgv(root, paths, message, capture)
+  return {
+    summary: readback === "absent"
+      ? `Desk's commit of the card ${card} did not land, and no step here can commit a live card safely. Read where the captured change stands, change nothing, and report.`
+      : `Desk cannot tell whether its commit of the card ${card} landed, and no step here can commit a live card safely. Read where the captured change stands, change nothing, and report.`,
+    steps: [
+      { step: `Read back where the captured change stands. ${READS_ONLY} Exit 0: HEAD already holds exactly it, committed here, and Desk's next push of this desk carries it. Exit 3 (ready), 4 (held) or 5 (unknown): it is not committed, or Desk cannot tell.`, argv: check },
+      { step: `Stop here: change nothing, and report step 1's JSON together with the tool's failure. Desk does not finish a live card by hand: the card guard refuses a hand commit, and that protection stays. A new task_update for ${card} appends a new note and commits whatever the card${paths.length > 1 ? ` and ${paths.slice(1).join(", ")}` : ""} hold by then, which may include another session's edit: that is a new write, not this captured change, so a person decides whether to make it.` },
+    ],
+    committed_locally_when: { argv: check, expect: "exits 0 and prints \"state\":\"committed\"; any other answer means this captured change is not proven committed, and nothing here commits it" },
+    held: true,
+  }
+}
+
+/**
  * The route for a commit Desk could not finish: exactly `paths` (relative to `root`) with `message`. `readback` is the commit's
  * read-back (`absent` or `unknown`); `capture` is the change Desk captured before dispatch (`{ before, branch, expected }`), when it
  * could; `card` names a live task card (`<track>/<slug>`) that is `paths[0]`, which the card guard lets in only through
- * task_update. `deskRoot` is the root a successful call hands `schedulePush`; the publish step uses exactly it, never a nested
- * `root`, because the push worker's lock and delivery state are keyed by it (R6), and Desk tool steps name paths relative to it.
+ * task_update, so its route is held. `deskRoot` is the root a successful call hands `schedulePush`; the publish step uses exactly
+ * it, never a nested `root`, because the push worker's lock and delivery state are keyed by it (R6), and Desk tool steps name
+ * paths relative to it.
  */
 export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root, capture = null }) {
   const publish = { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) }
   const published_when = publishedWhen(root, paths)
+  if (capture && card !== null) return cardRoute({ root, paths, message, readback, card, capture })
   if (capture) {
     const check = finishArgv(root, paths, message, capture)
-    const finish = card === null
-      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit from a private index, runs the repository's commit hooks through Git, and moves the branch by one compare-and-swap against the HEAD step 1 qualified, so a branch another writer moved is refused, never overwritten; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
-      : [{
-        step: `Only if step 1 exited 3 (ready): call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then read ${paths.slice(1).join(", ")} with \`git diff HEAD\`, and only if it shows nothing but this call's change, commit ${paths.length > 2 ? "them" : "it"} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""}`,
-        tool: "task_update",
-        arguments: { track: card.split("/")[0], slug: card.split("/").slice(1).join("/"), note: "Committing the card change an earlier call left uncommitted." },
-      }]
+    const finish = [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit from a private index, runs the repository's commit hooks through Git, and moves the branch by one compare-and-swap against the HEAD step 1 qualified, so a branch another writer moved is refused, never overwritten; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
     return {
       summary: readback === "absent"
         ? "Desk's commit did not land. Finish exactly the change Desk captured: read where it stands, commit it once only if the read says ready, publish, then read back the remote."

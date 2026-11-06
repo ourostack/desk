@@ -508,8 +508,9 @@ function stagingAllowed(filePath, spawnGit) {
 // return value, which a caller attaches to its result under `commit` only
 // on failure, so a normal, silent success stays byte-identical to today's
 // response shape.
-// A failure carries `route_around` (#561, #623); `card` names a live card (`<track>/<slug>`), which the route commits
-// through task_update because the card guard refuses a hand commit of it. A commit that timed out but landed is `undefined`.
+// A failure carries `route_around` (#561, #623); `card` names a live card (`<track>/<slug>`), whose route only reads and stops:
+// the card guard refuses a hand commit of it, and a new task_update is a new write, not this change. A commit that timed out but
+// landed is `undefined`.
 function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = [], card = null, deskRoot = path.dirname(filePath)) {
   const dir = path.dirname(filePath)
   const paths = [path.basename(filePath), ...alsoRelative]
