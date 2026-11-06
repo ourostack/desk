@@ -1,0 +1,1 @@
+The one-time desk tidy now prints its instructions directly instead of passing them through a shell heredoc, which could block before the reader started on affected Bash installations. Its instructions, claim metadata and repeat-run behavior are unchanged.
