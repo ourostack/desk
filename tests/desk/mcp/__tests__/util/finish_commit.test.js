@@ -34,9 +34,8 @@ function repo() {
 const head = (root) => git(root, ["rev-parse", "HEAD"]).trim()
 const snapshot = (root, paths) => ({ head: head(root), index: git(root, ["ls-files", "-s", "--", ...paths]), cached: git(root, ["diff", "--cached", "--", ...paths]), worktree: git(root, ["diff", "--", ...paths]) })
 
-// A commit dispatch Git refuses before it lands: what a pre-commit hook that runs out of time leaves. A `git commit`, or the
-// pre-commit hook a commit runs on its own (`git hook run pre-commit`).
-const refused = (cmd, args, opts) => ((args.includes("commit") || args.includes("pre-commit")) && !args.includes("rev-parse") ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(cmd, args, opts))
+// A commit dispatch Git refuses before it lands: what a pre-commit hook that runs out of time leaves.
+const refused = (cmd, args, opts) => (args.includes("commit") && !args.includes("rev-parse") ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(cmd, args, opts))
 
 // The commit runs for real, then the call reports a timeout and every later read of HEAD fails: Desk cannot classify it.
 function landedUnreadable() {
