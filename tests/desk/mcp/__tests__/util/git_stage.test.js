@@ -21,6 +21,7 @@ import {
   commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
+  readBackCommit,
   YIELD_ENV,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
@@ -536,4 +537,82 @@ test("a real post-commit hook that outlasts the bound: the commit lands, Git is 
   assert.equal(result.ok, true)
   assert.equal(result.readback, "committed")
   assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "save")
+})
+
+// readBackCommit answers only what Git proves: every read it cannot make is `unknown`, a HEAD that moved without touching these paths is
+// `absent`, and nothing it reads is taken as this call's commit unless the commit, its message, its paths and its entries all match.
+async function landedSave(root) {
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["commit", "-q", "-m", "save", "--", "a.txt"])
+  const expected = [`100644 ${git(root, ["rev-parse", "HEAD:a.txt"]).trim()}\ta.txt`]
+  return { before, expected }
+}
+const failing = (verb, when = () => true) => (command, args, options) =>
+  (args[2] === verb && when(args) ? { status: 1, stdout: "", stderr: `${verb} failed` } : spawnSync(command, args, options))
+
+test("readBackCommit: a HEAD that moved only by commits to other paths is absent", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  await fs.writeFile(path.join(root, "b.txt"), "theirs\n")
+  git(root, ["add", "b.txt"])
+  git(root, ["commit", "-q", "-m", "theirs"])
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [], spawnSync), { readback: "absent" })
+})
+
+test("readBackCommit: a commit to these paths with nothing captured to compare it with is unknown", async () => {
+  const root = await repoWithChange()
+  const { before } = await landedSave(root)
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, null, spawnSync), { readback: "unknown" })
+})
+
+test("readBackCommit: more new commits than it reads is unknown, never a guess from the newest few", async () => {
+  const root = await repoWithChange()
+  const { before, expected } = await landedSave(root)
+  for (let i = 0; i < 50; i++) git(root, ["commit", "-q", "--allow-empty", "-m", `later ${i}`])
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "unknown" })
+})
+
+test("readBackCommit: an unborn HEAD after a born one, or a HEAD read with no output, is unknown", async () => {
+  const root = await repoWithChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  const silentUnborn = (command, args, options) => (args[2] === "rev-parse" ? { status: 1 } : spawnSync(command, args, options))
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, [], silentUnborn), { readback: "unknown" })
+})
+
+test("readBackCommit: each read Git cannot make is unknown, never absent or committed", async () => {
+  const root = await repoWithChange()
+  const { before, expected } = await landedSave(root)
+  const ours = git(root, ["rev-parse", "HEAD"]).trim()
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "committed" }, "the reads that work prove it")
+  for (const [verb, when] of [["rev-list"], ["diff-tree"], ["log"], ["ls-tree"]])
+    assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, failing(verb, when)), { readback: "unknown" }, verb)
+  // Ours is not the newest commit: HEAD's own entries are read apart, and a failure there is unknown too.
+  git(root, ["commit", "-q", "--allow-empty", "-m", "later"])
+  const after = git(root, ["rev-parse", "HEAD"]).trim()
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, spawnSync), { readback: "committed" })
+  assert.deepEqual(readBackCommit(root, ["a.txt"], "save", before, expected, failing("ls-tree", (args) => args.includes(after))), { readback: "unknown" })
+  assert.notEqual(ours, after)
+})
+
+test("a commit whose branch read comes back empty carries no capture, so its route can never commit", async () => {
+  const root = await repoWithChange()
+  git(root, ["add", "--", "a.txt"])
+  let branchReads = 0
+  const spawn = (command, args, options) => {
+    if (args[2] === "symbolic-ref" && args.includes("HEAD") && ++branchReads === 2) return { status: 0 }
+    if (args[2] === "commit") return { status: 1, stdout: "", stderr: "hook said no" }
+    return spawnSync(command, args, options)
+  }
+  const result = commitPaths(root, ["a.txt"], "save", spawn)
+  assert.deepEqual(result, { ok: false, stderr: "hook said no", readback: "absent" })
+  assert.equal(branchReads, 2, "the refusal check and the branch read")
+})
+
+test("a path commit whose working tree differs from the index carries no capture: the commit would take bytes no read hashed", async () => {
+  const root = await repoWithChange()
+  git(root, ["add", "--", "a.txt"])
+  await fs.writeFile(path.join(root, "a.txt"), "three\n")
+  const result = commitPaths(root, ["a.txt"], "save", (command, args, options) => (args[2] === "commit" ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options)))
+  assert.deepEqual(result, { ok: false, stderr: "hook said no", readback: "absent" })
 })
