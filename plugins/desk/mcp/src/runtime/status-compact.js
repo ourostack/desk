@@ -76,6 +76,7 @@ function syncLine(sync) {
   if (typeof sync === "string") return sync
   if (sync === null || typeof sync !== "object") return null
   if (syncDegradation(sync.last_pull) !== null) return `last pull failed${sync.last_pull.cause ? ` (${sync.last_pull.cause})` : ""}: not known to be in sync`
+  if (sync.effects?.push === "unknown") return "push outcome unknown: read back the source and remote before retry"
   if (sync.blocked === true) return `blocked${sync.reason ? ` (${sync.reason})` : ""}`
   if (sync.behind > 0) return `${sync.behind} commit(s) behind origin`
   if (sync.ahead > 0) return `${sync.ahead} commit(s) ahead of origin, not pushed yet`
@@ -131,7 +132,7 @@ export function compactStatus(payload) {
     summary: state === "ready" ? readySummary : starting ? startingSummary(payload.admission) : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
+    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Read git -C ${shellQuote(payload.root?.path ?? "<desk>")} status --short --branch and the retained sync result. Read back unknown source/remote effects before retry; do not rebase, autostash, reset or abort shared work as a sync retry.` } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),

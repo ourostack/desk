@@ -163,14 +163,14 @@ test("sync leaves untracked files alone when the pull fails on a conflict", asyn
   const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
 
   assert.equal(result.state, "unresolved")
-  assert.equal(result.cause, "conflict")
+  assert.equal(result.cause, "diverged")
   assert.equal(result.quarantinedPaths, undefined)
   assert.equal(await fs.readFile(path.join(cloneA, "draft.md"), "utf8"), "another session's draft\n")
   assert.equal(await fs.readFile(path.join(cloneA, "track", "task", "planning.md"), "utf8"), "in progress\n")
   assert.equal(existsSync(path.join(cloneA, "_cache")), false, "nothing was moved anywhere")
 })
 
-test("sync moves only the paths git says would be overwritten", async () => {
+for (const diverged of [false, true]) test(`sync ${diverged ? "preserves divergent history and blocking untracked files" : "moves only the paths git says would be overwritten"}`, async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   mkdirSync(path.join(cloneB, "notes"), { recursive: true })
@@ -185,11 +185,20 @@ test("sync moves only the paths git says would be overwritten", async () => {
   await fs.writeFile(path.join(cloneA, "notes", "mine.md"), "another session's note\n")
   await fs.writeFile(path.join(cloneA, "draft.md"), "another session's draft\n")
   // A local commit makes the pull a real rebase, the shape a busy desk has.
-  await writeAndCommit(cloneA, "local.md", "local\n", "local commit")
+  if (diverged) await writeAndCommit(cloneA, "local.md", "local\n", "local commit")
   const today = new Date().toISOString().slice(0, 10)
 
   const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
 
+  if (diverged) {
+    assert.equal(result.state, "unresolved")
+    assert.equal(result.cause, "diverged")
+    assert.equal(result.quarantinedPaths, undefined)
+    assert.equal(await fs.readFile(path.join(cloneA, "stray.txt"), "utf8"), "local uncommitted\n")
+    assert.equal(await fs.readFile(path.join(cloneA, "notes", "café plan.md"), "utf8"), "local note\n")
+    assert.equal(existsSync(path.join(cloneA, "_cache")), false)
+    return
+  }
   assert.equal(result.state, "quarantined", JSON.stringify(result))
   assert.deepEqual([...result.quarantinedPaths].sort(), [
     path.join("_cache", `stray-${today}`, "notes", "café plan.md"),
@@ -291,7 +300,7 @@ test("quarantine skips a stray path that no longer exists by the time it runs, a
   // git names ghost.txt as in the way and lists it as untracked, but it is gone before the move.
   const spawnGit = (cmd, args, opts) => {
     const result = spawnSync(cmd, args, opts)
-    if (args.includes("ls-files")) return { ...result, stdout: `${result.stdout}ghost.txt\0` }
+    if (args.includes("--others")) return { ...result, stdout: `${result.stdout}ghost.txt\0` }
     if (args.includes("pull") && result.status !== 0) return { ...result, stderr: result.stderr.replace("\tstray.txt\n", "\tstray.txt\n\tghost.txt\n") }
     return result
   }
@@ -306,7 +315,7 @@ test("quarantine skips a stray path that no longer exists by the time it runs, a
 // Unresolved: a genuine tracked-file conflict, with nothing to quarantine.
 // ---------------------------------------------------------------------------
 
-test("a genuine tracked-file conflict with no untracked paths is unresolved, files through the detached filer, and leaves no rebase in progress", async () => {
+test("divergent tracked edits are unresolved without replaying or aborting history", async () => {
   const { cloneA } = await mkConflictFixture()
   let filed = null
   const fileProblem = (args) => { filed = args }
@@ -316,10 +325,10 @@ test("a genuine tracked-file conflict with no untracked paths is unresolved, fil
   assert.equal(result.quarantinedPaths, undefined)
   assert.match(result.diagnostic, /^Desk problem: session-sync — session-start pull did not resolve$/mu)
   assert.match(result.diagnostic, /pull_rebase_failed\)/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u)
+  assert.deepEqual(result.conflicted, [], "no merge was attempted, so no conflicted path was invented")
   assert.match(result.diagnostic, /filing in background/u)
 
-  assert.deepEqual(filed, { root: cloneA, env, reason: "pull_rebase_failed:conflict", host: "unknown" })
+  assert.deepEqual(filed, { root: cloneA, env, reason: "pull_rebase_failed:diverged", host: "unknown" })
   // The abort actually ran: no rebase left mid-flight, and the working tree is restored to
   // cloneA's own (still-local, unpushed) commit, clean of conflict markers.
   assert.ok(!existsSync(path.join(cloneA, ".git", "rebase-apply")))
@@ -327,7 +336,7 @@ test("a genuine tracked-file conflict with no untracked paths is unresolved, fil
   assert.equal(git(cloneA, ["status", "--porcelain"]).trim(), "")
 })
 
-test("a quarantine retry that still fails is unresolved, reports the quarantined paths, and files through the detached filer", async () => {
+test("divergence prevents quarantine even when an incoming file also collides with untracked work", async () => {
   const { cloneA, cloneB } = await mkDirtyIndexFixture()
   // Make the retry fail too, for a different (tracked-file conflict) reason: cloneA commits a
   // conflicting local edit to seed.md that origin also changed.
@@ -340,14 +349,14 @@ test("a quarantine retry that still fails is unresolved, reports the quarantined
   const result = await syncWorkspace({ root: cloneA, env, fileProblem })
 
   assert.equal(result.state, "unresolved")
-  assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.length === 1)
-  assert.match(result.diagnostic, /pull_rebase_failed_after_quarantine\)/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u)
-  assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:conflict")
+  assert.equal(result.quarantinedPaths, undefined)
+  assert.match(result.diagnostic, /pull_rebase_failed\)/u)
+  assert.equal(filed.reason, "pull_rebase_failed:diverged")
+  assert.equal(await fs.readFile(path.join(cloneA, "stray.txt"), "utf8"), "local uncommitted\n")
   assert.ok(!existsSync(path.join(cloneA, ".git", "rebase-merge")))
 })
 
-test("conflictedPaths and untrackedPaths degrade to empty when their own git commands fail, still reaching unresolved", async () => {
+test("an index safety read failure is explicit and never authorizes a pull or quarantine", async () => {
   const { cloneA } = await mkDirtyIndexFixture()
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("ls-files") || args.includes("--diff-filter=U")) return { status: 1, stdout: "" }
@@ -358,7 +367,8 @@ test("conflictedPaths and untrackedPaths degrade to empty when their own git com
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
   assert.doesNotMatch(result.diagnostic, /conflicted:/u)
-  assert.equal(filed.reason, "pull_rebase_failed:conflict")
+  assert.equal(result.reason, "git_state_unavailable")
+  assert.equal(filed, null)
 })
 
 // ---------------------------------------------------------------------------
@@ -415,7 +425,7 @@ test("GIT_SSH_COMMAND defaults to -o BatchMode=yes alone when nothing was alread
 // in `git status --porcelain`, and does not drop its own stash entry.
 // ---------------------------------------------------------------------------
 
-test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop conflicted as unresolved, and leaves no rebase in progress", async () => {
+test("an incoming change that overlaps pending work is refused without creating an autostash conflict", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await writeAndCommit(cloneB, "seed.md", "seed\nfrom origin\n", "origin edits seed")
@@ -431,14 +441,15 @@ test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
-  assert.match(result.diagnostic, /autostash_pop_conflict\)/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u)
-  assert.equal(filed.reason, "autostash_pop_conflict")
+  assert.match(result.diagnostic, /pull_rebase_failed\)/u)
+  assert.deepEqual(result.conflicted, [])
+  assert.equal(filed.reason, "pull_rebase_failed:conflict")
 
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
-  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the stash-pop conflict is real, left on disk exactly as real git leaves it")
-  assert.match(git(cloneA, ["stash", "list"]), /autostash/u, "the stash entry is deliberately not dropped, exactly as real git leaves it")
+  assert.equal(await fs.readFile(path.join(cloneA, "seed.md"), "utf8"), "seed\nfrom A working tree\n")
+  assert.equal(git(cloneA, ["ls-files", "-u"]), "")
+  assert.equal(git(cloneA, ["stash", "list"]), "")
 })
 
 // The retry pull (after a dirty-index quarantine) can leave its own
@@ -449,7 +460,7 @@ test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop
 // a scripted spawnGit" pattern `sync_worker.test.js`'s own "the loop
 // re-checks for new commits" test already uses -- since quarantine only ever
 // moves the untracked paths it already found, never touching a tracked file.
-test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop conflict as unresolved too, with the reason and quarantined paths both reported", async () => {
+test("the quarantine retry preserves a tracked edit that arrives after the first refusal", async () => {
   const { origin, cloneA } = await mkDirtyIndexFixture()
   const cloneB2 = await mkClone(origin, "b2", { trackMain: true })
   await writeAndCommit(cloneB2, "seed.md", "seed\nfrom origin\n", "origin edits seed too")
@@ -457,7 +468,7 @@ test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop c
 
   let injected = false
   const spawnGit = (cmd, args, opts) => {
-    if (!injected && args.includes("ls-files")) {
+    if (!injected && args.includes("--others")) {
       injected = true
       writeFileSync(path.join(cloneA, "seed.md"), "seed\nfrom A working tree\n")
     }
@@ -468,13 +479,15 @@ test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop c
 
   assert.equal(result.state, "unresolved")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the original stray path was still quarantined before the retry ran")
-  assert.match(result.diagnostic, /autostash_pop_conflict_after_quarantine\)/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u)
-  assert.equal(filed.reason, "autostash_pop_conflict_after_quarantine")
+  assert.match(result.diagnostic, /pull_rebase_failed_after_quarantine\)/u)
+  assert.deepEqual(result.conflicted, [])
+  assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:conflict")
 
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
-  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the retry's own stash-pop conflict is real, left on disk exactly as real git leaves it")
+  assert.equal(await fs.readFile(path.join(cloneA, "seed.md"), "utf8"), "seed\nfrom A working tree\n")
+  assert.equal(git(cloneA, ["ls-files", "-u"]), "")
+  assert.equal(git(cloneA, ["stash", "list"]), "")
 })
 
 // ---------------------------------------------------------------------------
@@ -520,11 +533,10 @@ test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull whe
 
 test("syncWorkspace reports sync_deadline_exceeded, without attempting a second pull, when the budget runs out after quarantining", async () => {
   const { cloneA } = await mkDirtyIndexFixture()
-  let exhausted = false
-  const now = () => (exhausted ? 999_999 : 0)
+  const moved = path.join(cloneA, "_cache", `stray-${new Date().toISOString().slice(0, 10)}`, "stray.txt")
+  const now = () => (existsSync(moved) ? 999_999 : 0)
   let pullCalls = 0
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("ls-files")) exhausted = true
     if (args.includes("pull")) pullCalls += 1
     return spawnSync(cmd, args, opts)
   }
@@ -567,44 +579,50 @@ test("run() itself refuses to spawn once the per-call budget is exhausted, never
   assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
 })
 
-test("stashCount falls back to 0 when its own git stash list call fails, and again when it returns non-string stdout", async () => {
+test("sync preserves existing stashes without consulting or applying them", async () => {
   const { cloneA: cloneStatus } = await mkOriginWithClone()
+  await fs.writeFile(path.join(cloneStatus, "seed.md"), "held stash bytes\n")
+  git(cloneStatus, ["stash", "push", "-q"])
+  const held = git(cloneStatus, ["stash", "list", "--format=%H"])
+  let stashReads = 0
   const failingStatus = (cmd, args, opts) => {
-    if (args.includes("stash") && args.includes("list")) return { status: 1, stdout: "" }
+    if (args.includes("stash") && args.includes("list")) { stashReads++; return { status: 1, stdout: "" } }
     return spawnSync(cmd, args, opts)
   }
-  assert.deepEqual(await syncWorkspace({ root: cloneStatus, env, spawnGit: failingStatus }), { state: "synced" }, "a stashCount lookup that fails outright still resolves synced on an already-clean pull")
+  assert.deepEqual(await syncWorkspace({ root: cloneStatus, env, spawnGit: failingStatus }), { state: "synced" })
+  assert.equal(git(cloneStatus, ["stash", "list", "--format=%H"]), held)
 
   const { cloneA: cloneStdout } = await mkOriginWithClone()
   const nonStringStdout = (cmd, args, opts) => {
-    if (args.includes("stash") && args.includes("list")) return { status: 0, stdout: undefined }
+    if (args.includes("stash") && args.includes("list")) { stashReads++; return { status: 0, stdout: undefined } }
     return spawnSync(cmd, args, opts)
   }
-  assert.deepEqual(await syncWorkspace({ root: cloneStdout, env, spawnGit: nonStringStdout }), { state: "synced" }, "a stashCount lookup with non-string stdout falls back the same way")
+  assert.deepEqual(await syncWorkspace({ root: cloneStdout, env, spawnGit: nonStringStdout }), { state: "synced" })
+  assert.equal(stashReads, 0)
 })
 
-test("syncWorkspace reports sync_deadline_exceeded right after the first pull's own conflict is captured and aborted, carrying firstConflicted through", async () => {
+test("syncWorkspace stops at the post-pull deadline without cleanup, quarantine or a retry", async () => {
   const { cloneA } = await mkConflictFixture()
-  // The deadline, the pre-pull checkpoint and the git steps up to the abort are all within budget. The second checkpoint is the one
-  // right after that abort (`if (remaining() <= 0) return deadlineExceeded(firstConflicted)`), which this scripts as exhausted so
-  // the sequence gives up there instead of ever reaching untrackedPaths/quarantine.
-  const clock = checkpointClock({ exhaustedAtCheckpoint: 2 })
-  const now = clock.now
+  let exhausted = false
+  const now = () => exhausted ? 999_999 : 0
+  let pulls = 0
   let untrackedCalled = false
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("ls-files")) untrackedCalled = true
-    return spawnSync(cmd, args, opts)
+    if (args.includes("--others")) untrackedCalled = true
+    const result = spawnSync(cmd, args, opts)
+    if (args.includes("pull")) { pulls++; exhausted = true }
+    return result
   }
   let filed = null
   const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined, "the budget ran out before quarantine was ever attempted")
-  assert.equal(clock.checkpoints(), 2, "the sequence stopped at the checkpoint right after the first pull's abort")
+  assert.equal(pulls, 1, "the real pull completed before the injected deadline")
   assert.equal(untrackedCalled, false, "untrackedPaths was never reached once this checkpoint gave up")
   assert.match(result.diagnostic, /sync_deadline_exceeded/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u, "firstConflicted -- captured before the abort that cleared it -- was carried through into the diagnostic")
+  assert.deepEqual(result.conflicted, [], "fast-forward refusal does not manufacture an unmerged path")
   assert.equal(filed, null, "a deadline is not a Desk defect, so nothing is filed")
-  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "the defensive abort still ran before this checkpoint gave up")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "no rebase was started")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
 })
 

@@ -92,7 +92,7 @@ export const TOOL_IMPLS = {
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal, env = process.env }) {
+export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal, env = process.env, writeContext }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -125,6 +125,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     const result = await impl({
       deskRoot, input: input ?? {}, person, statusContext, search,
       queryRouter: searchRouter(search), signal,
+      ...(name === "desk_save" ? { writeContext } : {}),
     })
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result

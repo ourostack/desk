@@ -8,11 +8,16 @@ import { EXACT, sameFile } from "../util/file-identity.js"
 // Both names are locked: a branch can be reacquired at a different path, and a
 // worktree path can be reused with another branch. Locks outlive worktree admin.
 // Paths from Git arrive with forward slashes on Windows; the claim works in the platform's own spelling, and two spellings of one folder (case, short name) take the same locks.
-export async function withWorkspaceClaim({ repository: givenRepository, worktree: givenWorktree, branch, owner }, action) {
+export async function withWorkspaceClaim({ repository: givenRepository, worktree: givenWorktree, branch, owner, reuse }, action) {
   const repository = nativeGitPath(givenRepository)
   const worktree = nativeGitPath(givenWorktree)
   if (!path.isAbsolute(repository) || !path.isAbsolute(worktree) || !/^refs\/heads\/.+/u.test(branch) || typeof owner !== "string" || !owner) {
     throw new Error("exact resource claim requires repository, worktree, branch and owner")
+  }
+  const resource = { repository, worktree, branch, owner }
+  if (reuse !== undefined) {
+    if (typeof reuse?.run !== "function") throw new Error("invalid internal workspace claim capability")
+    return reuse.run(resource, action)
   }
   if (!samePath(await fs.realpath(repository), repository)) throw new Error("claim repository identity is not canonical")
   const directory = path.join(repository, "desk-resource-claims")
@@ -21,13 +26,30 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
   const token = randomUUID()
   const record = JSON.stringify({ token, owner, repository, worktree, branch, pid: process.pid, start: await readProcessStart(process.pid) })
   const claims = []
+  let live = true
+  let nested = 0
   const assertHeld = async () => {
+    if (!live) throw new Error("workspace claim capability expired")
     for (const claim of claims) {
       const info = await fs.lstat(claim.file, EXACT)
       if (!info.isFile() || info.nlink !== 1n || !sameFile(info, claim) ||
           await fs.readFile(claim.file, "utf8") !== record) throw new Error("exact resource claim changed; cleanup refused")
     }
   }
+  const capability = Object.freeze({
+    async run(requested, callback) {
+      if (!live) throw new Error("workspace claim capability expired")
+      if (!samePath(requested.repository, repository) || !samePath(requested.worktree, worktree) ||
+          requested.branch !== branch || requested.owner !== owner) throw new Error("workspace claim owner/resource mismatch")
+      nested += 1
+      try {
+        await assertHeld()
+        return await callback(assertHeld, capability)
+      } finally {
+        nested -= 1
+      }
+    },
+  })
   try {
     for (const identity of [`branch:${branch}`, `worktree:${foldPath(worktree)}`].sort()) {
       const file = path.join(directory, `${createHash("sha256").update(identity).digest("hex")}.lock`)
@@ -43,11 +65,12 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
       } finally { await handle.close() }
     }
     await assertHeld()
-    return await action(assertHeld)
+    return await action(assertHeld, capability)
   } finally {
     // A replaced/unreadable claim is not ours to remove. Preserve it for exact
     // owner reconciliation, and never treat age or a reused PID as authority.
-    await assertHeld()
+    try { await assertHeld() } finally { live = false }
+    if (nested !== 0) throw new Error("workspace claim has an unsettled nested owner; claim retained")
     for (const claim of claims.reverse()) await fs.unlink(claim.file)
   }
 }

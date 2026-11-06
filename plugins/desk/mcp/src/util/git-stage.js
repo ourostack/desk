@@ -26,7 +26,7 @@ const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-gu
 /**
  * Why Desk must not stage or commit in `root` right now, or null when it may. A detached HEAD is always refused. Beyond that, `stateBranch` says what the caller knows:
  * - a branch name: the checkout must be on it (the host configured a state branch);
- * - `null`: no state branch is configured, so the checkout must be on the branch `origin/HEAD` names when the remote has one, and any named branch will do otherwise;
+ * - `null`: no state branch is configured, so any named branch is eligible;
  * - `undefined`: the caller was not told, so only the detached-HEAD rule applies. The session's write gate has already applied the full rule before a tool runs; this is the backstop for any path that skips it.
  * A Git read that cannot run (a status other than 0, or 1 for a detached HEAD) is not a refusal here: the stage or commit itself then fails and says why.
  */
@@ -36,13 +36,8 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
   if (status !== 0 && status !== 1) return null
   const found = status === 0 ? String(head.stdout ?? "").trim() : ""
   if (found === "") return "Desk did not write: the desk checkout is on a detached HEAD. Switch it to a branch and try again."
-  let expected = stateBranch
-  if (expected === null) {
-    const remote = run(spawnGit, root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
-    const name = remote.status === 0 ? String(remote.stdout).trim() : ""
-    expected = name.startsWith("origin/") ? name.slice("origin/".length) : undefined
-  }
-  if (expected === undefined || found === expected) return null
+  const expected = stateBranch
+  if (expected == null || found === expected) return null
   return `Desk did not write: the desk checkout is on branch \`${found}\`, and Desk writes only on \`${expected}\`. Switch the checkout to \`${expected}\` and try again.`
 }
 
