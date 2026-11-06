@@ -9,7 +9,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
-import { unlinkSync } from "node:fs"
+import { unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -188,10 +188,10 @@ test("stagePaths reports { ok: false, stderr: \"timeout\" } when the git call ti
   assert.deepEqual(result, { ok: false, stderr: "timeout" })
 })
 
-test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
+test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing, and cannot tell whether it landed when every read-back times out too", async () => {
   const root = await mkTempRepo()
   const result = commitPaths(root, ["a.txt"], "message", etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+  assert.deepEqual(result, { ok: false, stderr: "timeout", readback: "unknown" })
 })
 
 // Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
@@ -297,7 +297,9 @@ for (const indexed of [false, true]) test(`a ${indexed ? "temporary-index" : "pa
   const result = indexed
     ? commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
     : commitPaths(root, ["a.txt"], "save", spawn)
-  assert.equal(result.ok, false)
+  // The failed dispatch had landed, so the read-back (never a second dispatch) reports it committed (#561).
+  assert.equal(result.ok, true)
+  assert.equal(result.readback, "committed")
   assert.equal(dispatches, 1)
   assert.equal(commitCount(root), 1)
   assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n")
@@ -336,4 +338,202 @@ test("staging waits for an observed index lock before its single mutation dispat
   assert.equal(probes, 3)
   assert.equal(stages, 1)
   assert.equal(git(root, ["show", ":a.txt"]), "one\n")
+})
+
+// #561: a commit can land and still come back as a failure, most often because a post-commit hook (Git LFS, say) ran past the bound and the commit
+// was killed after it had already written. A failed commit call is read back once, never redispatched: the commit is `committed` when a new commit on
+// HEAD holds exactly this call's message, only these paths and the content this call meant to commit; `absent` when HEAD shows no new commit to them;
+// and `unknown` otherwise. Only the read-back reads Git again.
+const landedThenTimedOut = (counter) => (command, args, options) => {
+  const actual = spawnSync(command, args, options)
+  if (args[2] !== "commit") return actual
+  counter.commits++
+  assert.equal(actual.status, 0, actual.stderr)
+  return etimedoutResult()
+}
+const neverRanThenTimedOut = (counter) => (command, args, options) => {
+  if (args[2] !== "commit") return spawnSync(command, args, options)
+  counter.commits++
+  return etimedoutResult()
+}
+
+
+// A failure carries the change captured before dispatch (R2, R3): the HEAD and branch it was made on and the staged entries at
+// exactly its paths, so a route can finish that change and never whatever the paths hold later.
+function withoutCapture(root, result) {
+  const { capture, ...rest } = result
+  assert.deepEqual(capture, {
+    before: git(root, ["rev-list", "--max-parents=0", "HEAD"]).trim(),
+    branch: git(root, ["symbolic-ref", "--short", "HEAD"]).trim(),
+    expected: [`100644 ${git(root, ["hash-object", "a.txt"]).trim()}\ta.txt`],
+  })
+  return rest
+}
+
+for (const indexed of [false, true]) {
+  const kind = indexed ? "temporary-index" : "path"
+  const commit = (root, spawn, message = "save") => {
+    const entries = indexEntries(root, ["a.txt"], spawnSync)
+    return indexed ? commitIndexPaths(root, ["a.txt"], entries, message, spawn) : commitPaths(root, ["a.txt"], message, spawn)
+  }
+  const staged = async (root) => {
+    await fs.writeFile(path.join(root, "a.txt"), "two\n")
+    git(root, ["add", "--", "a.txt"])
+  }
+
+  test(`a ${kind} commit that lands but times out is read back as committed, dispatched once`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    const result = commit(root, landedThenTimedOut(counter))
+    assert.equal(result.ok, true)
+    assert.equal(result.readback, "committed")
+    assert.equal(counter.commits, 1)
+    assert.equal(commitCount(root), 2)
+    assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+  })
+
+  test(`a ${kind} commit that times out before it lands is read back as absent, dispatched once`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    const result = commit(root, neverRanThenTimedOut(counter))
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "absent" })
+    assert.equal(counter.commits, 1)
+    assert.equal(commitCount(root), 1)
+  })
+
+  test(`a ${kind} commit whose new commit on these paths is not this call's is read back as unknown, never committed`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    const spawn = (command, args, options) => {
+      if (args[2] !== "commit") return spawnSync(command, args, options)
+      counter.commits++
+      git(root, ["commit", "-q", "-m", "someone else", "--", "a.txt"])
+      return etimedoutResult()
+    }
+    const result = commit(root, spawn)
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.equal(counter.commits, 1)
+  })
+
+  test(`a ${kind} commit is read back as unknown when Git cannot answer the read-back, and never redispatched`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    let broken = false
+    const spawn = (command, args, options) => {
+      if (broken) return etimedoutResult()
+      if (args[2] !== "commit") return spawnSync(command, args, options)
+      counter.commits++
+      broken = true
+      return etimedoutResult()
+    }
+    const result = commit(root, spawn)
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.equal(counter.commits, 1)
+  })
+
+  // R4 (0972 on #625): "it happened" and "it is in effect now" are separate proofs. A commit of ours that a later commit overwrote before the
+  // read-back is not completion, and nothing is replayed.
+  test(`a ${kind} commit that lands but is overwritten before the read-back is unknown, never committed or replayed`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const counter = { commits: 0 }
+    const spawn = (command, args, options) => {
+      const actual = spawnSync(command, args, options)
+      if (args[2] !== "commit") return actual
+      counter.commits++
+      assert.equal(actual.status, 0, actual.stderr)
+      writeFileSync(path.join(root, "a.txt"), "someone else\n")
+      git(root, ["commit", "-q", "-m", "someone else", "--", "a.txt"])
+      return etimedoutResult()
+    }
+    const result = commit(root, spawn)
+    assert.equal(result.ok, false)
+    assert.equal(result.readback, "unknown")
+    assert.equal(result.stderr, "timeout")
+    assert.equal(result.landed.head, git(root, ["rev-parse", "HEAD"]).trim())
+    assert.equal(git(root, ["log", "-1", "--format=%s", result.landed.commit]).trim(), "save")
+    assert.equal(counter.commits, 1)
+  })
+
+  test(`a ${kind} commit Git refused with an error is read back as absent`, async () => {
+    const root = await repoWithChange()
+    await staged(root)
+    const spawn = (command, args, options) => (args[2] === "commit" ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options))
+    assert.deepEqual(withoutCapture(root, commit(root, spawn)), { ok: false, stderr: "hook said no", readback: "absent" })
+  })
+}
+
+test("a path commit from a subfolder that lands but times out is read back as committed", async () => {
+  const root = await repoWithChange()
+  await fs.mkdir(path.join(root, "desks", "me"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "me", "AGENTS.md"), "rule\n")
+  const dir = path.join(root, "desks", "me")
+  git(dir, ["add", "--", "AGENTS.md"])
+  const counter = { commits: 0 }
+  const result = commitPaths(dir, ["AGENTS.md"], "lesson_add: personal rule", landedThenTimedOut(counter))
+  assert.equal(result.ok, true)
+  assert.equal(result.readback, "committed")
+  assert.equal(counter.commits, 1)
+})
+
+// R4 (0972 on #625): what a path commit meant is captured before it is dispatched, never rebuilt from the working tree afterwards. A later edit
+// to the working tree is someone's change after ours, not evidence about ours; a commit that landed with other bytes than the captured ones is not ours.
+test("a path commit that lands as captured is committed even when the working tree changes before the read-back", async () => {
+  const root = await repoWithChange()
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "--", "a.txt"])
+  const spawn = (command, args, options) => {
+    const actual = spawnSync(command, args, options)
+    if (args[2] !== "commit") return actual
+    unlinkSync(path.join(root, "a.txt"))
+    return etimedoutResult()
+  }
+  const result = commitPaths(root, ["a.txt"], "save", spawn)
+  assert.equal(result.ok, true)
+  assert.equal(result.readback, "committed")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("a path commit that lands with bytes other than the ones captured before dispatch is unknown, even when the working tree now matches them", async () => {
+  const root = await repoWithChange()
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "--", "a.txt"])
+  let commits = 0
+  const spawn = (command, args, options) => {
+    if (args[2] !== "commit") return spawnSync(command, args, options)
+    commits++
+    writeFileSync(path.join(root, "a.txt"), "rewritten by a hook\n")
+    const actual = spawnSync(command, args, options)
+    assert.equal(actual.status, 0, actual.stderr)
+    return etimedoutResult()
+  }
+  const result = commitPaths(root, ["a.txt"], "save", spawn)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.equal(commits, 1)
+})
+
+test("a real post-commit hook that outlasts the bound: the commit lands, Git is killed, and the read-back says committed", { skip: process.platform === "win32" ? "a POSIX sleep hook" : false }, async t => {
+  const root = await repoWithChange()
+  t.diagnostic(`Owned fixture: ${root}; removed by the exact-root registry at file teardown.`)
+  const hooks = git(root, ["rev-parse", "--git-path", "hooks"]).trim()
+  const hook = path.resolve(root, hooks, "post-commit")
+  await fs.mkdir(path.dirname(hook), { recursive: true })
+  await fs.writeFile(hook, "#!/bin/sh\nsleep 3\n", { mode: 0o755 })
+  await fs.writeFile(path.join(root, "a.txt"), "two\n")
+  git(root, ["add", "--", "a.txt"])
+  let killed = null
+  const shortBound = (command, args, options) => {
+    const result = spawnSync(command, args, args[2] === "commit" ? { ...options, timeout: 1000 } : options)
+    if (args[2] === "commit") killed = result.error?.code ?? null
+    return result
+  }
+  const result = commitPaths(root, ["a.txt"], "save", shortBound)
+  assert.equal(killed, "ETIMEDOUT")
+  assert.equal(result.ok, true)
+  assert.equal(result.readback, "committed")
+  assert.equal(git(root, ["log", "-1", "--format=%s"]).trim(), "save")
 })

@@ -30,8 +30,16 @@ async function timedOutArchive({ track = true, trackContent = trackBefore, commi
         error: Object.assign(new Error("owned commit timeout"), { code: "ETIMEDOUT" }) }
     },
   })
-  assert.equal(result.status, "archive_pending")
-  assert.equal(result.commit.reason, "timeout")
+  if (committed) {
+    // A commit that timed out after it landed is read back as committed (#561, #556): archived at once, no pending answer.
+    assert.equal(result.status, "archived")
+    assert.equal(result.commit, undefined)
+  } else {
+    assert.equal(result.status, "archive_pending")
+    assert.equal(result.commit.reason, "timeout")
+    assert.equal(result.publication.status, "pending")
+    assert.ok(result.route_around, "an archive that is not published carries route_around")
+  }
   f.index = git(f.root, "ls-files", "-s")
   return f
 }
@@ -80,13 +88,42 @@ for (const [name, mutate] of [
   assert.equal(git(f.root, "status", "--porcelain"), status)
 })
 
-test("a timeout after the commit took effect is reconciled without a duplicate commit", async () => {
+test("a timeout after the commit took effect is read back as archived, without a duplicate commit", async () => {
   const f = await timedOutArchive({ committed: true })
   const head = git(f.root, "rev-parse", "HEAD")
   assert.notEqual(head, f.head)
   assert.equal((await retry(f)).status, "already_archived")
   assert.equal(git(f.root, "rev-parse", "HEAD"), head)
   assert.equal(git(f.root, "ls-files", "-s", "--", "unrelated.txt"), f.unrelated)
+})
+
+// R5 (0972 on #625): a commit Desk cannot classify stays unknown in every field and word of the answer; it is never reported as a
+// commit that failed or a publication that is merely pending. Here the archive's commit lands, then another commit changes the track
+// before the read-back, so the archive happened but is not what HEAD holds now (R4).
+test("an archive commit that landed but HEAD no longer holds is unknown in the commit and the publication, never failed or pending", async () => {
+  const f = await archiveFixture()
+  await fs.writeFile(path.join(f.root, "t/track.md"), trackBefore)
+  git(f.root, "add", "--", "t/track.md")
+  git(f.root, "commit", "-q", "-m", "owned track baseline")
+  const result = await retry(f, {
+    spawnGit(command, args, options) {
+      if (args[2] !== "commit") return spawnSync(command, args, options)
+      const answer = spawnSync(command, args, options)
+      assert.equal(answer.status, 0, answer.stderr)
+      const other = spawnSync("git", ["-C", f.root, "rm", "-q", "--cached", "--", "t/track.md"], { encoding: "utf8" })
+      assert.equal(other.status, 0, other.stderr)
+      const theirs = spawnSync("git", ["-C", f.root, "commit", "-q", "-m", "someone else"], { encoding: "utf8" })
+      assert.equal(theirs.status, 0, theirs.stderr)
+      return { status: null, signal: "SIGTERM", stdout: "", stderr: "",
+        error: Object.assign(new Error("owned commit timeout"), { code: "ETIMEDOUT" }) }
+    },
+  })
+  assert.equal(result.status, "archive_pending")
+  assert.equal(result.commit.status, "unknown")
+  assert.equal(result.publication.status, "unknown")
+  assert.ok(result.commit.landed?.commit, "the answer says the archive's commit happened, separately from what HEAD holds now")
+  assert.ok(result.route_around, "an unknown archive carries route_around")
+  assert.doesNotMatch(JSON.stringify(result.route_around.summary), /did not land/u)
 })
 
 test("staged retry without a track card publishes the relocation", async () => {
@@ -196,8 +233,10 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
     } catch (error) { if (error.code !== "ENOENT") throw error }
     await fs.unlink(hook)
   }
-  assert.equal(result.status, "archive_pending")
-  assert.equal(result.commit.reason, "timeout")
+  // The post-commit hook runs after the commit landed, so the read-back finds it committed (#561, #556); a pre-commit timeout left nothing.
+  assert.equal(result.status, phase === "pre-commit" ? "archive_pending" : "archived")
+  if (phase === "pre-commit") assert.equal(result.commit.reason, "timeout")
+  else assert.equal(result.commit, undefined)
   const events = (await fs.readFile(trace, "utf8")).trim().split("\n").map(line => JSON.parse(line))
   assert.ok(events.some(event => event.event === "child_start" && event.hook_name === phase),
     "native trace must identify the hook phase reached before timeout")
@@ -230,4 +269,46 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
   } else {
     assert.ok(absent, "owned hook process must retire before fixture cleanup")
   }
+})
+
+// R3 (0972 on #625): the archive's admitted entries travel with its route, with their modes. With core.symlinks=false a link is
+// a placeholder file holding its target; a route that committed the path from disk would make it a regular file (100644).
+const runArgv = (argv) => spawnSync(argv[0], argv.slice(1), { encoding: "utf8" })
+const companion = "t/_archive/mode-proof/companion.txt"
+
+test("an archive commit that timed out before landing is finished by its route with the admitted link entry, once", async () => {
+  const f = await archiveFixture({ symlinks: false, mode: "120000" })
+  const result = await retry(f, { spawnGit(command, args, options) {
+    if (args[2] === "commit") return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }
+    return spawnSync(command, args, options)
+  } })
+  assert.equal(result.status, "archive_pending")
+  const [check, finish] = result.route_around.steps.map((step) => step.argv)
+  assert.ok(check.includes(`120000 ${f.sha}\t${companion}`), "the route carries the admitted link entry")
+  assert.equal(runArgv(check).status, 3, "ready")
+  const done = runArgv(finish)
+  assert.equal(done.status, 0, done.stdout)
+  assert.match(git(f.root, "ls-tree", "HEAD", "--", companion), new RegExp(`^120000 blob ${f.sha}\\t`), "a link kept a link")
+  assert.equal(git(f.root, "rev-parse", "HEAD~1"), f.head, "exactly one commit")
+  assert.equal(git(f.root, "diff", "--cached", "--name-only"), "", "the shared index agrees with HEAD")
+  assert.equal(runArgv(check).status, 0, "read back: committed")
+})
+
+test("an archive whose link metadata could not be staged carries the admitted entries in a route that is held and changes nothing", async () => {
+  const f = await archiveFixture({ symlinks: false, mode: "120000" })
+  const result = await retry(f, { spawnGit(command, args, options) {
+    if (args[2] === "update-index" && args.includes("--index-info") && !options?.env?.GIT_INDEX_FILE) return { status: 1, stdout: "", stderr: "update-index failed" }
+    return spawnSync(command, args, options)
+  } })
+  assert.equal(result.status, "archive_pending")
+  const route = result.route_around
+  const check = route.steps[0].argv
+  assert.ok(String(check[1]).endsWith("finish-commit.js") && !check.includes("--commit"), "step 1 reads where the admitted change stands")
+  assert.ok(check.includes(`120000 ${f.sha}\t${companion}`), "the route carries the admitted link entry, never the placeholder's 100644")
+  assert.equal(route.steps.some((step) => step.tool === "desk_save"), false, "never a save of what disk holds")
+  const head = git(f.root, "rev-parse", "HEAD"), index = git(f.root, "ls-files", "-s"), status = git(f.root, "status", "--porcelain")
+  const read = runArgv(check)
+  assert.equal(read.status, 4, `held while the shared index holds the placeholder: ${read.stdout}`)
+  assert.equal(runArgv([...check, "--commit"]).status, 4, "held with --commit too: nothing is committed")
+  assert.deepEqual([git(f.root, "rev-parse", "HEAD"), git(f.root, "ls-files", "-s"), git(f.root, "status", "--porcelain")], [head, index, status])
 })

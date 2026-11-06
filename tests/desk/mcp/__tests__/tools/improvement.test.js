@@ -15,6 +15,7 @@ import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "../../../../../plugins/desk/mcp/s
 import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { SOURCES, CLOSE_REASONS, cardKey, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { READ_ONLY_TOOLS } from "../../../../../plugins/desk/mcp/src/factory/headless-flag.js"
+import { assertRoute } from "./_route_around.js"
 
 const JOB = "0123456789abcdef0123456789abcdef"
 const FP = "fedcba9876543210fedcba9876543210"
@@ -127,6 +128,7 @@ test("a commit failure reports a code and never loses the card or the library's 
   assert.equal(answer.status, "ok")
   assert.equal(answer.commit, "commit_failed")
   assert.equal(JSON.stringify(answer).includes("secret"), false)
+  assertRoute(answer.route_around)
   assert.equal((await fs.readdir(w.folder)).length, 1)
   assert.deepEqual(w.pushes, [])
 })

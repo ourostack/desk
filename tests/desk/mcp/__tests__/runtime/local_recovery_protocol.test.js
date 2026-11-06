@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, symlinkSync, readFileSync, realpathSync } fro
 import { PassThrough } from "node:stream"
 import { EventEmitter } from "node:events"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import { runRecovery, launchBootstrap } from "../../../../../plugins/desk/mcp/scripts/local-recovery.js"
 
 const fixturePath = path.resolve(process.env.TMPDIR ?? ".local-recovery-evidence/scratch", `recovery-protocol-${process.pid}`)
@@ -20,7 +21,7 @@ function stream(text = "{}") {
   input.end(text)
   return input
 }
-function mockTransport(answer = () => ({ status: "updated" })) {
+function mockTransport(answer = () => ({ status: "updated" }), statusOf = status) {
   const sent = []
   const launch = async () => {
     const input = new PassThrough()
@@ -32,7 +33,7 @@ function mockTransport(answer = () => ({ status: "updated" })) {
       let result
       if (request.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fixture", version: "1" } }
       if (request.method === "tools/list") result = { tools: [{ name: "task_update" }] }
-      if (request.params?.name === "desk_status") result = { content: [{ type: "text", text: JSON.stringify(status()) }] }
+      if (request.params?.name === "desk_status") result = { content: [{ type: "text", text: JSON.stringify(statusOf()) }] }
       if (request.params?.name === "task_update") result = { content: [{ type: "text", text: JSON.stringify(answer()) }] }
       output.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n")
     })
@@ -390,6 +391,19 @@ test("no Git observation is explicit partial state, not commit success", async (
   const result = await recovery({ env: { PATH: "" }, launch: fixture.launch })
   assert.equal(result.report.effects.commit, "unknown")
   assert.equal(result.report.code, "commit_not_observed")
+})
+
+test("a commit the tool could not read back stays unknown, never read as not observed (#561)", async () => {
+  const gitRoot = path.join(root, "git-desk")
+  mkdirSync(gitRoot, { recursive: true })
+  const git = (...args) => assert.equal(spawnSync("git", ["-C", gitRoot, ...args], { encoding: "utf8" }).status, 0)
+  git("init", "-q"); git("config", "user.email", "t@example.com"); git("config", "user.name", "T")
+  git("commit", "-q", "--allow-empty", "-m", "seed")
+  const fixture = mockTransport(() => ({ status: "updated", commit: { status: "unknown", reason: "timeout" } }), () => ({ ...status(), root: { valid: true, path: gitRoot } }))
+  const result = await runRecovery({ argv: ["--root", gitRoot, "--operation", "task_update"], cwd: gitRoot, env: { PATH: process.env.PATH }, input: stream(), timeoutMs: 1000, launch: fixture.launch })
+  assert.equal(result.report.effects.commit, "unknown", "an unchanged HEAD does not prove the commit is absent when the tool could not tell")
+  assert.equal(result.report.status, "partial")
+  assert.equal(result.exitCode, 2)
 })
 
 test("non-string input values are not echoed or reinterpreted", async () => {
