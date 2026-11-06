@@ -20,6 +20,12 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
+## Inspect local binary storage
+
+`node scripts/lfs.js inspect --repo "/existing/repository"` prints bounded, read-only local LFS observations without running hooks, content filters or network operations. Exit `0` means an inspection report, not storage readiness. `desk_doctor` can request a separate, redacted observation section with `{"storage":"inspect"}`; default and preview calls do not inspect storage. See the [inspector contract](../docs/lfs-inspection.md) and [doctor's scope, next steps and worker budget](../docs/lfs-doctor.md).
+
+Fresh-create bootstrap uses `node scripts/lfs.js create --repo "/existing/parent/absent-desk"` to plan local PDF/PNG storage, then the same command with `--apply --expect-plan "<plan_sha256>"` to create only that absent root. It never adopts an existing path, installs software, commits, binds or publishes. Existing-repository conversion, clone hydration, remote service/budget access and installed-payload qualification remain separate gates. See the [owned creator contract and partial-effect recovery](../docs/lfs-creation.md).
+
 ## Validated local recovery after a confirmed transport mismatch
 
 Use this command only after the agent has confirmed a requested/actual desk mismatch, refused the misrouted mutation, and established the intended existing desk. A missing-card error alone is not a mismatch. Permission, validation, containment and genuinely missing-card refusals remain refusals; this command is not an override or a machine-binding repair. [Issue #301](https://github.com/ourostack/desk/issues/301) records a motivating observed mismatch, not a selection bug fixed by this transport.

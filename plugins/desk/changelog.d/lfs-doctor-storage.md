@@ -1,0 +1,1 @@
+Add explicit `desk_doctor` storage inspection in an owned, bounded worker, with redacted local observations and read-only next steps separate from MCP runtime health. Default and preview behavior remain unchanged; local observations do not qualify remote publication, installed payloads or binary-storage setup.

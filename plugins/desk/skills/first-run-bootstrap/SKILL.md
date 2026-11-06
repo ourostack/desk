@@ -48,9 +48,22 @@ If nothing was found, lead with creating a fresh desk. Never offer "continue wit
 
 - **Local desk:** bind it in place; do not copy or move it.
 - **Clone:** clone with the authenticated remote into the chosen path, then verify origin and the desk shape.
-- **Fresh-create:** create `_archive/` and `_meta/`, each holding an empty `.gitkeep` so a clone keeps the desk shape, a `.gitignore` containing `.state/`, `.machine-local.yml`, `~$*` (Office lock files, which appear while a document in the desk is open), `/*.txt` and `/*/*.txt`, `/*.png` and `/*/*.png`, `/*.jpg` and `/*/*.jpg`, `/*.log` and `/*/*.log` (anchored to the desk root and one level down only, so a real deliverable inside a task folder two levels down or deeper is never silently ignored), `undefined/` (the literal shape an unexported shell variable's path produces), and `_cache/` (the Desk-problem quarantine directory — git-ignored, never committed; tidy flags anything stale inside it for the operator to review and delete, it never deletes anything itself), and a short README; initialize Git and commit. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
+- **Fresh-create:** run the owned new-root operation below before writing the scaffold or adding a binary. Only after `configured_local`, create `_archive/` and `_meta/`, each holding an empty `.gitkeep` so a clone keeps the desk shape, a `.gitignore` containing `.state/`, `.machine-local.yml`, `~$*` (Office lock files, which appear while a document in the desk is open), `/*.txt` and `/*/*.txt`, `/*.png` and `/*/*.png`, `/*.jpg` and `/*/*.jpg`, `/*.log` and `/*/*.log` (anchored to the desk root and one level down only, so a real deliverable inside a task folder two levels down or deeper is never silently ignored), `undefined/` (the literal shape an unexported shell variable's path produces), and `_cache/` (the Desk-problem quarantine directory — git-ignored, never committed; tidy flags anything stale inside it for the operator to review and delete, it never deletes anything itself), and a short README. The helper has already initialized Git on `main`; commit the scaffold and `.gitattributes` through the ordinary contribution path without reinitializing or changing identity/signing policy. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
 - **Operator-provided path or URL:** bind an existing path without copying it; clone a URL.
 - **Skip:** warn that task lifecycle, recall, resumption, friction and lesson persistence are unavailable for this session, and offer bootstrap again next session.
+
+For fresh-create only, use the absent absolute path selected at A3. The parent must already exist and have a canonical, non-symlink identity. From the loaded Desk plugin, run:
+
+```bash
+node "<Desk plugin folder>/mcp/scripts/lfs.js" create --repo "<absent absolute desk path>"
+node "<Desk plugin folder>/mcp/scripts/lfs.js" create --repo "<absent absolute desk path>" --apply --expect-plan "<plan_sha256 from the first result>"
+```
+
+Read the plan before applying it. The existing A3 fresh-create choice covers this local setup; do not add a redundant approval for unchanged supported defaults. The plan hash detects stale inputs, not authority or writer custody. The helper must create the root itself; the bootstrap owner and its helper remain the sole cooperating writers until the scaffold and binding handoff. This does not exclude arbitrary editors.
+
+The initial supported slice is a new local POSIX repository with an already available Git LFS client and compatible default policy. It configures local filters, native standard LFS hooks and PDF/PNG attributes, with conventional `plugins/` payload exemptions, before the first binary add. Other formats, future custom package roots, native Windows, existing repositories, adoption, conversion and clone hydration remain separate qualification gates. Never use `create` on a local/clone/operator-provided existing path or Entrance B, and do not stage unsupported binaries as an ordinary-Git fallback without agreement. [Creator contract](../../docs/lfs-creation.md).
+
+On `refused`, no root was acquired: preserve the path and resolve the named local prerequisite through the established tooling or policy owner. No installer, global configuration change or policy removal is included. On `partial`, the creating caller retains recovery responsibility for the exact created root and its recorded effects; preserve newer contents, do not delete or rerun `create` to force progress, and do not advance to A5. A repeated create must refuse `EEXIST`, including after a partial failure. Only `configured_local` permits the ordinary scaffold to continue, and it still leaves the root unbound and binary publication unqualified.
 
 #### A5. Bind, activate and verify V2
 
@@ -86,6 +99,8 @@ The public RFC stays optional and on demand. Use it when the operator wants desi
 ## Completion evidence
 
 Record which entrance ran, the source and destination state, the active V2 roots and declarations, MCP (including `desk-web`) and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
+
+For fresh-create, record the creator's local result and retained receipt, separately from selected-destination qualification. `configured_local` is not usable binary sync: remote availability, authentication, service budget, upload and independent cold-consumer bytes remain `not_checked`. Qualification is a separate authorized operation, never an automatic account/batch/upload probe by the creator or doctor. Unknown or refused service gates keep binary publication pending; preserve local text/offline use and original bytes. Do not change billing/admin policy, bypass hooks or silently fall back to ordinary Git. Do not hardcode a hosting plan's quota or forecast. Local/adopted/cloned desks receive no storage qualification from the new-root operation.
 
 ## Cross-references
 
