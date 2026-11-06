@@ -312,3 +312,21 @@ test("an archive whose link metadata could not be staged carries the admitted en
   assert.equal(runArgv([...check, "--commit"]).status, 4, "held with --commit too: nothing is committed")
   assert.deepEqual([git(f.root, "rev-parse", "HEAD"), git(f.root, "ls-files", "-s"), git(f.root, "status", "--porcelain")], [head, index, status])
 })
+
+test("an archive whose metadata could not be staged, on a checkout Git no longer puts on a branch, carries no capture: its route only reads", async () => {
+  const f = await archiveFixture({ symlinks: false, mode: "120000" })
+  let failed = false
+  const result = await retry(f, { spawnGit(command, args, options) {
+    if (args[2] === "update-index" && args.includes("--index-info") && !options?.env?.GIT_INDEX_FILE) {
+      failed = true
+      return { status: 1, stdout: "", stderr: "update-index failed" }
+    }
+    if (failed && args[2] === "symbolic-ref") return { status: 1, stdout: "", stderr: "" }
+    return spawnSync(command, args, options)
+  } })
+  assert.equal(result.status, "archive_pending")
+  const route = result.route_around
+  assert.equal(route.held, true, "no capture, so the route is held")
+  assert.deepEqual(route.steps[0].argv.map((argv) => argv.slice(3, 5)), [["diff", "HEAD"], ["log", "-1"]], "it reads the paths and stops")
+  assert.equal(JSON.stringify(route).includes("finish-commit"), false, "no finish step without a capture")
+})
