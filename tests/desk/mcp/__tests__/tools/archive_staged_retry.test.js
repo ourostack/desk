@@ -97,6 +97,35 @@ test("a timeout after the commit took effect is read back as archived, without a
   assert.equal(git(f.root, "ls-files", "-s", "--", "unrelated.txt"), f.unrelated)
 })
 
+// R5 (0972 on #625): a commit Desk cannot classify stays unknown in every field and word of the answer; it is never reported as a
+// commit that failed or a publication that is merely pending. Here the archive's commit lands, then another commit changes the track
+// before the read-back, so the archive happened but is not what HEAD holds now (R4).
+test("an archive commit that landed but HEAD no longer holds is unknown in the commit and the publication, never failed or pending", async () => {
+  const f = await archiveFixture()
+  await fs.writeFile(path.join(f.root, "t/track.md"), trackBefore)
+  git(f.root, "add", "--", "t/track.md")
+  git(f.root, "commit", "-q", "-m", "owned track baseline")
+  const result = await retry(f, {
+    spawnGit(command, args, options) {
+      if (args[2] !== "commit") return spawnSync(command, args, options)
+      const answer = spawnSync(command, args, options)
+      assert.equal(answer.status, 0, answer.stderr)
+      const other = spawnSync("git", ["-C", f.root, "rm", "-q", "--cached", "--", "t/track.md"], { encoding: "utf8" })
+      assert.equal(other.status, 0, other.stderr)
+      const theirs = spawnSync("git", ["-C", f.root, "commit", "-q", "-m", "someone else"], { encoding: "utf8" })
+      assert.equal(theirs.status, 0, theirs.stderr)
+      return { status: null, signal: "SIGTERM", stdout: "", stderr: "",
+        error: Object.assign(new Error("owned commit timeout"), { code: "ETIMEDOUT" }) }
+    },
+  })
+  assert.equal(result.status, "archive_pending")
+  assert.equal(result.commit.status, "unknown")
+  assert.equal(result.publication.status, "unknown")
+  assert.ok(result.commit.landed?.commit, "the answer says the archive's commit happened, separately from what HEAD holds now")
+  assert.ok(result.route_around, "an unknown archive carries route_around")
+  assert.doesNotMatch(JSON.stringify(result.route_around.summary), /did not land/u)
+})
+
 test("staged retry without a track card publishes the relocation", async () => {
   const f = await timedOutArchive({ track: false })
   assert.equal((await retry(f)).status, "archived")
