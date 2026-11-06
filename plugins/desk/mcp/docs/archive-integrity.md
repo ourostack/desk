@@ -43,6 +43,10 @@ foreign cleanup or age-based clearing.
 The aggregate owner always attempts descriptor settlement, including when a
 move session cannot be opened; cleanup does not depend on session initialization.
 An earlier operation error remains primary if settlement also fails.
+The owner's explicit failure context preserves even a falsy primary failure
+and records the actual settlement error separately. Without that context,
+failed standalone settlement still rejects; repeated settlement never retries
+a descriptor whose close outcome was already observed or left unknown.
 
 Factory terminal work is separately observed at its existing top-level
 handoff. A known marker at the last gate prevents a new call. An already

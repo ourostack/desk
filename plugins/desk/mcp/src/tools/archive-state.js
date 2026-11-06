@@ -116,7 +116,7 @@ export async function prepareArchiveAggregate({ effectiveRoot, srcDir, archiveDi
     }
     catch (error) { entry.closeUnknown = true; entry.record.closeUnknown = true; throw error }
   }
-  const close = async () => {
+  const close = async (failureContext) => {
     if (closed) return
     closed = true
     let primary
@@ -126,7 +126,14 @@ export async function prepareArchiveAggregate({ effectiveRoot, srcDir, archiveDi
     if (receipt.directoryReaders.some(record => record.acquireUnknown || record.closeUnknown))
       primary ??= aggregateFault("archive_directory_unknown", "archive directory-reader settlement is unqualified")
     if (now() >= evidenceDeadline) primary ??= aggregateFault("archive_evidence_deadline", "archive descriptor settlement exceeded its original evidence cutoff")
-    if (primary) { if (Object.isExtensible(primary)) primary.archiveAggregate = receipt; throw primary }
+    if (primary) {
+      if (failureContext && Object.hasOwn(failureContext, "primary")) {
+        receipt.closeFailure = primary.message
+        return
+      }
+      if (Object.isExtensible(primary)) primary.archiveAggregate = receipt
+      throw primary
+    }
   }
   const open = async (file, flags, purpose, mode) => {
     const record = { file, purpose, acquired: false, closed: false }

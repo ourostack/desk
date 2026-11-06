@@ -1097,3 +1097,62 @@ posixTest("an unavailable terminal lineage never dispatches finalize or evaluati
   assert.deepEqual(result.terminal_handoff.attempts, [])
   assert.deepEqual(messages, [["desk_factory: finalize_request_deferred"], ["desk_factory: evaluation_request_deferred"]])
 })
+for (const [label, failureContext, preservesPrimary] of [
+  ["absent context", undefined, false],
+  ["empty context", {}, false],
+  ["inherited primary only", Object.create({ primary: new Error("not an explicit operation failure") }), false],
+  ["frozen error primary", { primary: Object.freeze(new Error("original operation failed")) }, true],
+  ["false primary", { primary: false }, true],
+  ["zero primary", { primary: 0 }, true],
+  ["empty-string primary", { primary: "" }, true],
+  ["null primary", { primary: null }, true],
+  ["undefined primary", { primary: undefined }, true],
+]) {
+  posixTest(`public aggregate owner settlement with ${label} attempts every owned handle once and preserves the exact primary policy`, async t => {
+    const f = await fixture(), open = fs.open.bind(fs), opendir = fs.opendir.bind(fs)
+    const secondary = Object.freeze(new Error("owned descriptor close response was lost")), resources = []
+    t.mock.method(fs, "open", async (file, ...args) => {
+      const handle = await open(file, ...args), close = handle.close.bind(handle)
+      const record = { file, handle, attempts: 0, closedInFixture: false }
+      resources.push(record)
+      handle.close = async () => {
+        record.attempts++
+        await close()
+        record.closedInFixture = true
+        if (file === f.root) throw secondary
+      }
+      return handle
+    })
+    t.mock.method(fs, "opendir", async (file, ...args) => {
+      const dir = await opendir(file, ...args), close = dir.close.bind(dir)
+      const record = { file, attempts: 0, closedInFixture: false }
+      resources.push(record)
+      dir.close = async () => { record.attempts++; await close(); record.closedInFixture = true }
+      return dir
+    })
+    const plan = await prepare(f), original = failureContext?.primary
+    if (preservesPrimary) {
+      await assert.doesNotReject(plan.close(failureContext))
+      assert.equal(failureContext.primary, original)
+      assert.equal(plan.receipt.closeFailure, secondary.message)
+    } else await assert.rejects(plan.close(failureContext), error => error === secondary)
+    assert.ok(resources.length > 3)
+    assert.ok(resources.every(resource => resource.closedInFixture && resource.attempts === 1))
+    const rootRecord = plan.receipt.descriptors.find(record => record.file === f.root)
+    assert.equal(rootRecord.closeUnknown, true)
+    assert.equal(rootRecord.closed, false, "a lost close acknowledgement must not become confirmed closure")
+    assert.ok(plan.receipt.descriptors.filter(record => record !== rootRecord).every(record => record.closed))
+    await plan.close()
+    await plan.close({ primary: new Error("later error cannot reopen or replay settlement") })
+    assert.ok(resources.every(resource => resource.attempts === 1))
+    assert.deepEqual(plan.receipt.effects, [])
+  })
+}
+posixTest("public aggregate owner settlement with a primary but no close failure never invents a secondary error", async () => {
+  const f = await fixture(), plan = await prepare(f), primary = Object.freeze(new Error("original failure"))
+  await plan.close({ primary })
+  assert.equal(Object.hasOwn(plan.receipt, "closeFailure"), false)
+  assert.ok(plan.receipt.descriptors.every(record => record.closed))
+  assert.ok(plan.receipt.directoryReaders.every(record => record.closed))
+  await plan.close({ primary: false })
+})

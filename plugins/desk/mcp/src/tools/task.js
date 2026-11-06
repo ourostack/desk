@@ -449,7 +449,7 @@ const cardStatusIn = (deskRoot, person, originalCard) => async (track, slug) => 
     const file = await resolveWriteTarget({ deskRoot, person, segments })
     if (originalCard && file === originalCard.file) {
       const bytes = await originalCard.read()
-      return bytes === null ? null : String(parseMarkdownText(bytes.toString("utf8"), file).data.status ?? "unknown")
+      return String(parseMarkdownText(bytes.toString("utf8"), file).data.status ?? "unknown")
     }
     if (!(await pathExists(file))) continue
     try {
@@ -1523,9 +1523,6 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     const step = async work => { check(); const result = await work(); check(); return result }
     const root = await step(() => fs.realpath(effectiveRoot))
     const physical = path.join(root, path.relative(effectiveRoot, srcFile))
-    const suffix = path.relative(root, physical)
-    if (path.isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${path.sep}`))
-      throw new Error("task_archive: original card ancestry leaves its effective root")
     let cursor = root
     for (const part of ["", ...path.relative(root, path.dirname(physical)).split(path.sep).filter(Boolean)]) {
       if (part) cursor = path.join(cursor, part)
@@ -1733,7 +1730,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
           }
           return expected
         } })
-      let primary, notificationAttempted = false
+      let failureContext, notificationAttempted = false
       const notify = () => {
         notificationAttempted = true
         if (aggregate.moved || aggregate.receipt.effects.some(item => item.kind === "move")) {
@@ -1771,7 +1768,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
             cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
           return withArchiveFocus(statusContext, { track, slug }, result)
         } catch (error) {
-          primary = error
+          failureContext = { primary: error }
           try { await session.close(error) }
           catch (closeError) { aggregate.receipt.closeFailure = closeError.message }
           if (!notificationAttempted) try { notify() } catch (notifyError) { aggregate.receipt.notificationFailure = notifyError.message }
@@ -1786,13 +1783,10 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
               effects: aggregate.receipt }), terminal_handoff: terminalHandoff })
         }
       } catch (error) {
-        primary = error
+        failureContext = { primary: error }
         throw error
       } finally {
-        try { await aggregate.close() } catch (error) {
-          if (primary) aggregate.receipt.closeFailure ??= error.message
-          else throw error
-        }
+        await aggregate.close(failureContext)
       }
     }
     let prepared, moveSession, sessionClosed = false, sessionRetirement
