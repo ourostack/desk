@@ -565,6 +565,171 @@ test("default markdown discovery paths cover tracked docs, archive filtering, re
   assert.deepEqual(pointerErrors, [])
 })
 
+test("local-link extraction retains the complete balanced-parenthesis destination", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md",
+    body: "[link](../report(final).md)",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/report(final).md"])
+})
+
+test("local-link extraction retains image-only and shortcut-reference policy exclusions", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md",
+    body: "![image](../image.png)\n[shortcut]\n[shortcut]: ../shortcut.md\n",
+    repoRoot: "/synthetic",
+  }), [])
+})
+
+test("local-link validation includes reference definitions in containers", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "[label][ref]\r\n> [ref]: ../peer/notes.md\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/notes.md"])
+})
+
+test("local-link validation includes inverse list-to-quote nesting", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "[label][ref]\r\n\r\n- > [ref]: ../peer/right.md\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation does not admit an interrupted or prose definition", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md",
+    body: "[ref]:\r\n> ../peer/wrong.md\r\n\r\n[ref]: ../peer/right.md\r\n\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation includes compatible ordered-sibling definitions", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "1. Text\r\n2. [ref]: ../peer/right.md\r\n\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation includes new ordered definitions after outer quote failure", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "> 1. Text\r\n2. [ref]: ../peer/right.md\r\n\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation includes lazy quoted links after a type7-looking tag", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "> Text\r\n<custom>\r\n[x](../peer/right.md)\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation retains pending definition continuation through type7-looking angle syntax", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "> [ref]:\r\n<custom>\r\n\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/t/custom"])
+})
+
+test("local-link validation retains type7 lazy prose after a complete unused definition", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "> [ref]: unused.md\r\n<custom>\r\n[x](../peer/right.md)\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation includes nonblank indented links after a reference definition", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "[ref]: ../peer/right.md\r\n    [code](../peer/wrong.md)\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md", "/synthetic/peer/wrong.md"])
+})
+
+test("local-link validation excludes genuine code after a definition's blank boundary", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "[ref]: ../peer/right.md\r\n\r\n    [code](../peer/wrong.md)\r\n[label][ref]\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+for (const body of [
+  "Text <!-- [x](../peer/right.md)\r\n",
+  "[unused]: unused.md\r\n    Text <!-- [x](../peer/right.md)\r\n",
+]) {
+  test(`local-link validation includes real links after literal unclosed inline comments ${JSON.stringify(body)}`, () => {
+    assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+      file: "t/notes.md", body, repoRoot: "/synthetic",
+    }), ["/synthetic/peer/right.md"])
+  })
+}
+
+for (const body of [
+  '[a](../peer/a.md "<!--") [b](../peer/b.md)',
+  '[a](../peer/a.md "`") [b](../peer/b.md) `',
+]) {
+  test(`local-link validation includes both links despite literal title syntax ${JSON.stringify(body)}`, () => {
+    assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+      file: "t/notes.md", body, repoRoot: "/synthetic",
+    }), ["/synthetic/peer/a.md", "/synthetic/peer/b.md"])
+  })
+}
+
+for (const body of ["[x\r\n\r\n](../peer/wrong.md)", '[x](../peer/wrong.md "title\r\n# Heading\r\nend")']) {
+  test(`local-link validation excludes cross-block nonlinks ${JSON.stringify(body)}`, () => {
+    assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+      file: "t/notes.md", body, repoRoot: "/synthetic",
+    }), [])
+  })
+}
+
+test("local-link validation retains a real multiline quote link", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "> [multi\r\n> label](<../peer/right.md> \"title\")\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+for (const body of [
+  "> Text\r\n[ref]: ../peer/wrong.md\r\n\r\n[ref]: ../peer/right.md\r\n\r\n[label][ref]\r\n",
+  "===\r\n[ref]: ../peer/wrong.md\r\n\r\n[ref]: ../peer/right.md\r\n\r\n[label][ref]\r\n",
+  "[empty]: <>\r\n[ref]: ../peer/right.md\r\n[ref]: ../peer/wrong.md\r\n\r\n[label][ref]\r\n",
+]) {
+  test(`local-link validation retains only the valid target for ${JSON.stringify(body.split("\r\n")[0])}`, () => {
+    assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+      file: "t/notes.md", body, repoRoot: "/synthetic",
+    }), ["/synthetic/peer/right.md"])
+  })
+}
+
+test("local-link validation excludes indented code directly after a heading", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "# Heading\r\n    [code](../peer/wrong.md)\r\n[real](../peer/right.md)\r\n",
+    repoRoot: "/synthetic",
+  }), ["/synthetic/peer/right.md"])
+})
+
+test("local-link validation does not treat external autolink contents as filesystem references", () => {
+  assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "<https://example.test/[x](../peer/notes.md)>",
+    repoRoot: "/synthetic",
+  }), [])
+})
+
+for (const comment of ["<!-->", "<!--->"]) {
+  test(`local-link validation includes the real destination after ${comment}`, () => {
+    assert.deepEqual(docsValidator.localMarkdownLinkPaths({
+      file: "t/notes.md", body: `Text ${comment} [x](../peer/notes.md)`,
+      repoRoot: "/synthetic",
+    }), ["/synthetic/peer/notes.md"])
+  })
+}
+
+test("local-link validation reports an incomplete extraction instead of passing partial results", () => {
+  assert.throws(() => docsValidator.localMarkdownLinkPaths({
+    file: "t/notes.md", body: "[x](".repeat(200), repoRoot: "/synthetic",
+  }), /parse_budget_exceeded/u)
+})
+
 test("docs validator exports also pass through their repository defaults", () => {
   assert.equal(docsValidator.markdownLines("plugins/desk/README.md").length > 0, true)
   assert.deepEqual(docsValidator.fixtureRecord("fixture text"), {
@@ -586,12 +751,12 @@ test("docs validator exports also pass through their repository defaults", () =>
   docsValidator.validateMcpToolRegistrySurface(errors)
   assert.deepEqual(errors, [])
 
-  assert.throws(() => docsValidator.validateLocalMarkdownLinks([]), /replace/u)
+  assert.throws(() => docsValidator.validateLocalMarkdownLinks([]), TypeError)
   docsValidator.validateLocalMarkdownLinks([], {
     file: canonicalRfcPath,
     body: readText(canonicalRfcPath),
   })
-  assert.throws(() => docsValidator.localMarkdownLinkPaths(), /replace/u)
+  assert.throws(() => docsValidator.localMarkdownLinkPaths(), TypeError)
   assert.equal(
     docsValidator.localMarkdownLinkPaths({
       file: canonicalRfcPath,
