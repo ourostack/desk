@@ -1,0 +1,1 @@
+Add a bounded, read-only local LFS inspector and `lfs.js inspect` CLI that distinguish context binaries, package payloads, pointers and verified local bytes without changing repository policy or fetching objects. Onboarding integration, conversion, remote publication and installed-plugin readiness remain unqualified.

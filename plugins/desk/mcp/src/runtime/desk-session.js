@@ -39,16 +39,16 @@ const ROOT_SOURCE_PRIORITY = Object.freeze([
   "activation-config", "host-project", "host-session-root", "explicit-root",
 ])
 const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "launch-folder" : root.source)
-// Every field desk_doctor reads off `input`: both are read by the
+// Every field desk_doctor reads off `input`: these are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
 // (the module server.js registers for this tool name) — `deskDoctor` is the
 // session-layer dispatcher every desk_doctor call actually reaches first,
-// and it forwards only `{ format }` on to `doctorRuntime`, never `repair`.
+// and it forwards format and explicit storage observations to `doctorRuntime`, never `repair`.
 // Kept here, at module scope next to `deskDoctor`, so a field added to its
 // reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_DOCTOR_FIELDS = ["format", "repair"]
+export const DESK_DOCTOR_FIELDS = ["format", "repair", "storage"]
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
@@ -1034,11 +1034,26 @@ export function createDeskSession(deps) {
     if (format === "preview") {
       return jsonResult(previewRuntimeSnapshot(admission.snapshot().state === "ready" ? "ready" : "diagnostic"))
     }
+    if (input.storage !== undefined && input.storage !== "inspect") {
+      return { content: [{ type: "text", text: 'unsupported storage observation; use storage: "inspect"' }], isError: true }
+    }
+    if (input.storage === "inspect" && input.repair !== undefined) {
+      return { content: [{ type: "text", text: "cannot combine storage inspection with repair" }], isError: true }
+    }
     if (input.repair === STATE_BRANCH_REPAIR) return switchStateBranch(release)
     const snapshot = statusSnapshot()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
-      payload = JSON.parse((await runtimeCall("desk_doctor", { format }, signal)).content[0].text)
+      payload = JSON.parse((await runtimeCall("desk_doctor", { format, ...(input.storage === "inspect" ? { storage: "inspect" } : {}) }, signal)).content[0].text)
+    } else if (input.storage === "inspect") {
+      payload = {
+        ...payload,
+        storage: {
+          state: "not_checked", reason: "runtime_unavailable", worker: "not_started", readiness: "not_checked",
+          qualification: { remote_publication: "not_checked", network_auth: "not_checked", installed_payload: "not_checked" },
+          next_step: { kind: "tool_call", tool: "desk_status", input: { detail: true }, message: "Read this session's admission diagnosis before requesting storage inspection; no alternative root was inspected." },
+        },
+      }
     }
     return jsonResult({
       ...withAdmission(payload, snapshot),

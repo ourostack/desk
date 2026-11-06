@@ -1,5 +1,7 @@
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { diagnosticFormat, previewRuntimeSnapshot } from "../runtime/preview-snapshot.js"
+import { observeLfs } from "../runtime/lfs-observation.js"
 import { organizationFindings } from "../desk/organization.js"
 import { operatorNames } from "../desk/naming.js"
 import { personPrefix } from "../util/paths.js"
@@ -62,9 +64,7 @@ export function organizationSection(findings) {
 // Organization checks need a real desk subtree to read, so they only run
 // when a `deskRoot` is on hand and the caller didn't ask for the private,
 // dependency-free `preview` snapshot (which must carry no workspace data).
-// Both the no-deskRoot and preview paths stay fully synchronous, matching
-// every existing caller of `doctorRuntime()` that reads its return value
-// without awaiting it.
+// Default and preview calls remain synchronous; only an explicit storage observation returns a promise.
 function collectOrganization({ deskRoot, person }) {
   if (typeof deskRoot !== "string" || deskRoot.trim() === "") return null
   const scanRoot = path.resolve(personPrefix(deskRoot, person))
@@ -75,9 +75,15 @@ function collectOrganization({ deskRoot, person }) {
   return findings
 }
 
-export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null, env = process.env } = {}) {
+export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null, env = process.env, signal, observeStorage = observeLfs } = {}) {
   if (diagnosticFormat(input) === "preview") {
     return previewRuntimeSnapshot("ready")
+  }
+  if (input?.storage !== undefined && input.storage !== "inspect") {
+    throw new TypeError('unsupported storage observation; use storage: "inspect"')
+  }
+  if (input?.storage === "inspect" && input?.repair !== undefined) {
+    throw new TypeError("cannot combine storage inspection with repair")
   }
   const runtime = statusContext.runtime ?? {}
 
@@ -94,7 +100,7 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
   ].filter((section) => section !== null)
   const summary = sections.join("\n\n")
 
-  return {
+  const result = {
     status: "ok",
     mode: "healthy",
     reason: "ready",
@@ -112,4 +118,63 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
     legacy_work_ledger: legacyLedger,
     remediation: [],
   }
+  if (input?.storage !== "inspect") return result
+  if (typeof deskRoot !== "string" || deskRoot.trim() === "") {
+    return Promise.resolve(withStorage(result, { state: "not_checked", reason: "desk_unavailable", worker: "not_started" }, null))
+  }
+  let pending
+  try {
+    pending = observeStorage({ repo: path.resolve(deskRoot), env, signal })
+  } catch {
+    pending = { state: "unavailable", reason: "observation_failed", worker: "unconfirmed" }
+  }
+  return Promise.resolve(pending).then(
+    (observation) => withStorage(result, observation, path.resolve(deskRoot)),
+    () => withStorage(result, { state: "unavailable", reason: "observation_failed", worker: "unconfirmed" }, path.resolve(deskRoot)),
+  )
+}
+
+function withStorage(result, observation, repo) {
+  const storage = {
+    state: observation.state === "observed" ? observation.report.state : observation.state,
+    ...(observation.reason === undefined ? {} : { reason: observation.reason }),
+    worker: observation.worker,
+    readiness: "not_checked",
+    qualification: { remote_publication: "not_checked", network_auth: "not_checked", installed_payload: "not_checked" },
+  }
+  if (observation.state === "observed") {
+    const report = observation.report
+    storage.scope = {
+      kind: ["context", "package"].includes(report.repository.kind) ? report.repository.kind : "unknown",
+      context: ["personal", "shared"].includes(report.repository.context) ? report.repository.context : "unknown",
+    }
+    storage.tool = { state: ["available", "missing", "unavailable"].includes(report.tool.state) ? report.tool.state : "not_checked" }
+    storage.counts = {
+      inspected: report.files.filter((file) => file.inspection === "inspected").length,
+      skipped: report.files.filter((file) => file.inspection !== "inspected").length,
+      tracking_candidates: report.files.filter((file) => file.proposal === "track_exact_path").length,
+      review_candidates: report.files.filter((file) => typeof file.proposal === "string" && file.proposal.startsWith("review_")).length,
+      pointers: report.files.filter((file) => file.tracking === "lfs_pointer").length,
+      missing_local_objects: report.files.filter((file) => file.local_object === "missing").length,
+      mismatches: report.files.filter((file) => file.local_object === "mismatch" || file.materialization === "mismatch").length,
+      materialized_verified: report.files.filter((file) => file.materialization === "verified").length,
+      package_exempt: report.files.filter((file) => file.proposal === "package_exempt").length,
+      diagnostics: report.findings.length,
+    }
+  }
+  storage.next_step = observation.state === "cancelled" ? {
+    kind: "none", message: "Storage observation was cancelled. No retry or repair was performed; wait for a new request.",
+  } : repo === null || ["unconfirmed", "running"].includes(observation.worker) ? {
+    kind: "tool_call", tool: "desk_status", input: { detail: true },
+    message: repo === null ? "Read the bound Desk root before requesting storage inspection; do not use cwd as a fallback."
+      : observation.worker === "running" ? "A storage observation is still running. Wait for its result or cancel that request; do not start another."
+        : "Worker shutdown is unconfirmed. Do not repeat storage inspection; check this session's status and retain the failed observation.",
+  } : {
+    kind: "readonly_command", command: process.execPath,
+    args: [fileURLToPath(new URL("../../scripts/lfs.js", import.meta.url)), "inspect", "--repo", repo],
+    message: storage.counts?.mismatches > 0 ? "Preserve modified files and inspect the local mismatch details. Do not overwrite or convert them."
+      : storage.counts?.missing_local_objects > 0 ? "Inspect the missing local-object details. This report does not prove remote loss or authorize a download."
+        : "Review the local report before proposing any setup or forward-only contribution. This command installs, downloads and changes nothing.",
+  }
+  return { ...result, storage, summary: `${result.summary}\n\nBinary storage\n  Local inspection: ${storage.state}; storage readiness is not checked.\n  Remote publication, authentication and installed payloads are not checked.\n  ${storage.next_step.message}` }
 }
