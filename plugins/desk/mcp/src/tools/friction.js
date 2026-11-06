@@ -249,7 +249,7 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   }
 
   const commit = stage
-    ? stageAndCommitFile(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit)
+    ? stageAndCommitFile(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit, deskRoot)
     : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
 

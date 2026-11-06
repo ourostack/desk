@@ -236,7 +236,7 @@ export async function note_ack({ deskRoot, input, person = null, spawnGit = spaw
   const stage = isGit && !hasUnstagedWork(dir, [name], spawnGit)
   await fs.writeFile(file, next, "utf8")
   search?.noteChange(rel)
-  const commit = stage ? stageAndCommitFiles(dir, [name], `note_ack: ${name}`, spawnGit) : undefined
+  const commit = stage ? stageAndCommitFiles(dir, [name], `note_ack: ${name}`, spawnGit, deskRoot) : undefined
   const committed = stage && commit === undefined
   if (committed) schedulePush({ root: deskRoot })
   const result = { status: "acknowledged", note: rel, from: parsed.from, subject: parsed.subject, committed }

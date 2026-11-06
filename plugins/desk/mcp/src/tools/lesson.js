@@ -119,7 +119,7 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     const message = `lesson_add: personal ${slugify(topic)}`
     if (changes.length === 0) return { ...outcome, git, committed: git && !hasUnstagedWork(path.dirname(file), [path.basename(file), SHELF_FILE], spawnGit), commit: undefined, held: [where, shelfWhere], heldNames: [path.basename(file), SHELF_FILE], line, message }
     for (const [changed, , after] of changes) await fs.writeFile(changed, after, "utf8")
-    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, message, spawnGit) : undefined
+    const commit = stage ? stageAndCommitFiles(path.dirname(file), names, message, spawnGit, deskRoot) : undefined
     const changed = changes.map(([each]) => deskRelativePath(deskRoot, each))
     return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed, heldNames: names, line, message }
   })
@@ -136,7 +136,7 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   // that already held another session's edit, a commit of only this lesson from a temporary worktree.
   const routeAround = written.git && !written.committed
     ? written.commit?.route_around ?? heldFileRouteFor({
-      dir: path.dirname(file), names: written.heldNames, message: written.message, spawnGit,
+      dir: path.dirname(file), names: written.heldNames, message: written.message, spawnGit, deskRoot,
       change: `make the file hold the lesson line exactly as Desk wrote it here (${JSON.stringify(written.line)}), under the same topic`,
     })
     : null

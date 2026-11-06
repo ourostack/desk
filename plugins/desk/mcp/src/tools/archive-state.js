@@ -36,7 +36,8 @@ function gitBoolean(root, name, spawnGit) {
     throw new Error(`task_archive: Git ${name} could not be qualified`)
   return answer.stdout.trim() === "true"
 }
-async function gitContext(root, spawnGit) {
+// `deskRoot` is the root a successful archive schedules its push for; every route publishes exactly it (R6).
+async function gitContext(root, spawnGit, deskRoot = root) {
   const physicalRoot = await fs.realpath(root)
   let marker = false
   for (let dir = physicalRoot; ; dir = path.dirname(dir)) {
@@ -47,7 +48,7 @@ async function gitContext(root, spawnGit) {
   const top = readGit(root, ["rev-parse", "--show-toplevel"], spawnGit).trim()
   const head = spawnGit("git", ["-C", top, "rev-parse", "--verify", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (head.status !== 0 && head.status !== 1) throw new Error("task_archive: HEAD could not be qualified; nothing was moved")
-  return { root: top, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null,
+  return { root: top, deskRoot, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null,
     fileMode: gitBoolean(top, "core.filemode", spawnGit), symlinks: gitBoolean(top, "core.symlinks", spawnGit), spawnGit }
 }
 function headEntries(git, folder) {
@@ -125,7 +126,7 @@ function indexMatches(entries, expected) {
 // A failure that found bytes Desk did not admit starts the route with a read of those differences, so another session's
 // edit is never committed as the archive's.
 function differsRoute(git, paths, message) {
-  const route = commitRoute({ root: git.root, paths, message, readback: "absent" })
+  const route = commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot })
   route.steps.unshift({
     step: "These paths changed after Desk admitted them. Read the differences first: continue only if every one is this archive's own change. If any is another session's edit, leave the files as they are and report it instead of committing.",
     argv: ["git", "-C", git.root, "diff", "HEAD", "--", ...paths],
@@ -135,7 +136,7 @@ function differsRoute(git, paths, message) {
 function publishExpected(git, paths, expected, message, stagingPaths = paths) {
   assertGitState(git)
   const staged = stagePaths(git.root, stagingPaths, git.spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: git.root, paths, message, readback: "absent" }) }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot }) }
   let entries = indexEntries(git.root, paths, git.spawnGit)
   const normalStage = new Map([...expected].map(([file, entry]) => [file, { sha: entry.stageSha, mode: entry.stageMode }]))
   if (!indexMatches(entries, normalStage))
@@ -145,14 +146,14 @@ function publishExpected(git, paths, expected, message, stagingPaths = paths) {
     const input = metadata.map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}\0`).join("")
     const updated = git.spawnGit("git", ["-C", git.root, "update-index", "-z", "--index-info"],
       { windowsHide: true, encoding: "utf8", timeout: 10000, input })
-    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed", route_around: commitRoute({ root: git.root, paths, message, readback: "absent" }) }
+    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed", route_around: commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot }) }
     entries = indexEntries(git.root, paths, git.spawnGit)
   }
   if (!indexMatches(entries, expected))
     return { status: "failed", reason: "the admitted Git mode/type metadata could not be staged", route_around: differsRoute(git, paths, message) }
   assertGitState(git)
   const committed = commitIndexPaths(git.root, paths, entries, message, git.spawnGit)
-  return committed.ok ? undefined : commitFailure({ root: git.root, paths, message, committed })
+  return committed.ok ? undefined : commitFailure({ root: git.root, paths, message, committed, deskRoot: git.deskRoot })
 }
 async function ancestry(boundary, destination) {
   const physical = await fs.realpath(boundary)
@@ -179,10 +180,10 @@ async function ancestry(boundary, destination) {
   } }
 }
 
-export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated = false }) {
+export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated = false }) {
   const snapshot = await tree(relocated ? archiveDir : srcDir)
   const fence = await ancestry(effectiveRoot, archiveDir)
-  const git = await gitContext(effectiveRoot, spawnGit)
+  const git = await gitContext(effectiveRoot, spawnGit, deskRoot)
   let track = null
   let tracked = []
   let originals = new Map()
@@ -371,12 +372,12 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
   }
 }
 
-export async function prepareArchivedCardPublication({ effectiveRoot, file, before, spawnGit }) {
+export async function prepareArchivedCardPublication({ effectiveRoot, deskRoot = effectiveRoot, file, before, spawnGit }) {
   const physical = await fs.realpath(file), boundary = await fs.realpath(effectiveRoot)
   if (!isPathContained(boundary, physical)) throw new Error("task_archive: archived card target is outside the effective desk")
   const stat = await fs.lstat(physical, { bigint: true })
   if (!stat.isFile()) throw new Error("task_archive: archived card target is not a regular file")
-  const git = await gitContext(effectiveRoot, spawnGit)
+  const git = await gitContext(effectiveRoot, spawnGit, deskRoot)
   let previous = null
   let key
   if (git) {
