@@ -293,12 +293,12 @@ test("recordLocalOnlyOnCards commits on the configured state branch even when th
   const cards = [{ file, track: "t", slug: "ship-it", data: { status: "processing", repos: [{ name: "greenhouse", local_path: clone, mode: "local" }] } }]
   const { installCardGuard } = await import("../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js")
   assert.equal(installCardGuard(root).state, "installed")
-  // No state branch configured: the remote's default is main, HEAD is on desk-state, so nothing is written.
-  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: null }), [])
+  // An explicit branch remains a restriction, not extra write authority.
+  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: "main" }), [])
   assert.equal(await fs.readFile(file, "utf8"), text)
   assert.equal(git(root, "status", "--porcelain"), "")
-  // The configured state branch is where Desk writes.
-  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: "desk-state" }), ["t/ship-it"])
+  // With no branch configured, boot records on the intentional named branch.
+  assert.deepEqual(await recordLocalOnlyOnCards({ cards, deskRoot: root, stateBranch: null }), ["t/ship-it"])
   assert.equal(git(root, "log", "-1", "--format=%s"), "boot: record local-only clone on t/ship-it")
   assert.equal(git(root, "status", "--porcelain"), "")
 })
