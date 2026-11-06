@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { archiveFixture, git, retry } from "./_archive_state_helpers.js"
+import { afterLanding, beforeLanding } from "../_index_commit_seam.js"
 
 const trackBefore = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](mode-proof/notes.md) |\n"
 const trackAfter = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](_archive/mode-proof/notes.md) |\n"
@@ -21,7 +22,8 @@ async function timedOutArchive({ track = true, trackContent = trackBefore, commi
   f.head = git(f.root, "rev-parse", "HEAD")
   const result = await retry(f, {
     spawnGit(command, args, options) {
-      if (args[2] !== "commit") return spawnSync(command, args, options)
+      // The archive's commit (#632: hooks, commit-tree, one compare-and-swap) is cut off before it lands, or after it landed.
+      if (!(committed ? afterLanding : beforeLanding)(args)) return spawnSync(command, args, options)
       if (committed) {
         const answer = spawnSync(command, args, options)
         assert.equal(answer.status, 0, answer.stderr)
@@ -36,7 +38,7 @@ async function timedOutArchive({ track = true, trackContent = trackBefore, commi
     assert.equal(result.commit, undefined)
   } else {
     assert.equal(result.status, "archive_pending")
-    assert.equal(result.commit.reason, "timeout")
+    assert.match(result.commit.reason, /pre-commit hook was cut off/u)
     assert.equal(result.publication.status, "pending")
     assert.ok(result.route_around, "an archive that is not published carries route_around")
   }
@@ -107,7 +109,7 @@ test("an archive commit that landed but HEAD no longer holds is unknown in the c
   git(f.root, "commit", "-q", "-m", "owned track baseline")
   const result = await retry(f, {
     spawnGit(command, args, options) {
-      if (args[2] !== "commit") return spawnSync(command, args, options)
+      if (!afterLanding(args)) return spawnSync(command, args, options)
       const answer = spawnSync(command, args, options)
       assert.equal(answer.status, 0, answer.stderr)
       const other = spawnSync("git", ["-C", f.root, "rm", "-q", "--cached", "--", "t/track.md"], { encoding: "utf8" })
@@ -221,7 +223,8 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
   try {
     result = await retry(f, {
       spawnGit(command, args, options) {
-        return spawnSync(command, args, args[2] === "commit"
+        // Since #632 Desk runs the hooks with `git hook run`, not inside a `git commit`.
+        return spawnSync(command, args, args[2] === "hook"
           ? { ...options, timeout: 1500, env: { ...options.env, GIT_TRACE2_EVENT: trace } } : options)
       },
     })
@@ -235,7 +238,7 @@ for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout
   }
   // The post-commit hook runs after the commit landed, so the read-back finds it committed (#561, #556); a pre-commit timeout left nothing.
   assert.equal(result.status, phase === "pre-commit" ? "archive_pending" : "archived")
-  if (phase === "pre-commit") assert.equal(result.commit.reason, "timeout")
+  if (phase === "pre-commit") assert.match(result.commit.reason, /pre-commit hook was cut off/u)
   else assert.equal(result.commit, undefined)
   const events = (await fs.readFile(trace, "utf8")).trim().split("\n").map(line => JSON.parse(line))
   assert.ok(events.some(event => event.event === "child_start" && event.hook_name === phase),
@@ -279,7 +282,7 @@ const companion = "t/_archive/mode-proof/companion.txt"
 test("an archive commit that timed out before landing is finished by its route with the admitted link entry, once", async () => {
   const f = await archiveFixture({ symlinks: false, mode: "120000" })
   const result = await retry(f, { spawnGit(command, args, options) {
-    if (args[2] === "commit") return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }
+    if (beforeLanding(args)) return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }
     return spawnSync(command, args, options)
   } })
   assert.equal(result.status, "archive_pending")

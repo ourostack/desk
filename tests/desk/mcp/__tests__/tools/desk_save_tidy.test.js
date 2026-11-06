@@ -9,6 +9,7 @@ import { stagedChanges } from "../../../../../plugins/desk/mcp/src/util/git-stag
 import { ensureCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { assertRoute } from "./_route_around.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const CARD = "---\ntitle: One\nstatus: active\n---\nBody of the card.\n"
 
@@ -139,12 +140,29 @@ test("the undo of a tidy commits through the same call", async () => {
   const tidySha = git(root, ["rev-parse", "HEAD"]).stdout.trim()
   git(root, ["revert", "--no-commit", tidySha])
   git(root, ["checkout", tidySha, "--", "_meta/organization.json"]) // the record is restored, as the migration says
+  git(root, ["revert", "--quit"]) // and the revert is ended with its changes kept staged, as the migration says
   const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
   assert.equal(result.status, "committed")
   assert.match(subject(root), /Undo the tidy\n\nDesk-Tidy: true/u)
   const stat = await fs.stat(path.join(root, "old-track", "job", "task.md"))
   assert.ok(stat.isFile())
   assert.equal(git(root, ["status", "--short"]).stdout, "")
+})
+
+// Desk commits nothing while a revert is in progress (#632), so an undo still inside its `git revert --no-commit` holds; it says why.
+test("the undo of a tidy holds while the revert is still in progress", async () => {
+  const root = await makeDesk()
+  await stageTidy(root)
+  const paths = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
+  await save(root, { paths, message: "Move one task", tidy: true })
+  const tidySha = git(root, ["rev-parse", "HEAD"]).stdout.trim()
+  git(root, ["revert", "--no-commit", tidySha])
+  git(root, ["checkout", tidySha, "--", "_meta/organization.json"])
+  const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
+  assert.notEqual(result.status, "committed")
+  assert.match(result.commit.reason, /revert is in progress/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout.trim(), tidySha)
+  assert.equal(git(root, ["rev-parse", "-q", "--verify", "REVERT_HEAD"]).status, 0, "the revert is left as it was")
 })
 
 const TIDY_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
@@ -247,12 +265,15 @@ test("git failures are reported, not thrown", async () => {
   assert.equal((await routed(failing("add"))).status, "failed")
   assert.match((await routed(failing("diff", "--cached"))).reason, /list the staged changes/u)
   assert.match((await routed(failing("ls-files", "-s"))).reason, /read the index/u)
-  assert.equal((await routed(failing("read-tree"))).reason, "read-tree failed")
-  assert.equal((await routed(failing("update-index"))).reason, "update-index failed")
-  assert.equal((await routed(failing("commit"))).reason, "commit failed")
-  const slow = (cmd, args, options) => (args[2] === "commit" ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
+  // Since #632 the tidy commit is hooks, `git commit-tree` and one compare-and-swap `git update-ref`, never a `git commit`; each
+  // failure says which step failed and why.
+  assert.match((await routed(failing("read-tree"))).reason, /git read-tree failed: read-tree failed/u)
+  assert.match((await routed(failing("update-index"))).reason, /building the private index failed: update-index failed/u)
+  const refused = (cmd, args, options) => (beforeLanding(args) ? { status: 1, stdout: "", stderr: "commit failed", error: undefined } : spawnSync(cmd, args, options))
+  assert.match((await routed(refused)).reason, /pre-commit hook refused the commit: commit failed/u)
+  const slow = (cmd, args, options) => (beforeLanding(args) ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
   const timedOut = await routed(slow)
-  assert.equal(timedOut.reason, "timeout")
+  assert.match(timedOut.reason, /pre-commit hook was cut off/u)
   assert.equal(timedOut.status, "failed", "a timed-out tidy commit that left HEAD where it was is read back as not landed")
 })
 

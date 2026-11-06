@@ -55,10 +55,33 @@ function headOf(spawnGit, root, branch) {
   return listed.ok && listed.stdout.trim() === "" ? "" : null
 }
 
+// A cut-off-shaped answer for a step the time budget left no room for: it was never run, so nothing it does can have happened.
+const NOT_RUN = { status: null, signal: null, stdout: "", stderr: "the time budget was spent before this step, so it was not run", error: { code: "ETIMEDOUT" } }
+
+/**
+ * `spawnGit` held to one total time budget ending at `deadline` (a `Date.now()` time): each call gets what is left, or no more
+ * than it asked for, and a call with nothing left is not run. `deadline` null means no budget: `spawnGit` itself.
+ */
+function budgeted(spawnGit, deadline) {
+  if (deadline === null) return spawnGit
+  return (command, args, options) => {
+    const left = deadline - Date.now()
+    return left <= 0 ? NOT_RUN : spawnGit(command, args, { ...options, timeout: Math.min(options.timeout, left) })
+  }
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
 
-function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, env }) {
+/**
+ * The one commit of exactly `wanted` at `paths` on exactly `head` of `branch`. Two options a caller other than the hand finish
+ * needs, both off by default so the hand finish is unchanged: `toolCommit` keeps Desk's own commit marker in what Git and the
+ * hooks see (a Desk tool's commit, which the card guard lets through), and `deadline` holds every step up to and including the
+ * post-commit hook to one total time budget ending then (see `budgeted`), in place of each step's own bound.
+ */
+function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit = false, deadline = null }) {
+  const spawnGit = budgeted(unbudgeted, deadline)
+  const bound = deadline === null ? `the ${COMMIT_TIMEOUT_MS / 1000} s bound` : "the end of the commit's time budget"
   const prefixRead = git(spawnGit, root, ["rev-parse", "--show-prefix"])
   if (!prefixRead.ok) return { state: "unknown", reason: "Git could not place these paths in the repository" }
   const prefix = prefixRead.stdout.trim()
@@ -66,7 +89,8 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-finish-"))
   try {
     const { [TOOL_COMMIT_ENV]: _dropped, ...rest } = env
-    const own = { ...rest, GIT_INDEX_FILE: path.join(dir, "index") }
+    const own = { ...(toolCommit ? env : rest), GIT_INDEX_FILE: path.join(dir, "index") }
+    const refEnv = toolCommit ? env : undefined
     const kept = new Set(wanted.map((line) => line.split("\t")[1]))
     // A captured path can be a folder (a save or a move names folders): every leaf HEAD holds under it that the capture does
     // not keep is removed, so a deleted or renamed file does not survive from HEAD (0972 #1 on ae1395e4).
@@ -95,7 +119,7 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     const hookEnv = { ...own, GIT_EDITOR: ":" }
     const hook = (name, ...args) => git(spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
     const stopped = (name, answer) => answer.cut
-      ? { state: "unknown", reason: `the ${name} hook was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running; the branch was not moved, but read back before anything else` }
+      ? { state: "unknown", reason: `the ${name} hook was cut off at ${bound} and may still be running; the branch was not moved, but read back before anything else` }
       : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
     const pre = hook("pre-commit")
     if (!pre.ok) return stopped("pre-commit", pre)
@@ -112,9 +136,10 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     if (!cleaned.ok || cleaned.stdout.trim() === "") return held("nothing was committed: the commit message is empty after the hooks ran")
     writeFileSync(messageFile, cleaned.stdout)
     const sign = git(spawnGit, root, ["config", "--type=bool", "--get", "commit.gpgSign"]).stdout.trim() === "true"
-    const made = git(spawnGit, root, ["commit-tree", tree.stdout.trim(), ...(head === "" ? [] : ["-p", head]), "-F", messageFile, ...(sign ? ["-S"] : [])], { timeout: COMMIT_TIMEOUT_MS })
+    const made = git(spawnGit, root, ["commit-tree", tree.stdout.trim(), ...(head === "" ? [] : ["-p", head]), "-F", messageFile, ...(sign ? ["-S"] : [])], { env: refEnv, timeout: COMMIT_TIMEOUT_MS })
     if (!made.ok) return held(`nothing was committed: git commit-tree failed: ${made.stderr || "no reason given"}`)
     const commitId = made.stdout.trim()
+    if (deadline !== null && Date.now() >= deadline) return held("nothing was committed: the commit's time budget ran out before the branch was moved")
     const branchLast = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
     if (!branchLast.ok || branchLast.stdout.trim() !== branch) return held(`nothing was committed: the checkout left ${branch} while the hooks ran`)
     const operationLast = operationAnswer(spawnGit, root)
@@ -123,12 +148,13 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     // other writer moved it since, Git refuses and nothing is overwritten; it is never repeated.
     const subject = cleaned.stdout.split("\n")[0]
     const ref = `refs/heads/${branch}`
-    const moved = git(spawnGit, root, ["update-ref", "-m", `commit${head === "" ? " (initial)" : ""}: ${subject}`, ref, commitId, head === "" ? ZERO : head], { timeout: COMMIT_TIMEOUT_MS })
-    const nowRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", ref])
+    const moved = git(spawnGit, root, ["update-ref", "-m", `commit${head === "" ? " (initial)" : ""}: ${subject}`, ref, commitId, head === "" ? ZERO : head], { env: refEnv, timeout: COMMIT_TIMEOUT_MS })
+    // Read back without the budget: whatever the branch update did, what the branch holds now is the answer.
+    const nowRead = git(unbudgeted, root, ["rev-parse", "--verify", "-q", ref])
     const now = nowRead.ok ? nowRead.stdout.trim() : null
-    if (now === commitId) return afterPostCommit({ spawnGit, root, branch, commitId, post: hook("post-commit") })
+    if (now === commitId) return afterPostCommit({ spawnGit: unbudgeted, root, branch, commitId, post: hook("post-commit"), bound })
     if (moved.ok || moved.cut || now === null)
-      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound` : moved.ok ? "reported success" : "failed"} and ${ref} does not hold ${commitId.slice(0, 12)}; read back before anything else`, commit: commitId }
+      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at ${bound}` : moved.ok ? "reported success" : "failed"} and ${ref} does not hold ${commitId.slice(0, 12)}; read back before anything else`, commit: commitId }
     return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -138,8 +164,8 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
 // post-commit runs after the branch moved, so the commit, the hook's outcome and where HEAD is afterwards are three facts, read
 // apart (0972 #3 on ae1395e4). Only all three as wanted is `finished`; anything else is `unknown`, naming the commit, and is
 // never replayed: the commit stands, and only a read-back says what is in effect.
-function afterPostCommit({ spawnGit, root, branch, commitId, post }) {
-  const post_commit = post.ok ? "ran" : post.cut ? `cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running` : `failed: ${post.stderr || "no reason given"}`
+function afterPostCommit({ spawnGit, root, branch, commitId, post, bound }) {
+  const post_commit = post.ok ? "ran" : post.cut ? `cut off at ${bound} and may still be running` : `failed: ${post.stderr || "no reason given"}`
   const branchAfter = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
   const headAfter = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
   const at = headAfter.ok ? headAfter.stdout.trim() : null
@@ -165,4 +191,4 @@ function builtAgainst({ spawnGit, root, head, tree, paths, wanted, scope }) {
   return outside.length === 0 ? null : `outside the captured paths: ${outside.join(", ")}`
 }
 
-export { git, treeLines, operationAnswer, headOf, same, held, commitCaptured }
+export { git, treeLines, operationAnswer, headOf, same, held, commitCaptured, budgeted }

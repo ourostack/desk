@@ -11,9 +11,11 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
-import * as os from "node:os"
+import { existsSync } from "node:fs"
 import * as path from "node:path"
+
+import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
+import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
 
 // Bounds every git call so a hung hook or a held lock can never block a tool
 // call indefinitely. Git hooks stay enabled — disabling them is not this
@@ -21,7 +23,6 @@ import * as path from "node:path"
 // other slow git command and is reported the same way a stage or commit
 // failure is.
 const GIT_TIMEOUT_MS = 10_000
-const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-guard.js` exports; kept literal so this module stays dependency-free
 
 /**
  * Why Desk must not stage or commit in `root` right now, or null when it may. A detached HEAD is always refused. Beyond that, `stateBranch` says what the caller knows:
@@ -234,12 +235,13 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
 // A failed commit call's answer: `ok` when the read-back finds it landed and in effect (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
 // A failure also carries what the call meant to commit (`capture`: the HEAD and branch it read before dispatch and the captured entries),
 // so its route can finish exactly that change and never whatever the paths hold later (R2, R3). No capture means no route may commit.
-function afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit, branch) {
-  const stderr = timedOut(result) ? "timeout" : result.stderr
+// `made` is set when the call is known to have made a commit object whose effect is uncertain (a branch update cut off, or a
+// post-commit hook that moved HEAD): a read-back that finds nothing then says `unknown`, never `absent`.
+function afterFailedCommit(stderr, root, relPaths, message, before, expected, spawnGit, branch, made = false) {
   const { readback, landed } = readBackCommit(root, relPaths, message, before, expected, spawnGit)
   if (readback === "committed") return { ok: true, stderr, readback }
   const capture = before !== null && expected !== null && branch ? { before, branch, expected } : null
-  return { ok: false, stderr, readback, ...(landed ? { landed } : {}), ...(capture ? { capture } : {}) }
+  return { ok: false, stderr, readback: made && readback === "absent" ? "unknown" : readback, ...(landed ? { landed } : {}), ...(capture ? { capture } : {}) }
 }
 
 /** The branch HEAD is on, or null for a detached HEAD or when Git cannot say. A read. */
@@ -250,35 +252,32 @@ function branchOf(root, spawnGit) {
 }
 
 /**
- * Commits exactly what the index holds at `relPaths` (`entries`, from `indexEntries` for the same paths), never what the working tree holds there: it builds a temporary index from HEAD, copies in the real index's
- * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
- * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
+ * Commits exactly what the index holds at `relPaths` (`entries`, from `indexEntries` for the same paths), never what the working tree holds there, and only on
+ * the HEAD it read (#632). It builds a private index from that HEAD with the real index's entry for each path (and every leaf HEAD holds under a folder path
+ * that the index no longer does removed), runs the hooks git commit runs, makes the commit on that HEAD, and moves the branch by one compare-and-swap from it:
+ * another writer's commit landing at any point in between makes Git refuse, so it stands and nothing of this call's is committed over it. That is
+ * `cas-commit.js`'s `commitCaptured`, the core the hand finish uses, here with Desk's own commit marker and one total `GIT_TIMEOUT_MS` budget for the whole
+ * commit. While a merge, cherry-pick, revert or rebase is in progress it commits nothing. The real index is untouched, so other staged work stays staged,
+ * and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`, and on a failure the read-back and capture
+ * (`afterFailedCommit`); never throws on a Git failure.
  */
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
-  const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
+  const deadline = Date.now() + GIT_TIMEOUT_MS
+  const step = budgeted(spawnGit, deadline)
+  const refusal = commitBranchRefusal(root, step, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
-  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
-  try {
-    const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
-    const before = headOf(root, spawnGit)
-    const branch = branchOf(root, spawnGit)
-    const hasHead = before !== null && before !== ""
-    const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
-    if (seed.status !== 0) return { ok: false, stderr: seed.stderr, readback: "absent" }
-    const held = new Set(entries.map((entry) => entry.path))
-    const lines = [
-      ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}\0`),
-      ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${"0".repeat(40)}\t${p}\0`),
-    ]
-    const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
-    if (update.status !== 0) return { ok: false, stderr: update.stderr, readback: "absent" }
-    const result = run(spawnGit, root, ["commit", "-m", message], { env })
-    if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
-    // What this call meant to commit is exactly `entries` at `relPaths`, and nothing at the paths the index did not hold.
-    return afterFailedCommit(result, root, relPaths, message, before, entryLines(entries), spawnGit, branch)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  const before = headOf(root, step)
+  const branch = branchOf(root, step)
+  if (before === null || branch === null) return { ok: false, stderr: "Git could not read the branch and HEAD to commit on, so nothing was committed", readback: "absent" }
+  // What this call means to commit is exactly `entries` at `relPaths`, and nothing at the paths the index does not hold.
+  const expected = entryLines(entries)
+  const failed = (reason, made) => afterFailedCommit(reason, root, relPaths, message, before, expected, spawnGit, branch, made)
+  const operation = operationAnswer(step, root)
+  if (operation) return failed(operation.reason, false)
+  if (sameEntries(before === "" ? [] : treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
+  const answer = commitCaptured({ root, paths: relPaths, wanted: expected, head: before, branch, message, spawnGit, env: { ...process.env, [TOOL_COMMIT_ENV]: "1" }, toolCommit: true, deadline })
+  if (answer.state === "finished") return { ok: true, stderr: "" }
+  return failed(answer.reason, answer.commit !== undefined)
 }
 
 /**
@@ -329,5 +328,5 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
   if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
-  return afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit, branch)
+  return afterFailedCommit(timedOut(result) ? "timeout" : result.stderr, root, relPaths, message, before, expected, spawnGit, branch)
 }

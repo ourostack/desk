@@ -1,0 +1,9 @@
+Desk's commits from a temporary index, which `task_archive` and the desk tidy (`desk_save` with `tidy: true`) make, no longer overwrite another writer's commit (#632). Desk used to seed a private index from `HEAD` and then run a plain `git commit` with it, so a commit another session made in between was silently undone by the next one. These commits now go through the same core as `scripts/finish-commit.js`: Desk builds the commit from the private index, checks the whole tree it built against the entries it judged (every file under a selected folder included, and in a desk that sits in a subfolder of its repository), runs the repository's commit hooks through Git with Desk's own commit marker, and moves the branch with one compare-and-swap against the `HEAD` it read, so a branch that moved is refused and the other writer's commit stands ([core](../mcp/src/util/cas-commit.js), [temporary-index commit](../mcp/src/util/git-stage.js)). Commits Desk makes with `git commit -- <paths>`, as most tools do, are unchanged.
+
+What changes for these commits:
+
+- They hold while a merge, cherry-pick, revert, rebase or sequencer operation is in progress, and commit nothing. Undoing a tidy with `git revert --no-commit` therefore needs `git revert --quit`, which keeps the reverted changes staged, before `desk_save`.
+- A pre-commit hook that changes what is staged holds the commit instead of committing what it changed.
+- The whole commit, hooks and reads included, has one 10-second budget, not 10 seconds for each Git call.
+- A branch update that is cut off, or a commit that landed before its post-commit hook failed or was cut off, is never read back as not committed: Desk reads back what the branch holds and answers `committed` or `unknown`, naming the commit it made. Nothing is ever repeated.
+- A failure says which step failed and why, such as `the pre-commit hook was cut off`, instead of `timeout`.
