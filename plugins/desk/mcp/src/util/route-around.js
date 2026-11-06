@@ -61,7 +61,7 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
   if (capture) {
     const check = finishArgv(root, paths, message, capture)
     const finish = card === null
-      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit in a private index, runs the repository's hooks, and moves the branch only if it has not moved; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
+      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit in a private index, runs the repository's hooks, commits only if the branch has not moved when it looks just before, and reports unknown, naming the commit, if a move slipped in after that look; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
       : [{
         step: `Only if step 1 exited 3 (ready): call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then read ${paths.slice(1).join(", ")} with \`git diff HEAD\`, and only if it shows nothing but this call's change, commit ${paths.length > 2 ? "them" : "it"} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""}`,
         tool: "task_update",

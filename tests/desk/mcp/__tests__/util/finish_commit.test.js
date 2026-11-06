@@ -179,6 +179,20 @@ test("the finish is one plain git commit of a private index: no update-ref, comm
   assert.equal(done.commit, head(root))
 })
 
+// The finish runs from a shell, outside the tool call's budget. A hook slower than the tool's 10-second bound is what left the
+// commit unfinished, so the one commit dispatch gets room for it; every read keeps the short bound.
+test("the one commit dispatch outlasts a hook slower than the tool's bound, and every read keeps the short bound", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const calls = []
+  const spy = (cmd, args, opts) => { calls.push({ verb: args[2], timeout: opts?.timeout }); return spawnSync(cmd, args, opts) }
+  assert.equal(finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: spy }).state, "finished")
+  const commitTimeout = calls.find(({ verb }) => verb === "commit").timeout
+  assert.ok(commitTimeout >= 300_000, `the commit dispatch's bound is ${commitTimeout} ms`)
+  for (const call of calls.filter(({ verb }) => verb !== "commit")) assert.equal(call.timeout, 10_000, `${call.verb} keeps the short bound`)
+})
+
 function lateCommit(root) {
   writeFileSync(path.join(root, "late.md"), "late\n")
   spawnSync("git", ["-C", root, "add", "late.md"], { env })
