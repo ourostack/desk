@@ -132,37 +132,63 @@ test("a non-git desk reports nothing_to_commit for a tidy", async () => {
   assert.equal((await save(root, { paths: ["other.md"], message: "m", tidy: true })).status, "nothing_to_commit")
 })
 
-test("the undo of a tidy commits through the same call", async () => {
-  const root = await makeDesk()
+// The undo the tidy migration (02-tidy-desk.md) prescribes, run for real: git revert --no-commit, the record restored, git revert
+// --quit, then desk_save. Git's own state is read back at each step rather than assumed (#632: Desk commits nothing while a
+// revert is in progress, so the undo ends the revert first, and --quit must keep exactly what the revert staged).
+const UNDO_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
+const revertMarked = (root) => git(root, ["rev-parse", "-q", "--verify", "REVERT_HEAD"], { allowFail: true }).status === 0
+const staged = (root) => git(root, ["diff", "--cached", "-M", "--name-status"]).stdout
+const index = (root) => git(root, ["ls-files", "-s"]).stdout
+
+async function tidied(root) {
   await stageTidy(root)
-  const paths = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
-  await save(root, { paths, message: "Move one task", tidy: true })
-  const tidySha = git(root, ["rev-parse", "HEAD"]).stdout.trim()
-  git(root, ["revert", "--no-commit", tidySha])
+  await save(root, { paths: UNDO_PATHS, message: "Move one task", tidy: true })
+  // Another session's staged selection, which neither the revert, --quit nor the undo may touch.
+  await fs.writeFile(path.join(root, "other.md"), "staged elsewhere\n")
+  git(root, ["add", "other.md"])
+  return git(root, ["rev-parse", "HEAD"]).stdout.trim()
+}
+
+test("the undo of a tidy commits through the same call once git revert --quit ends the revert", async () => {
+  const root = await makeDesk()
+  const tidySha = await tidied(root)
+  const reverted = git(root, ["revert", "--no-commit", tidySha])
+  assert.equal(reverted.status, 0, "the revert applies without a conflict")
+  assert.match(staged(root), /^R\d+\tnew-track\/job\/task\.md\told-track\/job\/task\.md$/mu, "the card is staged as a move back")
   git(root, ["checkout", tidySha, "--", "_meta/organization.json"]) // the record is restored, as the migration says
-  git(root, ["revert", "--quit"]) // and the revert is ended with its changes kept staged, as the migration says
-  const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
+  const selection = staged(root), entries = index(root)
+  assert.equal(git(root, ["revert", "--quit"]).status, 0)
+  assert.equal(revertMarked(root), false, "--quit ends the revert")
+  assert.equal(git(root, ["rev-parse", "HEAD"]).stdout.trim(), tidySha, "--quit moves nothing")
+  assert.equal(index(root), entries, "--quit keeps the index exactly as the revert left it")
+  assert.equal(staged(root), selection)
+  const result = await save(root, { paths: UNDO_PATHS, message: "Undo the tidy", tidy: true })
   assert.equal(result.status, "committed")
   assert.match(subject(root), /Undo the tidy\n\nDesk-Tidy: true/u)
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).stdout.trim(), tidySha, "one commit, on the tidy")
+  assert.match(git(root, ["show", "--name-status", "--format=", "-M", "HEAD"]).stdout, /^R100\tnew-track\/job\/task\.md\told-track\/job\/task\.md\n$/u, "the undo is the move back, and only that")
+  assert.equal(git(root, ["show", "HEAD:old-track/job/task.md"]).stdout, CARD)
+  assert.equal(git(root, ["show", `${tidySha}:_meta/organization.json`]).stdout, git(root, ["show", "HEAD:_meta/organization.json"]).stdout, "the record stays")
   const stat = await fs.stat(path.join(root, "old-track", "job", "task.md"))
   assert.ok(stat.isFile())
-  assert.equal(git(root, ["status", "--short"]).stdout, "")
+  assert.equal(git(root, ["status", "--short"]).stdout, "M  other.md\n", "the other staged selection is still staged, and only it")
 })
 
-// Desk commits nothing while a revert is in progress (#632), so an undo still inside its `git revert --no-commit` holds; it says why.
-test("the undo of a tidy holds while the revert is still in progress", async () => {
+// Desk commits nothing while a revert is in progress (#632), so an undo still inside its `git revert --no-commit` holds and says
+// why, leaving the revert, the index and HEAD as they were.
+test("the undo of a tidy holds while the revert is still in progress", async (t) => {
   const root = await makeDesk()
-  await stageTidy(root)
-  const paths = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
-  await save(root, { paths, message: "Move one task", tidy: true })
-  const tidySha = git(root, ["rev-parse", "HEAD"]).stdout.trim()
+  const tidySha = await tidied(root)
   git(root, ["revert", "--no-commit", tidySha])
+  if (!revertMarked(root)) return t.skip("this Git leaves no revert in progress after a clean git revert --no-commit")
   git(root, ["checkout", tidySha, "--", "_meta/organization.json"])
-  const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
+  const entries = index(root)
+  const result = await save(root, { paths: UNDO_PATHS, message: "Undo the tidy", tidy: true })
   assert.notEqual(result.status, "committed")
   assert.match(result.commit.reason, /revert is in progress/u)
   assert.equal(git(root, ["rev-parse", "HEAD"]).stdout.trim(), tidySha)
-  assert.equal(git(root, ["rev-parse", "-q", "--verify", "REVERT_HEAD"]).status, 0, "the revert is left as it was")
+  assert.equal(index(root), entries)
+  assert.equal(revertMarked(root), true, "the revert is left as it was")
 })
 
 const TIDY_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]

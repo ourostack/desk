@@ -14,7 +14,6 @@
 import { existsSync } from "node:fs"
 import * as path from "node:path"
 
-import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
 
 // Bounds every git call so a hung hook or a held lock can never block a tool
@@ -23,6 +22,7 @@ import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
 // other slow git command and is reported the same way a stage or commit
 // failure is.
 const GIT_TIMEOUT_MS = 10_000
+const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-guard.js` exports; card_commit_guard.test.js checks they match
 
 /**
  * Why Desk must not stage or commit in `root` right now, or null when it may. A detached HEAD is always refused. Beyond that, `stateBranch` says what the caller knows:
