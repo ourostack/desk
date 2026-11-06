@@ -1,5 +1,67 @@
 # desk plugin — changelog
 
+## 3.2.68 — 2026-11-06
+
+Windows ACL provider request timeouts now carry a frozen, privacy-safe snapshot of queue wait, dispatch elapsed time, observed spawn/write/exit events and current-request output byte counts. Native failure reports print this metadata without including paths, payloads or output text. The existing deadlines, PowerShell programs and refusal behavior are unchanged; these diagnostics expose the observable stage of a timeout, not its still-unknown cause.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.67 — 2026-11-06
+
+Superpowers refresh: Desk now ships Superpowers 7.0.2, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/22f0b463e7a5e579904dd6211a520321035526f7) (upstream version 7.0.2) copied byte for byte. Selected files: 16 changed, 1 added, 5 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.66 — 2026-11-06
+
+Delivering Desk's commits no longer acknowledges a commit made while the fetch ran (#567): the commits it counts as delivered are bounded to the head it captured and pushed, so a commit that arrived at that moment stays owed and the next push worker delivers it instead of suppressing it as already delivered.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.65 — 2026-11-06
+
+Superpowers refresh: Desk now ships Superpowers 7.0.1, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/2ce8aa15d05bd57213e6f746f953aafb7ded7a8b) (upstream version 7.0.1) copied byte for byte. Selected files: 11 changed, 16 added, 6 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.64 — 2026-11-06
+
+Crew's `join` now offers a verified way to finish setting up a member folder that already holds work but has no registry row. `crew.js join --adopt-existing <reviewed-commit>` keeps every existing file, adds only the missing template paths, checks that the publishing account is the member and that the full history shows no conflicting owner, and registers the member through the shared-write protocol. Changed contents, conflicting reservations or pending claims, symlinks and untracked files still refuse, so nothing is overwritten or claimed silently. The join-crew skill describes the review-and-confirm steps and the canonical filing that follows ([#539](https://github.com/ourostack/desk/issues/539)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.63 — 2026-11-06
+
+Startup now warns about staged or untracked paths, changed tracked-file metadata, commits ahead of upstream, and commits absent from locally cached `origin/main` in a bound Crew workspace and its linked worktrees. The [metadata-only check](mcp/src/runtime/unsaved-work.js) never compares content through clean/process filters or enters submodules; it reports those content checks as unverified. It shares the existing wall-clock boot budget with index snapshots, reports incomplete coverage, and shows counts without private paths or branch names. It never publishes or cleans up work; local Git evidence does not establish current remote or pull-request state.
+
+Introduces saved-login store exclusion and an owned native snapshot producer for copied browser contexts. Password and editable-control values use redacted placeholders, including overlapping values; arbitrary authenticated extraction and unqualified document coverage are refused. This initial source slice supports one main document. Native synthetic-cookie acceptance, broader frame/shadow coverage and installed qualification remain open ([#577](https://github.com/ourostack/desk/issues/577)).
+
+Exact-word and timeline searches now read current files after classified in-memory index failures, preserve existing exclusions and redactions, and report the actual backend through search diagnostics. Recovery rejects individual file read/stat failures instead of returning an incomplete corpus; ordinary discovery stays tolerant. Unknown, filesystem and permission failures remain failures. [Search recovery](docs/search-recovery.md) documents the supported requests and the limits of the source-level regression evidence.
+
+The `Delivered:` line of an accept-or-send-back delivery is now a receipt: each acceptance check with its result and proof, what to look at, and what is not covered, with a substantial delivery published as a page and linked. The three literal lines are unchanged. [`evidence-discipline`](skills/evidence-discipline/SKILL.md) owns the rule in a new "Delivery receipt" section, and [`interaction-style`](skills/interaction-style/SKILL.md) and [`task-lifecycle`](skills/task-lifecycle/SKILL.md) point at it. This carries the distinct intent of the older validation-receipt pull request onto the current delivery format.
+
+Several rules one operator had recorded for his own agents are general practice, so Desk now carries them for everyone. [`interaction-style`](skills/interaction-style/SKILL.md) says to write a question in the message with its context rather than call a question form at all, and that an asked-for update is one last message, with no tool calls after it, covering all work in flight. [`work-orchestration`](skills/work-orchestration/SKILL.md) says finished pull requests merge once their required checks pass, to work smart rather than loop on reruns or duplicate a lane, that a fleet steward watches every session and every pull request with fixed thresholds for hung and stalled sessions, that no session reports another going quiet, and to spend less per piece of work (the cheapest capable model, small contexts, restarts from a checkpoint, no chatter between sessions) without ever capping pace or parallelism to save money; a hard quota or rate limit is a separate case, met by switching to an account or provider already authorized for the same work where possible, never by switching identity, tenant or credentials on a quota error alone. [`content-routing`](skills/content-routing/SKILL.md) says a move of a repository, package or folder is finished only when the old home and running agents can see it. [`evidence-discipline`](skills/evidence-discipline/SKILL.md) says every screenshot carries a caption saying what to notice.
+
+Git staging and committing no longer redispatch a failed mutation merely because its error mentions a lock: a hook or filter may already have run. Staging still waits briefly for an observed index lock before its one dispatch, while background writers continue to yield immediately. Existing result shapes and caller interfaces are unchanged ([implementation](../mcp/src/util/git-stage.js), [regressions](../../../tests/desk/mcp/__tests__/util/git_stage.test.js)). This source fix does not qualify installed-worker persistence recovery or identify the cause of a native commit timeout.
+
+Add a bounded, read-only local LFS inspector and `lfs.js inspect` CLI that distinguish context binaries, package payloads, pointers and verified local bytes without changing repository policy or fetching objects. Onboarding integration, conversion, remote publication and installed-plugin readiness remain unqualified.
+
+Work stays out of a host's own folders. Copilot's system prompt offers the session folder, `~/.copilot/session-state/<id>/files/`, as a place that "persists across checkpoints for artifacts that shouldn't be committed", and one agent left about 2,800 research files there; another invented a `~/.<app>` folder for its work. Agents work across sessions and machines, so work kept in one machine's private folder is lost to the rest. The host-command table in [`skills/interaction-style/SKILL.md`](skills/interaction-style/SKILL.md) maps the session folder (and Claude Code's `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` and Codex's `${CODEX_HOME:-~/.codex}/sessions/`) to the repository for code and docs and the desk for private work product, and an invented dot folder to the operating system's app-data folder, the repository or the desk.
+
+On Copilot CLI the launcher can make this structural, next to `--excluded-tools=ask_user`: `--deny-tool="write(${COPILOT_HOME:-$HOME/.copilot}/session-state/*/files/**)"` refuses Copilot's file tools under `files/` even with `--allow-all-tools`, while Copilot's own session writes go on. It does not cover the shell, and Copilot has no setting for it, so only the launcher can add it; Desk adds no tool-call hook. See [the session folder on Copilot CLI](docs/agent-files.md#the-session-folder-on-copilot-cli).
+
+[Using Superpowers with Desk](skills/using-superpowers-with-desk/SKILL.md) now says where a brainstorming design doc goes: `design.md` in the task's iteration folder, beside its plan, not `docs/superpowers/specs/` in the code repository. Superpowers 7's brainstorming decides where files go without asking and lets the operator's preference override its default, so Desk states that preference.
+
+Superpowers packaging 6.4.6 acquires native BigInt journal stats before comparing exact file identity, so numeric precision loss cannot admit a same-byte replacement during a guarded read or write. Persisted journal and recovery formats and pristine upstream inputs are unchanged. This fixes the deterministic precision defect tracked in [#616](https://github.com/ourostack/desk/issues/616); the actual Windows collision mechanism remains unverified.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.62 — 2026-11-05
+
+[Issue-drain guidance](../skills/draining-issues/SKILL.md) now requires visible intake acknowledgements, truthful ownership and duplicate-safe status updates within the authorized repository/account scope. It also requires filtering the drain's own status-only comments before watcher wakeups; this amendment does not implement or verify that filtering.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.61 — 2026-11-05
 
 `task_archive` can retry an interrupted staged relocation without manual unstaging when the archive exactly matches the source in HEAD and its track-link update is unchanged. Unrelated staged work stays staged; altered or partially staged archives and destinations already occupied in HEAD remain pending. A timeout after a successful commit is reconciled without a duplicate commit. The original cause of a commit timeout still needs separate diagnosis ([recovery contract](mcp/README.md#tools-exposed-24)).

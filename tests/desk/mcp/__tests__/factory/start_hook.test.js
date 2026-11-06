@@ -42,8 +42,8 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // The registry.
 // ---------------------------------------------------------------------------
 
-test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy, then improvement", () => {
-  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy", "improvement"])
+test("the registry runs publication inspection before workspace tidy within the shared budget", () => {
+  assert.deepEqual(checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "unsaved-work", "workspace-tidy", "improvement"])
   assert.equal(TOTAL_BUDGET_MS, 300)
   assert.ok(checks.every((entry) => entry.budgetMs <= 300))
 })
@@ -393,6 +393,7 @@ async function overridesFor(dir, { lines = null, calls }) {
   const file = path.join(dir, `overrides-${Math.random().toString(16).slice(2)}.cjs`)
   await fs.writeFile(file, `
 const fs = require("node:fs");
+require("node:test").mock.method(performance, "now", () => 0);
 module.exports = {
   migrationLine: async () => "",
   checks: ${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })),
@@ -538,6 +539,7 @@ for (const [host, pending] of [["claude", 1], ["copilot", 1], ["claude", 3], ["c
     const precheck = "workspace-tidy deferred (0 listed); 1 task card with unreadable repos: greenhouse-ops/valve-firmware-flasher/task.md (repo ~/code/valve-firmware not found); their repositories were not inspected"
     const overrides = path.join(base, "budget-overrides.cjs")
     await fs.writeFile(overrides, `
+require("node:test").mock.method(performance, "now", () => 0);
 module.exports = {
   checks: [{ id: "fixture", budgetMs: 100, run: async () => ({ line: ${JSON.stringify(precheck)} }) }],
   migrationLine: async () => ${JSON.stringify(migration)},

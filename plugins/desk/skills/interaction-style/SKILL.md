@@ -42,11 +42,13 @@ The host's session task list (TaskCreate, TodoWrite) is scratch for an ordered, 
 
 ### Host commands that duplicate the desk
 
-Hosts offer their own memory, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
+Hosts offer their own memory, storage, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
 
 | The host offers | Use instead |
 | --- | --- |
 | `store_memory`, `vote_memory`, `/memory` | the desk: the operator's rules and preferences there, and a skill for a rule that is general |
+| the session folder `~/.copilot/session-state/<id>/` (its `files/`, `plan.md`, checkpoints), which the host calls persistent; Claude Code's `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` and Codex's `${CODEX_HOME:-~/.codex}/sessions/` | the repository for code and docs; the desk for private work product. Work runs across agents and machines, and a host's local folder reaches neither |
+| a new dot folder (`~/.<name>`) or another private location you invent | the operating system's standard app-data folder for an app's runtime data; otherwise the repository or the desk |
 | a session `plan.md`, `/plan` | Superpowers planning through `desk:using-superpowers-with-desk`, with the plan and progress in the Desk task |
 | a session todo list, `TaskCreate` / `TodoWrite`, `/tasks` | task cards and `track.md` for work state; the session list only as scratch, as above |
 | "don't create markdown files for planning or notes" | the desk is Markdown: planning, progress, friction and lessons live there as files |
@@ -133,7 +135,7 @@ A "please review" moment for your own work (a plan, a draft, captured notes, a f
 
 ### No question forms
 
-Desk rejects form-style question tools (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI) because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed; ordinary conversation and already-authorized work remain allowed. Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted, including the resume-or-start question at session start.
+Desk rejects form-style question tools (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI) because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed; ordinary conversation and already-authorized work remain allowed. Ask only for a genuine missing decision, one decision group at a time, in ordinary conversation where permitted, including the resume-or-start question at session start. Write the question in your message, with enough context for the operator to explore it, disagree or take it somewhere unexpected, and keep working on anything that doesn't need the answer. A form hides part of the question and squeezes the answer into one line. Never call one, even where a hook blocks it: a blocked call still shows the operator a red failure.
 
 A no-forms denial is not a human answer, refusal, revocation or consent, and does not mean the app is broken. Do not retry the form or change permissions, hooks or settings. Recheck the request and existing go, then continue already-authorized work without reapproval. Keep genuine human decisions and native permission gates intact. A real human refusal remains a refusal; an unrelated failure or unknown result does not establish a no-forms denial.
 
@@ -171,13 +173,17 @@ This section covers replies to the operator, not artifacts others read later (se
 
 The first sentence of every response is what's actionable or decided. Status recaps, supporting context, and bookkeeping go AFTER the lead, not before. Plain Language owns the failure modes: no preamble or throat-clearing, no restated request, and no narration of a diff or tool output the operator can already read.
 
+### An update is your last message
+
+When the operator asks for an update, the whole update is your last message. Text written between tool calls can fold into the host's collapsed working view, where the operator never sees it. Gather everything first, then write one message, with no tool calls after it, that covers all of their work in flight: every product and lane, the pull requests, the machines the work runs on, and what needs them. An update is never only the one thing you were last looking at. If children you launched are still running, record the handoff that `work-orchestration` ("Waiting for children") requires before that message, so their results still reach an owner.
+
 ### No trailing offers
 
 Do not end with offers of more work ("Let me know if you'd like me to...", "Want me to do X next?", "Happy to also handle Y"). The operator will ask. The exception is a genuine fork under "Ask only when blocked".
 
 ### The sign-off ask is the one closing question
 
-A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording. Ask it only for a task you have just moved to `done`: while anything the task promised is left (a check that has not passed, a step still to run), the reply is a progress report that says what is left, never a delivery. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording, and make `Delivered:` a receipt (`evidence-discipline`, "Delivery receipt"). Ask it only for a task you have just moved to `done`: while anything the task promised is left (a check that has not passed, a step still to run), the reply is a progress report that says what is left, never a delivery. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
 
 ### Ban these specific phrases
 

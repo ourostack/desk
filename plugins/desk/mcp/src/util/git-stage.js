@@ -47,8 +47,8 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
 }
 
 // Another Git process (often Desk's own background loop committing an improvement card) can hold the desk's index or a ref lock
-// for a moment. A person's write then waits for it, retrying for up to LOCK_WAIT_MS, instead of failing. Desk's background
-// writers run with DESK_GIT_YIELD=1 (hooks/loop-start.cjs) and never wait: they give way, and their card is committed by a later write.
+// for a moment. Staging waits for an observed index lock before dispatch; a failed mutation is never redispatched,
+// because its hooks or filters may already have taken effect. Desk's background writers run with DESK_GIT_YIELD=1 and never wait.
 const LOCK_WAIT_MS = 3000
 const LOCK_RETRY_MS = 50
 const LOCK_HELD = /Unable to create '[^']*\.lock'|\.lock': File exists|cannot lock ref/u
@@ -70,9 +70,9 @@ function sleepSync(ms) {
 function run(spawnGit, root, args, extra = {}) {
   const once = () => spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
   let result = once()
-  if (yieldsGitLock()) return result
+  if (!["symbolic-ref", "rev-parse", "diff", "ls-files"].includes(args[0]) || result?.error || yieldsGitLock()) return result
   const deadline = Date.now() + LOCK_WAIT_MS
-  while (lockHeld(result) && Date.now() < deadline) {
+  while (!result?.error && lockHeld(result) && Date.now() < deadline) {
     sleepSync(LOCK_RETRY_MS)
     result = once()
   }
@@ -193,6 +193,10 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
 export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false } = {}) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
+  if (!yieldsGitLock()) {
+    const deadline = Date.now() + LOCK_WAIT_MS
+    while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
+  }
   const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }

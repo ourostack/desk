@@ -1,1 +1,0 @@
-[Issue-drain guidance](../skills/draining-issues/SKILL.md) now requires visible intake acknowledgements, truthful ownership and duplicate-safe status updates within the authorized repository/account scope. It also requires filtering the drain's own status-only comments before watcher wakeups; this amendment does not implement or verify that filtering.

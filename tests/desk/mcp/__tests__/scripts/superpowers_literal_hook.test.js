@@ -38,6 +38,10 @@ test("the actual vendored run-hook.cmd has no heredoc and preserves distinct ups
     repository: () => ({ full_name: source.repository, default_branch: "main", html_url: "https://github.com/obra/superpowers", license: { spdx_id: "MIT" } }),
     latestRelease: () => null,
     commit: () => ({ sha: source.commit }),
+    tree: () => new Map(source.files.map((entry) => [
+      entry.sourcePath,
+      { type: "blob", mode: (lstatSync(path.join(repo, entry.upstreamPath ?? entry.generatedPath)).mode & 0o111) ? "100755" : "100644" },
+    ])),
     file: (repository, sourcePath) => {
       const selected = source.files.find((entry) => entry.sourcePath === sourcePath)
       return readFileSync(path.join(repo, selected.upstreamPath ?? selected.generatedPath))

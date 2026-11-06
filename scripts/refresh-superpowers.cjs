@@ -4,9 +4,13 @@
 // Refreshes the vendored Superpowers payload from an upstream Git checkout and, when any selected byte changed,
 // releases it: Superpowers takes upstream's declared version (or the next patch when upstream changed the payload
 // without a new version) on every surface that names it, and Desk gains a changelog fragment, like any other pull
-// request, from which the release workflow takes Desk's next alpha once the refresh merges. The upstream payload
-// itself is never edited; only Ourostack packaging files and release surfaces are.
+// request, from which the release workflow takes Desk's next alpha once the refresh merges. When upstream crosses a
+// major version, Desk's compatibility floor moves to it, so CI qualifies Desk against the new major rather than
+// failing every refresh on the old floor; the report carries upstream's release notes since the version Desk shipped,
+// so the pull request and any issue say what changed. The upstream payload itself is never edited; only Ourostack
+// packaging files and release surfaces are.
 
+const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
@@ -15,12 +19,13 @@ const { spawnSync } = require("node:child_process");
 const { compareVersions, parseVersion } = require("./check-release-integrity.cjs");
 const { createGitTreeReader, updateSource, sha256 } = require("./check-upstream-sources.cjs");
 const { FRAGMENT_DIR, replaceVersion, versionToken } = require("./release-desk.cjs");
+const { satisfiesVersion } = require("./validate-skills.cjs");
 const hookCompat = require("./superpowers-hook-compat.cjs");
 
 const SOURCE_ID = "obra-superpowers";
 
 // Every surface that names the shipped Superpowers version. A caret range such as `^6.3.0` is a compatibility
-// floor, not the shipped version, and is left alone.
+// floor, not the shipped version; it moves only when the new version falls outside it (SUPERPOWERS_RANGE_FILES).
 const SUPERPOWERS_VERSION_FILES = [
   ".claude-plugin/marketplace.json",
   "plugins/superpowers/plugin.json",
@@ -30,7 +35,14 @@ const SUPERPOWERS_VERSION_FILES = [
   "plugins/desk/activation/copilot-root.flattened-bundle.json",
 ];
 
+// Where Desk declares the Superpowers versions it works with, and how to find the declaration in each.
+const SUPERPOWERS_RANGE_FILES = [
+  { file: "plugins/desk/.claude-plugin/plugin.json", find: (json) => json.dependencies.find((dependency) => dependency.name === "superpowers"), key: "version" },
+  { file: "plugins/desk/activation/desk.activation.json", find: (json) => json.dependencies.find((dependency) => dependency.id === "superpowers"), key: "version_range" },
+];
+
 const SUPERPOWERS_README = "plugins/superpowers/README.md";
+const UPSTREAM_NOTES = "RELEASE-NOTES.md";
 
 function readJson(root, file) {
   return JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
@@ -74,17 +86,60 @@ function fragmentText({ superpowers, upstream, report }) {
   return `Superpowers refresh: Desk now ships Superpowers ${superpowers}, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/${report.commit}) (upstream version ${upstream}) copied byte for byte. Selected files: ${counts}. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.\n`;
 }
 
-function release({ root, report, upstream }) {
+function shippedUpstream(root) {
+  return /version (\S+), commit `/u.exec(fs.readFileSync(path.join(root, SUPERPOWERS_README), "utf8"))?.[1] ?? null;
+}
+
+// Upstream's notes for every version after the one Desk shipped, up to the one it ships now, newest first.
+function releaseNotes(upstreamTree, { from, to }) {
+  if (!upstreamTree.entries.has(UPSTREAM_NOTES)) return [];
+  const text = upstreamTree.read(UPSTREAM_NOTES).toString("utf8").replace(/\r\n/gu, "\n");
+  const sections = text.split(/^## /mu).slice(1);
+  return sections.flatMap((section) => {
+    const [heading, ...rest] = section.split("\n");
+    const version = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/u.exec(heading.trim())?.[1];
+    if (!version || compareVersions(version, to) > 0 || (from && compareVersions(version, from) <= 0)) return [];
+    return [{ version, heading: heading.trim(), body: rest.join("\n").trim() }];
+  });
+}
+
+// Moves Desk's caret floor to the new version only when the new version falls outside it. The edit replaces the one
+// quoted range string and is checked by re-parsing, so the rest of each file keeps its bytes.
+function moveRange(root, version) {
+  const ranges = SUPERPOWERS_RANGE_FILES.map((site) => ({ ...site, range: site.find(readJson(root, site.file))[site.key] }));
+  const outside = ranges.filter((site) => !satisfiesVersion(version, site.range));
+  if (outside.length === 0) return null;
+  const floors = new Set(ranges.map((site) => site.range));
+  if (floors.size !== 1) throw new Error(`Superpowers refresh: Desk declares different Superpowers ranges: ${[...floors].join(", ")}`);
+  const [from] = floors;
+  const to = `^${version}`;
+  for (const site of ranges) {
+    const target = path.join(root, site.file);
+    const text = fs.readFileSync(target, "utf8");
+    const quoted = JSON.stringify(from);
+    if (text.split(quoted).length !== 2) throw new Error(`Superpowers refresh: ${site.file} names ${quoted} more than once; move its range by hand`);
+    const next = text.replace(quoted, JSON.stringify(to));
+    const expected = JSON.parse(text);
+    site.find(expected)[site.key] = to;
+    assert.deepStrictEqual(JSON.parse(next), expected, `Superpowers refresh: moving the range in ${site.file} changed more than the range`);
+    fs.writeFileSync(target, next);
+  }
+  return { from, to, files: ranges.map((site) => site.file) };
+}
+
+function release({ root, report, upstream, upstreamTree }) {
   const currentSuperpowers = readJson(root, "plugins/superpowers/.claude-plugin/plugin.json").version;
   const superpowers = chooseSuperpowersVersion(currentSuperpowers, upstream);
   const fragment = `${FRAGMENT_DIR}/superpowers-${superpowers}.md`;
+  const notes = releaseNotes(upstreamTree, { from: shippedUpstream(root), to: upstream });
 
   replaceVersion(root, SUPERPOWERS_VERSION_FILES, currentSuperpowers, superpowers);
+  const range = moveRange(root, superpowers);
   updateReadme(root, { upstream, commit: report.commit, tree: report.tree });
   fs.mkdirSync(path.join(root, FRAGMENT_DIR), { recursive: true });
   fs.writeFileSync(path.join(root, fragment), fragmentText({ superpowers, upstream, report }));
 
-  return { superpowers: { from: currentSuperpowers, to: superpowers, upstream }, fragment };
+  return { superpowers: { from: currentSuperpowers, to: superpowers, upstream }, fragment, range, notes };
 }
 
 function refresh({ root, upstream, io = fs }) {
@@ -103,7 +158,8 @@ function refresh({ root, upstream, io = fs }) {
     .map((file) => `plugins/superpowers/${file}`);
   const paths = [...new Set([
     "upstream-sources.lock.json", ...source.files.flatMap((file) => [file.generatedPath, file.upstreamPath ?? file.generatedPath]),
-    ...hookCompat.OUTPUT_PATHS, ...SUPERPOWERS_VERSION_FILES, SUPERPOWERS_README, fragment, ...incoming,
+    ...hookCompat.OUTPUT_PATHS, ...SUPERPOWERS_VERSION_FILES, ...SUPERPOWERS_RANGE_FILES.map((site) => site.file),
+    SUPERPOWERS_README, fragment, ...incoming,
   ])];
   const before = hookCompat.snapshot({ root, paths, io });
   for (const file of source.files) {
@@ -185,7 +241,7 @@ function refresh({ root, upstream, io = fs }) {
     }
     if (before.get(fragment) !== null) throw new Error(`Superpowers refresh: release fragment already exists: ${fragment}`);
     const compatibility = hookCompat.generate({ root: candidateRoot, io });
-    const released = release({ root: candidateRoot, report, upstream: version });
+    const released = release({ root: candidateRoot, report, upstream: version, upstreamTree: upstream });
     const candidate = hookCompat.snapshot({ root: candidateRoot, paths });
     const artifacts = [...candidate].map(([file, current]) => ({
       path: file, content: current?.content ?? null, ...(current === null ? {} : { mode: current.mode }),
@@ -295,10 +351,38 @@ function parseArgs(argv) {
   return options;
 }
 
+// Desk's own text files: tracked files in a checkout, otherwise every file outside dot and dependency directories.
+function deskFiles(root, run) {
+  const listed = run("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8" });
+  let files = listed.status === 0 ? listed.stdout.split("\0").filter(Boolean) : [];
+  if (files.length === 0) {
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
+        if ((entry.name.startsWith(".") && entry.isDirectory()) || entry.name === "node_modules") continue;
+        const file = dir ? `${dir}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile()) files.push(file);
+      }
+    };
+    walk("");
+  }
+  return files.flatMap((file) => {
+    const full = path.join(root, file);
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return [];
+    const bytes = fs.readFileSync(full);
+    return bytes.includes(0) ? [] : [{ path: file, text: bytes.toString("utf8") }];
+  });
+}
+
 function main(argv = process.argv.slice(2), { stdout = process.stdout, run = spawnSync } = {}) {
   const options = parseArgs(argv);
+  const root = path.resolve(options.root);
   const upstream = createGitTreeReader({ dir: path.resolve(options.upstreamDir), ref: options.ref, run });
-  const result = refresh({ root: path.resolve(options.root), upstream });
+  const result = refresh({ root, upstream });
+  if (result.changed) {
+    const { referencesToRemoved } = require("./superpowers-upstream-pr.cjs");
+    result.desk_references = result.removed_paths.length === 0 ? [] : referencesToRemoved(result.removed_paths, deskFiles(root, run));
+  }
   stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;
 }
@@ -313,6 +397,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  SUPERPOWERS_RANGE_FILES,
   SUPERPOWERS_VERSION_FILES,
   chooseSuperpowersVersion,
   main,

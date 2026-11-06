@@ -38,7 +38,7 @@ function readAcl(target) {
 
 test("native: the factory state root, the machine secret and an outbox file each carry an owner-only, single-rule NTFS DACL for the current user", {
   skip: isWindows ? false : "requires a native Windows host",
-}, async () => {
+}, async t => {
   const { base, env } = await mkFactoryEnv()
   try {
     const consent = await setConsent(env, { store: "ourostack/factory", contribute: true })
@@ -89,6 +89,9 @@ test("native: the factory state root, the machine secret and an outbox file each
       assert.equal(acl.identity, self)
       assert.match(acl.rights, /FullControl/u)
     }
+  } catch (error) {
+    if (error.details) t.diagnostic(JSON.stringify(error.details))
+    throw error
   } finally {
     await fs.rm(base, { recursive: true, force: true })
   }

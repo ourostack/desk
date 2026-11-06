@@ -78,6 +78,10 @@ A skill is a *capability*, not just a rule, so it routes the same way (whose? ge
 
 **The gate, at author time.** Before a new skill lands in the nearest or most-specific plugin by default, run the test. Wholly generic goes to the canonical library; generic engine plus a context skin gets split; wholly context-specific goes to the context plugin. The default home is the *lowest* layer the capability is honest at, not the *closest* one to where you happen to be working.
 
+## A move is finished when everyone can see it
+
+When you move, split or rename a repository, package or folder that other agents work in, the old home says what moved, where it went and the rule for new work, in its README and AGENTS.md, in the same change. Agents read AGENTS.md only when they start, so also announce the move where running agents will see it, such as the team's announcement file or channel. Where agents working in the old repository can't see that channel, open an issue labelled `moved` in each old repository, and close it once that repository's README and AGENTS.md point to the new home. A fleet steward, when there is one, checks both on every pass and briefs the running sessions the move affects.
+
 ## Pointer shape — what stays in the workspace after extraction
 
 > ### Short rule title (DATE)

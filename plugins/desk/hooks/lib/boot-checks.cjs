@@ -5,9 +5,9 @@
 // through copilot-session-start.cjs).
 //
 // Each check is `{ id, budgetMs, run(ctx) -> { line?, repair?: { command } } }`
-// and they run in order under one 300 ms total budget; a check gets the
-// smaller of its own budget and what is left, and the real time each check
-// takes is charged against the total. A check is skipped for this start, its
+// and they run in order under one 300 ms wall-clock deadline, including index
+// snapshots; a check gets the smaller of its own work budget and what is left.
+// A check is skipped for this start, its
 // line and repair discarded, when its budget timer fires, when it took longer
 // than its budget (a check that blocks synchronously settles before its timer
 // can fire), when it throws, or when it stops itself at `ctx.deadline` by
@@ -41,11 +41,13 @@
 //      (mcp/src/factory/boot-check.js, mcp/src/factory/andon-watch.js);
 //   4. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   5. workspace-tidy: stale worktree listing with its own detached repair
+//   5. unsaved-work: read-only local publication evidence for the bound Crew
+//      workspace and its linked worktrees, without paths or branch names;
+//   6. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
-//   6. improvement: the open improvement cards and the oldest one's age, or an
+//   7. improvement: the open improvement cards and the oldest one's age, or an
 //      unreadable card folder, as one status line, without a repair
 //      (mcp/src/factory/boot-check.js). The labels, andon and improvement
 //      checks say nothing in a noninteractive session and read the cards once.
@@ -440,6 +442,24 @@ const deskHealthCheck = {
 
 const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorkspaceTidy };
 
+const unsavedWorkCheck = {
+  id: "unsaved-work",
+  budgetMs: 100,
+  budgetLine: "unsaved-work: not checked (boot budget exhausted); local publication state unknown.",
+  async run(ctx) {
+    const [{ resolveStartupRoot }, { resolveActivationConfigPath }, { inspectUnsavedWork }] = await Promise.all([
+      import("../../mcp/src/util/startup-direction.js"), import("../../mcp/src/util/paths.js"), import("../../mcp/src/runtime/unsaved-work.js"),
+    ]);
+    const bound = resolveStartupRoot({
+      env: ctx.env, activationConfigPath: resolveActivationConfigPath({ env: ctx.env }),
+      hostProjectRoot: ctx.host === "copilot" ? ctx.sessionFolder : ctx.env.CLAUDE_PROJECT_DIR,
+    });
+    if (bound.error || bound.unavailable) return { line: "unsaved-work: binding unavailable; local publication state unknown; see desk_status." };
+    if (!bound.root) return {};
+    return { line: await inspectUnsavedWork({ deskRoot: bound.root, deadline: ctx.deadline, signal: ctx.signal, git: ctx.unsavedWorkGit }) };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // The registry.
 // ---------------------------------------------------------------------------
@@ -478,8 +498,8 @@ async function runBootChecks(options = {}) {
   } = options;
   const env = options.env ?? process.env;
   if (isHeadless(env)) return "";
-  // The real time every check took, charged against the total budget.
-  let used = 0;
+  const registryDeadline = performance.now() + totalBudgetMs;
+  const remaining = () => registryDeadline - performance.now();
   const shared = {};
   const lines = [];
   const repairs = [];
@@ -488,9 +508,8 @@ async function runBootChecks(options = {}) {
   // `deskHealthCheck` resolve their own desk root, and only watched when it
   // is itself a Git repository.
   const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem, formatDeskProblem } = await import("../../mcp/src/runtime/index-drift.js");
-  const { isGitRepository } = await import("../../mcp/src/util/git-stage.js");
   const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
-  const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
+  const tracksIndex = typeof driftRoot === "string";
   // A failure's raw text (a staged path, an error message) never becomes an
   // argument on the detached filer's own command line unredacted -- `ps`
   // shows a process's argv to every account on the machine, not just this
@@ -516,17 +535,22 @@ async function runBootChecks(options = {}) {
     return { file: launch ? "filing in background" : "filing already queued (within the last hour)" };
   };
   for (const check of registry) {
-    const budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, totalBudgetMs - used);
+    let budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, remaining());
     // Timers resolve to whole milliseconds, so less than one left is none left.
     if (budget < 1) {
       skipped.push({ id: check.id, reason: "total_budget" });
+      if (check.budgetLine) lines.push(oneLine(check.budgetLine));
       continue;
     }
     const cancellation = new AbortController();
-    // Taken outside the check's own timing window, so a snapshot's cost (git
-    // is bounded to 1 s, never the check's own budget) is never charged
-    // against it — see `mcp/src/runtime/index-drift.js`.
-    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit }) : null;
+    // Snapshots share the registry deadline without consuming the check's own work allowance.
+    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit, timeoutMs: remaining() }) : null;
+    budget = Math.min(budget, remaining());
+    if (budget < 1) {
+      skipped.push({ id: check.id, reason: "total_budget" });
+      if (check.budgetLine) lines.push(oneLine(check.budgetLine));
+      continue;
+    }
     const checkStarted = performance.now();
     const deadline = checkStarted + budget;
     let timer;
@@ -539,21 +563,22 @@ async function runBootChecks(options = {}) {
     clearTimeout(timer);
     // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
     const elapsed = performance.now() - checkStarted;
-    used += elapsed;
+    if (outcome.overrun || elapsed > budget) cancellation.abort();
     // The after-snapshot is taken (and its own cost incurred) only once the
     // check's own elapsed time is already settled, and only when the before-
     // snapshot itself succeeded: a failed or timed-out "before" makes any
     // diff meaningless, and trying again risks the same hang twice.
-    if (tracksIndex && beforeStaged !== null) {
-      const afterStaged = snapshotStagedPaths({ root: driftRoot, spawnGit });
+    if (tracksIndex && beforeStaged !== null && remaining() >= 1) {
+      const afterStaged = snapshotStagedPaths({ root: driftRoot, spawnGit, timeoutMs: remaining() });
       if (afterStaged !== null) {
         const drift = diffStagedPaths(beforeStaged, afterStaged);
         if (drift.length > 0) lines.push(await formatIndexDriftProblem({ kind: "boot check", label: check.id, drift, env, host: options.host, fileProblem: indexDriftFileProblem }));
       }
     }
-    if (outcome.overrun || elapsed > budget) {
+    if (outcome.overrun || elapsed > budget || remaining() < 1) {
       cancellation.abort();
       skipped.push({ id: check.id, reason: "budget", elapsed_ms: Math.round(elapsed) });
+      if (check.budgetLine) lines.push(oneLine(check.budgetLine));
       continue;
     }
     if (outcome.failed) {
@@ -778,7 +803,7 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
   return { started: true, node, code };
 }
 
-const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, improvementCheck];
+const checks = [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, unsavedWorkCheck, workspaceTidyCheck, improvementCheck];
 
 // The command line of the entry file `hooks/boot-checks.cjs`: the spawned repair, fast-forward, compatible-node, acknowledge and revoke runs.
 function main(argv = process.argv.slice(2)) {

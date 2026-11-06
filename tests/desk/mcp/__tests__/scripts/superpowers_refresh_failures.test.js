@@ -13,7 +13,7 @@ import { otherFile } from "../_file_identity.js"
 const repo = fileURLToPath(new URL("../../../../../", import.meta.url))
 const require = createRequire(import.meta.url)
 const compat = require(path.join(repo, "scripts/superpowers-hook-compat.cjs"))
-const { refresh, main, upstreamVersion, chooseSuperpowersVersion, SUPERPOWERS_VERSION_FILES } = require(path.join(repo, "scripts/refresh-superpowers.cjs"))
+const { refresh, main, upstreamVersion, chooseSuperpowersVersion, SUPERPOWERS_RANGE_FILES, SUPERPOWERS_VERSION_FILES } = require(path.join(repo, "scripts/refresh-superpowers.cjs"))
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 
 function fixture(t) {
@@ -27,6 +27,11 @@ function fixture(t) {
     fs.writeFileSync(path.join(root, file), content)
   }
   for (const file of SUPERPOWERS_VERSION_FILES) put(file, '{"version":"6.4.5"}\n')
+  for (const site of SUPERPOWERS_RANGE_FILES) {
+    const json = fs.existsSync(path.join(root, site.file)) ? JSON.parse(fs.readFileSync(path.join(root, site.file))) : {}
+    json.dependencies = [{ name: "superpowers", id: "superpowers", [site.key]: "^6.3.0" }]
+    put(site.file, JSON.stringify(json) + "\n")
+  }
   put("plugins/superpowers/README.md", `version 6.4.2, commit \`${"a".repeat(40)}\`; the upstream tree is \`${"b".repeat(40)}\`\n`)
   const raw = fs.readFileSync(path.join(repo, "plugins/superpowers/hooks/upstream/run-hook.cmd"))
   const bytes = new Map([
@@ -116,8 +121,8 @@ for (const mode of ["identity", "cleanup-noop"]) {
     }, renameSync(from, to) {
       fs.renameSync(from, to)
       if (to.startsWith(f.root) && to.endsWith("superpowers-7.0.0.md")) published = true
-    }, lstatSync(file) {
-      const stat = fs.lstatSync(file)
+    }, lstatSync(file, ...args) {
+      const stat = fs.lstatSync(file, ...args)
       return mode === "identity" && published && file === candidate ? { ...stat, ...otherFile(stat), isDirectory: () => true } : stat
     }, rmSync(file, ...args) {
       if (mode === "cleanup-noop" && file === candidate) return
@@ -204,6 +209,78 @@ test("malformed release README fails before any consumer version is changed", (t
   assert.deepEqual(fs.readFileSync(path.join(f.root, SUPERPOWERS_VERSION_FILES[0])), version)
 })
 
+for (const fault of ["different ranges", "duplicate range text"]) {
+  test(`refresh refuses ${fault} without publishing payload or consumer changes`, (t) => {
+    const f = fixture(t), site = SUPERPOWERS_RANGE_FILES[0]
+    const declaration = JSON.parse(fs.readFileSync(path.join(f.root, site.file), "utf8"))
+    if (fault === "different ranges") site.find(declaration)[site.key] = "^6.4.0"
+    else declaration.fixture_note = "^6.3.0"
+    f.put(site.file, JSON.stringify(declaration) + "\n")
+    const files = new Set([
+      ...SUPERPOWERS_VERSION_FILES, ...SUPERPOWERS_RANGE_FILES.map((entry) => entry.file),
+      "upstream-sources.lock.json", "plugins/superpowers/README.md", "plugins/superpowers/skills/example/SKILL.md",
+    ])
+    const before = [...files].map((file) => [file, fs.readFileSync(path.join(f.root, file))])
+    assert.throws(() => refresh(f), fault === "different ranges" ? /declares different Superpowers ranges/ : /names "\^6\.3\.0" more than once/)
+    for (const [file, bytes] of before) assert.deepEqual(fs.readFileSync(path.join(f.root, file)), bytes, file)
+    assert.equal(fs.existsSync(path.join(f.root, "plugins/desk/changelog.d/superpowers-7.0.0.md")), false)
+    compat.verify({ root: f.root })
+  })
+}
+
+for (const inventory of ["tracked", "walked"]) {
+  test(`refresh reports only regular text references from its ${inventory} inventory`, (t) => {
+    const f = fixture(t), upstreamDir = path.join(f.root, "upstream-input")
+    f.incoming.delete("skills/example/SKILL.md")
+    f.incoming.set("skills/example/replacement", Buffer.from("replacement skill\n"))
+    fs.mkdirSync(upstreamDir)
+    for (const [file, content] of f.incoming) {
+      fs.mkdirSync(path.dirname(path.join(upstreamDir, file)), { recursive: true })
+      fs.writeFileSync(path.join(upstreamDir, file), content)
+    }
+    const git = (root, ...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim()
+    git(upstreamDir, "init", "--quiet")
+    git(upstreamDir, "config", "user.name", "Fixture")
+    git(upstreamDir, "config", "user.email", "fixture@example.invalid")
+    git(upstreamDir, "config", "commit.gpgsign", "false")
+    git(upstreamDir, "add", "--all")
+    git(upstreamDir, "commit", "--quiet", "-m", "fixture")
+    f.put("desk-notes.md", "Dispatch example/SKILL.md first.\n")
+    f.put("binary.dat", Buffer.from("example/SKILL.md\0"))
+    if (inventory === "tracked") {
+      f.put("missing.md", "example/SKILL.md")
+      f.put("directory.md", "example/SKILL.md")
+      git(f.root, "init", "--quiet")
+      git(f.root, "add", "--", "desk-notes.md", "binary.dat", "missing.md", "directory.md")
+      fs.rmSync(path.join(f.root, "missing.md"))
+      fs.rmSync(path.join(f.root, "directory.md"))
+      fs.mkdirSync(path.join(f.root, "directory.md"))
+      f.put("untracked.md", "example/SKILL.md")
+    } else {
+      f.put("opaque-entry", "example/SKILL.md")
+      const io = require("node:fs"), readdir = io.readdirSync
+      t.mock.method(io, "readdirSync", (dir, ...args) => {
+        const entries = Reflect.apply(readdir, io, [dir, ...args])
+        if (dir !== f.root || !args[0]?.withFileTypes) return entries
+        // Model a nonregular directory entry without requiring Windows symlink privileges.
+        return entries.map((entry) => entry.name !== "opaque-entry" ? entry : new Proxy(entry, {
+          get(target, key, receiver) {
+            return key === "isFile" ? () => false : Reflect.get(target, key, receiver)
+          },
+        }))
+      })
+    }
+    let output = ""
+    assert.equal(main(["--upstream-dir", upstreamDir, "--root", f.root], { stdout: { write: (text) => { output += text } } }), 0)
+    const result = JSON.parse(output)
+    assert.equal(result.changed, true)
+    assert.deepEqual(result.removed_paths, ["skills/example/SKILL.md"])
+    assert.deepEqual(result.desk_references, [{ path: "skills/example/SKILL.md", files: ["desk-notes.md"] }])
+    assert.equal(fs.existsSync(path.join(f.root, "plugins/superpowers/skills/example/SKILL.md")), false)
+    compat.verify({ root: f.root })
+  })
+}
+
 for (const fault of ["journal", "directory", "missing", "rearm-fails"]) {
   test(`candidate allocation re-admits the original guard: ${fault}`, (t) => {
     const f = fixture(t)
@@ -253,7 +330,10 @@ for (const fault of ["journal", "directory"]) {
 
 test("nested unknown candidate recovery survives enclosing refresh cleanup", (t) => {
   const f = fixture(t)
-  f.incoming.set("hooks/run-hook.cmd", Buffer.from(f.incoming.get("hooks/run-hook.cmd").toString().replace("REM Try Git", "REM Changed Git")))
+  const original = f.incoming.get("hooks/run-hook.cmd").toString()
+  const changed = original.replace("@echo off\n", "@echo off\nREM Fixture upstream change\n")
+  assert.notEqual(changed, original)
+  f.incoming.set("hooks/run-hook.cmd", Buffer.from(changed))
   const io = { ...fs, renameSync(from, to) {
     if (to.includes("superpowers-hook-candidate-") && to.endsWith("run-hook-compat.provenance.json")) {
       fs.writeFileSync(path.join(path.dirname(to), "run-hook.cmd"), "foreign nested output")

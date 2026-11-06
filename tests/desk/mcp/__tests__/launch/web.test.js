@@ -1,7 +1,7 @@
 // Desk's browser (plugins/desk/mcp/web.cjs): fresh or mine, through the Playwright CLI.
 // Most tests drive a fake CLI and a fake npm placed where the real ones go, so they run everywhere without a browser.
 // With DESK_BROWSER_REAL=1 the last tests install the real playwright-core and drive a real Edge or Chrome.
-import { test } from "node:test"
+import { afterEach, beforeEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
@@ -13,13 +13,29 @@ import * as path from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { different } from "../_file_identity.js"
 import { NO_POSIX_MODES, isWindows } from "../_platform.js"
+import { fakeDriver, PASSWORD } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const webFile = path.join(repoRoot, "plugins", "desk", "mcp", "web.cjs")
 const web = require(webFile)
 const catalog = require(path.join(repoRoot, "plugins", "desk", "mcp", "web-catalog.json"))
+const sourceOnly = process.env.DESK_BROWSER_SOURCE_ONLY === "1"
+
+// Authenticated tests use a fake driver/runtime, not a credential-bearing host.
+// Coverage stays loaded; only its forwarded environment is scoped out of each
+// synthetic case, which explicitly supplies unqualified options when testing refusal.
+let inheritedNodeOptions
+beforeEach(() => {
+  inheritedNodeOptions = process.env.NODE_OPTIONS
+  delete process.env.NODE_OPTIONS
+})
+afterEach(() => {
+  if (inheritedNodeOptions === undefined) delete process.env.NODE_OPTIONS
+  else process.env.NODE_OPTIONS = inheritedNodeOptions
+})
 
 const FAKE_CLI = `
 const fs = require("fs"), path = require("path")
@@ -98,6 +114,8 @@ async function setup({ cli = true, mode = "", npmMode, platform } = {}) {
   const env = { ...process.env, DESK_BROWSER_STATE_DIR: state, FAKE_CLI_MODE: mode, FAKE_CLI_SOURCE: cliSource, FAKE_DAEMON_SOURCE: daemonSource, FAKE_DAEMON_LOG: path.join(root, "daemons.log"), FAKE_NPM_MODE: npmMode ?? "ok", FAKE_FINAL: installDir }
   const options = {
     env, tmpDir: tmp, npmCli: npm, exists: onlyEdge, platform: platform ?? process.platform,
+    authDriver: fakeDriver().driver,
+    runtimeStateReader: () => ({ execArgv: [], inspectorActive: false }),
     profileRoots: { msedge: path.join(profiles, "edge"), chrome: path.join(profiles, "chrome") },
   }
   const calls = () => {
@@ -167,7 +185,644 @@ test("copyProfile falls back to Default for a missing, unsafe or malformed last_
   }
 })
 
+test("copyProfile excludes saved-login stores and companions without changing cookies or encryption metadata", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const localState = JSON.stringify({ profile: { last_used: "Profile 1" }, os_crypt: { encrypted_key: "synthetic-cookie-key" } })
+  fs.writeFileSync(path.join(source, "Local State"), localState)
+  const profile = path.join(source, "Profile 1")
+  const passwords = [
+    "Login Data", "Login Data-journal", "Login Data-wal", "Login Data-shm",
+    "Login Data For Account", "Login Data For Account-journal", "Login Data For Account-wal", "Login Data For Account-shm",
+    "Login Data.bak", "Login Data Backup", "login data-wal",
+  ]
+  for (const folder of [profile, path.join(profile, "Network")]) {
+    for (const name of passwords) fs.writeFileSync(path.join(folder, name), "synthetic-saved-login")
+  }
+  fs.writeFileSync(path.join(profile, "Network", "Cookies-wal"), "synthetic-cookie-wal")
+  fs.writeFileSync(path.join(profile, "Network", "Cookies-shm"), "synthetic-cookie-shm")
+  fs.mkdirSync(path.join(profile, "Local Storage"))
+  fs.writeFileSync(path.join(profile, "Local Storage", "session"), "synthetic-session")
+  const dest = path.join(root, "dest")
+  assert.deepEqual(web.copyProfile(source, dest), { name: "Profile 1", skipped: [] })
+  assert.equal(fs.readFileSync(path.join(dest, "Local State"), "utf8"), localState)
+  const copied = path.join(dest, "Profile 1")
+  for (const folder of [copied, path.join(copied, "Network")]) {
+    for (const name of passwords) assert.equal(fs.existsSync(path.join(folder, name)), false, name)
+  }
+  assert.equal(fs.readFileSync(path.join(copied, "Network", "Cookies"), "utf8"), "cookies")
+  assert.equal(fs.readFileSync(path.join(copied, "Network", "Cookies-wal"), "utf8"), "synthetic-cookie-wal")
+  assert.equal(fs.readFileSync(path.join(copied, "Network", "Cookies-shm"), "utf8"), "synthetic-cookie-shm")
+  assert.equal(fs.readFileSync(path.join(copied, "Local Storage", "session"), "utf8"), "synthetic-session")
+  for (const name of passwords) assert.equal(fs.readFileSync(path.join(profile, name), "utf8"), "synthetic-saved-login")
+})
+
+test("copyProfile does not follow aliases to saved-login stores", { skip: isWindows ? "symlink creation requires Windows privileges" : false }, async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const profile = path.join(source, "Profile 1")
+  fs.writeFileSync(path.join(profile, "Login Data"), "synthetic-saved-login")
+  fs.symlinkSync("Login Data", path.join(profile, "saved-login-alias"))
+  const dest = path.join(root, "dest")
+  assert.deepEqual(web.copyProfile(source, dest), { name: "Profile 1", skipped: ["saved-login-alias"] })
+  assert.equal(fs.existsSync(path.join(dest, "Profile 1", "saved-login-alias")), false)
+  assert.equal(fs.readFileSync(path.join(profile, "saved-login-alias"), "utf8"), "synthetic-saved-login")
+})
+
+test("copyProfile excludes multiply-linked aliases regardless of name order or inventory", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const profile = path.join(source, "Profile 1")
+  const store = path.join(profile, "Login Data")
+  fs.writeFileSync(store, "synthetic-saved-login")
+  for (const name of ["000-before", "zzz-after"]) fs.linkSync(store, path.join(profile, name))
+  const outside = path.join(root, "outside-store")
+  fs.writeFileSync(outside, "synthetic-outside-store")
+  fs.mkdirSync(path.join(profile, "nested"))
+  fs.linkSync(outside, path.join(profile, "nested", "ordinary"))
+  const dest = path.join(root, "dest")
+  const copied = web.copyProfile(source, dest)
+  for (const name of ["000-before", "zzz-after", "nested/ordinary"]) {
+    assert.equal(fs.existsSync(path.join(dest, "Profile 1", name)), false, name)
+    assert.ok(copied.skipped.includes(name))
+  }
+  assert.equal(fs.readFileSync(path.join(dest, "Profile 1", "Network", "Cookies"), "utf8"), "cookies")
+})
+
+test("copyProfile refuses linked essential metadata or cookies without reading Local State first", async () => {
+  const { root } = await setup()
+  for (const [index, relative] of ["Local State", "Profile 1/Network/Cookies", "Profile 1/Network/Cookies-wal"].entries()) {
+    const source = path.join(root, `src${index}`)
+    makeProfile(source)
+    const file = path.join(source, relative)
+    if (!fs.existsSync(file)) fs.writeFileSync(file, "synthetic-cookie-companion")
+    fs.linkSync(file, path.join(root, `alias${index}`))
+    assert.throws(() => web.copyProfile(source, path.join(root, `dest${index}`)), /COPY_SOURCE_POLICY/u)
+  }
+})
+
+test("copyProfile binds Local State to its opened identity before reading bytes", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const originalStat = fs.fstatSync
+  const originalRead = fs.readFileSync
+  let reads = 0
+  fs.fstatSync = (...args) => {
+    const stat = originalStat(...args)
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: different(stat.ino) })
+  }
+  fs.readFileSync = (...args) => { reads++; return originalRead(...args) }
+  try {
+    assert.throws(() => web.copyProfile(source, path.join(root, "dest")), /COPY_SOURCE_POLICY/u)
+    assert.equal(reads, 0)
+  } finally {
+    fs.fstatSync = originalStat
+    fs.readFileSync = originalRead
+  }
+})
+
+test("copyProfile refuses an essential cookie symlink rather than silently omitting session state", { skip: isWindows }, async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const cookie = path.join(source, "Profile 1", "Network", "Cookies")
+  const target = path.join(root, "cookie-target")
+  fs.renameSync(cookie, target)
+  fs.symlinkSync(target, cookie)
+  assert.throws(() => web.copyProfile(source, path.join(root, "dest")), /COPY_SOURCE_POLICY/u)
+})
+
+test("copyProfile rejects unknown identity and link changes after a read without writing metadata", async () => {
+  const { root } = await setup()
+  for (const mode of ["unknown", "changed-after-read"]) {
+    const source = path.join(root, mode)
+    makeProfile(source)
+    const original = fs.fstatSync
+    let count = 0
+    fs.fstatSync = (...args) => {
+      const stat = original(...args)
+      count++
+      const changes = mode === "unknown" ? { ino: 0n } : (count === 2 ? { nlink: 2n } : {})
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, changes)
+    }
+    try {
+      const dest = path.join(root, `${mode}-copy`)
+      assert.throws(() => web.copyProfile(source, dest), /COPY_SOURCE_POLICY/u)
+      assert.equal(fs.existsSync(path.join(dest, "Local State")), false)
+    } finally { fs.fstatSync = original }
+  }
+})
+
 // ---- the controller with a fake CLI ----
+
+test("mine uses the owned native API and never opens or closes the CLI", async () => {
+  const { options, profiles, calls } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(opened.isError, false, text(opened))
+  assert.equal(native.calls.filter((call) => call[0] === "launchPersistentContext").length, 1)
+  assert.equal(calls().length, 0)
+  await controller.closeAll()
+  assert.equal(native.calls.filter((call) => call[0] === "context.close").length, 1)
+  assert.equal(calls().length, 0)
+})
+
+test("mine refuses arbitrary eval and emits owned redacted text JSON and artifacts", async () => {
+  const { options, profiles, calls } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const opened = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
+  try {
+    const denied = await controller.call("browser_command", { contextId: opened.contextId, args: ["eval", "() => document.querySelector('input').value"] })
+    assert.equal(denied.isError, true)
+    const snapshot = await controller.call("browser_command", { contextId: opened.contextId, args: ["snapshot", "--save"] })
+    assert.equal(snapshot.isError, false, text(snapshot))
+    assert.ok(text(snapshot).includes("[redacted]"))
+    assert.equal(text(snapshot).includes(PASSWORD), false)
+    const result = json(snapshot)
+    assert.equal(fs.readFileSync(result.artifact, "utf8").includes(PASSWORD), false)
+    assert.ok(fs.readFileSync(result.artifact, "utf8").includes("[redacted]"))
+    assert.equal(calls().length, 0)
+  } finally { await controller.closeAll() }
+})
+
+test("authenticated cleanup IO errors do not expose raw error text and retain retry ownership", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
+  const original = fs.rmSync
+  fs.rmSync = () => { throw new Error(PASSWORD) }
+  try {
+    const result = await controller.call("browser_context", { action: "close", contextId: opened.contextId })
+    assert.equal(result.isError, true)
+    assert.equal(text(result).includes(PASSWORD), false)
+  } finally { fs.rmSync = original; await controller.closeAll() }
+})
+
+test("authenticated owner forgery and unowned copies never reach legacy command or cleanup", async () => {
+  const { options, profiles, tmp, calls } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
+  const dir = path.join(tmp, `desk-browser-${opened.contextId}`)
+  const ownerFile = path.join(dir, "owner.json")
+  const original = fs.readFileSync(ownerFile, "utf8")
+  try {
+    const other = web.createController(options)
+    assert.equal((await other.call("browser_command", { contextId: opened.contextId, args: ["eval", "() => 1"] })).isError, true)
+    assert.equal((await other.call("browser_context", { action: "close", contextId: opened.contextId })).isError, true)
+    fs.writeFileSync(ownerFile, JSON.stringify({ pid: process.pid, browser: "fresh", transport: "legacy-cli", profilePolicy: 1 }))
+    assert.equal((await controller.call("browser_command", { contextId: opened.contextId, args: ["eval", "() => 1"] })).isError, true)
+    assert.equal(calls().length, 0)
+  } finally {
+    fs.writeFileSync(ownerFile, original)
+    await controller.closeAll()
+  }
+})
+
+test("authenticated runtime admission rejects environment preloads and active inspection before copying", async () => {
+  const { options, profiles, tmp, calls } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  for (const extra of [
+    { env: { ...options.env, NODE_OPTIONS: "--inspect=127.0.0.1:0" } },
+    { env: { ...options.env, NODE_OPTIONS: "--require fake-preload.js" } },
+    { env: { ...options.env, NODE_OPTIONS: "--import fake-preload.mjs" } },
+    { runtimeStateReader: () => ({ execArgv: ["--require", "fake-preload.js"], inspectorActive: false }) },
+    { runtimeStateReader: () => ({ execArgv: [], inspectorActive: true }) },
+  ]) {
+    const native = fakeDriver()
+    const controller = web.createController({ ...options, ...extra, authDriver: native.driver })
+    const original = fs.openSync
+    let sourceOpens = 0
+    fs.openSync = (file, ...args) => {
+      if (String(file).startsWith(profiles)) sourceOpens++
+      return original(file, ...args)
+    }
+    try {
+      const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+      assert.equal(result.isError, true)
+      assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+      assert.equal(sourceOpens, 0)
+      assert.equal(native.calls.length, 0)
+      assert.equal(calls().length, 0)
+      assert.deepEqual(fs.readdirSync(tmp), [])
+    } finally { fs.openSync = original; await controller.closeAll() }
+  }
+})
+
+test("actual process options refuse authenticated open even when the supplied environment is clean", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const original = fs.openSync
+  let sourceOpens = 0
+  fs.openSync = (file, ...args) => {
+    if (String(file).startsWith(profiles)) sourceOpens++
+    return original(file, ...args)
+  }
+  process.env.NODE_OPTIONS = inheritedNodeOptions || "--require fake-unqualified-preload.cjs"
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(sourceOpens, 0)
+    assert.equal(native.calls.length, 0)
+    assert.deepEqual(fs.readdirSync(tmp), [])
+  } finally { fs.openSync = original; await controller.closeAll() }
+})
+
+test("actual process options changed after open refuse native work but preserve owned close", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+  assert.equal(opened.isError, false, text(opened))
+  const { contextId } = json(opened)
+  const before = native.calls.length
+  process.env.NODE_OPTIONS = "--import fake-unqualified-preload.mjs"
+  try {
+    const result = await controller.call("browser_command", { contextId, args: ["snapshot", "--save"] })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_RUNTIME_POLICY_REFUSED/u)
+    assert.equal(native.calls.length, before)
+  } finally { await controller.closeAll() }
+  assert.ok(native.calls.some(call => call[0] === "context.close"))
+})
+
+test("authenticated debug aliases malformed runtime and driver versions refuse before launch", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  for (const [key, value] of [["PWDEBUG", "1"], ["npm_config_pwdebug", "inspect"], ["npm_package_config_pwdebug", "1"]]) {
+    const native = fakeDriver()
+    const controller = web.createController({ ...options, env: { ...options.env, [key]: value }, authDriver: native.driver })
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(native.calls.length, 0)
+  }
+  for (const runtime of [null, { execArgv: [], inspectorActive: "unknown" }, { execArgv: [1], inspectorActive: false }]) {
+    const native = fakeDriver()
+    const result = await web.createController({ ...options, authDriver: native.driver, runtimeStateReader: () => runtime })
+      .call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.equal(native.calls.length, 0)
+  }
+  for (const driver of [{ version: "0", chromium: {} }, { version: web.PLAYWRIGHT_VERSION }, { version: web.PLAYWRIGHT_VERSION, chromium: {} }]) {
+    const result = await web.createController({ ...options, authDriver: driver })
+      .call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(result), /AUTH_DRIVER_REFUSED/u)
+  }
+  for (const disabled of ["0", "false"]) {
+    const controller = web.createController({ ...options, env: { ...options.env, PWDEBUG: disabled },
+      runtimeStateReader: () => ({ execArgv: ["--test", "--test-name-pattern=synthetic"], inspectorActive: false }) })
+    assert.equal((await controller.call("browser_context", { action: "open", browser: "mine" })).isError, false)
+    await controller.closeAll()
+  }
+  assert.deepEqual(fs.readdirSync(tmp), [])
+})
+
+test("the default runtime reader reports actual process settings without changing flags", async () => {
+  const { options } = await setup()
+  const controller = web.createController({ ...options, runtimeStateReader: undefined })
+  assert.deepEqual(controller.settings.runtimeStateReader(), {
+    execArgv: process.execArgv,
+    inspectorActive: Boolean(require("node:inspector").url()),
+  })
+})
+
+test("managed native package loading uses only an owned synthetic versioned module", async () => {
+  const { options, profiles, installDir } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const moduleDir = path.join(installDir, "node_modules", "playwright-core")
+  fs.writeFileSync(path.join(moduleDir, "package.json"), JSON.stringify({ version: web.PLAYWRIGHT_VERSION, main: "index.cjs" }))
+  fs.writeFileSync(path.join(moduleDir, "index.cjs"), `
+    module.exports = { chromium: { launchPersistentContext: async () => ({
+      pages: () => [], close: async () => {}
+    }) } }
+  `)
+  const controller = web.createController({ ...options, authDriver: undefined })
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, false, text(result))
+  } finally { await controller.closeAll() }
+})
+
+test("Local State destination and descriptor-close failures refuse an authenticated copy", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "source")
+  makeProfile(source)
+  const originalWrite = fs.writeFileSync
+  fs.writeFileSync = (file, ...args) => {
+    if (String(file) === path.join(root, "dest-write", "Local State")) throw new Error(PASSWORD)
+    return originalWrite(file, ...args)
+  }
+  try { assert.throws(() => web.copyProfile(source, path.join(root, "dest-write")), /COPY_DESTINATION_FAILED/u) }
+  finally { fs.writeFileSync = originalWrite }
+  const originalClose = fs.closeSync
+  for (const readable of [true, false]) {
+    const originalRead = fs.readFileSync
+    fs.closeSync = fd => { originalClose(fd); throw new Error(PASSWORD) }
+    if (!readable) fs.readFileSync = () => { throw new Error(PASSWORD) }
+    try { assert.throws(() => web.copyProfile(source, path.join(root, `dest-close-${readable}`)), /COPY_SOURCE_POLICY/u) }
+    finally { fs.closeSync = originalClose; fs.readFileSync = originalRead }
+  }
+})
+
+test("an unqualified Network source directory refuses instead of returning a partial copy", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "source")
+  makeProfile(source)
+  const network = path.join(source, "Profile 1", "Network")
+  const original = fs.lstatSync
+  fs.lstatSync = (file, ...args) => {
+    const stat = original(file, ...args)
+    return String(file) === network ? { isDirectory: () => false } : stat
+  }
+  try { assert.throws(() => web.copyProfile(source, path.join(root, "dest")), /COPY_SOURCE_POLICY/u) }
+  finally { fs.lstatSync = original }
+})
+
+test("owned legacy metadata cannot grant authenticated cleanup authority or erase stale copies", async () => {
+  const { options, tmp } = await setup()
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open" }))
+  const ownerFile = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+  const original = fs.readFileSync(ownerFile, "utf8")
+  fs.writeFileSync(ownerFile, JSON.stringify({ browser: "mine", profilePolicy: 2, transport: "auth-api", pid: process.pid }))
+  try {
+    assert.equal((await controller.call("browser_context", { action: "close", contextId: opened.contextId })).isError, true)
+  } finally { fs.writeFileSync(ownerFile, original); await controller.closeAll() }
+  const missingTmp = path.join(tmp, "absent")
+  assert.equal(await web.createController({ ...options, tmpDir: missingTmp }).sweep(), undefined)
+})
+
+test("opaque non-object failures are reported without exception coercion", async () => {
+  const { options } = await setup()
+  const result = await web.createController({ ...options, exists: () => { throw "fake-native-text" } })
+    .call("browser_context", { action: "open" })
+  assert.match(text(result), /BROWSER_INTERNAL_FAILURE/u)
+  assert.equal(text(result).includes("fake-native-text"), false)
+})
+
+test("process-table commands and parsing are qualified through an owned fake exec callback", async () => {
+  const childProcess = require("node:child_process")
+  const original = childProcess.execFile
+  const calls = []
+  let ended = 0
+  let fail = false
+  childProcess.execFile = (file, args, options, callback) => {
+    calls.push({ file, args, options })
+    queueMicrotask(() => callback(fail ? new Error(PASSWORD) : null, "42420001 1 2026-01-01\ninvalid\n42420002 42420001 2026-01-02\r\n"))
+    return { stdin: { end() { ended++ } } }
+  }
+  try {
+    for (const [platform, env] of [["linux", {}], ["win32", {}], ["win32", { windir: "C:\\Synthetic" }], ["win32", { SystemRoot: "C:\\Owned" }]]) {
+      assert.deepEqual(await web.readProcessTable(platform, env), [
+        { pid: 42420001, ppid: 1, start: "2026-01-01" },
+        { pid: 42420002, ppid: 42420001, start: "2026-01-02" },
+      ])
+    }
+    fail = true
+    assert.equal(await web.readProcessTable("linux", {}), null)
+    assert.equal(calls[0].file, "ps")
+    assert.equal(calls[1].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    assert.ok(calls[2].file.startsWith("C:\\Synthetic\\"))
+    assert.ok(calls[3].file.startsWith("C:\\Owned\\"))
+    assert.equal(ended, 5)
+    assert.ok(calls.every(call => call.options.windowsHide === true))
+    fail = false
+    const { options } = await setup()
+    const controller = web.createController({ ...options, processTable: undefined })
+    assert.equal((await controller.settings.processTable()).length, 2)
+    assert.equal(ended, 6)
+  } finally { childProcess.execFile = original }
+})
+
+test("printed synthetic process identities are recorded without a daemon or host enumeration", async () => {
+  for (const table of [null, [], [{ pid: 42420001, ppid: 1, start: "2026-01-01" }]]) {
+    const { options, cliDir, tmp } = await setup()
+    const cli = path.join(cliDir, "cli.js")
+    fs.appendFileSync(cli, '\nif (verb === "open") process.stdout.write("### Browser desk opened with pid 42420001.\\n")\n')
+    const controller = web.createController({ ...options, processTable: async () => table })
+    try {
+      const opened = json(await controller.call("browser_context", { action: "open" }))
+      const file = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+      const owner = JSON.parse(fs.readFileSync(file, "utf8"))
+      assert.deepEqual(owner.processes, table?.length ? [{ pid: 42420001, start: "2026-01-01" }] : undefined)
+      owner.processes = []
+      fs.writeFileSync(file, JSON.stringify(owner))
+    } finally { await controller.closeAll() }
+  }
+})
+
+test("legacy cleanup uses only qualified synthetic process rows and an owned fake signal function", async () => {
+  const originalKill = process.kill
+  const originalNow = Date.now
+  const row = { pid: 42420001, ppid: 1, start: "2026-01-01" }
+  const signals = []
+  process.kill = (pid, signal) => {
+    assert.equal(pid, row.pid)
+    assert.equal(signal, "SIGKILL")
+    signals.push([pid, signal])
+    throw new Error(PASSWORD)
+  }
+  try {
+    for (const mode of ["unreadable", "gone", "exits", "stays"]) {
+      const { options, tmp } = await setup()
+      let reads = 0
+      let clock = 0
+      const controller = web.createController({ ...options, exitWaitMs: 1,
+        processTable: async () => {
+          reads++
+          if (mode === "stays") clock = 2
+          return mode === "unreadable" ? null : mode === "gone" || (mode === "exits" && reads > 1) ? [] : [row]
+        } })
+      const opened = json(await controller.call("browser_context", { action: "open" }))
+      const file = path.join(tmp, `desk-browser-${opened.contextId}`, "owner.json")
+      const owner = JSON.parse(fs.readFileSync(file, "utf8"))
+      owner.processes = [{ pid: row.pid, start: row.start }]
+      fs.writeFileSync(file, JSON.stringify(owner))
+      let result
+      Date.now = () => clock
+      try { result = await controller.call("browser_context", { action: "close", contextId: opened.contextId }) }
+      finally { Date.now = originalNow }
+      assert.equal(result.isError, false, text(result))
+      assert.equal(fs.existsSync(path.dirname(file)), false)
+    }
+    assert.deepEqual(signals, [[row.pid, "SIGKILL"]])
+  } finally { process.kill = originalKill; Date.now = originalNow }
+})
+
+test("startup keeps a fresh context whose own process is still alive", async () => {
+  const { options, tmp } = await setup()
+  const dir = path.join(tmp, "desk-browser-11111111-1111-4111-8111-111111111111")
+  fs.mkdirSync(dir)
+  fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ browser: "fresh", pid: process.pid }))
+  const controller = web.createController(options)
+  await controller.sweep()
+  assert.equal(fs.existsSync(dir), true)
+})
+
+test("a partial destination write fails the authenticated copy before native launch", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  const controller = web.createController({ ...options, authDriver: native.driver })
+  const original = fs.writeFileSync
+  fs.writeFileSync = (file, ...args) => {
+    if (String(file).includes("desk-browser-") && String(file).endsWith(path.join("Profile 1", "Preferences"))) {
+      original(file, PASSWORD)
+      throw new Error(PASSWORD)
+    }
+    return original(file, ...args)
+  }
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.equal(text(result).includes(PASSWORD), false)
+    assert.equal(native.calls.length, 0)
+    assert.deepEqual(fs.readdirSync(tmp), [])
+  } finally { fs.writeFileSync = original; await controller.closeAll() }
+})
+
+test("runtime policy is enforced after successful authenticated open while owned cleanup remains available", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  for (const mode of ["active", "unknown", "node-options"]) {
+    let changed = false
+    const env = { ...options.env }
+    const native = fakeDriver()
+    const controller = web.createController({
+      ...options, env, authDriver: native.driver,
+      runtimeStateReader: () => {
+        if (changed && mode === "unknown") throw new Error(PASSWORD)
+        return { execArgv: [], inspectorActive: changed && mode === "active" }
+      },
+    })
+    const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    const { contextId } = json(opened)
+    changed = true
+    if (mode === "node-options") env.NODE_OPTIONS = "--import fake-preload.mjs"
+    const before = native.calls.length
+    try {
+      const result = await controller.call("browser_command", { contextId, args: ["snapshot", "--save"] })
+      assert.equal(result.isError, true)
+      assert.equal(text(result).includes(PASSWORD), false)
+      assert.equal(native.calls.length, before, "policy refusal precedes native work")
+    } finally { await controller.closeAll() }
+    assert.ok(native.calls.some((call) => call[0] === "context.close"))
+  }
+})
+
+test("runtime changes during native launch refuse open but preserve owned cleanup", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver()
+  let active = false
+  const launch = native.driver.chromium.launchPersistentContext
+  native.driver.chromium.launchPersistentContext = async (...args) => {
+    const context = await launch(...args)
+    active = true
+    return context
+  }
+  const controller = web.createController({
+    ...options, authDriver: native.driver,
+    runtimeStateReader: () => ({ execArgv: [], inspectorActive: active }),
+  })
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.ok(native.calls.some((call) => call[0] === "context.close"))
+    assert.deepEqual(fs.readdirSync(tmp), [])
+  } finally { await controller.closeAll() }
+})
+
+test("launcher never trusts native plain/message prefixes or reads their getters", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  let reads = 0
+  const getter = () => { reads++; throw new Error(PASSWORD) }
+  for (const error of [
+    { plain: true, message: "AUTH_NATIVE: " + PASSWORD },
+    Object.defineProperty({}, "plain", { get: getter }),
+    Object.defineProperty({ plain: true }, "message", { get: getter }),
+    new Proxy({}, { get: getter }),
+  ]) {
+    const native = fakeDriver({ launchError: error })
+    const controller = web.createController({ ...options, authDriver: native.driver })
+    try {
+      const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+      assert.equal(result.isError, true)
+      assert.equal(text(result).includes(PASSWORD), false)
+      assert.match(text(result), /AUTH_OPEN_FAILED/u)
+      assert.deepEqual(fs.readdirSync(tmp), [])
+    } finally { await controller.closeAll() }
+  }
+  assert.equal(reads, 0)
+})
+
+test("unbranded outer errors are formatted without arbitrary message-property reads", async () => {
+  const { options } = await setup()
+  let reads = 0
+  const error = Object.defineProperty({}, "message", { get() { reads++; throw new Error(PASSWORD) } })
+  const controller = web.createController({ ...options, exists: () => { throw error } })
+  const result = await controller.call("browser_context", { action: "open" })
+  assert.equal(result.isError, true)
+  assert.equal(text(result).includes(PASSWORD), false)
+  assert.equal(reads, 0)
+})
+
+test("failed authenticated open cleanup preserves the original safe refusal", async () => {
+  const { options, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const native = fakeDriver({ closeError: new Error(PASSWORD) })
+  let active = false
+  const launch = native.driver.chromium.launchPersistentContext
+  native.driver.chromium.launchPersistentContext = async (...args) => {
+    const context = await launch(...args)
+    active = true
+    return context
+  }
+  const controller = web.createController({
+    ...options, authDriver: native.driver,
+    runtimeStateReader: () => ({ execArgv: [], inspectorActive: active }),
+  })
+  try {
+    const result = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /AUTH_LOGGING_REFUSED/u)
+    assert.match(text(result), /AUTH_CLEANUP_FAILED/u)
+    assert.equal(text(result).includes(PASSWORD), false)
+    assert.equal(Object.keys(controller.settings.contexts).length, 1, "failed cleanup remains owned")
+  } finally {
+    native.context.close = async () => {}
+    await controller.closeAll()
+  }
+})
+
+test("startup retains stale authenticated copies without native CLI attachment or scrubbing", async () => {
+  const { options, tmp, calls } = await setup()
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid
+  const dir = path.join(tmp, "desk-browser-66666666-6666-4666-8666-666666666666")
+  fs.mkdirSync(dir)
+  fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: dead, browser: "mine", transport: "auth-api", profilePolicy: 2 }))
+  fs.writeFileSync(path.join(dir, "config.json"), "{}")
+  fs.writeFileSync(path.join(dir, "fake-retained-file"), "synthetic-retained-data")
+  await web.createController(options).sweep()
+  assert.equal(fs.readFileSync(path.join(dir, "fake-retained-file"), "utf8"), "synthetic-retained-data")
+  assert.equal(calls().length, 0)
+})
 
 test("fresh opens in a private folder, runs page commands and deletes the folder on close", async () => {
   const { options, tmp, calls, state } = await setup()
@@ -224,39 +879,62 @@ test("mine opens a private copy of the person's profile and deletes it on close"
   assert.equal(fs.existsSync(dir), false)
 })
 
-test("mine skips files the running browser holds locked, and says when the cookies stayed behind", async () => {
-  const chromeExe = isWindows ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "/opt/google/chrome/chrome"
-  const onlyChrome = (file) => file === chromeExe || file.endsWith(path.join("Google Chrome.app", "Contents", "MacOS", "Google Chrome")) || /Google[\\/]Chrome[\\/]Application[\\/]chrome\.exe$/u.test(file)
+test("commands refuse generated contexts without the password-store exclusion policy and leave them untouched", async () => {
+  const { options, tmp, profiles, calls } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const controller = web.createController(options)
+  const { contextId } = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
+  const dir = path.join(tmp, `desk-browser-${contextId}`)
+  const ownerFile = path.join(dir, "owner.json")
+  const originalOwner = fs.readFileSync(ownerFile, "utf8")
+  const before = calls().length
+  const owner = JSON.parse(originalOwner)
+  delete owner.profilePolicy
+  fs.writeFileSync(ownerFile, JSON.stringify(owner))
+  const oldStore = path.join(dir, "profile", "Profile 1", "Login Data")
+  fs.writeFileSync(oldStore, "synthetic-old-store")
+  for (const metadata of [JSON.stringify(owner), "{", JSON.stringify({ ...owner, profilePolicy: 999 })]) {
+    fs.writeFileSync(ownerFile, metadata)
+    const result = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+    assert.equal(result.isError, true)
+    assert.match(text(result), /password-store exclusion policy/u)
+    assert.equal(fs.readFileSync(ownerFile, "utf8"), metadata, "no metadata migration")
+    assert.equal(fs.readFileSync(oldStore, "utf8"), "synthetic-old-store", "no old-profile scrubbing")
+  }
+  assert.equal(calls().length, before, "no page command reaches the old context")
+  fs.writeFileSync(ownerFile, originalOwner)
+  assert.equal((await controller.call("browser_command", { contextId, args: ["snapshot"] })).isError, false)
+  await controller.closeAll()
+})
+
+test("mine refuses unreadable essential cookies and may omit a nonessential locked file", async () => {
   const { options, profiles, tmp } = await setup()
   makeProfile(path.join(profiles, "edge"))
   makeProfile(path.join(profiles, "chrome"))
   fs.writeFileSync(path.join(profiles, "edge", "Profile 1", "Preferences.lock"), "x")
-  const original = fs.copyFileSync
+  const original = fs.openSync
   let locked = /(?:Cookies|Preferences\.lock)$/u
-  fs.copyFileSync = (from, ...rest) => {
+  fs.openSync = (from, ...rest) => {
     if (locked.test(from)) throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" })
     return original(from, ...rest)
   }
   try {
     const edge = web.createController(options)
-    const opened = json(await edge.call("browser_context", { action: "open", browser: "mine" }))
-    assert.equal(opened.signIns, "Edge is open, so only your Microsoft work sign-in carries over; close Edge to use all your sign-ins.")
-    const profile = path.join(tmp, `desk-browser-${opened.contextId}`, "profile", "Profile 1")
-    assert.equal(fs.existsSync(path.join(profile, "Network", "Cookies")), false)
-    assert.equal(fs.existsSync(path.join(profile, "Preferences")), true)
-    await edge.closeAll()
-
-    const chrome = json(await web.createController({ ...options, exists: onlyChrome }).call("browser_context", { action: "open", browser: "mine" }))
-    assert.equal(chrome.app, "Google Chrome")
-    assert.equal(chrome.signIns, "Chrome is open, so some of your sign-ins did not carry over; close Chrome to use all your sign-ins.")
+    const refused = await edge.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(refused.isError, true)
+    assert.match(text(refused), /COPY_SOURCE_POLICY/u)
+    assert.deepEqual(fs.readdirSync(tmp), [])
 
     locked = /Preferences\.lock$/u
     const other = web.createController(options)
     const unlocked = json(await other.call("browser_context", { action: "open", browser: "mine" }))
-    assert.equal(unlocked.signIns, undefined, "only a missing cookie file changes the result")
+    assert.equal(unlocked.signIns, undefined)
+    const profile = path.join(tmp, `desk-browser-${unlocked.contextId}`, "profile", "Profile 1")
+    assert.equal(fs.existsSync(path.join(profile, "Preferences.lock")), false)
+    assert.equal(fs.readFileSync(path.join(profile, "Network", "Cookies"), "utf8"), "cookies")
     await other.closeAll()
   } finally {
-    fs.copyFileSync = original
+    fs.openSync = original
   }
   for (const name of fs.readdirSync(tmp)) fs.rmSync(path.join(tmp, name), { recursive: true, force: true })
 })
@@ -270,7 +948,7 @@ test("mine gives a plain message when there is no profile, or it cannot be copie
   makeProfile(path.join(profiles, "edge"), { withProfile: false })
   const busy = await controller.call("browser_context", { action: "open", browser: "mine" })
   assert.equal(busy.isError, true)
-  assert.equal(text(busy), "Desk could not copy your Edge profile, probably because Edge is using it. Close Edge, or use a fresh browser (browser: \"fresh\").")
+  assert.match(text(busy), /AUTH_OPEN_FAILED/u)
   assert.deepEqual(fs.readdirSync(tmp), [], "the failed copy left no folder")
 })
 
@@ -317,7 +995,9 @@ test("browser_command runs only page commands, refuses options that switch sessi
   assert.equal(await run(["eval", "fail-quiet"]), "The command failed.")
   assert.equal(await run(["eval", "fail-loud"]), "boom")
   const impatient = web.createController({ ...options, commandMs: 2000 })
-  assert.match(text(await impatient.call("browser_command", { contextId, args: ["eval", "sleep"] })), /longer than 2 seconds/u)
+  const impatientId = json(await impatient.call("browser_context", { action: "open" })).contextId
+  assert.match(text(await impatient.call("browser_command", { contextId: impatientId, args: ["eval", "sleep"] })), /longer than 2 seconds/u)
+  await impatient.closeAll()
   await controller.closeAll()
 })
 
@@ -357,7 +1037,7 @@ const stopFakes = (t, root) => t.after(() => {
 
 const recorded = (tmp, contextId) => JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${contextId}`, "owner.json"), "utf8")).processes ?? []
 
-test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", { timeout: 180000 }, async (t) => {
+test("close ends the browser and the CLI daemon the context started, even when the CLI's close leaves them running", { timeout: 180000, skip: sourceOnly }, async (t) => {
   const { options, tmp, root } = await setup({ mode: "daemon-leak" })
   stopFakes(t, root)
   const controller = web.createController({ ...options, exitWaitMs: 500 })
@@ -381,7 +1061,7 @@ test("close ends the browser and the CLI daemon the context started, even when t
   assert.deepEqual(fakesRunning(root), [])
 })
 
-test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", { timeout: 180000 }, async (t) => {
+test("close kills nothing when the CLI's close already ended the browser, and copes with an unreadable process table", { timeout: 180000, skip: sourceOnly }, async (t) => {
   const { options, tmp, root } = await setup({ mode: "daemon" })
   stopFakes(t, root)
   let reads = 0
@@ -409,7 +1089,7 @@ test("close kills nothing when the CLI's close already ended the browser, and co
   assert.deepEqual(fakesRunning(root), [])
 })
 
-test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000 }, async (t) => {
+test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000, skip: sourceOnly }, async (t) => {
   const failed = await setup({ mode: "daemon-open-fail" })
   stopFakes(t, failed.root)
   const controller = web.createController({ ...failed.options, exitWaitMs: 500 })
@@ -423,7 +1103,7 @@ test("a daemon that failed to start is ended, and a PID that is already gone rec
   assert.deepEqual(recorded(ghost.tmp, opened.contextId), [])
 })
 
-test("the process table is read with ps, or with PowerShell from the Windows folder, and an unreadable one is null", { timeout: 120000 }, async (t) => {
+test("the process table is read with ps, or with PowerShell from the Windows folder, and an unreadable one is null", { timeout: 120000, skip: sourceOnly }, async (t) => {
   assert.deepEqual(web.processTableCommand("darwin", {}), ["ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="]])
   assert.equal(web.processTableCommand("win32", { SystemRoot: "D:\\Win" })[0], "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
   assert.equal(web.processTableCommand("win32", { windir: "E:\\W" })[0], "E:\\W\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
@@ -463,7 +1143,7 @@ test("closing retries a folder the browser still holds, and reports one that sta
     fs.rmSync = () => { throw busy }
     const locked = await controller.call("browser_context", { action: "close", contextId: second.contextId })
     assert.equal(locked.isError, true)
-    assert.match(text(locked), /unexpected problem: busy/u)
+    assert.match(text(locked), /BROWSER_INTERNAL_FAILURE/u)
   } finally {
     fs.rmSync = original
   }
@@ -530,8 +1210,8 @@ test("startup closes contexts whose Desk process is gone, and keeps the rest", a
     if (config) fs.writeFileSync(path.join(dir, "config.json"), "{}")
     return dir
   }
-  const stale = make("11111111-1111-4111-8111-111111111111", JSON.stringify({ pid: dead }))
-  const staleNoConfig = make("44444444-4444-4444-8444-444444444444", JSON.stringify({ pid: dead }), false)
+  const stale = make("11111111-1111-4111-8111-111111111111", JSON.stringify({ pid: dead, browser: "fresh" }))
+  const staleNoConfig = make("44444444-4444-4444-8444-444444444444", JSON.stringify({ pid: dead, browser: "fresh" }), false)
   const alive = make("22222222-2222-4222-8222-222222222222", JSON.stringify({ pid: process.pid }))
   const noOwner = make("33333333-3333-4333-8333-333333333333", undefined)
   const other = path.join(tmp, "desk-browser-not-an-id")
@@ -547,7 +1227,7 @@ test("startup closes contexts whose Desk process is gone, and keeps the rest", a
   const { options: noCli, tmp: tmp2 } = await setup({ cli: false })
   const leftover = path.join(tmp2, "desk-browser-55555555-5555-4555-8555-555555555555")
   fs.mkdirSync(leftover)
-  fs.writeFileSync(path.join(leftover, "owner.json"), JSON.stringify({ pid: dead }))
+  fs.writeFileSync(path.join(leftover, "owner.json"), JSON.stringify({ pid: dead, browser: "fresh" }))
   fs.writeFileSync(path.join(leftover, "config.json"), "{}")
   await web.createController(noCli).sweep()
   assert.equal(fs.existsSync(leftover), false)
@@ -643,7 +1323,7 @@ test("a failure while closing still lets the server finish and exit", async () =
 
 // ---- real browsers ----
 
-const real = process.env.DESK_BROWSER_REAL === "1" ? false : "set DESK_BROWSER_REAL=1 to drive a real browser"
+const real = !sourceOnly && process.env.DESK_BROWSER_REAL === "1" ? false : "real browser qualification is not part of source-only tests"
 
 // The context's recorded processes: the CLI daemon and the browser it started, at least.
 async function realProcesses(tmp, contextId) {
@@ -693,53 +1373,6 @@ test("real: fresh opens headless, loads a page, closes and its folder is gone", 
     await controller.closeAll()
     assert.deepEqual(await stillRunning(secondProcesses), [], "closeAll ends the daemon and the browser")
   } finally {
-    await controller.closeAll()
-    page.closeAllConnections()
-    page.close()
-  }
-})
-
-test("real: mine carries the person's sign-in into a copy, leaves a running browser alone and deletes the copy", { skip: real, timeout: 300000 }, async () => {
-  const { root, tmp, env: isolated, url, page } = await realSetup()
-  // macOS keeps the key that protects saved sign-ins in the login keychain, which a browser finds only under the real home.
-  const env = process.platform === "darwin" ? { ...isolated, HOME: os.userInfo().homedir } : isolated
-  const controller = web.createController({ env, tmpDir: tmp })
-  const persons = path.join(root, "person")
-  let personal = null
-  try {
-    // Install the driver through a fresh open, then build "the person's" profile with a saved cookie.
-    const warm = await controller.call("browser_context", { action: "open" })
-    assert.equal(warm.isError, false, text(warm))
-    await controller.call("browser_context", { action: "close", contextId: json(warm).contextId })
-    const { chromium } = require(path.join(env.DESK_BROWSER_STATE_DIR, `playwright-core-${web.PLAYWRIGHT_VERSION}`, "node_modules", "playwright-core"))
-    const channel = json(warm).app === "Microsoft Edge" ? "msedge" : "chrome"
-    const options = { channel, headless: true, env, ignoreDefaultArgs: ["--use-mock-keychain", "--password-store=basic"] }
-    const setupContext = await chromium.launchPersistentContext(persons, options)
-    await (setupContext.pages()[0] ?? await setupContext.newPage()).goto(`${url}/set`)
-    await setupContext.close()
-
-    // "The person's browser" keeps running on its own profile while Desk opens mine.
-    personal = await chromium.launch({ channel, headless: true })
-    const personalPage = await personal.newPage()
-    await personalPage.goto(url)
-
-    const mine = web.createController({ env, tmpDir: tmp, profileRoots: { msedge: persons, chrome: persons } })
-    const opened = await mine.call("browser_context", { action: "open", browser: "mine" })
-    assert.equal(opened.isError, false, text(opened))
-    const { contextId } = json(opened)
-    await mine.call("browser_command", { contextId, args: ["goto", url] })
-    const cookie = await mine.call("browser_command", { contextId, args: ["eval", "() => document.cookie"] })
-    assert.match(text(cookie), /desk=signed-in/u)
-    const processes = await realProcesses(tmp, contextId)
-    await mine.call("browser_context", { action: "close", contextId })
-    assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${contextId}`)), false)
-    assert.deepEqual(await stillRunning(processes), [], "the daemon and the browser on the copied profile are gone after close")
-
-    assert.equal(personal.isConnected(), true)
-    assert.equal(personal.contexts()[0].pages().length, 1)
-    assert.equal(await personalPage.title(), "Desk test page")
-  } finally {
-    await personal?.close()
     await controller.closeAll()
     page.closeAllConnections()
     page.close()
