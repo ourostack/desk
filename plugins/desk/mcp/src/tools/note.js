@@ -239,11 +239,15 @@ export async function note_ack({ deskRoot, input, person = null, spawnGit = spaw
   const commit = stage ? stageAndCommitFiles(dir, [name], `note_ack: ${name}`, spawnGit, deskRoot) : undefined
   const committed = stage && commit === undefined
   if (committed) schedulePush({ root: deskRoot })
-  const result = { status: "acknowledged", note: rel, from: parsed.from, subject: parsed.subject, committed }
+  // A commit Desk cannot read back is unknown (R5): `committed` is null, never a false that claims the note is not committed.
+  const unknown = commit?.status === "unknown"
+  const result = { status: "acknowledged", note: rel, from: parsed.from, subject: parsed.subject, committed: unknown ? null : committed }
   if (commit !== undefined) result.commit = commit
   const why = !isGit ? "this desk is not a Git checkout" : commit === undefined ? "the note already held uncommitted changes, so Desk left it for you to commit" : commitFailureWords(commit)
   result.message = committed
     ? `Acknowledged ${rel} from ${parsed.from}. It is committed, and ${parsed.from} sees it once your desk syncs.`
-    : `Acknowledged ${rel} from ${parsed.from} on this machine, but not committed (${why}), so ${parsed.from} does not see it yet.`
+    : unknown
+      ? `Acknowledged ${rel} from ${parsed.from} on this machine; ${why}, so ${parsed.from} may not see it yet.`
+      : `Acknowledged ${rel} from ${parsed.from} on this machine, but not committed (${why}), so ${parsed.from} does not see it yet.`
   return result
 }
