@@ -928,6 +928,28 @@ test("#632: nothing to commit is no commit: absent, and no empty commit is made"
   assert.equal(headOf632(root), before)
 })
 
+// A HEAD or branch Git cannot read before anything is built: nothing that could commit was run, so it is absent, with no capture to finish.
+for (const [label, unreadable] of [["HEAD", "rev-parse"], ["the branch", "symbolic-ref"]]) {
+  test(`#632: ${label} that Git cannot read before the commit is built dispatches nothing and commits nothing`, async () => {
+    const root = await stagedChange()
+    const before = headOf632(root)
+    const entries = indexEntries(root, ["a.txt"], spawnSync)
+    const verbs = []
+    let branchReads = 0
+    const spawn = (command, args, options) => {
+      const verb = args[2]
+      verbs.push(verb)
+      // The branch refusal's own symbolic-ref read passes; the read of the branch to commit on after it fails.
+      if (verb === unreadable && (verb === "rev-parse" || branchReads++ > 0)) return { status: 128, stdout: "", stderr: "fatal: cannot read" }
+      return spawnSync(command, args, options)
+    }
+    const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+    assert.deepEqual(result, { ok: false, stderr: "Git could not read the branch and HEAD to commit on, so nothing was committed", readback: "absent" })
+    assert.equal(headOf632(root), before)
+    assert.deepEqual(verbs.filter((verb) => ["read-tree", "hook", "commit-tree", "update-ref"].includes(verb)), [], "nothing was built, hooked or dispatched")
+  })
+}
+
 // The hook runs as git commit runs it, and what it writes stays written: Desk does not undo it. Only a change to the tree Desk judged holds.
 test("#632 (behaviour change): a pre-commit hook that changes what would be committed is held: the branch does not move and the shared index loses nothing", posix, async () => {
   const root = await stagedChange()
