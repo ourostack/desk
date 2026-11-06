@@ -232,11 +232,21 @@ export function readBackCommit(root, relPaths, message, before, expected, spawnG
 }
 
 // A failed commit call's answer: `ok` when the read-back finds it landed and in effect (`readback: "committed"`), so every caller schedules its push; otherwise the failure with its read-back.
-function afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit) {
+// A failure also carries what the call meant to commit (`capture`: the HEAD and branch it read before dispatch and the captured entries),
+// so its route can finish exactly that change and never whatever the paths hold later (R2, R3). No capture means no route may commit.
+function afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit, branch) {
   const stderr = timedOut(result) ? "timeout" : result.stderr
   const { readback, landed } = readBackCommit(root, relPaths, message, before, expected, spawnGit)
   if (readback === "committed") return { ok: true, stderr, readback }
-  return landed ? { ok: false, stderr, readback, landed } : { ok: false, stderr, readback }
+  const capture = before !== null && expected !== null && branch ? { before, branch, expected } : null
+  return { ok: false, stderr, readback, ...(landed ? { landed } : {}), ...(capture ? { capture } : {}) }
+}
+
+/** The branch HEAD is on, or null for a detached HEAD or when Git cannot say. A read. */
+function branchOf(root, spawnGit) {
+  const head = run(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
+  const name = head?.status === 0 ? String(head.stdout ?? "").trim() : ""
+  return name === "" ? null : name
 }
 
 /**
@@ -251,6 +261,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
     const before = headOf(root, spawnGit)
+    const branch = branchOf(root, spawnGit)
     const hasHead = before !== null && before !== ""
     const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
     if (seed.status !== 0) return { ok: false, stderr: seed.stderr, readback: "absent" }
@@ -264,7 +275,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
     const result = run(spawnGit, root, ["commit", "-m", message], { env })
     if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
     // What this call meant to commit is exactly `entries` at `relPaths`, and nothing at the paths the index did not hold.
-    return afterFailedCommit(result, root, relPaths, message, before, entryLines(entries), spawnGit)
+    return afterFailedCommit(result, root, relPaths, message, before, entryLines(entries), spawnGit, branch)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -312,10 +323,11 @@ export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
   const before = headOf(root, spawnGit)
+  const branch = branchOf(root, spawnGit)
   const expected = capturedPaths(root, relPaths, spawnGit)
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
   if (!timedOut(result) && result.status === 0) return { ok: true, stderr: result.stderr }
-  return afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit)
+  return afterFailedCommit(result, root, relPaths, message, before, expected, spawnGit, branch)
 }

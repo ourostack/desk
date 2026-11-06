@@ -868,7 +868,7 @@ function archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication }
     root: deskRoot, paths: [relPath(deskRoot, srcDir), relPath(deskRoot, archiveDir)], message: `task_archive: ${track}/${slug}`,
     readback: publication.status === "unknown" ? "unknown" : "absent",
   })
-  route.steps.push({ step: `Call task_archive for ${track}/${slug} again: it finds the published move and finishes the track row and report link without moving anything.`, tool: "task_archive", arguments: { track, slug } })
+  if (!route.held) route.steps.push({ step: `Call task_archive for ${track}/${slug} again: it finds the published move and finishes the track row and report link without moving anything.`, tool: "task_archive", arguments: { track, slug } })
   return route
 }
 
