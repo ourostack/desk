@@ -513,6 +513,58 @@ test("runBlock on Windows rejects an exhausted source cleanup failure instead of
   assert.equal(existsSync(path.dirname(source)), false)
 })
 
+test("runBlock reports a vanished timeout target without issuing native PID operations", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const posixChild = timeoutChild()
+  const kill = t.mock.method(process, "kill", () => {
+    throw Object.assign(new Error("owned process group already absent"), { code: "ESRCH" })
+  })
+  const posix = runBlock("sleep 1", {
+    env: {}, cwd: process.cwd(), timeoutMs: 100, platform: "darwin", bash: "fixture-bash",
+    spawn: () => posixChild,
+  })
+  t.mock.timers.tick(100)
+  posixChild.emit("close", null)
+  assert.deepEqual(await posix, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
+  assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [[-posixChild.pid, "SIGKILL"]])
+
+  const windowsChild = timeoutChild()
+  const helper = timeoutChild()
+  let source
+  let callback
+  const windows = runBlock("sleep 1", {
+    env: {}, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "fixture-bash",
+    spawn: (_command, args) => { source = transportedSource(args); return windowsChild },
+    execFile: (command, args, _options, done) => {
+      assert.equal(path.win32.basename(command).toLowerCase(), "taskkill.exe")
+      assert.deepEqual(args, ["/PID", String(windowsChild.pid), "/T", "/F"])
+      callback = done
+      return helper
+    },
+  })
+  const rejected = assert.rejects(windows, (error) => {
+    assert.match(error.message, /tree cleanup UNQUALIFIED/u)
+    assert.match(error.message, /owned tree target already absent: controlled missing target/u)
+    assert.ok(error.message.includes(String(windowsChild.pid)))
+    return true
+  })
+  t.mock.timers.tick(100)
+  windowsChild.emit("close", null)
+  callback(Object.assign(new Error("owned tree target already absent"), { code: 128 }), "", "controlled missing target")
+  await rejected
+  assert.equal(existsSync(path.dirname(source)), false)
+  for (const child of [posixChild, windowsChild]) {
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+  }
+  for (const child of [windowsChild, helper]) {
+    assert.equal(child.stdout.destroyed, true)
+    assert.equal(child.stderr.destroyed, true)
+  }
+  t.mock.timers.tick(1001)
+  assert.equal(kill.mock.callCount(), 1, "Windows must not fall back to signalling a fabricated native PID")
+})
+
 test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async () => {
   const ran = await runBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.deepEqual(ran, { status: 4, stdout: "out\n", stderr: "err\n", timedOut: false, unavailable: false })
@@ -529,9 +581,6 @@ test("runBlock reports the exit, the output, a timeout that kills the whole bloc
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
   const windows = await runBlock("sleep 5", { ...windowsTimeoutOptions, env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: resolveBash(), spawn: windowsTimeoutSpawn })
   assert.equal(windows.timedOut, true, "Windows termination must include the shell's descendants")
-  // A block that exits between its timer and its close event is not killed twice.
-  const gone = await runBlock("sleep 1", { env: process.env, cwd: process.cwd(), timeoutMs: 100, spawn: (command, args, options) => Object.defineProperty(spawn(command, args, options), "pid", { value: 2 ** 22 + 12345 }) })
-  assert.equal(gone.timedOut, true)
   const chatty = await runBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
   assert.ok(chatty.stdout.length < 100_000, "output is kept bounded")
 })
