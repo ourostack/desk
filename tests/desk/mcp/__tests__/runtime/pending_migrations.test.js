@@ -3,8 +3,10 @@ import assert from "node:assert/strict"
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import fs from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
-import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -196,6 +198,182 @@ function transportedSource(args) {
   return args[1].slice(3, -1).replaceAll("'\\''", "'")
 }
 
+function timeoutChild() {
+  const child = new EventEmitter()
+  Object.assign(child, { pid: 2 ** 22 + 45678, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true })
+  return child
+}
+
+// On this host model Windows tree termination with an owned POSIX group, not a PATH taskkill shim.
+const windowsTimeoutOptions = process.platform === "win32" ? {} : {
+  execFile: (_command, args, options, callback) => execFile(process.execPath, ["-e", 'process.kill(-Number(process.argv[1]), "SIGKILL")', args[1]], options, callback),
+}
+const windowsTimeoutSpawn = (command, args, options) => spawn(command, args, { ...options, detached: process.platform !== "win32" })
+
+test("runBlock Windows timeout waits for exact-PID tree termination and close in either order", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  for (const closeFirst of [false, true]) {
+    const child = timeoutChild()
+    let callback
+    let source
+    let settled = false
+    const result = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: (command, args, options, done) => {
+        assert.ok(path.win32.isAbsolute(command))
+        assert.equal(path.win32.basename(command).toLowerCase(), "taskkill.exe")
+        assert.deepEqual(args, ["/PID", String(child.pid), "/T", "/F"])
+        assert.equal(options.timeout, 1000)
+        assert.equal(options.maxBuffer, 16_384)
+        assert.equal(options.windowsHide, true)
+        callback = done
+        return timeoutChild()
+      },
+    }).then((value) => { settled = true; return value })
+    t.after(async () => { child.emit("close", null); await result })
+    child.stdout.emit("data", "before-deadline\n")
+    t.mock.timers.tick(199)
+    assert.equal(callback, undefined)
+    t.mock.timers.tick(1)
+    assert.equal(typeof callback, "function", "the deadline must start a tree operation, not kill only the launcher")
+    if (closeFirst) child.emit("close", null)
+    else callback(null, "", "")
+    await Promise.resolve()
+    assert.equal(settled, false, "neither helper success nor close alone qualifies termination")
+    if (closeFirst) callback(null, "", "")
+    else child.emit("close", null)
+    assert.deepEqual(await result, { status: null, stdout: "before-deadline\n", stderr: "", timedOut: true, unavailable: false })
+    assert.equal(existsSync(path.dirname(source)), false)
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+    t.mock.timers.tick(1001)
+  }
+})
+
+test("runBlock Windows timeout rejects every termination failure and releases handles without claiming cleanup", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  for (const outcome of ["missing", "throw", "nonzero", "signal", "helper-timeout", "no-close", "child-error", "callback-then-throw"]) {
+    const child = timeoutChild()
+    const helper = timeoutChild()
+    let source
+    let callback
+    const run = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: (_command, _args, _options, done) => {
+        callback = done
+        if (outcome === "throw") throw new Error("owned synchronous launch refusal")
+        if (outcome === "missing") done(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }), "", "")
+        if (outcome === "nonzero") done(Object.assign(new Error("exit 5"), { code: 5 }), "", "access refused")
+        if (outcome === "signal") done(Object.assign(new Error("signal SIGTERM"), { signal: "SIGTERM" }), "", "")
+        if (outcome === "callback-then-throw") {
+          done(new Error("owned first failure"), "", "")
+          throw new Error("owned subsequent failure")
+        }
+        if (outcome === "no-close" || outcome === "child-error") done(null, "", "")
+        return helper
+      },
+    })
+    const rejected = assert.rejects(run, (error) => {
+      assert.match(error.message, /tree cleanup UNQUALIFIED/u)
+      assert.ok(error.message.includes(String(child.pid)), "failure must identify the owned process")
+      if (outcome === "nonzero") assert.match(error.message, /access refused/u)
+      return true
+    })
+    t.mock.timers.tick(200)
+    if (outcome === "child-error") child.emit("error", new Error("child stream operation failed"))
+    t.mock.timers.tick(1000)
+    await rejected
+    assert.equal(child.stdout.destroyed, true)
+    assert.equal(child.stderr.destroyed, true)
+    assert.equal(existsSync(path.dirname(source)), false)
+    assert.equal(child.listenerCount("close"), 0)
+    assert.equal(child.listenerCount("error"), 0)
+    if (callback !== undefined) callback(null, "", "")
+    t.mock.timers.tick(1001)
+  }
+})
+
+test("runBlock Windows termination locates the OS executable independently of block env and PATH", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const saved = Object.entries(process.env).filter(([key]) => /^(systemroot|windir)$/iu.test(key))
+  for (const key of Object.keys(process.env)) if (/^(systemroot|windir)$/iu.test(key)) delete process.env[key]
+  try {
+    for (const [values, expected] of [
+      [{}, "C:\\Windows\\System32\\taskkill.exe"],
+      [{ sYsTeMrOoT: " D:\\Operating System ", WINDIR: "E:\\Other" }, "D:\\Operating System\\System32\\taskkill.exe"],
+      [{ SystemRoot: "relative", wInDiR: "E:\\Windows" }, "E:\\Windows\\System32\\taskkill.exe"],
+    ]) {
+      Object.assign(process.env, values)
+      const child = timeoutChild()
+      const run = runBlock("while :; do :; done", {
+        env: { PATH: "untrusted", SystemRoot: "Z:\\NotTheOS" }, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+        spawn: () => child,
+        execFile: (command, _args, _options, callback) => {
+          assert.equal(command, expected)
+          callback(new Error("fixture refusal"), "", "")
+          return timeoutChild()
+        },
+      })
+      const rejected = assert.rejects(run, /fixture refusal/u)
+      t.mock.timers.tick(200)
+      await rejected
+      for (const key of Object.keys(values)) delete process.env[key]
+    }
+  } finally {
+    for (const [key, value] of saved) process.env[key] = value
+  }
+})
+
+test("runBlock Windows normal close cancels the deadline and does not start termination", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const child = timeoutChild()
+  let source
+  const run = runBlock("printf complete", {
+    env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+    spawn: (_command, args) => { source = transportedSource(args); return child },
+    execFile: () => assert.fail("normal close must cancel the timeout"),
+  })
+  child.emit("close", 0)
+  assert.deepEqual(await run, { status: 0, stdout: "", stderr: "", timedOut: false, unavailable: false })
+  t.mock.timers.tick(1201)
+  assert.equal(existsSync(path.dirname(source)), false)
+  assert.equal(child.listenerCount("error"), 0)
+})
+
+test("runBlock Windows preserves both termination and source-cleanup errors", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let source
+  const child = timeoutChild()
+  const remove = fs.rmSync
+  const stub = t.mock.method(fs, "rmSync", (target, options) => {
+    if (source !== undefined && path.resolve(target) === path.resolve(path.dirname(source))) throw new Error("owned cleanup refused")
+    return remove(target, options)
+  })
+  syncBuiltinESMExports()
+  try {
+    const run = runBlock("while :; do :; done", {
+      env: {}, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "fixture-bash",
+      spawn: (_command, args) => { source = transportedSource(args); return child },
+      execFile: () => { throw new Error("owned termination refused") },
+    })
+    const rejected = assert.rejects(run, (error) => {
+      assert.ok(error instanceof AggregateError)
+      assert.equal(error.errors.length, 2)
+      assert.match(error.errors[0].message, /owned termination refused/u)
+      assert.match(error.errors[1].message, /owned cleanup refused/u)
+      return true
+    })
+    t.mock.timers.tick(200)
+    await rejected
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+    remove(path.dirname(source), { recursive: true, force: true })
+  }
+})
+
 test("runBlock on Windows executes source well above 8 KB with unchanged shell context and ignored stdin", async () => {
   const root = await mkTempRoot("desk-windows-block-")
   const bash = resolveBash()
@@ -268,11 +446,12 @@ test("runBlock on Windows cleans its source after success, timeout and asynchron
   for (const outcome of ["success", "timeout", "spawn-error", "throw"]) {
     let source
     const run = runBlock(outcome === "timeout" ? "while :; do :; done" : "printf 'complete\\n'", {
+      ...windowsTimeoutOptions,
       env: process.env, cwd: root, timeoutMs: outcome === "timeout" ? 200 : 10_000, platform: "win32", bash: resolveBash(),
       spawn: (command, args, options) => {
         source = transportedSource(args)
         if (outcome === "throw") throw new Error("owned launch failure")
-        return spawn(outcome === "spawn-error" ? "/nonexistent/bash" : command, args, options)
+        return windowsTimeoutSpawn(outcome === "spawn-error" ? "/nonexistent/bash" : command, args, options)
       },
     })
     if (outcome === "throw") {
@@ -345,12 +524,11 @@ test("runBlock reports the exit, the output, a timeout that kills the whole bloc
   assert.equal(slow.unavailable, false)
   const grandchild = Number(execFileSync("cat", [marker], { encoding: "utf8" }).trim())
   await new Promise((resolve) => setTimeout(resolve, 100))
-  // Windows has no process groups, so runBlock kills the block itself there (the last assertion below) and a grandchild it started can outlive it. That is a known limit of the product, so the grandchild check runs where groups exist.
-  if (process.platform !== "win32") assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
+  assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
   const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
   assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
-  const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "bash" })
-  assert.equal(windows.timedOut, true, "without process groups the block itself is killed")
+  const windows = await runBlock("sleep 5", { ...windowsTimeoutOptions, env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: resolveBash(), spawn: windowsTimeoutSpawn })
+  assert.equal(windows.timedOut, true, "Windows termination must include the shell's descendants")
   // A block that exits between its timer and its close event is not killed twice.
   const gone = await runBlock("sleep 1", { env: process.env, cwd: process.cwd(), timeoutMs: 100, spawn: (command, args, options) => Object.defineProperty(spawn(command, args, options), "pid", { value: 2 ** 22 + 12345 }) })
   assert.equal(gone.timedOut, true)
