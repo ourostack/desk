@@ -578,3 +578,231 @@ test("a branch that is unborn now but had a HEAD when the change was captured is
   }
   assert.equal(spawnSync("git", ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], { env }).status, 1, "the branch is still unborn")
 })
+
+// Every answer finish-commit gives, reached: each read Git cannot make, each step Git refuses, and each hook outcome. A read that
+// fails is unknown or held, a mutation that fails before the branch moves is held, and nothing moves in either case.
+const answered = (verb, reply, { nth = 1, when = () => true } = {}) => {
+  let seen = 0
+  return (cmd, args, opts) => (args[2] === verb && when(args) && ++seen === nth ? { stdout: "", stderr: "", ...reply } : spawnSync(cmd, args, opts))
+}
+const no = { status: 1, stdout: "", stderr: "it failed" }
+function readyChange() {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  return { root, committed: capturedFailure(root, ["notes.md"], "save notes") }
+}
+function hook(root, name, script) {
+  writeFileSync(path.join(root, ".git", "hooks", name), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
+}
+function assertNothingMoved(root, before, label) {
+  assert.deepEqual(snapshot(root, ["notes.md"]), before, label)
+}
+
+test("a Git answer with no output streams at all is read as a failure with nothing to say, never as success", () => {
+  const { root, committed } = readyChange()
+  const answer = finish(root, ["notes.md"], "save notes", committed, { spawnGit: answered("rev-parse", { status: 1, stdout: undefined, stderr: undefined }) })
+  assert.equal(answer.state, "unknown", answer.reason)
+  const missing = finish(root, ["notes.md"], "save notes", committed, { spawnGit: (cmd, args, opts) => spawnSync(args[2] === "symbolic-ref" ? "git-that-does-not-exist" : cmd, args, opts) })
+  assert.equal(missing.state, "held", "a Git that cannot start is not on a branch")
+})
+
+test("each read the qualification needs and cannot make is unknown, and nothing moves", () => {
+  const cases = {
+    "HEAD read fails outright": answered("rev-parse", { status: 128, stderr: "fatal" }, { when: (args) => args.includes("--verify") }),
+    "HEAD's entries cannot be read": answered("ls-tree", no),
+    "the index cannot be read": answered("ls-files", no),
+  }
+  for (const [label, spawnGit] of Object.entries(cases)) {
+    const { root, committed } = readyChange()
+    const before = snapshot(root, ["notes.md"])
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit })
+    assert.equal(answer.state, "unknown", `${label}: ${answer.reason}`)
+    assertNothingMoved(root, before, label)
+  }
+})
+
+test("a detached checkout is held: the change was made on a branch", () => {
+  const { root, committed } = readyChange()
+  git(root, ["checkout", "-q", "--detach"])
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.deepEqual([answer.state, answer.reason], ["held", "the checkout is not on a branch now"])
+})
+
+test("with no environment given, the finish reads the process's own and still commits through the card guard's rules", () => {
+  const { root, committed } = readyChange()
+  const saved = process.env[TOOL_COMMIT_ENV]
+  delete process.env[TOOL_COMMIT_ENV]
+  try {
+    const answer = finishCommit({ root, paths: ["notes.md"], message: "save notes", ...committed.capture })
+    assert.equal(answer.state, "ready", answer.reason)
+  } finally {
+    if (saved !== undefined) process.env[TOOL_COMMIT_ENV] = saved
+  }
+})
+
+test("HEAD that moved only by another commit to other paths is still ready, then finished on the new HEAD", () => {
+  const { root, committed } = readyChange()
+  writeFileSync(path.join(root, "other.md"), "theirs\n")
+  git(root, ["add", "other.md"])
+  git(root, ["commit", "-q", "-m", "theirs", "--", "other.md"])
+  const theirs = head(root)
+  assert.equal(finish(root, ["notes.md"], "save notes", committed).state, "ready")
+  const done = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.equal(done.state, "finished", done.reason)
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), theirs, "on top of the other commit, which stands")
+})
+
+test("an unborn capture whose branch got another session's root commit at other paths is ready", () => {
+  const { root } = unbornWithOrigin()
+  writeFileSync(path.join(root, "notes.md"), "first\n")
+  const committed = capturedFailure(root, ["notes.md"], "first notes")
+  writeFileSync(path.join(root, "other.md"), "theirs\n")
+  git(root, ["add", "other.md"])
+  git(root, ["commit", "-q", "-m", "theirs", "--", "other.md"])
+  assert.equal(finish(root, ["notes.md"], "first notes", committed).state, "ready")
+})
+
+test("a branch rewound to before the capture, with these paths different there, is held", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "old\n")
+  git(root, ["add", "notes.md"])
+  git(root, ["commit", "-q", "-m", "old notes"])
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  git(root, ["update-ref", "refs/heads/main", "HEAD~1"])
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.deepEqual([answer.state, answer.reason], ["held", "another commit changed these paths after this change was captured"])
+})
+
+test("HEAD that moved, when the earlier HEAD's entries cannot be read, is unknown", () => {
+  const { root, committed } = readyChange()
+  git(root, ["update-ref", "refs/heads/main", git(root, ["commit-tree", "-p", "HEAD", "-m", "theirs", "HEAD^{tree}"]).trim()])
+  const answer = finish(root, ["notes.md"], "save notes", committed, { spawnGit: answered("ls-tree", no, { when: (args) => args.includes(committed.capture.before) }) })
+  assert.deepEqual([answer.state, answer.reason], ["unknown", "Git could not read the earlier HEAD's entries at these paths"])
+})
+
+test("conflict stages at the captured paths, with no merge in progress, are held", () => {
+  const { root, committed } = readyChange()
+  const sha = git(root, ["rev-parse", ":notes.md"]).trim()
+  git(root, ["update-index", "-z", "--index-info"], { input: `0 ${"0".repeat(40)}\tnotes.md\x00100644 ${sha} 1\tnotes.md\x00100644 ${sha} 2\tnotes.md\x00100644 ${sha} 3\tnotes.md\0` })
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.deepEqual([answer.state, answer.reason], ["held", "the index holds a merge conflict at these paths"])
+})
+
+test("each step that builds the commit and fails before any hook runs is held or unknown, and nothing moves", () => {
+  const cases = {
+    "the repository prefix cannot be read": [answered("rev-parse", no, { when: (args) => args.includes("--show-prefix") }), "unknown"],
+    "HEAD's leaves cannot be read again": [answered("ls-tree", no, { nth: 2 }), "unknown"],
+    "read-tree fails": [answered("read-tree", no), "held"],
+    "update-index fails": [answered("update-index", no), "held"],
+    "write-tree fails": [answered("write-tree", no), "held"],
+    "the built tree cannot be read": [answered("ls-tree", no, { nth: 3 }), "held"],
+    "the built tree cannot be compared with HEAD": [answered("diff-tree", no), "held"],
+  }
+  for (const [label, [spawnGit, state]] of Object.entries(cases)) {
+    const { root, committed } = readyChange()
+    const before = snapshot(root, ["notes.md"])
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit })
+    assert.equal(answer.state, state, `${label}: ${answer.reason}`)
+    assertNothingMoved(root, before, label)
+  }
+})
+
+test("a private index that gains an entry outside the captured paths is held before the compare-and-swap", () => {
+  const { root, committed } = readyChange()
+  const before = snapshot(root, ["notes.md"])
+  const sha = git(root, ["rev-parse", ":notes.md"]).trim()
+  const widened = (cmd, args, opts) => spawnSync(cmd, args, args[2] === "update-index" ? { ...opts, input: `${opts.input}100644 ${sha}\textra.md\0` } : opts)
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: widened })
+  assert.equal(answer.state, "held", answer.reason)
+  assert.match(answer.reason, /outside the captured paths: extra\.md/u)
+  assertNothingMoved(root, before, "nothing moved")
+})
+
+test("each commit hook that refuses, silently or with a reason, or that empties the message, is held, and nothing moves", () => {
+  const cases = {
+    "pre-commit": ["pre-commit", "exit 1", /pre-commit hook refused the commit: no reason given/u],
+    "prepare-commit-msg": ["prepare-commit-msg", "echo no template >&2; exit 1", /prepare-commit-msg hook refused the commit: no template/u],
+    "commit-msg": ["commit-msg", "echo bad subject >&2; exit 1", /commit-msg hook refused the commit: bad subject/u],
+    "an emptied message": ["commit-msg", ": > \"$1\"", /the commit message is empty after the hooks ran/u],
+    "a hook that switches branch": ["commit-msg", "git symbolic-ref HEAD refs/heads/elsewhere", /the checkout left main while the hooks ran/u],
+  }
+  for (const [label, [name, script, reason]] of Object.entries(cases)) {
+    const { root, committed } = readyChange()
+    hook(root, name, script)
+    const before = git(root, ["rev-parse", "refs/heads/main"]).trim()
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+    assert.equal(answer.state, "held", `${label}: ${answer.reason}`)
+    assert.match(answer.reason, reason, label)
+    assert.equal(git(root, ["rev-parse", "refs/heads/main"]).trim(), before, `${label}: the branch did not move`)
+  }
+})
+
+test("a commit-tree that fails, with a reason or with none, is held and moves nothing; a signing config is honoured", () => {
+  const { root, committed } = readyChange()
+  git(root, ["config", "commit.gpgSign", "true"])
+  git(root, ["config", "gpg.program", "false"])
+  const before = head(root)
+  const signed = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.equal(signed.state, "held", signed.reason)
+  assert.match(signed.reason, /git commit-tree failed: .+/u)
+  assert.doesNotMatch(signed.reason, /no reason given/u)
+  git(root, ["config", "commit.gpgSign", "false"])
+  const silent = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: answered("commit-tree", { status: 1 }) })
+  assert.deepEqual([silent.state, silent.reason], ["held", "nothing was committed: git commit-tree failed: no reason given"])
+  assert.equal(head(root), before)
+})
+
+test("a branch update that reports success but leaves another commit, or fails with the branch gone, is unknown and names the commit", () => {
+  const raced = (root) => (cmd, args, opts) => {
+    const real = spawnSync(cmd, args, opts)
+    if (args[2] === "update-ref") git(root, ["update-ref", "refs/heads/main", git(root, ["commit-tree", "-p", "HEAD", "-m", "theirs", "HEAD^{tree}"]).trim()])
+    return real
+  }
+  const gone = (root) => (cmd, args, opts) => {
+    if (args[2] === "update-ref") git(root, ["update-ref", "-d", "refs/heads/main"])
+    return spawnSync(cmd, args, opts)
+  }
+  for (const [label, wrap, said] of [["raced", raced, /reported success/u], ["gone", gone, /failed and refs\/heads\/main/u]]) {
+    const { root, committed } = readyChange()
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: wrap(root) })
+    assert.equal(answer.state, "unknown", `${label}: ${answer.reason}`)
+    assert.match(answer.reason, said, label)
+    assert.match(answer.commit, /^[0-9a-f]{40}$/u, label)
+  }
+})
+
+test("a compare-and-swap Git refuses without a reason is held: the branch is where it was", () => {
+  const { root, committed } = readyChange()
+  const before = head(root)
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: answered("update-ref", { status: 1 }) })
+  assert.equal(answer.state, "held", answer.reason)
+  assert.match(answer.reason, /refused to overwrite it \(no reason given\)/u)
+  assert.equal(head(root), before)
+})
+
+test("a post-commit hook that fails silently, deletes the branch or detaches HEAD is unknown, naming the commit made", () => {
+  const cases = {
+    silent: ["exit 1", /post-commit hook failed: no reason given/u, true],
+    deleted: ["git update-ref -d refs/heads/main", /Git could not read HEAD/u, false],
+    detached: ["git checkout -q --detach", /on no branch/u, false],
+  }
+  for (const [label, [script, said, holds]] of Object.entries(cases)) {
+    const { root, committed } = readyChange()
+    hook(root, "post-commit", script)
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+    assert.equal(answer.state, "unknown", `${label}: ${answer.reason}`)
+    assert.match(answer.reason, said, label)
+    assert.match(answer.commit, /^[0-9a-f]{40}$/u, label)
+    if (holds) assert.equal(head(root), answer.commit, `${label}: the commit stands`)
+  }
+})
+
+test("the command line without --root is bad usage, exit 2, and reads nothing", () => {
+  let out = ""
+  let calls = 0
+  const code = runFinishCommitCli(["--branch", "main"], { out: { write: (text) => { out += text } }, spawnGit: () => { calls++; return { status: 1 } }, env })
+  assert.equal(code, 2)
+  assert.deepEqual(JSON.parse(out), { state: "usage", reason: "--root is required" })
+  assert.equal(calls, 0)
+})
