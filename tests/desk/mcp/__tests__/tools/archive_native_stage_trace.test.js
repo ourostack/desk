@@ -259,15 +259,26 @@ test("an unavailable stage program fails typed before any spawn, and only when t
   const error = await openArchiveHandleSession(pair, { ...on.dependencies, buildStageProgram: throwing }).then(() => null, e => e)
   assert.ok(error)
   assert.match(error.message, /diagnostic program unavailable/)
+  assert.equal(error.code, "ARCHIVE_NATIVE_MOVE")
   assert.doesNotMatch(error.message, /secret|anchor/)
   assert.equal(builds, 1)
   assert.equal(spawns, 0)
   assert.equal(on.argv(), undefined)
+  assert.equal(error.handleReceipt.childPid, null)
+  assert.equal(error.handleReceipt.executedProgramSha256, null)
+  assert.equal(error.handleReceipt.capturedValidated, false)
+  assert.equal(error.handleReceipt.stdoutBytes, 0)
 
   const off = silentChild([], {})
-  off.dependencies.spawn = (...a) => { spawns++; return silentChild([], {}).dependencies.spawn(...a) }
-  await openArchiveHandleSession(pair, { ...off.dependencies, buildStageProgram: throwing }).catch(() => {})
+  const offSpawn = off.dependencies.spawn
+  off.dependencies.spawn = (...a) => { spawns++; return offSpawn(...a) }
+  const offError = await openArchiveHandleSession(pair, { ...off.dependencies, buildStageProgram: throwing }).then(() => null, e => e)
+  assert.equal(offError.code, "ARCHIVE_NATIVE_MOVE")
+  assert.equal(offError.message, "task_archive: native handle capture readiness timeout")
   assert.equal(builds, 1)
+  assert.equal(spawns, 1)
+  assert.equal(createHash("sha256").update(off.argv()[4]).digest("hex"), DEFAULT_SHA)
+  assert.equal("programVariant" in offError.handleReceipt, false)
 })
 
 test("stage control reaches only the measured launch and needs the receipt trace", () => {
