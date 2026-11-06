@@ -1,6 +1,6 @@
 # Superpowers provider
 
-This package contains the selected, unmodified source payload from [obra/superpowers](https://github.com/obra/superpowers) version 6.4.2, commit `8ca22dba9a94f28898bbce59f2537ff4d87c747d`. The MIT license and source notices remain intact. `upstream-sources.lock.json` records every selected source path and SHA-256; the upstream tree is `a29cb0f1f5600c82888f61eb6832025b3d9d3677`.
+This package contains the selected, unmodified source payload from [obra/superpowers](https://github.com/obra/superpowers) version 7.0.2, commit `22f0b463e7a5e579904dd6211a520321035526f7`. The MIT license and source notices remain intact. `upstream-sources.lock.json` records every selected source path and SHA-256; the upstream tree is `8fddc972a73e9af7501442df0e638d8e29842b6b`.
 
 The root `plugin.json`, `.claude-plugin/plugin.json`, this README, and `hooks/copilot-hooks.json` are Ourostack-authored packaging, not upstream files. Copilot uses the explicit `PLUGIN_ROOT` adapter with a bounded timeout. Upstream source bytes remain locked separately from the one maintained wrapper described below.
 
@@ -23,5 +23,7 @@ The guard journal is bound to its original regular single-link file identity, no
 [Journal admission](../../scripts/superpowers-hook-compat.cjs#L93-L143) acquires native BigInt path and descriptor stats before comparing exact inode/device IDs and nanosecond creation times. Those exact values belong to the in-memory authority record; persisted journal, recovery and provenance formats are unchanged. This corrects deterministic numeric precision loss, not a verified explanation of the separate Windows failure tracked in [#616](https://github.com/ourostack/desk/issues/616).
 
 The shipped Superpowers version includes downstream packaging releases and is not the upstream payload version stated above. Owned fake-hook tests cover source declarations and copied-package paths; they do not establish native Windows qualification or successful real installed startup.
+
+The selected provider is Superpowers 7, with an explicit `^7.0.1` dependency floor in both Desk's activation manifest and Claude metadata. Activation, packaging, bootstrap envelopes and generated-wrapper contracts gate that selection; they do not establish complete host or engineering-behavior qualification. A later major is not admitted by this range. The upstream-source check reconciles whole selected skill directories against a complete upstream tree, reporting added and retired references as payload changes rather than fetching retired paths and mistaking their 404 for an unavailable source. The scheduled refresh preserves an existing refresh branch through a normal merge and nonforce push; conflicts or a concurrent writer stop the update rather than replacing their history.
 
 With Desk, invoke `desk:using-superpowers-with-desk` before using these skills. That contract binds plans, progress, authority, and the terminal endpoint to Desk; it does not change the upstream payload. A successful hook transport probe is not proof of engineering-method consumption, background inheritance, or complete host qualification.

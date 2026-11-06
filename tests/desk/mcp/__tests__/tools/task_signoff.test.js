@@ -17,6 +17,7 @@ import { deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/defe
 import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 import { osEnv } from "../_os_env.js"
+import { notCommitted } from "./_route_around.js"
 
 const SENTINEL = "SENTINEL-card-body-text"
 const PR_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/7" }
@@ -549,7 +550,7 @@ test("a commit that fails is reported and the sign-off stays written", async () 
   const file = await delivered(root, "commit-fails")
   const spawnGit = (cmd, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, options))
   const result = await sign(root, "commit-fails", { outcome: "accepted" }, { spawnGit })
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal("desk_commit" in result, false)
   assert.equal("desk_note" in result, false)
   assert.equal((await readFront(file)).data.signoff.state, "accepted")

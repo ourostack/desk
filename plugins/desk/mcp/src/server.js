@@ -59,6 +59,7 @@ import { doctorRuntime } from "./tools/doctor.js"
 export { createSearchEngine } from "./search/engine.js"
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
+import { NATIVE_STAGES, NATIVE_STAGE_MAX_US, nativeStageTraceEnabled, runWithNativeStageScope } from "./tools/native-stage-context.js"
 
 
 // Map tool name → implementation. Every tool now has a real body.
@@ -229,6 +230,24 @@ export function projectNativeReceipt(error) {
       if (typeof code === "string" && code.length <= 40 && TRACE_ISSUES.has(code)) out.protocolIssues.push(code)
       else { out.incomplete = true; out.fieldStatus.protocolIssues = "invalid" }
     }
+    if (traceData(receipt, "programVariant") !== TRACE_MISSING) {
+      out.programVariant = primitive(receipt, "programVariant", "programVariant", value => value === "stage_diag")
+      out.nativeStages = []
+      let previous = null
+      for (const [index, entry] of array("nativeStages", NATIVE_STAGES.length).entries()) {
+        traceObject(entry)
+        const stage = traceData(entry, "stage"), nativeUs = traceData(entry, "nativeUs"), wrapperUs = traceData(entry, "wrapperUs")
+        const bounded = value => integer(value) && value <= NATIVE_STAGE_MAX_US
+        if (stage !== NATIVE_STAGES[index] || !bounded(nativeUs) || !bounded(wrapperUs) ||
+            previous && (nativeUs < previous.nativeUs || wrapperUs < previous.wrapperUs)) {
+          out.incomplete = true
+          out.fieldStatus.nativeStages = "invalid"
+          break
+        }
+        previous = { stage, nativeUs, wrapperUs }
+        out.nativeStages.push(previous)
+      }
+    }
     return out
   } catch { return unavailable() }
 }
@@ -246,6 +265,11 @@ function emitNativeReceipt(error, requestId, write) {
   if (!Number.isSafeInteger(requestId) || requestId < 0) return
   const line = `${TRACE_PREFIX}${JSON.stringify({ requestId, receipt: projectNativeReceipt(error) })}\n`
   writeBoundedDiagnosticFrame(line, write)
+}
+
+// Success margins use the same frame and projector, scoped to this request by the call's own async context.
+function emitNativeStageSummary(summary, requestId, write) {
+  emitNativeReceipt({ handleReceipt: summary }, requestId, write)
 }
 
 
@@ -284,10 +308,15 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   try {
     // The session's search engine (src/search/engine.js), once admission has started it: writes tell it what they changed, and searches use it.
     const search = statusContext.search ?? null
-    const result = await impl({
+    const invoke = () => impl({
       deskRoot, input: input ?? {}, person, statusContext, search,
       queryRouter: searchRouter(search), signal,
     })
+    let stageStore = null
+    const result = name === "task_archive" && nativeStageTraceEnabled(env)
+      ? await runWithNativeStageScope(store => { stageStore = store; return invoke() })
+      : await invoke()
+    if (stageStore?.summaries.length === 1) emitNativeStageSummary(stageStore.summaries[0], traceRequestId, traceWrite)
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
     return {

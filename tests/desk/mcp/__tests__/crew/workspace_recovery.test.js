@@ -7,7 +7,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 
 const NOW = () => 1767225600000
@@ -27,7 +27,7 @@ test("a first push GitHub took although its answer was lost: the rerun finds the
   assert.ok(mainFiles(repo.bare).includes("_meta/crew.json"))
   const again = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: LATER, apply: true })
   assert.equal(again.state, "already_crew", again.message)
-  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), git(repo.bare, ["rev-parse", "main"]))
+  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), bareGit(repo.bare, ["rev-parse", "main"]))
   assert.equal((await crewStatus({ repo: repo.clone })).state, "crew")
 })
 

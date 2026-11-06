@@ -8,11 +8,12 @@ import { indexedSearch, indexedTimeline } from "../tools/search.js"
 /**
  * Read the desk's files afresh into a disposable in-memory corpus and search it with the same FTS5 tokenizer, BM25 and
  * query serialization as the search engine. Serves searches made before the session's search engine has started.
+ * Recovery opts into strict discovery; ordinary pre-engine searches keep tolerant reads.
  */
-export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
+export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }, { strict = false } = {}) {
   signal?.throwIfAborted()
   const tombstones = await loadTombstoneLedger({ pluginRoot: deskPluginRoot() })
-  const documents = await discover(deskRoot, { signal })
+  const documents = await discover(deskRoot, { signal, strict })
   const db = new Database(":memory:")
   try {
     db.exec(`
@@ -42,9 +43,11 @@ export async function directLexicalSearch({ deskRoot, query, filters, scope, lim
     })()
     signal?.throwIfAborted()
     const search = kind === "timeline" ? indexedTimeline : indexedSearch
-    return await search({
+    const result = await search({
       deskRoot, db, input: { query, filters, scope, limit, from, to }, opts: { now },
     })
+    signal?.throwIfAborted()
+    return result
   } finally {
     db.close()
   }

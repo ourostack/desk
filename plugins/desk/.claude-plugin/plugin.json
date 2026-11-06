@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.2.62",
+  "version": "3.2.70",
   "author": {
     "name": "ourostack",
     "url": "https://github.com/ourostack/desk"
@@ -25,7 +25,7 @@
   "dependencies": [
     {
       "name": "superpowers",
-      "version": "^6.3.0"
+      "version": "^7.0.1"
     },
     {
       "name": "plain-language",

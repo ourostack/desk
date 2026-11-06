@@ -22,6 +22,7 @@
 import { spawn as nodeSpawn } from "node:child_process"
 import { lstatSync, statSync } from "node:fs"
 import * as path from "node:path"
+import { performance } from "node:perf_hooks"
 
 // Resolved from %SystemRoot%, never from PATH: the provider must be the one
 // shipped with the operating system, not the first match on a search path.
@@ -287,7 +288,9 @@ function createSession(executable, args, idleMs) {
   child.stdout.setEncoding("utf8")
   child.stderr.setEncoding("utf8")
   const session = { child, pending: null, queue: Promise.resolve(), idleTimer: null, dead: false, stderr: "",
-    closeError: false, onIdle: null }
+    closeError: false, onIdle: null, spawned: false, exited: false, exitCode: null, requestCount: 0 }
+  child.once("spawn", () => { session.spawned = true })
+  child.once("exit", (code) => { session.exited = true; session.exitCode = code })
   session.closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })))
   const retire = (error) => {
     if (session.dead) return
@@ -342,14 +345,40 @@ function createSession(executable, args, idleMs) {
 
 const sessionKey = (executable, args) => `${executable}\0${args.join("\0")}`
 
-const timedOutError = (label, timeoutMs) => new Error(`${label}: Windows ACL provider timed out after ${timeoutMs}ms`)
+// Only request timeouts carry this closed, text-free snapshot. Spawn/exit are session facts; write acceptance means
+// flushed to the pipe, not consumed by PowerShell. Byte counts and acceptance belong only to this request.
+// Monotonic elapsed diagnostics do not change the wall-clock due used for queueing, restart or the request timer.
+// The private verifier's separate closePrivateSession timer is not a request timeout and has no such details.
+function timedOutError(label, timeoutMs, session, request) {
+  const now = performance.now()
+  const queued = request.askedAt === null
+  const error = new Error(`${label}: Windows ACL provider timed out after ${timeoutMs}ms`)
+  Object.defineProperty(error, "details", { value: Object.freeze({
+    phase: queued ? "queued_expired" :
+      !session.spawned ? "awaiting_spawn" :
+      !request.writeAccepted ? "awaiting_write_accept" :
+      request.outputBytes + request.stderrBytes === 0 ? "awaiting_first_output" : "awaiting_response",
+    queueWaitMs: Math.floor((request.askedAt ?? now) - request.started),
+    sinceAskMs: queued ? null : Math.floor(now - request.askedAt),
+    spawned: session.spawned,
+    writeAccepted: request.writeAccepted,
+    stdoutBytes: request.outputBytes,
+    stderrBytes: request.stderrBytes,
+    exited: session.exited,
+    exitCode: session.exitCode,
+    requestIndex: request.requestIndex,
+    sessionFresh: request.sessionFresh,
+  }) })
+  return error
+}
 
-function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }) {
+function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }, request) {
   return new Promise((resolve, reject) => {
     clearTimeout(session.idleTimer)
     session.stderr = ""
-    const timer = setTimeout(() => session.retire(timedOutError(label, timeoutMs)), due - Date.now())
-    session.pending = {
+    request.askedAt = performance.now()
+    const timer = setTimeout(() => session.retire(timedOutError(label, timeoutMs, session, request)), due - Date.now())
+    session.pending = Object.assign(request, {
       stdout: "",
       outputBytes: 0,
       stderrBytes: 0,
@@ -362,19 +391,25 @@ function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }) {
         session.idleTimer.unref()
         resolve(value)
       },
-    }
-    session.child.stdin.write(`${payload}\n`)
+    })
+    session.child.stdin.write(`${payload}\n`, (error) => {
+      if (!error && session.pending === request) request.writeAccepted = true
+    })
   })
 }
 
-function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due = Date.now() + timeoutMs, lifecycle }) {
+function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due = Date.now() + timeoutMs, lifecycle,
+  started = performance.now() }) {
   const key = sessionKey(executable, args)
   let session = sessions.get(key)
+  const sessionFresh = session === undefined
   if (session === undefined) {
     session = createSession(executable, args, idleMs)
     sessions.set(key, session)
   }
   const current = session
+  const request = { started, askedAt: null, writeAccepted: false, outputBytes: 0, stderrBytes: 0,
+    requestIndex: ++current.requestCount, sessionFresh }
   if (lifecycle) {
     lifecycle.sessions.add(current)
     current.onIdle = () => {
@@ -389,9 +424,9 @@ function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, l
   // waiting caller the one limit, never one limit per caller ahead of it. A request whose time ran out while it waited is never sent.
   const turn = current.queue.then(() => (
     lifecycle?.closed || lifecycle?.failed ? Promise.reject(new Error("NATIVE_PRIVATE_PATH_INVALID")) :
-    due - Date.now() <= 0 ? Promise.reject(timedOutError(label, timeoutMs)) :
-    current.dead ? defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due, lifecycle }) :
-    ask(current, { payload, timeoutMs, maxOutputBytes, label, due })))
+    due - Date.now() <= 0 ? Promise.reject(timedOutError(label, timeoutMs, current, request)) :
+    current.dead ? defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due, lifecycle, started }) :
+    ask(current, { payload, timeoutMs, maxOutputBytes, label, due }, request)))
   current.queue = turn.then(() => undefined, () => undefined)
   return turn
 }

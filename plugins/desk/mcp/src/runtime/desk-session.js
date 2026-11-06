@@ -769,7 +769,7 @@ export function createDeskSession(deps) {
     }
   }
 
-  function runtimeCall(name, input, signal, search = context.search) {
+  function runtimeCall(name, input, signal, search = context.search, requestId) {
     return context.runtimeServer.callTool({
       deskRoot: context.root.root,
       name,
@@ -777,10 +777,11 @@ export function createDeskSession(deps) {
       person: context.person ?? null,
       statusContext: statusContext(search),
       signal,
+      ...(Number.isSafeInteger(requestId) && requestId >= 0 ? { traceRequestId: requestId } : {}),
     })
   }
 
-  async function callTool({ name, input = {}, signal }) {
+  async function callTool({ name, input = {}, signal, requestId }) {
     if (!TOOL_NAMES.includes(name)) {
       return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true }
     }
@@ -814,7 +815,7 @@ export function createDeskSession(deps) {
         const result = await operation((release) => {
           if (!disposed && admission.running && gate < GATE_REJOINS) return GATE_RETRY
           if (disposed || admission.running) return pendingRefusal(name)
-          return dispatch(name, input, signal, release)
+          return dispatch(name, input, signal, release, requestId)
         })
         if (result !== GATE_RETRY) return result
         budget = deadline - Date.now()
@@ -834,20 +835,20 @@ export function createDeskSession(deps) {
     }, REQUIREMENT_TEXT[toolRequirement(name)] ?? "a verified desk destination")
   }
 
-  async function dispatch(name, input, signal, release) {
+  async function dispatch(name, input, signal, release, requestId) {
     const requirement = toolRequirement(name)
     if (requirement === "doctor") return deskDoctor(input, signal, release)
     // A focus call needs the runtime and a root, never a write: while Desk is still admitting it waits a short, bounded time, like the read tools, then refuses.
     if (requirement === "focus") {
-      return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
+      return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null, requestId) : refusal(name, requirement)
     }
     if (!requirementMet(requirement, context)) return refusal(name, requirement)
-    if (requirement === "write") return write(name, input, signal)
-    return runtimeCall(name, input, signal)
+    if (requirement === "write") return write(name, input, signal, requestId)
+    return runtimeCall(name, input, signal, undefined, requestId)
   }
 
   // Right before a write, HEAD must still be on the state branch; it can move under a ready session.
-  async function write(name, input, signal) {
+  async function write(name, input, signal, requestId) {
     const inspection = await inspectStateBranch({ root: context.root.root, branch: context.stateBranchName, git })
     if (!inspection.ok) {
       context.stateBranch = inspection
@@ -860,7 +861,7 @@ export function createDeskSession(deps) {
     if (!branch.ok) {
       return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
-    return runtimeCall(name, input, signal)
+    return runtimeCall(name, input, signal, undefined, requestId)
   }
 
   function refusal(name, requirement) {

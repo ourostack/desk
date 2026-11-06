@@ -11,8 +11,10 @@ const {
   createGh,
   main,
   parseArgs,
+  pending,
   publish,
   pullRequestBody,
+  referencesToRemoved,
   sleepSync,
 } = require("./superpowers-upstream-pr.cjs");
 
@@ -113,6 +115,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     [`workflow run desk-release.yml --repo ${repo} --ref main`, ok("")],
   ]);
   assert.equal(result.outcome, "merged");
+  assert.equal(result.delivered, true);
   // The merge used the workflow token, which starts no push-triggered run, so the Desk release is dispatched on main.
   assert.equal(result.message, "Every check passed, the refresh merged and the Desk release was dispatched.");
   assert.equal(calls.at(-1).line, `workflow run desk-release.yml --repo ${repo} --ref main`);
@@ -221,10 +224,17 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     noRules,
     ["pr merge 7", fail("GraphQL: Protected branch rules not configured for this branch (mergePullRequest)")],
     ["pr comment 7", ok("")],
+    labelExists,
+    [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, ok([])],
+    ["issue create", ok("https://github.com/owner/desk/issues/13\n")],
   ]);
   assert.equal(result.outcome, "merge-blocked");
+  assert.equal(result.delivered, false);
   assert.match(result.message, /could not merge: GraphQL: Protected branch rules/u);
   assert.match(calls.find((call) => call.line.startsWith("pr comment 7")).input, /stays open/u);
+  // An undelivered refresh always leaves an issue, not only a comment on the pull request.
+  assert.equal(result.issue, "https://github.com/owner/desk/issues/13");
+  assert.match(calls.find((call) => call.line.startsWith("issue create")).input, /https:\/\/github\.com\/owner\/desk\/pull\/7.*could not merge/su);
 }
 
 {
@@ -279,6 +289,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     const reportPath = path.join(tempRoot, "report.json");
     fs.writeFileSync(reportPath, JSON.stringify(report));
     const summaryPath = path.join(tempRoot, "summary.md");
+    const outputPath = path.join(tempRoot, "output.txt");
     const { run } = fakeGh([
       [`pr list --repo ${repo} --head ${branch}`, ok([])],
       ["pr create", fail("not permitted")],
@@ -288,9 +299,12 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     ]);
     let output = "";
     const argv = ["publish", "--repo", repo, "--branch", branch, "--base", "main", "--sha", sha, "--report", reportPath, "--workflows", "ci.yml,", "--run-url", runUrl];
-    assert.equal(main(argv, { run, env: { GITHUB_STEP_SUMMARY: summaryPath }, stdout: { write(value) { output += value; } } }), 0);
+    // A refresh that did not reach main fails the run, so the scheduled run is red instead of a silent green, and
+    // tells the workflow it already reported so the generic failure step does not comment a second time.
+    assert.equal(main(argv, { run, env: { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath }, stdout: { write(value) { output += value; } } }), 1);
     assert.match(output, /^## Superpowers upstream refresh: pull-request-blocked\n\nnot permitted\n\nIssue: https:\/\/github\.com\/owner\/desk\/issues\/12\n/u);
     assert.equal(fs.readFileSync(summaryPath, "utf8"), output);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "outcome=pull-request-blocked\ndelivered=false\nissue=https://github.com/owner/desk/issues/12\n");
 
     // Poll and timeout options reach the wait loop; a merged run writes to stdout only when there is no summary file.
     let polls = 0;
@@ -382,13 +396,373 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "", stderr: "" }],
     ["pr merge 7", ok("")],
     ["issue list", ok([])],
+    labelExists,
+    ["issue create", ok("https://github.com/owner/desk/issues/14\n")],
   ]);
   assert.equal(quiet.result.outcome, "merged");
+  // Merged but not released is still not delivered: the run fails and an issue says how to release.
+  assert.equal(quiet.result.delivered, false);
+  assert.equal(quiet.result.issue, "https://github.com/owner/desk/issues/14");
+  assert.match(quiet.calls.find((call) => call.line.startsWith("issue create")).input, /Dispatch desk-release\.yml on main/u);
   assert.equal(quiet.result.message, "Every check passed and the refresh merged, but the Desk release could not be dispatched: HTTP 403: Resource not accessible by integration. Dispatch desk-release.yml on main.");
   assert.throws(
     () => publishWith([...base, [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "<html>", stderr: "" }]]),
     /gh api repos\/owner\/desk\/rules\/branches\/main returned invalid JSON/u,
   );
+}
+
+{
+  // Live regression (runs 38280011058 to 41488986364): a failed job's own error is what an agent needs, so the issue
+  // carries each failed job's failure annotations, not only a link to the log.
+  const { result, calls } = publishWith([
+    existingPull,
+    ["pr edit 7", ok("")],
+    ["workflow run", ok("")],
+    runsRoute("ci.yml", completed(81, "failure")),
+    runsRoute("lint.yml", completed(82)),
+    jobs(81, [{ id: 801, name: "Validate skills", conclusion: "failure", html_url: "https://job/801" }]),
+    jobs(82, [{ id: 802, name: "b", conclusion: "success", html_url: "https://job/802" }]),
+    [`api repos/${repo}/check-runs/801/annotations?per_page=50`, ok([
+      { annotation_level: "notice", message: "a notice that is not an error" },
+      { annotation_level: "failure", message: "desk: plugins/desk/.claude-plugin/plugin.json requires superpowers ^6.3.0, but the marketplace ships 7.0.1" },
+      { annotation_level: "failure", message: `x`.repeat(900) },
+      { annotation_level: "failure", message: "third" },
+      { annotation_level: "failure", message: "fourth is beyond the limit" },
+    ])],
+    noRules,
+    labelExists,
+    [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, ok([])],
+    ["issue create", ok("https://github.com/owner/desk/issues/15\n")],
+  ]);
+  assert.equal(result.outcome, "checks-failed");
+  assert.equal(result.delivered, false);
+  const body = calls.find((call) => call.line.startsWith("issue create")).input;
+  assert.match(body, /- ci\.yml: \[Validate skills\]\(https:\/\/job\/801\) — failure\n {2}- desk: plugins\/desk\/\.claude-plugin\/plugin\.json requires superpowers \^6\.3\.0, but the marketplace ships 7\.0\.1\n/u);
+  assert.match(body, / {2}- x{300}…\n {2}- third\n/u);
+  assert.doesNotMatch(body, /fourth is beyond the limit|a notice/u);
+  // An unreadable annotation list never hides the failure itself.
+  const unreadable = publishWith([
+    existingPull,
+    ["pr edit 7", ok("")],
+    ["workflow run", ok("")],
+    runsRoute("ci.yml", completed(83, "failure")),
+    runsRoute("lint.yml", completed(84)),
+    jobs(83, [{ id: 803, name: "Windows suite", conclusion: "failure", html_url: "https://job/803" }]),
+    jobs(84, [{ id: 804, name: "b", conclusion: "success", html_url: "https://job/804" }]),
+    [`api repos/${repo}/check-runs/803/annotations?per_page=50`, fail("HTTP 403")],
+    noRules,
+    labelExists,
+    [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, ok([])],
+    ["issue create", ok("https://github.com/owner/desk/issues/16\n")],
+  ]);
+  assert.match(unreadable.calls.find((call) => call.line.startsWith("issue create")).input, /\[Windows suite\]\(https:\/\/job\/803\) — failure\n/u);
+}
+
+const majorReport = {
+  ...report,
+  removed_paths: ["skills/brainstorming/spec-document-reviewer-prompt.md"],
+  release: {
+    superpowers: { from: "6.4.5", to: "7.0.2", upstream: "7.0.2" },
+    fragment: "plugins/desk/changelog.d/superpowers-7.0.2.md",
+    range: { from: "^6.3.0", to: "^7.0.2", files: ["plugins/desk/.claude-plugin/plugin.json", "plugins/desk/activation/desk.activation.json"] },
+    notes: [
+      { version: "7.0.2", heading: "v7.0.2 (2026-11-03)", body: "Brainstorming asks fewer questions.\n\n### Hooks\n\n- Copilot on Windows now gets the bootstrap." },
+      { version: "7.0.0", heading: "v7.0.0 (2026-10-09)", body: "Brainstorming, rebuilt from scratch." },
+    ],
+  },
+  desk_references: [{ path: "skills/brainstorming/spec-document-reviewer-prompt.md", files: ["plugins/desk/skills/x/SKILL.md"] }],
+};
+
+{
+  // A refresh states what upstream changed: its release notes for every version it brings in, and, when upstream
+  // crossed a major version, says so plainly, names the moved compatibility floor and what in Desk to read.
+  const body = pullRequestBody({ report: majorReport, runUrl });
+  assert.match(body, /^> \*\*Major upstream release: Superpowers 6 → 7\.\*\* The refresh moved Desk's Superpowers compatibility floor from `\^6\.3\.0` to `\^7\.0\.2` in `plugins\/desk\/\.claude-plugin\/plugin\.json`, `plugins\/desk\/activation\/desk\.activation\.json`/mu);
+  assert.match(body, /## What upstream changed\n\n<details><summary>v7\.0\.2 \(2026-11-03\)<\/summary>\n\nBrainstorming asks fewer questions\.\n\n### Hooks\n\n- Copilot on Windows now gets the bootstrap\.\n\n<\/details>\n\n<details><summary>v7\.0\.0 \(2026-10-09\)<\/summary>\n\nBrainstorming, rebuilt from scratch\.\n\n<\/details>/u);
+  assert.match(body, /Desk files that still name a removed upstream file: `skills\/brainstorming\/spec-document-reviewer-prompt\.md` in `plugins\/desk\/skills\/x\/SKILL\.md`\./u);
+  // Without notes the body says so instead of leaving the section out.
+  const plain = pullRequestBody({ report, runUrl });
+  assert.match(plain, /## What upstream changed\n\nUpstream's RELEASE-NOTES\.md has no section for a version after the one Desk shipped/u);
+  assert.doesNotMatch(plain, /Major upstream release/u);
+  // Release notes never push the body past GitHub's limit: each section is cut with a link to the full notes.
+  const long = pullRequestBody({ report: { ...majorReport, release: { ...majorReport.release, notes: [{ version: "7.0.2", heading: "v7.0.2", body: "y".repeat(70_000) }] } }, runUrl });
+  assert.ok(long.length < 60_000);
+  assert.match(long, /y…\n\n\[Read the full release notes\]\(https:\/\/github\.com\/obra\/superpowers\/blob\/b{40}\/RELEASE-NOTES\.md\)/u);
+
+  const compatible = pullRequestBody({ report: { ...majorReport, release: { ...majorReport.release, range: null } }, runUrl });
+  assert.match(compatible, /Major upstream release: Superpowers 6 → 7/u);
+  assert.doesNotMatch(compatible, /moved Desk's Superpowers compatibility floor/u);
+  assert.match(compatible, /<details><summary>v7\.0\.2 \(2026-11-03\)<\/summary>/u);
+}
+
+{
+  // A major refresh is labelled and titled as one, and files one adoption issue with the release notes so an agent
+  // works out what Desk should take from it even when CI passes and it merges on its own.
+  const { result, calls } = publishWith([
+    existingPull,
+    ["pr edit 7 --repo owner/desk --title", ok("")],
+    [`label list --repo ${repo} --search superpowers-major`, ok([])],
+    [`label create superpowers-major --repo ${repo}`, ok("")],
+    [`pr edit 7 --repo ${repo} --add-label superpowers-major`, ok("")],
+    [`issue list --repo ${repo} --label superpowers-major --state open`, ok([{ number: 20, title: "Superpowers 6: adopt what's new", url: "https://github.com/owner/desk/issues/20" }])],
+    [`issue create --repo ${repo} --title Superpowers 7: adopt what's new --label superpowers-major`, ok("https://github.com/owner/desk/issues/21\n")],
+    ["workflow run", ok("")],
+    runsRoute("ci.yml", completed(91)),
+    runsRoute("lint.yml", completed(92)),
+    jobs(91, [{ name: "a", conclusion: "success", html_url: "https://job/91" }]),
+    jobs(92, [{ name: "b", conclusion: "success", html_url: "https://job/92" }]),
+    noRules,
+    ["pr merge 7", ok("")],
+    ["issue list --repo owner/desk --label upstream-refresh", ok([])],
+  ], { report: majorReport });
+  assert.equal(result.outcome, "merged");
+  assert.equal(result.delivered, true);
+  assert.equal(result.adoption, "https://github.com/owner/desk/issues/21");
+  assert.match(calls.find((call) => call.line.startsWith("pr edit 7 --repo owner/desk --title")).line, /--title Refresh Superpowers from upstream bbbbbbbbbbbb \(major: 6\.4\.5 → 7\.0\.2\)/u);
+  const adoption = calls.find((call) => call.line.startsWith("issue create"));
+  assert.match(adoption.input, /Superpowers 7\.0\.2 crossed a major version/u);
+  assert.match(adoption.input, /using-superpowers-with-desk/u);
+  assert.match(adoption.input, /<details><summary>v7\.0\.0 \(2026-10-09\)<\/summary>/u);
+  // A later run for the same major finds its open adoption issue and does not file another.
+  const again = publishWith([
+    existingPull,
+    ["pr edit 7 --repo owner/desk --title", ok("")],
+    [`label list --repo ${repo} --search superpowers-major`, ok([{ name: "superpowers-major" }])],
+    [`pr edit 7 --repo ${repo} --add-label superpowers-major`, ok("")],
+    [`issue list --repo ${repo} --label superpowers-major --state open`, ok([{ number: 21, title: "Superpowers 7: adopt what's new", url: "https://github.com/owner/desk/issues/21" }])],
+    ["workflow run", ok("")],
+    runsRoute("ci.yml", completed(93)),
+    runsRoute("lint.yml", completed(94)),
+    jobs(93, [{ name: "a", conclusion: "success", html_url: "https://job/93" }]),
+    jobs(94, [{ name: "b", conclusion: "success", html_url: "https://job/94" }]),
+    noRules,
+    ["pr merge 7", ok("")],
+    ["issue list --repo owner/desk --label upstream-refresh", ok([])],
+  ], { report: majorReport });
+  assert.equal(again.result.adoption, "https://github.com/owner/desk/issues/21");
+  assert.equal(again.calls.some((call) => call.line.startsWith("issue create")), false);
+}
+
+{
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "superpowers-major-summary-"));
+  try {
+    const reportPath = path.join(tempRoot, "report.json");
+    const summaryPath = path.join(tempRoot, "summary.md");
+    const outputPath = path.join(tempRoot, "output.txt");
+    fs.writeFileSync(reportPath, JSON.stringify(majorReport));
+    const { run } = fakeGh([
+      existingPull,
+      ["pr edit 7", ok("")],
+      [`label list --repo ${repo} --search superpowers-major`, ok([{ name: "superpowers-major" }])],
+      [`issue list --repo ${repo} --label superpowers-major --state open`, ok([{ number: 21, title: "Superpowers 7: adopt what's new", url: "https://github.com/owner/desk/issues/21" }])],
+      ["workflow run", ok("")],
+      runsRoute("ci.yml", completed(95)),
+      jobs(95, [{ name: "a", conclusion: "success", html_url: "https://job/95" }]),
+      noRules,
+      ["pr merge 7", ok("")],
+      [`issue list --repo ${repo} --label upstream-refresh`, ok([])],
+    ]);
+    const { now, sleep } = clock();
+    let output = "";
+    assert.equal(main(["publish", "--repo", repo, "--branch", branch, "--base", "main", "--sha", sha,
+      "--report", reportPath, "--workflows", "ci.yml", "--run-url", runUrl], {
+      run, env: { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      stdout: { write(value) { output += value; } }, now, sleep,
+    }), 0);
+    assert.match(output, /^## Superpowers upstream refresh: merged\n/u);
+    assert.match(output, /Pull request: https:\/\/github\.com\/owner\/desk\/pull\/7\n/u);
+    assert.match(output, /Adoption issue: https:\/\/github\.com\/owner\/desk\/issues\/21\n/u);
+    assert.equal(fs.readFileSync(summaryPath, "utf8"), output);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "outcome=merged\ndelivered=true\n");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  // Desk text that still names a removed upstream file is found by its skill-relative path or a distinctive file name.
+  const files = [
+    { path: "plugins/desk/skills/a/SKILL.md", text: "Dispatch brainstorming/spec-document-reviewer-prompt.md first." },
+    { path: "plugins/desk/skills/b/SKILL.md", text: "See anthropic-best-practices.md." },
+    { path: "plugins/desk/skills/c/SKILL.md", text: "Read SKILL.md and nothing else." },
+    { path: "plugins/superpowers/skills/brainstorming/SKILL.md", text: "spec-document-reviewer-prompt.md" },
+    { path: "upstream-sources.lock.json", text: "skills/writing-skills/anthropic-best-practices.md" },
+    { path: "plugins/desk/CHANGELOG.md", text: "anthropic-best-practices.md" },
+    { path: "plugins/desk/changelog.d/x.md", text: "anthropic-best-practices.md" },
+  ];
+  assert.deepEqual(referencesToRemoved([
+    "skills/brainstorming/spec-document-reviewer-prompt.md",
+    "skills/writing-skills/anthropic-best-practices.md",
+    "skills/executing-plans/SKILL.md",
+  ], files), [
+    { path: "skills/brainstorming/spec-document-reviewer-prompt.md", files: ["plugins/desk/skills/a/SKILL.md"] },
+    { path: "skills/writing-skills/anthropic-best-practices.md", files: ["plugins/desk/skills/b/SKILL.md"] },
+  ]);
+  assert.deepEqual(referencesToRemoved([], files), []);
+}
+
+{
+  // Equal selected bytes and executable modes deduplicate even when unselected upstream content moved.
+  const rawHook = "plugins/superpowers/hooks/upstream/run-hook.cmd";
+  const tool = "plugins/superpowers/skills/a/tool.sh";
+  const freshLock = { sources: [{ id: "obra-superpowers", commit: "c".repeat(40), files: [
+    { sourcePath: "skills/a/tool.sh", generatedPath: tool, sha256: "1".repeat(64) },
+    { sourcePath: "hooks/run-hook.cmd", generatedPath: "plugins/superpowers/hooks/run-hook.cmd", upstreamPath: rawHook, sha256: "2".repeat(64) },
+  ] }] };
+  const branchLock = (files) => ok({ sources: [{ id: "obra-superpowers", commit: "d".repeat(40), files }] });
+  const lockRoute = (result) => [`api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=`, result];
+  const openPull = [`pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt`, ok([{ number: 7, url: "https://github.com/owner/desk/pull/7", createdAt: "2026-10-12T07:40:00Z", headRefOid: sha }])];
+  const openIssue = [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, ok([{ number: 4, url: "https://github.com/owner/desk/issues/4" }])];
+  const at = () => Date.parse("2026-11-05T07:30:00Z");
+  const tree = (toolMode = "100644") => ({
+    sha: "b".repeat(40), url: `https://api.github.com/repos/${repo}/git/trees/${"b".repeat(40)}`, truncated: false,
+    tree: [
+      { path: tool, mode: toolMode, type: "blob", sha: "e".repeat(40), size: 12 },
+      { path: rawHook, mode: "100755", type: "blob", sha: "f".repeat(40), size: 12 },
+      { path: "plugins/superpowers/hooks/run-hook.cmd", mode: "100644", type: "blob", sha: "b".repeat(40), size: 20 },
+      { path: "README.md", mode: "100755", type: "blob", sha: "d".repeat(40), size: 100 },
+    ],
+  });
+  const treeRoute = (result = ok(tree())) => [`api repos/${repo}/git/trees/${sha}?recursive=1`, result];
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "superpowers-upstream-pending-"));
+  const fixtureModes = new Map([
+    [path.join(tempRoot, tool), 0o644],
+    [path.join(tempRoot, rawHook), 0o755],
+    [path.join(tempRoot, "plugins/superpowers/hooks/run-hook.cmd"), 0o644],
+  ]);
+  const originalLstatSync = fs.lstatSync;
+  const setMode = (file, mode) => {
+    assert.ok(fixtureModes.has(file), `undeclared mode fixture: ${file}`);
+    fs.chmodSync(file, mode);
+    fixtureModes.set(file, mode);
+  };
+  try {
+    if (process.platform === "win32") {
+      // Windows chmod cannot set POSIX execute bits; supply only those bits for declared regular fixtures.
+      fs.lstatSync = (...args) => {
+        const stat = Reflect.apply(originalLstatSync, fs, args);
+        const mode = fixtureModes.get(args[0]);
+        if (mode !== undefined && stat?.isFile()) {
+          const mask = typeof stat.mode === "bigint" ? 0o111n : 0o111;
+          const executable = typeof stat.mode === "bigint" ? BigInt(mode & 0o111) : mode & 0o111;
+          stat.mode = (stat.mode & ~mask) | executable;
+        }
+        return stat;
+      };
+    }
+    for (const [file, mode] of fixtureModes) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "echo fixture\n");
+      setMode(file, mode);
+    }
+    const options = { repo, branch, base: "main", lock: freshLock, root: tempRoot, now: at };
+    const sameRoutes = [openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(), openIssue];
+    const none = fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]);
+    assert.deepEqual(pending({ ...options, gh: none.gh }), { rerun: true, outcome: "no-open-refresh", message: "No refresh pull request is open, so this run refreshes, pushes and runs CI." });
+
+    const same = fakeGh(sameRoutes);
+    const held = pending({ ...options, gh: same.gh });
+    assert.equal(held.rerun, false);
+    assert.equal(held.outcome, "pending");
+    assert.match(held.message, /https:\/\/github\.com\/owner\/desk\/pull\/7 has carried this upstream payload for 23 days and is still not on main\. See https:\/\/github\.com\/owner\/desk\/issues\/4\./u);
+
+    const noIssue = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(), [openIssue[0], ok([])]]);
+    const untracked = pending({ ...options, gh: noIssue.gh });
+    assert.equal(untracked.rerun, false);
+    assert.equal(untracked.outcome, "pending");
+    assert.doesNotMatch(untracked.message, /See |undefined/u);
+    const noSource = fakeGh([openPull, lockRoute(ok({ sources: [] }))]);
+    const missingPayload = pending({ ...options, gh: noSource.gh });
+    assert.equal(missingPayload.rerun, true);
+    assert.equal(missingPayload.outcome, "upstream-moved");
+
+    for (const [localMode, carriedMode] of [[0o644, "100755"], [0o755, "100644"]]) {
+      setMode(path.join(tempRoot, tool), localMode);
+      const modesMoved = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(ok(tree(carriedMode))), openIssue]);
+      assert.equal(pending({ ...options, gh: modesMoved.gh }).rerun, true, "a selected executable-mode change must rerun the refresh");
+    }
+    setMode(path.join(tempRoot, tool), 0o644);
+    assert.equal(same.calls[0].line, `pr list --repo ${repo} --head ${branch} --base main --state open --json number,url,createdAt,headRefOid`);
+    assert.ok(same.calls.some((call) => call.line === `api -H Accept: application/vnd.github.raw+json repos/${repo}/contents/upstream-sources.lock.json?ref=${sha}`), "read the lock at the observed pull-request head");
+    assert.ok(same.calls.some((call) => call.line === `api repos/${repo}/git/trees/${sha}?recursive=1`), "read modes from the same head, not a moving branch");
+
+    const movedFiles = freshLock.sources[0].files.map((file, index) => index === 0 ? { ...file, sha256: "3".repeat(64) } : file);
+    const moved = fakeGh([openPull, lockRoute(branchLock(movedFiles))]);
+    assert.equal(pending({ ...options, gh: moved.gh }).rerun, true);
+
+    const unreadable = fakeGh([openPull, lockRoute(fail("HTTP 404"))]);
+    assert.equal(pending({ ...options, gh: unreadable.gh }).rerun, true);
+
+    for (const [name, result, error] of [
+      ["API refusal", fail("HTTP 403"), /gh api repos\/owner\/desk\/git\/trees\/.* failed: HTTP 403/u],
+      ["empty output", ok(""), /returned no JSON/u],
+      ["invalid JSON", ok("<html>"), /returned invalid JSON/u],
+      ["missing tree", ok({}), /refresh tree/u],
+      ["null response", ok("null"), /refresh tree/u],
+      ["truncated tree", ok({ ...tree(), truncated: true }), /refresh tree/u],
+      ["invalid truncation flag", ok({ ...tree(), truncated: "false" }), /refresh tree/u],
+      ["invalid entries", ok({ ...tree(), tree: {} }), /refresh tree/u],
+      ["null entry", ok({ ...tree(), tree: [null] }), /refresh tree/u],
+      ["empty path", ok({ ...tree(), tree: [{ path: "" }] }), /refresh tree/u],
+      ["duplicate path", ok({ ...tree(), tree: [...tree().tree, tree().tree[0]] }), /refresh tree/u],
+      ["missing selected path", ok({ ...tree(), tree: tree().tree.slice(1) }), /regular.file mode/u],
+      ["missing mode", ok({ ...tree(), tree: tree().tree.map((entry) => ({ ...entry, mode: undefined })) }), /regular.file mode/u],
+      ["invalid mode", ok(tree("100600")), /regular.file mode/u],
+      ["symlink mode", ok(tree("120000")), /regular.file mode/u],
+      ["invalid entry type", ok({ ...tree(), tree: tree().tree.map((entry) => ({ ...entry, type: "tree" })) }), /regular.file mode/u],
+      ["bad evidence after a mode change", ok({ ...tree(), tree: tree("100755").tree.map((entry) => entry.path === rawHook ? { ...entry, mode: "invalid" } : entry) }), /regular.file mode/u],
+    ]) {
+      const broken = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(result), openIssue]);
+      assert.throws(() => pending({ ...options, gh: broken.gh }), error, name);
+    }
+
+    const noHead = fakeGh([[openPull[0], ok([{ number: 7, url: "https://github.com/owner/desk/pull/7", createdAt: "2026-10-12T07:40:00Z" }])]]);
+    assert.throws(() => pending({ ...options, gh: noHead.gh }), /refresh pull request.*head/u);
+    fs.rmSync(path.join(tempRoot, tool));
+    assert.throws(() => pending({ ...options, gh: fakeGh(sameRoutes).gh }), /ENOENT/u);
+    fs.mkdirSync(path.join(tempRoot, tool));
+    assert.throws(() => pending({ ...options, gh: fakeGh(sameRoutes).gh }), /regular file/u);
+    fs.rmdirSync(path.join(tempRoot, tool));
+    fs.writeFileSync(path.join(tempRoot, tool), "echo fixture\n");
+    setMode(path.join(tempRoot, tool), 0o644);
+
+    // The CLI emits a refusal output only after admission succeeds; unexpected failures leave no such output.
+    const lockPath = path.join(tempRoot, "lock.json");
+    const outputPath = path.join(tempRoot, "output.txt");
+    fs.writeFileSync(lockPath, JSON.stringify(freshLock));
+    let output = "";
+    const argv = ["pending", "--repo", repo, "--branch", branch, "--base", "main", "--lock", lockPath];
+    assert.equal(main(argv, { run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write(value) { output += value; } }, now: at }), 1);
+    assert.match(output, /^## Superpowers upstream refresh: pending\n/u);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=false\n");
+    fs.rmSync(outputPath);
+    setMode(path.join(tempRoot, tool), 0o755);
+    assert.equal(main(argv, { run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n", "a mode-only change must reach the workflow's push/publish path");
+    fs.rmSync(outputPath);
+    setMode(path.join(tempRoot, tool), 0o644);
+    const brokenTree = fakeGh([openPull, lockRoute(branchLock(freshLock.sources[0].files)), treeRoute(fail("HTTP 403")), openIssue]);
+    assert.throws(() => main(argv, { run: brokenTree.run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), /HTTP 403/u);
+    assert.equal(fs.existsSync(outputPath), false, "an unexpected gate failure must not write rerun=false");
+    assert.equal(main(argv, { run: fakeGh([[`pr list --repo ${repo} --head ${branch}`, ok([])]]).run, env: { GITHUB_OUTPUT: outputPath }, stdout: { write() {} }, now: at }), 0);
+    assert.equal(fs.readFileSync(outputPath, "utf8"), "rerun=true\n");
+    assert.throws(() => parseArgs(["pending", "--repo", repo]), /pending requires --branch, --base, --lock/u);
+
+    const summaryPath = path.join(tempRoot, "pending-summary.md");
+    const refusalPath = path.join(tempRoot, "pending-output.txt");
+    let refusal = "";
+    assert.equal(main(argv, {
+      run: fakeGh(sameRoutes).run, env: { GITHUB_OUTPUT: refusalPath, GITHUB_STEP_SUMMARY: summaryPath },
+      stdout: { write(value) { refusal += value; } }, now: at,
+    }), 1);
+    assert.match(refusal, /^## Superpowers upstream refresh: pending\n/u);
+    assert.match(refusal, /has carried this upstream payload for 23 days and is still not on main/u);
+    assert.equal(fs.readFileSync(summaryPath, "utf8"), refusal);
+    assert.equal(fs.readFileSync(refusalPath, "utf8"), "rerun=false\n");
+  } finally {
+    fs.lstatSync = originalLstatSync;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 console.log("Superpowers upstream pull request tests passed.");

@@ -28,6 +28,7 @@ import {
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { commitFailure, commitRoute } from "../util/route-around.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -471,6 +472,23 @@ function relPath(deskRoot, absPath) {
 const INCLUDED_CHANGES_NOTE = "This card already held uncommitted changes before this call (an earlier commit that failed, a card taken out of a hand commit, or an edit made outside Desk's tools); this commit includes them."
 const CONFLICTED_CARD_REASON = "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again."
 
+// The route for a card Git holds as a conflict. Whose merge this is cannot be proven, and marking it resolved writes the shared
+// index (R1, R2, 0972 on #625), so the route only reads and stops: the person who owns the merge resolves it, then task_update
+// commits the card.
+function conflictedCardRoute(filePath, track, slug) {
+  const dir = path.dirname(filePath)
+  const name = path.basename(filePath)
+  return {
+    summary: "Git holds the card as a conflict. Read it, change nothing, and report: the person who owns the merge resolves it, then task_update commits the card. Never commit the card with its conflict markers in it.",
+    steps: [
+      { step: "Read back the conflict: this lists the card as unmerged (U) while the conflict stands. It changes nothing.", argv: ["git", "-C", dir, "ls-files", "-u", "--", name] },
+      { step: `Stop here: change nothing, and report the conflict in ${filePath}. Resolving it and marking it resolved belong to the person who owns the merge; once they have, call task_update for ${track}/${slug} with a one-line note, and Desk commits the card and schedules its push.` },
+    ],
+    committed_locally_when: { argv: ["git", "-C", dir, "status", "--porcelain", "--", name], expect: "prints nothing" },
+    held: true,
+  }
+}
+
 // On a Git desk, task_signoff and the archived-card resource write stage the
 // task.md they write (M4-5 fix round 4) only when the file held no unstaged
 // changes before this write, so a dirty/untracked card left by another session
@@ -490,13 +508,16 @@ function stagingAllowed(filePath, spawnGit) {
 // return value, which a caller attaches to its result under `commit` only
 // on failure, so a normal, silent success stays byte-identical to today's
 // response shape.
-function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = []) {
+// A failure carries `route_around` (#561, #623); `card` names a live card (`<track>/<slug>`), whose route only reads and stops:
+// the card guard refuses a hand commit of it, and a new task_update is a new write, not this change. A commit that timed out but
+// landed is `undefined`.
+function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = [], card = null, deskRoot = path.dirname(filePath)) {
   const dir = path.dirname(filePath)
   const paths = [path.basename(filePath), ...alsoRelative]
   const staged = stagePaths(dir, paths, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  if (!staged.ok) return { status: "failed", reason: staged.stderr, route_around: commitRoute({ root: dir, paths, message, readback: "absent", card, deskRoot }) }
   const committed = commitPaths(dir, paths, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : commitFailure({ root: dir, paths, message, committed, card, deskRoot })
 }
 
 // The next step as `report_as` shows it: credential-like text redacted (the card's text is the agent's own, and the sentence
@@ -775,7 +796,7 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   await writeMarkdown(filePath, data, body)
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
-    commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit)
+    commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit, [], `${track}/${slug}`, deskRoot)
     if (!commit) schedulePush({ root: deskRoot })
   }
   search?.noteChange(relPath(deskRoot, filePath))
@@ -842,11 +863,30 @@ async function archiveTrackPlan(trackFile, slug, status) {
   return after === before ? null : { file: trackFile, before, after }
 }
 
-function archivePendingAnswer(path, publication) {
+// The route for an archive whose publication is pending or unknown when no captured commit travels with it (R2): Desk holds
+// no proof of the move's exact entries, so the route reads the move of exactly this task's folder and stops; it never commits it.
+function archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication }) {
+  return commitRoute({
+    root: deskRoot, paths: [relPath(deskRoot, srcDir), relPath(deskRoot, archiveDir)], message: `task_archive: ${track}/${slug}`,
+    readback: publication.status === "unknown" ? "unknown" : "absent",
+  })
+}
+
+// The commit's own status travels as it is (R5): a commit Desk cannot classify stays `unknown` in the commit and the
+// publication alike, never `failed` or `pending`, and keeps `landed` when it happened but HEAD no longer holds it.
+/** A commit step's failure as the archive's publication: `unknown` stays unknown; only a commit that did not land is pending. */
+function publicationOf(commit) {
+  return { status: commit.status === "unknown" ? "unknown" : "pending", reason: commit.reason }
+}
+
+function archivePendingAnswer(path, publication, routeAround, commit = null) {
   return {
     status: "archive_pending", path, publication,
-    commit: { status: "failed", reason: publication.reason },
-    next_action: "Keep the archived folder intact and do not repeat the directory move. Resolve the named publication or change-recording failure through its supported repair, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
+    commit: commit
+      ? { status: commit.status, reason: commit.reason, ...(commit.landed ? { landed: commit.landed } : {}) }
+      : { status: publication.status === "unknown" ? "unknown" : "failed", reason: publication.reason },
+    route_around: routeAround,
+    next_action: "Keep the archived folder intact and do not repeat the directory move or the commit blind. Follow route_around, which reads back before anything changes, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
   }
 }
 
@@ -1143,7 +1183,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   }
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
-  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON } : undefined
+  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`, deskRoot) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON, route_around: conflictedCardRoute(filePath, track, slug) } : undefined
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   if (stage && !commit) schedulePush({ root: deskRoot })
@@ -1271,7 +1311,7 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
   let publication
   try {
     publication = await prepareArchivedCardPublication({
-      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit,
+      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), deskRoot, file: archivedFile, before, spawnGit,
     })
     await publication.assertBefore()
   } catch (error) {
@@ -1398,12 +1438,15 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
     } else if (publication.status === "pending" || publication.status === "unknown") {
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
+      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication,
+        archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication })))
     } else {
       const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
       if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
         ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
-          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
+          refilled.publication ?? publicationOf(refilled.commit),
+          refilled.commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: publicationOf(refilled.commit) }),
+          refilled.commit),
       })
       let pending = null
       try {
@@ -1491,14 +1534,14 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
     try {
-      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
+      prepared = await prepareArchiveState({ effectiveRoot, deskRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
       trackPlan = prepared.trackPlan
     } catch (error) {
       if (!relocated) throw error
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
       return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
         status: "unknown", reason: error.message,
-      }))
+      }, archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: { status: "unknown" } })))
     }
     await withCreatedDirs(path.dirname(archiveDir), async () => {
       if (relocated) await prepared.atUse()
@@ -1574,7 +1617,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (published) schedulePush({ root: deskRoot })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
     const result = commit
-      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason })
+      ? archivePendingAnswer(relPath(deskRoot, filePath), publicationOf(commit),
+        commit.route_around, commit)
       : { status: "archived", path: relPath(deskRoot, filePath) }
     if (!commit) {
       if (delivered !== null) Object.assign(result, delivered)

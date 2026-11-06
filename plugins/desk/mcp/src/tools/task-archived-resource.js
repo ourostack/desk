@@ -32,7 +32,7 @@ export async function recordArchivedDisposition({ deskRoot, file, track, slug, v
   const stage = helpers.stagingAllowed(file, spawnGit)
   // Written through a temporary file and a rename, so a reader never sees the card half written; nothing else about the card changes.
   await writeFileAtomic(file, front + written.body)
-  const commit = stage ? helpers.stageAndCommitCard(file, `task_update: ${track}/${slug}`, spawnGit) : undefined
+  const commit = stage ? helpers.stageAndCommitCard(file, `task_update: ${track}/${slug}`, spawnGit, [], null, deskRoot) : undefined
   if (stage && !commit) helpers.schedulePush({ root: deskRoot })
   search?.noteChange(helpers.relPath(deskRoot, file))
   try {
