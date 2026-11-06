@@ -137,11 +137,13 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     : null
   const unconfirmed = unknownCommit ? `${commitFailureWords(written.commit)}, so it may not have reached other machines` : null
   // Every lesson that is not committed carries the way to finish it (#561, #623): the commit's own route, or, for a file
-  // that already held another session's edit, a commit of only this lesson from a temporary worktree.
+  // that already held another session's edit, reads only, then desk_save once the files hold nothing but this lesson's whole
+  // change: the line, where it went, and any older lessons it moved to the shelf, a new shelf file included (R1, R7).
+  const movedTopics = written.moved.map((moved) => moved.topic)
   const routeAround = written.git && !written.committed
     ? written.commit?.route_around ?? heldFileRouteFor({
-      dir: path.dirname(file), names: written.heldNames, message: written.message, spawnGit, deskRoot,
-      change: `make the file hold the lesson line exactly as Desk wrote it here (${JSON.stringify(written.line)}), under the same topic`,
+      dir: path.dirname(file), names: written.heldNames, message: written.message, deskRoot,
+      change: `the lesson line ${JSON.stringify(written.line)} ${written.tier === "shelf" ? `on ${SHELF_FILE}` : `in ${path.basename(file)}`}${movedTopics.length > 0 ? `, and the older ${movedTopics.length === 1 ? "lesson" : "lessons"} on ${topicList(movedTopics, MESSAGE_TOPIC_CHARS)} moved from ${path.basename(file)} to ${SHELF_FILE}` : ""}`,
     })
     : null
   const problems = [uncommitted, unloaded].filter((problem) => problem !== null)

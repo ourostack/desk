@@ -1,78 +1,110 @@
 // What a Desk result that did not finish its commit gives the agent instead (#561, #623): the steps to finish the same
-// commit by hand, in order, and the read-backs that prove it worked. Desk tools only help: a tool's failure is never a
+// commit another way, in order, and the read-backs that prove it worked. Desk tools only help: a tool's failure is never a
 // reason to stop, and the route keeps every protection the tool had.
 //
 // Each step is an argv (run it as given, from any folder; no shell is needed, so nothing here depends on POSIX quoting)
-// or, for a live task card, the Desk tool that commits it. Step 1 is always a read-back, because a failed or timed-out
-// commit can still have landed: nothing is committed again until the read-back says it is needed. Committed here and
-// published to the remote are separate facts with separate read-backs.
+// or a Desk tool call. Step 1 always only reads, because a failed or timed-out commit can still have landed.
 //
-// What a route never contains: `git stash`, a force push, `git add -f`, `-a`/`-A`, `--no-verify`, the card guard's override variable,
-// a hard-coded remote or branch (the published read-back compares with the checkout's own upstream), or a step that
-// touches another session's index lock.
+// A route never commits whatever the paths hold now (R2, 0972 on #625): later bytes there may be another session's. When the
+// failure carries the change Desk captured before it dispatched (`capture`: the entries with their modes, the HEAD and the
+// branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
+// cannot qualify, and commits through a private index with a compare-and-set on the branch, never touching the shared index
+// or the working tree (R1, R3). Without a capture, a commit that surely did not land is finished through Desk's own guarded
+// tool once a read of the paths shows only this call's change; a commit Desk cannot classify gets reads only, and the
+// answer is to stop and report. Committed here and published to the remote are separate facts with separate read-backs.
+//
+// What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
+// card guard's override variable, a hard-coded remote or branch (the published read-back compares with the checkout's own
+// upstream), or a step that touches another session's index lock.
 
-import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
+const FINISH_SCRIPT = fileURLToPath(new URL("../../scripts/finish-commit.js", import.meta.url))
 
 /** The argv that hands `root` to Desk's own push worker, which never forces, takes its turn behind a push already running and replays in a private worktree. */
 function publishArgv(root) {
   return [process.execPath, SYNC_PUSH_SCRIPT, "--root", root, "--debounce-ms", "0"]
 }
 
-function readbacks(root, paths) {
+function publishedWhen(root, paths) {
   return {
-    committed_locally_when: { argv: ["git", "-C", root, "status", "--porcelain", "--", ...paths], expect: "prints nothing" },
-    published_when: {
-      argv: [["git", "-C", root, "fetch", "--quiet"], ["git", "-C", root, "diff", "--exit-code", "HEAD", "@{u}", "--", ...paths]],
-      expect: "both exit 0 and the second prints nothing; a desk with no remote has nothing to publish, and committed_locally_when is the whole proof",
-    },
+    argv: [["git", "-C", root, "fetch", "--quiet"], ["git", "-C", root, "diff", "--exit-code", "HEAD", "@{u}", "--", ...paths]],
+    expect: "both exit 0 and the second prints nothing; a desk with no remote has nothing to publish, and committed_locally_when is the whole proof",
   }
 }
 
-// `git add` takes only the paths on disk (a new file has to be added before it can be committed); `git commit -- <paths>`
-// then records every listed path as it is on disk, a deleted or moved-away one included.
-function handCommit(root, paths, message, which) {
-  const present = paths.filter((p) => existsSync(path.resolve(root, p)))
-  return {
-    step: `Only if step 1 listed any of ${which}: stage and commit exactly them, with this message. Never -a, -A, add -f, --no-verify, a stash or a way past the card guard.`,
-    argv: [...(present.length > 0 ? [["git", "-C", root, "add", "--", ...present]] : []), ["git", "-C", root, "commit", "-m", message, "--", ...paths]],
-  }
+/** The finish-commit argv for a captured change; `commit` adds the one dispatch. */
+function finishArgv(root, paths, message, capture, commit = false) {
+  return [
+    process.execPath, FINISH_SCRIPT, "--root", root, "--branch", capture.branch, "--before", capture.before, "--message", message,
+    ...paths.flatMap((p) => ["--path", p]), ...capture.expected.flatMap((line) => ["--entry", line]), ...(commit ? ["--commit"] : []),
+  ]
+}
+
+const READS_ONLY = "It changes nothing."
+const STOP = "On exit 4 (held) or 5 (unknown): stop, change nothing, and report its JSON reason together with the tool's failure; only a person can settle it."
+
+function deskPaths(root, deskRoot, paths) {
+  return paths.map((p) => path.relative(deskRoot, path.resolve(root, p)).split(path.sep).join("/"))
 }
 
 /**
- * The route for a commit Desk could not finish: exactly `paths` (relative to `root`) with `message`. `readback` is the
- * commit's read-back (`absent` or `unknown`); `card` names a live task card (`<track>/<slug>`) that is `paths[0]`, which
- * the card guard lets in only through task_update, so the route commits it there instead of by hand (any other paths are
- * committed by hand after it, never together with it). `deskRoot` is the root a successful call hands `schedulePush`; the
- * publish step uses exactly it, never a nested `root`, because the push worker's lock and delivery state are keyed by it (R6).
+ * The route for a commit Desk could not finish: exactly `paths` (relative to `root`) with `message`. `readback` is the commit's
+ * read-back (`absent` or `unknown`); `capture` is the change Desk captured before dispatch (`{ before, branch, expected }`), when it
+ * could; `card` names a live task card (`<track>/<slug>`) that is `paths[0]`, which the card guard lets in only through
+ * task_update. `deskRoot` is the root a successful call hands `schedulePush`; the publish step uses exactly it, never a nested
+ * `root`, because the push worker's lock and delivery state are keyed by it (R6), and Desk tool steps name paths relative to it.
  */
-export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root }) {
-  const { committed_locally_when: local, published_when: published } = readbacks(root, paths)
-  const commit = card === null
-    ? [handCommit(root, paths, message, "these paths")]
-    : [
-      {
-        step: `Only if step 1 listed ${paths[0]}: call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card with what it already holds; the card guard refuses a hand commit of a live card, and that protection stays.`,
+export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root, capture = null }) {
+  const publish = { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) }
+  const published_when = publishedWhen(root, paths)
+  if (capture) {
+    const check = finishArgv(root, paths, message, capture)
+    const finish = card === null
+      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit in a private index, runs the repository's hooks, and moves the branch only if it has not moved; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
+      : [{
+        step: `Only if step 1 exited 3 (ready): call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then read ${paths.slice(1).join(", ")} with \`git diff HEAD\`, and only if it shows nothing but this call's change, commit ${paths.length > 2 ? "them" : "it"} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""}`,
         tool: "task_update",
         arguments: { track: card.split("/")[0], slug: card.split("/").slice(1).join("/"), note: "Committing the card change an earlier call left uncommitted." },
-      },
-      ...(paths.length > 1 ? [handCommit(root, paths.slice(1), message, "the other paths")] : []),
-    ]
+      }]
+    return {
+      summary: readback === "absent"
+        ? "Desk's commit did not land. Finish exactly the change Desk captured: read where it stands, commit it once only if the read says ready, publish, then read back the remote."
+        : "Desk cannot tell whether its commit landed. Never repeat it blind: read where the captured change stands first; commit it once only if the read says ready, otherwise stop and report.",
+      steps: [
+        { step: `Read back where the captured change stands. ${READS_ONLY} Exit 0: HEAD already holds exactly it, go straight to publishing. Exit 3 (ready): go on. ${STOP}`, argv: check },
+        ...finish,
+        publish,
+      ],
+      committed_locally_when: { argv: check, expect: "exits 0 and prints \"state\":\"committed\"" },
+      published_when,
+    }
+  }
+  const look = { step: `Read what these paths hold beyond HEAD, and the last commit that touched them. ${READS_ONLY}`, argv: [["git", "-C", root, "diff", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%H %s", "--", ...paths]] }
+  const committed_locally_when = { argv: [["git", "-C", root, "diff", "--exit-code", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%s", "--", ...paths]], expect: `the first exits 0 and the second prints "${message}"` }
+  if (readback !== "absent") {
+    return {
+      summary: "Desk cannot tell whether its commit landed, and it could not capture the exact change before dispatching it, so no step can commit it safely. Read where the paths stand, change nothing, and report.",
+      steps: [look, { step: "Stop here: change nothing, and report what step 1 showed together with the tool's failure. If the diff is empty and the log shows this call's message, the commit is in; say so and publish through Desk's push worker.", argv: publishArgv(deskRoot) }],
+      committed_locally_when,
+      published_when,
+      held: true,
+    }
+  }
+  const tool = card === null
+    ? { step: `Only if step 1 shows nothing but this call's own change: commit exactly these paths through Desk's own guarded path, desk_save. If it shows anything else, stop, change nothing, and report it: it may be another session's edit.`, tool: "desk_save", arguments: { paths: deskPaths(root, deskRoot, paths), message } }
+    : {
+      step: `Only if step 1 shows nothing but this call's own change: call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then commit ${paths.slice(1).join(", ")} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""} If step 1 shows anything else, stop, change nothing, and report it.`,
+      tool: "task_update",
+      arguments: { track: card.split("/")[0], slug: card.split("/").slice(1).join("/"), note: "Committing the card change an earlier call left uncommitted." },
+    }
   return {
-    summary: readback === "absent"
-      ? "Desk's commit did not land. Finish it another way: read back, commit exactly these paths, publish, then read back the remote."
-      : "Desk cannot tell whether its commit landed. Never repeat the commit blind: read back first, commit only what is still uncommitted, publish, then read back the remote.",
-    steps: [
-      { step: "Read back first. No output means these paths are already committed here: go straight to publishing.", argv: local.argv },
-      ...commit,
-      { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
-    ],
-    committed_locally_when: local,
-    published_when: published,
+    summary: "Desk's commit did not land. Finish it through Desk's own guarded path once a read shows only this call's change, publish, then read back the remote.",
+    steps: [look, tool, publish],
+    committed_locally_when,
+    published_when,
   }
 }
 
@@ -83,42 +115,29 @@ export function commitFailure({ root, paths, message, committed, card = null, de
     status: readback === "absent" ? "failed" : "unknown",
     reason: committed.stderr,
     ...(committed.landed ? { landed: committed.landed } : {}),
-    route_around: commitRoute({ root, paths, message, readback, card, deskRoot }),
+    route_around: commitRoute({ root, paths, message, readback, card, deskRoot, capture: committed.capture ?? null }),
   }
 }
 
 /**
  * The route for a change Desk wrote but deliberately left uncommitted because a file already held another session's
- * uncommitted edit: committing the file would publish that edit as this call's. The same change is committed from a
- * temporary worktree at HEAD that checks out only these files, the branch is moved to that commit only if it has not
- * moved, and the index entries for the files are reset to the new HEAD, so the other session's edit stays in the
- * working tree, uncommitted and untouched.
- * `dir` is the folder the files are in, `prefix` that folder relative to the repository's top (Git's `--show-prefix`),
- * `names` the file names, `branch` the checked-out branch, `head` HEAD's full hash, `worktree` an unused folder for the
- * temporary worktree, and `change` says in words what to make the same in the worktree's copies.
+ * uncommitted edit (R1, R7). It only reads: committing the file whole would publish that edit as this call's, and no step
+ * here resets an index entry or moves a branch, so another session's staged and unstaged work stays exactly as it is.
+ * The change is committed through Desk's own desk_save once a read shows the files hold nothing else, a new file included.
+ * `dir` is the folder the files are in, `names` the changed file names, `change` says in words what this call changed.
  */
-function heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree, deskRoot }) {
-  const tempBranch = `desk-route/${path.basename(worktree)}`
-  const inWorktree = path.join(worktree, ...prefix.split("/").filter(Boolean))
+export function heldFileRouteFor({ dir, names, message, change, deskRoot = dir }) {
   const files = names.join(" and ")
   return {
-    summary: `${files} already held another session's uncommitted edit, so Desk did not commit. Commit only this change from a temporary worktree, leaving that edit where it is, then publish and read back the remote.`,
+    summary: `${files} already held another session's uncommitted edit, so Desk did not commit. Nothing here changes that edit: read what the files hold, and commit this change through desk_save only once they hold nothing else; otherwise stop and report.`,
     steps: [
-      { step: "Make a temporary worktree at HEAD on a temporary branch, with only these files checked out (any unused folder you own will do for the worktree).", argv: [
-        ["git", "-C", dir, "worktree", "add", "--no-checkout", "-b", tempBranch, worktree, head],
-        ["git", "-C", worktree, "reset", "-q"],
-        ["git", "-C", worktree, "checkout", head, "--", ...names.map((name) => [prefix, name].filter(Boolean).join(""))],
-      ] },
-      { step: `In ${inWorktree}, ${change}. Change nothing else.` },
-      { step: "Commit exactly those files there.", argv: [["git", "-C", inWorktree, "add", "--", ...names], ["git", "-C", inWorktree, "commit", "-m", message, "--", ...names]] },
-      { step: `Move ${branch} to that commit only if it still points where it did; this fails safely if anything moved, and then you start again from step 1 at the new HEAD.`, argv: ["git", "-C", dir, "update-ref", `refs/heads/${branch}`, tempBranch, head] },
-      { step: "Point the index entries for these files at the new HEAD. The working tree keeps the other session's edit, still uncommitted.", argv: ["git", "-C", dir, "reset", "-q", "--", ...names] },
-      { step: `Delete the folder ${worktree} (the temporary worktree from step 1, and nothing else), then let Git forget it and drop the temporary branch.`, argv: [["git", "-C", dir, "worktree", "prune"], ["git", "-C", dir, "branch", "-d", tempBranch]] },
+      { step: `Read what ${files} hold beyond HEAD (a new file shows in the second read). ${READS_ONLY}`, argv: [["git", "-C", dir, "diff", "HEAD", "--", ...names], ["git", "-C", dir, "status", "--porcelain", "--", ...names]] },
+      { step: `Only once step 1 shows nothing but this call's change (${change}): commit exactly these files through desk_save. While anything else is there, stop, change nothing, and report it with the tool's failure.`, tool: "desk_save", arguments: { paths: deskPaths(dir, deskRoot, names), message } },
       { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
     ],
-    committed_locally_when: { argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names], expect: "shows only the other session's edit, never this change" },
-    published_when: readbacks(dir, names).published_when,
-    never: `Never commit ${files} whole: that publishes the other session's edit as this change.`,
+    committed_locally_when: { argv: [["git", "-C", dir, "diff", "--exit-code", "HEAD", "--", ...names], ["git", "-C", dir, "log", "-1", "--format=%s", "--", ...names]], expect: `the first exits 0 and the second prints "${message}"` },
+    published_when: publishedWhen(dir, names),
+    never: `Never commit ${files} whole while they hold anything else: that publishes the other session's edit as this change. Never reset their index entries or move the branch by hand.`,
   }
 }
 
@@ -129,36 +148,4 @@ export function commitFailureWords(commit) {
   return commit.status === "unknown"
     ? `Desk cannot tell whether the commit landed (${commit.reason}); route_around reads it back before anything is committed again`
     : `the commit failed: ${commit.reason}; route_around finishes it`
-}
-
-function gitLine(spawnGit, dir, args) {
-  const answer = spawnGit("git", ["-C", dir, ...args], { windowsHide: true, encoding: "utf8", timeout: 10_000 })
-  return answer.status === 0 && typeof answer.stdout === "string" ? answer.stdout.replace(/\r?\n$/u, "") : null
-}
-
-/**
- * heldFileRoute for the files `names` in `dir`, reading the branch, HEAD and the folder's place in the repository from Git.
- * The temporary worktree goes beside the repository, in a folder named for this call. When Git cannot say (a detached or
- * unborn HEAD), the route says what to do in words and still never commits the held files whole.
- */
-export function heldFileRouteFor({ dir, names, message, change, spawnGit, deskRoot = dir }) {
-  const top = gitLine(spawnGit, dir, ["rev-parse", "--show-toplevel"])
-  const prefix = gitLine(spawnGit, dir, ["rev-parse", "--show-prefix"])
-  const branch = gitLine(spawnGit, dir, ["symbolic-ref", "--short", "-q", "HEAD"])
-  const head = gitLine(spawnGit, dir, ["rev-parse", "--verify", "-q", "HEAD"])
-  if (top && prefix !== null && branch && head) {
-    const worktree = `${path.resolve(top)}.desk-route-${randomBytes(4).toString("hex")}`
-    return heldFileRoute({ dir, prefix, names, message, branch, head, change, worktree, deskRoot })
-  }
-  const files = names.join(" and ")
-  return {
-    summary: `${files} already held another session's uncommitted edit, so Desk did not commit, and Git could not name the branch and HEAD to build the exact commands.`,
-    steps: [
-      { step: "Read back what the files hold that is not committed.", argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names] },
-      { step: `Make a temporary worktree at the commit the checkout's branch points to, ${change} in its copies and nothing else, commit exactly those files with the message "${message}", move the branch to that commit only if it has not moved (git update-ref with the old value), then reset the index entries for the files here.` },
-      { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) },
-    ],
-    committed_locally_when: { argv: ["git", "-C", dir, "diff", "HEAD", "--", ...names], expect: "shows only the other session's edit, never this change" },
-    never: `Never commit ${files} whole: that publishes the other session's edit as this change.`,
-  }
 }
