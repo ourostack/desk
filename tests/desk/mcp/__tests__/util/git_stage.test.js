@@ -903,6 +903,19 @@ test("#632: a branch update that spends the rest of the budget is dispatched onc
   assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
 })
 
+test("#632: a branch read that spends the rest of the budget after the branch moved: the post-commit hook is not run, and the commit is unknown", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "rev-parse" && verb.at(-1) === "refs/heads/main" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out before the post-commit hook could run/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
 test("#632: a pre-commit hook cut off at the end of the budget is unknown, never absent: it may still be running, and the read-back is not run past the budget", async (t) => {
   const root = await stagedChange()
   const before = headOf632(root)
