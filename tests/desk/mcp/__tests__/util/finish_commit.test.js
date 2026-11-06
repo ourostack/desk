@@ -421,3 +421,61 @@ test("a private index that does not build exactly the captured tree is held befo
   assert.deepEqual(refs, [], "no hook ran and the branch was never dispatched")
   assert.deepEqual(snapshot(root, ["docs"]), before)
 })
+
+// 0972 #4 on ae1395e4: git commit has rules for a merge, cherry-pick, revert or rebase in progress (a merge commit takes every
+// staged change and both parents, so `git commit -- <paths>` refuses a partial one). The finish makes one-parent commits only,
+// so while any such operation is in progress it holds, before and after it builds the commit, and moves nothing.
+test("a resolved merge in progress is held: no partial one-parent commit, MERGE_HEAD and the branch left as they were", () => {
+  const root = repo()
+  git(root, ["switch", "-q", "-c", "side"])
+  writeFileSync(path.join(root, "side.md"), "side\n")
+  git(root, ["add", "side.md"])
+  git(root, ["commit", "-q", "-m", "side"])
+  git(root, ["switch", "-q", "main"])
+  writeFileSync(path.join(root, "main.md"), "main\n")
+  git(root, ["add", "main.md"])
+  git(root, ["commit", "-q", "-m", "main"])
+  git(root, ["merge", "-q", "--no-commit", "--no-ff", "side"])
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  git(root, ["add", "notes.md"])
+  const native = spawnSync("git", ["-C", root, "commit", "-q", "-m", "save notes", "--", "notes.md"], { encoding: "utf8", env })
+  assert.notEqual(native.status, 0, "git commit itself refuses a partial merge commit")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const before = snapshot(root, ["notes.md", "side.md"])
+  for (const commit of [false, true]) {
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit })
+    assert.equal(answer.state, "held", answer.reason)
+    assert.match(answer.reason, /merge is in progress/u)
+  }
+  assert.deepEqual(snapshot(root, ["notes.md", "side.md"]), before, "HEAD, the index and the working tree are as they were")
+  assert.equal(git(root, ["rev-parse", "MERGE_HEAD"]).trim(), git(root, ["rev-parse", "side"]).trim(), "the merge is still in progress")
+})
+
+test("a cherry-pick, revert, sequence or rebase in progress is held, and one that starts while the commit is built is held before the branch moves", () => {
+  for (const marker of ["CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer", "rebase-merge", "rebase-apply"]) {
+    const root = repo()
+    writeFileSync(path.join(root, "notes.md"), "mine\n")
+    const committed = capturedFailure(root, ["notes.md"], "save notes")
+    const qualified = head(root)
+    const place = () => (marker.startsWith("rebase") || marker === "sequencer" ? mkdirSync(path.join(root, ".git", marker)) : writeFileSync(path.join(root, ".git", marker), `${qualified}\n`))
+    let late = false
+    const starting = (cmd, args, opts) => { if (!late && args[2] === "commit-tree") { late = true; place() } return spawnSync(cmd, args, opts) }
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: starting })
+    assert.ok(late, `${marker}: the operation started while the commit was built`)
+    assert.equal(answer.state, "held", `${marker}: ${answer.reason}`)
+    assert.equal(head(root), qualified, `${marker}: the branch did not move`)
+    assert.equal(finish(root, ["notes.md"], "save notes", committed).state, "held", `${marker}: a read with it in progress is held`)
+  }
+})
+
+test("Git unable to say whether an operation is in progress is unknown, and nothing moves", () => {
+  const root = repo()
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const before = snapshot(root, ["notes.md"])
+  const blind = (cmd, args, opts) => (args.includes("--git-path") ? { status: 128, stdout: "", stderr: "fatal: not a git repository" } : spawnSync(cmd, args, opts))
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: blind })
+  assert.equal(answer.state, "unknown", answer.reason)
+  assert.match(answer.reason, /in progress/u)
+  assert.deepEqual(snapshot(root, ["notes.md"]), before)
+})

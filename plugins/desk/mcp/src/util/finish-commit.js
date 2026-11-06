@@ -25,7 +25,7 @@
 // unfinished; every read keeps 10 s. A hook or branch update cut off at that bound is `unknown`. One dispatch, never repeated.
 
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -53,6 +53,19 @@ function treeLines(spawnGit, root, commit, paths) {
   }).sort()
 }
 
+// What git commit refuses to commit partially, or commits with more than one parent (0972 #4 on ae1395e4). The finish makes a
+// one-parent commit of a few paths, so while any of these is in progress it holds and moves nothing.
+const OPERATIONS = [["MERGE_HEAD", "a merge"], ["CHERRY_PICK_HEAD", "a cherry-pick"], ["REVERT_HEAD", "a revert"], ["sequencer", "a cherry-pick or revert sequence"], ["rebase-merge", "a rebase"], ["rebase-apply", "a rebase or git am"]]
+
+/** The Git operation in progress in this checkout, `null` for none, or a held/unknown answer when it holds or cannot be read. */
+function operationAnswer(spawnGit, root) {
+  const where = git(spawnGit, root, ["rev-parse", "--path-format=absolute", ...OPERATIONS.flatMap(([name]) => ["--git-path", name])])
+  const files = where.stdout.split("\n").filter(Boolean)
+  if (!where.ok || files.length !== OPERATIONS.length) return { state: "unknown", reason: "Git could not say whether a merge, cherry-pick, revert or rebase is in progress" }
+  const found = OPERATIONS.find((_, i) => existsSync(files[i]))
+  return found ? held(`${found[1]} is in progress in this checkout; git commit has its own rules for it, so Desk does not finish the change by hand and nothing was committed`) : null
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
 
@@ -68,6 +81,8 @@ export function finishCommit({ root, paths, expected, before, branch, message, c
   if (!Array.isArray(paths) || paths.length === 0 || !Array.isArray(expected) || typeof before !== "string" || !branch || !message)
     return held("the route does not carry the captured change (paths, entries, HEAD, branch and message), so nothing can be checked")
   const wanted = [...expected].sort()
+  const operation = operationAnswer(spawnGit, root)
+  if (operation) return operation
   const onBranch = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
   if (!onBranch.ok) return held("the checkout is not on a branch now")
   if (onBranch.stdout.trim() !== branch) return held(`the checkout is on ${onBranch.stdout.trim()} now, not ${branch}, where the change was made`)
@@ -154,6 +169,8 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     const commitId = made.stdout.trim()
     const branchLast = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
     if (!branchLast.ok || branchLast.stdout.trim() !== branch) return held(`nothing was committed: the checkout left ${branch} while the hooks ran`)
+    const operationLast = operationAnswer(spawnGit, root)
+    if (operationLast) return operationLast
     // The one dispatch that moves anything: a compare-and-swap of the branch from exactly the HEAD that was qualified. If any
     // other writer moved it since, Git refuses and nothing is overwritten; it is never repeated.
     const subject = cleaned.stdout.split("\n")[0]
