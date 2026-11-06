@@ -27,7 +27,7 @@ import {
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
-import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths, gitFailure } from "../util/git-stage.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -494,9 +494,9 @@ function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = []) {
   const dir = path.dirname(filePath)
   const paths = [path.basename(filePath), ...alsoRelative]
   const staged = stagePaths(dir, paths, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  if (!staged.ok) return gitFailure(staged)
   const committed = commitPaths(dir, paths, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+  return committed.ok ? undefined : gitFailure(committed)
 }
 
 // The next step as `report_as` shows it: credential-like text redacted (the card's text is the agent's own, and the sentence
@@ -842,10 +842,10 @@ async function archiveTrackPlan(trackFile, slug, status) {
   return after === before ? null : { file: trackFile, before, after }
 }
 
-function archivePendingAnswer(path, publication) {
+function archivePendingAnswer(path, publication, commit = { status: "failed", reason: publication.reason }) {
   return {
     status: "archive_pending", path, publication,
-    commit: { status: "failed", reason: publication.reason },
+    commit,
     next_action: "Keep the archived folder intact and do not repeat the directory move. Resolve the named publication or change-recording failure through its supported repair, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
   }
 }
@@ -1324,9 +1324,7 @@ function withArchiveFocus(statusContext, target, result) {
  * Bumps a non-terminal task to `done` or `cancelled` (see below) as part of
  * the same call.
  *
- * An already-published archive is idempotent. An interrupted relocation
- * reconciles only unchanged source HEAD/index and exact relocated bytes;
- * anything unqualified returns `archive_pending`, never publication success.
+ * An already-published archive is idempotent. An interrupted relocation reconciles unchanged source HEAD/index or an exact staged source-to-destination mapping against source HEAD, with exact relocated bytes and a qualified track-link update. Anything unqualified returns `archive_pending`, never publication success.
  *
  * Evidence gate on the archive bump (the invented-completion finding): a
  * card already in a terminal status (`done` or `cancelled`) archives as-is,
@@ -1405,7 +1403,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
       if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
         ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
-          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
+          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }, refilled.commit),
       })
       let pending = null
       try {
@@ -1474,7 +1472,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
     throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
-  const trackPlan = await archiveTrackPlan(await target([track, "track.md"]), slug, archiveBump?.status ?? null)
+  const trackFile = await target([track, "track.md"])
+  let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
   let prepared, moveSession, sessionClosed = false
   const closeSession = async () => {
     if (!moveSession || sessionClosed) return
@@ -1492,7 +1491,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
     try {
-      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated })
+      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, trackFile, slug, spawnGit, relocated })
+      trackPlan = prepared.trackPlan
     } catch (error) {
       if (!relocated) throw error
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
@@ -1574,7 +1574,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (published) schedulePush({ root: deskRoot })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
     const result = commit
-      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason })
+      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason }, commit)
       : { status: "archived", path: relPath(deskRoot, filePath) }
     if (!commit) {
       if (delivered !== null) Object.assign(result, delivered)

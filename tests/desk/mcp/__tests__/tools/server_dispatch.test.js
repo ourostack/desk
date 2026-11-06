@@ -143,6 +143,47 @@ test("server.callTool surfaces tool errors as isError with structured body", asy
   const body = parseResult(res)
   assert.equal(body.status, "error")
   assert.match(body.message, /does not exist/)
+  assert.equal(body.effects.status, "unknown")
+  assert.equal(body.effects.readback_required, true)
+  assert.doesNotMatch(body.fix, /Retry the call/u)
+})
+
+test("server.callTool preserves partial write evidence without advising a blind retry", async () => {
+  const original = TOOL_IMPLS.desk_save
+  const mutation = { status: "partial", applied_paths: ["notes.md"], uncertain_paths: ["later.md"], readback_required: true }
+  TOOL_IMPLS.desk_save = async () => { throw Object.assign(new Error("later write failed"), { mutation }) }
+  try {
+    const result = await callTool({ deskRoot: await mkTempDeskRoot(), name: "desk_save", input: {} })
+    assert.equal(result.isError, true)
+    assert.deepEqual(parseResult(result).effects, mutation)
+    assert.doesNotMatch(parseResult(result).fix, /Retry the call/u)
+  } finally {
+    TOOL_IMPLS.desk_save = original
+  }
+})
+
+test("server.callTool requires readback for a returned mutation failure, not a refusal or success", async () => {
+  const original = TOOL_IMPLS.desk_save
+  try {
+    for (const result of [
+      { status: "updated", commit: { status: "failed", reason: "commit failed" } },
+      { status: "failed", effects: { status: "partial", applied_paths: ["notes.md"], readback_required: true } },
+      { status: "refused", code: "authority" },
+      { status: "committed" },
+    ]) {
+      TOOL_IMPLS.desk_save = async () => result
+      const body = parseResult(await callTool({ deskRoot: await mkTempDeskRoot(), name: "desk_save", input: {} }))
+      if (result.status === "refused" || result.status === "committed") assert.deepEqual(body, result)
+      else {
+        assert.equal(body.effects?.status, result.effects?.status ?? "unknown")
+        assert.equal(body.effects.readback_required, true)
+        assert.match(body.fix, /Read back/u)
+        assert.doesNotMatch(body.fix, /Retry the call/u)
+      }
+    }
+  } finally {
+    TOOL_IMPLS.desk_save = original
+  }
 })
 
 test("server.callTool routes desk_thread to the real implementation", async () => {

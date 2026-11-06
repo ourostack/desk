@@ -365,7 +365,9 @@ test("task_create reports a commit failure without losing the write", async () =
   })
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(result.commit.status, "failed")
+  assert.equal(result.commit.reason, "commit boom")
+  assert.equal(result.commit.effects.status, "unknown")
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
@@ -382,7 +384,9 @@ test("task_create reports a staging failure without losing the write", async () 
     spawnGit,
   })
   assert.equal(result.status, "created", "the write itself is never lost to a staging failure")
-  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
+  assert.equal(result.commit.status, "failed", "a stage failure is reported, not swallowed as a silent success")
+  assert.equal(result.commit.reason, "add boom")
+  assert.equal(result.commit.effects.readback_required, true)
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
 })
 
