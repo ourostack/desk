@@ -2,7 +2,7 @@ import "./_archive_source_fence.mjs"
 import "../_isolated_env.mjs"
 import { test, after } from "node:test"
 import assert from "node:assert/strict"
-import { promises as fs } from "node:fs"
+import { promises as fs, writeFileSync } from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { planArchiveLinks } from "../../../../../plugins/desk/mcp/src/util/archive-link-plan.js"
@@ -1097,7 +1097,7 @@ posixTest("an unavailable terminal lineage never dispatches finalize or evaluati
   assert.deepEqual(result.terminal_handoff.attempts, [])
   assert.deepEqual(messages, [["desk_factory: finalize_request_deferred"], ["desk_factory: evaluation_request_deferred"]])
 })
-for (const [label, failureContext, preservesPrimary] of [
+for (const [label, failureContext, preservesPrimary, priorCloseFailure] of [
   ["absent context", undefined, false],
   ["empty context", {}, false],
   ["inherited primary only", Object.create({ primary: new Error("not an explicit operation failure") }), false],
@@ -1107,6 +1107,8 @@ for (const [label, failureContext, preservesPrimary] of [
   ["empty-string primary", { primary: "" }, true],
   ["null primary", { primary: null }, true],
   ["undefined primary", { primary: undefined }, true],
+  ["an earlier session cleanup diagnostic", { primary: Object.freeze(new Error("original operation failed")) }, true,
+    "earlier native-session cleanup failed"],
 ]) {
   posixTest(`public aggregate owner settlement with ${label} attempts every owned handle once and preserves the exact primary policy`, async t => {
     const f = await fixture(), open = fs.open.bind(fs), opendir = fs.opendir.bind(fs)
@@ -1131,10 +1133,11 @@ for (const [label, failureContext, preservesPrimary] of [
       return dir
     })
     const plan = await prepare(f), original = failureContext?.primary
+    if (priorCloseFailure !== undefined) plan.receipt.closeFailure = priorCloseFailure
     if (preservesPrimary) {
       await assert.doesNotReject(plan.close(failureContext))
       assert.equal(failureContext.primary, original)
-      assert.equal(plan.receipt.closeFailure, secondary.message)
+      assert.equal(plan.receipt.closeFailure, priorCloseFailure ?? secondary.message)
     } else await assert.rejects(plan.close(failureContext), error => error === secondary)
     assert.ok(resources.length > 3)
     assert.ok(resources.every(resource => resource.closedInFixture && resource.attempts === 1))
@@ -1144,6 +1147,7 @@ for (const [label, failureContext, preservesPrimary] of [
     assert.ok(plan.receipt.descriptors.filter(record => record !== rootRecord).every(record => record.closed))
     await plan.close()
     await plan.close({ primary: new Error("later error cannot reopen or replay settlement") })
+    if (preservesPrimary) assert.equal(plan.receipt.closeFailure, priorCloseFailure ?? secondary.message)
     assert.ok(resources.every(resource => resource.attempts === 1))
     assert.deepEqual(plan.receipt.effects, [])
   })
@@ -1156,3 +1160,144 @@ posixTest("public aggregate owner settlement with a primary but no close failure
   assert.ok(plan.receipt.directoryReaders.every(record => record.closed))
   await plan.close({ primary: false })
 })
+posixTest("review residual real POSIX admission preserves its exact currentness failure before any effects", async () => {
+  const f = await fixture(), { plan, opened } = await session(f), assertCurrent = plan.assertCurrent
+  let observed
+  plan.assertCurrent = async () => {
+    try { return await assertCurrent() }
+    catch (error) { observed = error; throw error }
+  }
+  await fs.writeFile(path.join(f.root, "t/guide.md"), "concurrent owned-fixture edit\n")
+  await assert.rejects(opened.admit(), error => {
+    assert.equal(error, observed)
+    assert.equal(error.code, "archive_changed")
+    assert.equal(error.archiveAggregate, plan.receipt)
+    return true
+  })
+  await opened.close(observed)
+  await plan.close({ primary: observed })
+  assert.deepEqual(plan.receipt.effects, [])
+  assert.ok(plan.receipt.descriptors.every(record => record.closed))
+  assert.ok(plan.receipt.directoryReaders.every(record => record.closed))
+  assert.equal(await fs.readFile(path.join(f.root, "t/guide.md"), "utf8"), "concurrent owned-fixture edit\n")
+  await assert.rejects(fs.lstat(f.destination), { code: "ENOENT" })
+})
+posixTest("review residual default archive refuses a concurrent owned edit during real zero-effect admission and settles its outer owner", async t => {
+  const f = await fixture(), open = fs.open.bind(fs), opendir = fs.opendir.bind(fs), resources = []
+  let sourceReads = 0, changed = false, receipt
+  t.mock.method(fs, "opendir", async (file, ...args) => {
+    const dir = await opendir(file, ...args), close = dir.close.bind(dir)
+    if (file === f.source) sourceReads++
+    const resource = { attempts: 0, closed: false }
+    resources.push(resource)
+    dir.close = async () => { resource.attempts++; await close(); resource.closed = true }
+    return dir
+  })
+  t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args), close = handle.close.bind(handle), stat = handle.stat.bind(handle)
+    const resource = { attempts: 0, closed: false }
+    resources.push(resource)
+    handle.close = async () => { resource.attempts++; await close(); resource.closed = true }
+    if (file === path.join(f.source, "task.md")) handle.stat = async (...options) => {
+      const result = await stat(...options)
+      if (!changed && sourceReads === 2) {
+        await fs.writeFile(path.join(f.root, "t/guide.md"), "concurrent owned-fixture edit\n")
+        changed = true
+      }
+      return result
+    }
+    return handle
+  })
+  await assert.rejects(invoke(f), error => {
+    assert.equal(error.code, "archive_changed")
+    assert.equal(error.message, "task_archive: file generation/version changed after admission")
+    receipt = error.archiveAggregate
+    assert.ok(receipt.originalMap.some(row => row.path === "t/guide.md"))
+    assert.ok(Array.isArray(receipt.finalMap))
+    assert.deepEqual(receipt.effects, [])
+    assert.equal(receipt.marker, undefined)
+    return true
+  })
+  assert.equal(changed, true)
+  assert.equal(sourceReads, 2)
+  assert.ok(resources.length > 3)
+  assert.ok(resources.every(resource => resource.closed && resource.attempts === 1))
+  assert.ok(receipt.descriptors.every(record => record.closed))
+  assert.ok(receipt.directoryReaders.every(record => record.closed))
+  assert.equal(await fs.readFile(path.join(f.root, "t/guide.md"), "utf8"), "concurrent owned-fixture edit\n")
+  assert.equal(await fs.readFile(path.join(f.source, "task.md"), "utf8"), "---\nstatus: cancelled\n---\n\n[Guide](../guide.md)\n")
+  await assert.rejects(fs.lstat(path.join(f.source, ".desk-archive-operation.json")), { code: "ENOENT" })
+  await assert.rejects(fs.lstat(f.destination), { code: "ENOENT" })
+})
+test("review residual terminal primary and real destination marker retain the accepted helper failure diagnostic", async () => {
+  const f = await fixture(), primary = Object.freeze(new Error("owned accepted Factory environment read failed"))
+  const env = { ...process.env }, marker = path.join(f.destination, ".desk-archive-operation.json")
+  let reads = 0
+  Object.defineProperty(env, "XDG_STATE_HOME", { get() {
+    reads++
+    writeFileSync(marker, '{"state":"unfinished"}\n')
+    throw primary
+  } })
+  const result = await invoke(f, { env, moveArchive: async (source, destination, beforeMove) => {
+    await beforeMove(); await fs.rename(source, destination)
+  } })
+  assert.equal(reads, 1)
+  assert.equal(result.status, "archive_pending")
+  assert.equal(result.publication.reason, "unqualified_original_map")
+  assert.equal(result.publication.primary_error, primary.message)
+  assert.equal(result.terminal_handoff.status, "unknown")
+  assert.equal(result.terminal_handoff.attempts.length, 1)
+  const attempt = result.terminal_handoff.attempts[0]
+  assert.equal(attempt.helper, "factoryStateRoot.finalize")
+  assert.equal(attempt.error.message, primary.message)
+  assert.equal(attempt.effectState, "unknown_or_partial")
+  assert.equal(attempt.postBarrier.reason, "task_archive: unqualified_original_map")
+  assert.equal(await fs.readFile(marker, "utf8"), '{"state":"unfinished"}\n')
+  await assert.rejects(fs.lstat(f.source), { code: "ENOENT" })
+})
+for (const closeFails of [false, true]) {
+  test(`review residual public legacy retirement preserves an existing archiveMove and exact primary with close failure ${closeFails}`, async () => {
+    const f = await fixture(), prior = { released: true, retirement: "unconfirmed", evidence: "earlier owned legacy capture" }
+    const returned = { released: false, retirement: "confirmed", closed: true }, primary = new Error("owned legacy admission refused")
+    let closed = 0, admitted = 0, moved = 0
+    await assert.rejects(invoke(f, { openArchiveMove: async () => {
+      const initial = await archiveMarkerState({ effectiveRoot: f.root, srcDir: f.source, archiveDir: f.destination })
+      assert.equal(initial.state, "absent")
+      return {
+        async admit() {
+          admitted++
+          await fs.rename(f.source, `${f.source}-retained`)
+          await fs.mkdir(f.source)
+          await fs.writeFile(path.join(f.source, "FOREIGN"), "not the captured task\n")
+          const observation = await archiveMarkerState({ effectiveRoot: f.root, srcDir: f.source,
+            archiveDir: f.destination, expected: initial.bindings })
+          assert.equal(observation.state, "unverified")
+          primary.archiveMarkerObservation = observation
+          primary.archiveMove = prior
+          throw primary
+        },
+        async move() { moved++; assert.fail("refused legacy admission must not move") },
+        async close() {
+          closed++
+          if (closeFails) throw new Error("owned legacy close acknowledgement unavailable")
+          return returned
+        },
+      }
+    } }), error => {
+      assert.equal(error, primary)
+      assert.equal(error.archiveMove, prior)
+      assert.equal(error.archiveMarkerRejected, true)
+      assert.equal(error.created_parents, "retained_until_native_retirement_resolved")
+      if (closeFails) assert.equal(error.native_close_failure, "archive native cleanup unconfirmed")
+      else assert.equal(error.native_close_failure, undefined)
+      return true
+    })
+    assert.equal(admitted, 1)
+    assert.equal(moved, 0)
+    assert.equal(closed, 1)
+    assert.equal(await fs.readFile(path.join(f.source, "FOREIGN"), "utf8"), "not the captured task\n")
+    assert.equal(await fs.readFile(path.join(`${f.source}-retained`, "task.md"), "utf8"),
+      "---\nstatus: cancelled\n---\n\n[Guide](../guide.md)\n")
+    await assert.rejects(fs.lstat(f.destination), { code: "ENOENT" })
+  })
+}

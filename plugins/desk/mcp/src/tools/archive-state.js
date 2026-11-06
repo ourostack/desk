@@ -128,7 +128,7 @@ export async function prepareArchiveAggregate({ effectiveRoot, srcDir, archiveDi
     if (now() >= evidenceDeadline) primary ??= aggregateFault("archive_evidence_deadline", "archive descriptor settlement exceeded its original evidence cutoff")
     if (primary) {
       if (failureContext && Object.hasOwn(failureContext, "primary")) {
-        receipt.closeFailure = primary.message
+        receipt.closeFailure ??= primary.message
         return
       }
       if (Object.isExtensible(primary)) primary.archiveAggregate = receipt
