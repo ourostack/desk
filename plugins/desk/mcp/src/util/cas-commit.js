@@ -17,7 +17,7 @@ const ZERO = "0".repeat(40)
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  return { ok: !answer.error && answer.status === 0, status: answer.status, cut: Boolean(answer.error || answer.signal), notRun: answer === NOT_RUN, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
 function treeLines(spawnGit, root, commit, paths) {
@@ -76,8 +76,8 @@ const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
 /**
  * The one commit of exactly `wanted` at `paths` on exactly `head` of `branch`. Two options a caller other than the hand finish
  * needs, both off by default so the hand finish is unchanged: `toolCommit` keeps Desk's own commit marker in what Git and the
- * hooks see (a Desk tool's commit, which the card guard lets through), and `deadline` holds every step up to and including the
- * post-commit hook to one total time budget ending then (see `budgeted`), in place of each step's own bound.
+ * hooks see (a Desk tool's commit, which the card guard lets through), and `deadline` holds every Git call it makes, the reads
+ * after the branch update included, to one total time budget ending then (see `budgeted`), in place of each step's own bound.
  */
 function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: unbudgeted, env, toolCommit = false, deadline = null }) {
   const spawnGit = budgeted(unbudgeted, deadline)
@@ -149,12 +149,17 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     const subject = cleaned.stdout.split("\n")[0]
     const ref = `refs/heads/${branch}`
     const moved = git(spawnGit, root, ["update-ref", "-m", `commit${head === "" ? " (initial)" : ""}: ${subject}`, ref, commitId, head === "" ? ZERO : head], { env: refEnv, timeout: COMMIT_TIMEOUT_MS })
-    // Read back without the budget: whatever the branch update did, what the branch holds now is the answer.
-    const nowRead = git(unbudgeted, root, ["rev-parse", "--verify", "-q", ref])
+    // Read back inside the same budget (the hand finish has none): whatever the branch update did, what the branch holds now is
+    // the answer, and a read the budget left no room for leaves it unknown.
+    const nowRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", ref])
     const now = nowRead.ok ? nowRead.stdout.trim() : null
-    if (now === commitId) return afterPostCommit({ spawnGit: unbudgeted, root, branch, commitId, post: hook("post-commit"), bound })
+    if (now === commitId) {
+      const post = hook("post-commit")
+      if (post.notRun) return { state: "unknown", reason: `the branch holds the commit, but the commit's time budget ran out before the post-commit hook could run, so it was not run; read back before anything else and never commit it again`, commit: commitId }
+      return afterPostCommit({ spawnGit, root, branch, commitId, post, bound })
+    }
     if (moved.ok || moved.cut || now === null)
-      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at ${bound}` : moved.ok ? "reported success" : "failed"} and ${ref} does not hold ${commitId.slice(0, 12)}; read back before anything else`, commit: commitId }
+      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at ${bound}` : moved.ok ? "reported success" : "failed"} and ${ref} ${nowRead.notRun ? "could not be read back inside the commit's time budget, so the post-commit hook was not run" : `does not hold ${commitId.slice(0, 12)}`}; read back before anything else`, commit: commitId }
     return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
   } finally {
     rmSync(dir, { recursive: true, force: true })

@@ -257,8 +257,9 @@ function branchOf(root, spawnGit) {
  * that the index no longer does removed), runs the hooks git commit runs, makes the commit on that HEAD, and moves the branch by one compare-and-swap from it:
  * another writer's commit landing at any point in between makes Git refuse, so it stands and nothing of this call's is committed over it. That is
  * `cas-commit.js`'s `commitCaptured`, the core the hand finish uses, here with Desk's own commit marker and one total `GIT_TIMEOUT_MS` budget for the whole
- * commit. While a merge, cherry-pick, revert or rebase is in progress it commits nothing. A pre-commit hook that changes the tree Desk judged holds the
- * commit (what the hook wrote stays written); one that writes only to the working tree does not. The real index is untouched, so other staged work stays staged,
+ * commit, every read before and after it and the read-back after a failure included: a Git call the budget leaves no room for is not run, and an answer it
+ * leaves unread is `unknown`. While a merge, cherry-pick, revert or rebase is in progress it commits nothing. A pre-commit hook that changes the tree Desk
+ * judged holds the commit (what the hook wrote stays written); one that writes only to the working tree does not. The real index is untouched, so other staged work stays staged,
  * and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`, and on a failure the read-back and capture
  * (`afterFailedCommit`); never throws on a Git failure.
  */
@@ -272,7 +273,10 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   if (before === null || branch === null) return { ok: false, stderr: "Git could not read the branch and HEAD to commit on, so nothing was committed", readback: "absent" }
   // What this call means to commit is exactly `entries` at `relPaths`, and nothing at the paths the index does not hold.
   const expected = entryLines(entries)
-  const failed = (reason, made) => afterFailedCommit(reason, root, relPaths, message, before, expected, spawnGit, branch, made)
+  const failed = (reason, made) => {
+    const answer = afterFailedCommit(reason, root, relPaths, message, before, expected, step, branch, made)
+    return answer.readback === "unknown" && Date.now() >= deadline ? { ...answer, stderr: `${reason}; the commit's time budget ran out before it could be read back, so it is unknown: read back before anything else` } : answer
+  }
   const operation = operationAnswer(step, root)
   if (operation) return failed(operation.reason, false)
   if (sameEntries(before === "" ? [] : treeEntries(root, before, relPaths, step), expected)) return failed("nothing to commit: HEAD already holds these paths as the index does", false)
