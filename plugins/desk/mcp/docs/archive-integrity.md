@@ -54,6 +54,11 @@ accepted call may still write, repair or clean up its private state after a
 racing marker or deadline. Its result/error and post-await uncertainty are
 recorded separately; no further helper is dispatched and the archive returns
 pending without pretending those internal effects were canceled.
+The terminal deadline decision uses the original deadline and real clock.
+An expired decision logs synchronously and dispatches no request; awaiting it
+adds one continuation yield before the unchanged following marker check.
+Internal expired/future decision and concurrent-marker controls qualify that
+sequence, not observation of the original public inter-check timing race.
 
 ## Bounds and qualifications
 

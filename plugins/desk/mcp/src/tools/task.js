@@ -45,6 +45,7 @@ import { prepareArchiveState, prepareArchivedCardPublication, archivePublication
 import { appendProgressNote, localDate, replaceNextStep, replaceSection } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
+import { requestArchiveTerminalBeforeDeadline } from "./archive-terminal-request.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote, shelvedLessons } from "./task-focus.js"
@@ -1757,8 +1758,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
           await session.close()
           markerBindings = { ...markerBindings, source: null, destination: markerBindings.source }
           await checkMarkers()
-          if (Date.now() < aggregate.deadline) await terminalSync(finalStatus)
-          else console.error("desk_factory: archive_terminal_requests_deferred_deadline")
+          await requestArchiveTerminalBeforeDeadline(aggregate.deadline, () => terminalSync(finalStatus))
           await checkMarkers()
           const result = { status: "archived", path: relPath(deskRoot, archivedFile), terminal_handoff: terminalHandoff,
             archive_coverage: { scope: "effective_person_root", excluded_storage: [".git", "node_modules"],

@@ -892,6 +892,70 @@ for (const closeFails of [false, true]) {
     await assert.rejects(fs.lstat(f.destination), { code: "ENOENT" })
   })
 }
+test("internal deadline decision returns the exact future request promise and synchronous callback effects", async () => {
+  const { requestArchiveTerminalBeforeDeadline } = await import("../../../../../plugins/desk/mcp/src/tools/archive-terminal-request.js")
+  const effects = [], pending = Promise.resolve("accepted")
+  const returned = requestArchiveTerminalBeforeDeadline(Date.now() + 60000, () => {
+    effects.push("request")
+    return pending
+  })
+  assert.equal(returned, pending)
+  assert.deepEqual(effects, ["request"])
+  assert.equal(await returned, "accepted")
+})
+test("internal deadline decision preserves a future request's exact rejection and synchronous throw", async () => {
+  const { requestArchiveTerminalBeforeDeadline } = await import("../../../../../plugins/desk/mcp/src/tools/archive-terminal-request.js")
+  const primary = Object.freeze(new Error("owned terminal request failed"))
+  const pending = Promise.reject(primary)
+  const returned = requestArchiveTerminalBeforeDeadline(Date.now() + 60000, () => pending)
+  assert.equal(returned, pending)
+  await assert.rejects(returned, error => error === primary)
+  assert.throws(() => requestArchiveTerminalBeforeDeadline(Date.now() + 60000, () => { throw primary }),
+    error => error === primary)
+})
+test("internal deadline decision synchronously defers an already expired deadline without calling the request", async t => {
+  const { requestArchiveTerminalBeforeDeadline } = await import("../../../../../plugins/desk/mcp/src/tools/archive-terminal-request.js")
+  const messages = []
+  let requests = 0
+  t.mock.method(console, "error", (...args) => messages.push(args))
+  const returned = requestArchiveTerminalBeforeDeadline(Date.now() - 1, () => { requests++; return Promise.resolve() })
+  assert.equal(returned, undefined)
+  assert.equal(requests, 0)
+  assert.deepEqual(messages, [["desk_factory: archive_terminal_requests_deferred_deadline"]])
+  await returned
+  assert.equal(requests, 0)
+})
+test("internal expired-await sequence holds a real marker introduced during the added yield, not proof of the original public race", async t => {
+  const { requestArchiveTerminalBeforeDeadline } = await import("../../../../../plugins/desk/mcp/src/tools/archive-terminal-request.js")
+  const f = await fixture(), marker = path.join(f.source, ".desk-archive-operation.json")
+  const before = await archiveMarkerState({ effectiveRoot: f.root, srcDir: f.source, archiveDir: f.destination })
+  assert.equal(before.state, "absent")
+  let inserted = false, requests = 0, success = false
+  const messages = []
+  t.mock.method(console, "error", (...args) => {
+    messages.push(args)
+    queueMicrotask(() => { writeFileSync(marker, '{"state":"unfinished"}\n'); inserted = true })
+  })
+  const expired = requestArchiveTerminalBeforeDeadline(Date.now() - 1, () => { requests++; return Promise.resolve() })
+  assert.equal(inserted, false, "diagnostic and decision run before the approved await yield")
+  const sequence = async () => {
+    await expired
+    const after = await archiveMarkerState({ effectiveRoot: f.root, srcDir: f.source,
+      archiveDir: f.destination, expected: before.bindings })
+    if (after.state !== "absent") return { status: "archive_pending", observation: after }
+    success = true
+    return { status: "archived" }
+  }
+  const result = await sequence()
+  assert.equal(inserted, true)
+  assert.equal(requests, 0)
+  assert.equal(success, false)
+  assert.equal(result.status, "archive_pending")
+  assert.equal(result.observation.state, "present")
+  assert.equal(result.observation.placement, "source")
+  assert.deepEqual(messages, [["desk_factory: archive_terminal_requests_deferred_deadline"]])
+  assert.equal(await fs.readFile(marker, "utf8"), '{"state":"unfinished"}\n')
+})
 posixTest("a directory move refusal retains unknown placement and a separate notification failure", async t => {
   const f = await fixture(), rename = fs.rename.bind(fs), original = new Error("owned rename outcome unavailable")
   t.mock.method(fs, "rename", (...args) => args[0] === f.source && args[1] === f.destination
