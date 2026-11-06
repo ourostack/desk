@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
-import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_create, task_update, stageAndCommitCard } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
@@ -652,4 +652,26 @@ test("lesson_add: an unknown commit for a lesson session start would not print s
   assert.equal(result.in_effect, false)
   assert.equal(result.commit.status, "unknown")
   assert.match(result.message, /^Written to AGENTS\.md, but not in effect: session start on this desk cannot tell whose desk this is \(no person\).*; and Desk cannot tell whether the commit landed/u)
+})
+
+// stageAndCommitCard named with only the file, the message and git: it commits that one file, names no live card, and roots
+// the route at the file's own folder, so the route itself finishes the captured change.
+test("stageAndCommitCard with no extra paths, card or desk root routes the file alone, from its own folder, and its route finishes it", async () => {
+  const { root, origin } = await repoWithOrigin()
+  const file = path.join(root, "notes.md")
+  await fs.writeFile(file, "kept\n", "utf8")
+  const seed = git(root, ["rev-parse", "HEAD"]).trim()
+  const commit = stageAndCommitCard(file, "save notes", timedOutBeforeCommit)
+  assert.equal(commit.status, "failed")
+  const route = commit.route_around
+  assertRoute(route)
+  assert.equal(route.held, undefined, "no live card is named, so the captured change is not held")
+  assert.doesNotMatch(JSON.stringify(route), /live card|task_update/u)
+  const { code, first } = await followRoute(route)
+  assert.equal(code, 3, first[0].stdout)
+  assert.equal(runArgv(route.committed_locally_when.argv)[0].status, 0)
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), seed, "exactly one commit")
+  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim().split("\n"), ["notes.md"])
+  for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
+  assert.equal(remoteShow(origin, "notes.md").stdout, "kept\n")
 })
