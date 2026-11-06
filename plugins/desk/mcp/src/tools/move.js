@@ -187,7 +187,7 @@ function stageWrites({ root, files, spawnGit }) {
  * attaches to its result under `commit` only on failure, so a normal,
  * silent success stays byte-identical to today's response shape.
  */
-function commitMove({ root, movedDirs, writtenFiles, message, spawnGit, deskRoot = root }) {
+function commitMove({ root, movedDirs, writtenFiles, message, spawnGit, deskRoot }) {
   if (!isGitRepository(root, spawnGit)) return undefined
   const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
   const committed = commitPaths(root, relPaths, message, spawnGit)
