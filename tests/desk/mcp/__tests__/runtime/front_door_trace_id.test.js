@@ -8,6 +8,8 @@ import { PassThrough } from "node:stream"
 import { EventEmitter } from "node:events"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { startFrontDoor } from "../../../../../plugins/desk/mcp/src/runtime/front-door.js"
 import { createDeskSession } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
@@ -74,6 +76,8 @@ function fakeChild(onMove, { fail = false, staged = true } = {}) {
 async function productionDoor(t, { env, fail = false, slugs = ["s"], refuseCommits = false }) {
   const fixture = await makeGitDesk("front-door-trace-")
   const root = fixture.desk
+  // A runner without a global git identity refuses the archive commit before any hook runs.
+  for (const [key, value] of [["user.name", "Desk Test"], ["user.email", "desk-test@example.invalid"]]) await promisify(execFile)("git", ["config", key, value], { cwd: root })
   for (const slug of slugs) await task_create({ deskRoot: root, input: { track: "t", slug, title: slug, status: "done" }, schedulePush() {} })
   if (refuseCommits) {
     const hook = path.join(root, ".git", "hooks", "pre-commit")
