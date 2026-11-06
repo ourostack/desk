@@ -17,6 +17,7 @@ import {
 import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
 
@@ -296,8 +297,9 @@ test("task_archive reports a commit failure without losing the move", async () =
   const root = await mkTempDeskRoot()
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
+  // The archive commits from a temporary index, refused here before it lands: its pre-commit step (#632 commits without `git commit`).
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    if (args.includes("commit") || beforeLanding(args)) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
@@ -313,7 +315,7 @@ test("task_archive reports a commit failure without losing the move", async () =
   assert.equal(result.path, "t/_archive/book-flights/task.md")
   assert.equal(result.publication.status, "pending")
   assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(result.commit, { status: "failed", reason: "nothing was committed: the repository's pre-commit hook refused the commit: commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 

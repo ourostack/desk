@@ -302,7 +302,22 @@ test("a temporary-index commit that did not land is finished with the admitted e
   const blob = git(root, ["hash-object", "-w", "_archive/link"]).trim()
   git(root, ["update-index", "--add", "--cacheinfo", `120000,${blob},_archive/link`])
   const entries = indexEntries(root, ["_archive/link"], spawnSync)
-  const committed = commitIndexPaths(root, ["_archive/link"], entries, "task_archive: link", refused)
+  // #632: the temporary-index commit runs no `git commit` to refuse, so a real pre-commit hook refuses it. The hook lives inside
+  // this fixture's own .git, and the hook setting is restored before the finish route runs, even if an assertion fails.
+  const hooks = path.join(root, ".git", "finish-commit-test-297-hooks")
+  mkdirSync(hooks)
+  writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\necho 'finish-commit-test-297: pre-commit refused' >&2\nexit 1\n", { mode: 0o755 })
+  git(root, ["config", "core.hooksPath", hooks])
+  let committed
+  try {
+    const before = head(root)
+    committed = commitIndexPaths(root, ["_archive/link"], entries, "task_archive: link", spawnSync)
+    assert.match(committed.stderr, /finish-commit-test-297: pre-commit refused/u)
+    assert.equal(head(root), before)
+    assert.deepEqual(committed.capture, { before, branch: "main", expected: [`120000 ${blob}\t_archive/link`] })
+  } finally {
+    git(root, ["config", "--unset", "core.hooksPath"])
+  }
   assert.equal(committed.ok, false)
   const route = commitFailure({ root, paths: ["_archive/link"], message: "task_archive: link", committed }).route_around
   const check = route.steps[0].argv

@@ -9,6 +9,7 @@ import { createFocusHolder } from "../../../../../plugins/desk/mcp/src/runtime/d
 import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 import { archiveFixture, git } from "./_archive_state_helpers.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const target = {track:"t",slug:"owned-work"}
 const evidence = {kind:"non_code",ref:"https://example.invalid/owned-proof"}
@@ -131,7 +132,8 @@ test("an archive refusal leaves live terminal advice available rather than claim
 
 test("an interrupted publication retains its own pending action, not a fresh live-task cue",async () => {
   const f = await archiveFixture(), key = {track:"t",slug:"mode-proof"}
-  const spawnGit = (command,args,options) => args[2] === "commit"
+  // The archive's temporary-index commit is refused before it lands: its pre-commit step (#632 commits without `git commit`).
+  const spawnGit = (command,args,options) => args[2] === "commit" || beforeLanding(args)
     ? {status:1,stdout:"",stderr:"CONTROLLED_ARCHIVE_COMMIT_FAILURE"} : spawnSync(command,args,options)
   const result = await task_archive({deskRoot:f.root,input:key,spawnGit,schedulePush:() => assert.fail("failed publication is not pushed")})
   assert.equal(result.status,"archive_pending")

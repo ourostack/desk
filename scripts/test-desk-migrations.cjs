@@ -970,7 +970,9 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   assert.match(blocks.Migrate, /Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge\./u);
   assert.match(blocks.Migrate, /to_track when the kept task is in another track[\s\S]{0,300}re-file that track's tasks first/u);
   assert.match(blocks.Migrate, /into _meta\/ when it concerns the whole desk\. Never create a task just to hold files\. A loose folder that is clearly a task gets a card with task_create instead of a move\. A loose entry whose name fails the name rules gets an outcome name/u);
-  assert.match(blocks.Migrate, /git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- [^,]+organization\.json, and commit both with desk_save/u);
+  // The undo: a revert Git applies cleanly still leaves REVERT_HEAD, so desk_save holds until git revert --quit ends it; a conflicted revert holds and is left for the human.
+  assert.match(blocks.Migrate, /run git revert --no-commit <tidy commit>\. If Git reports a conflict, stop and tell the human which paths conflict[\s\S]{0,200}never git revert --abort, which also drops other sessions' staged work, and commit nothing[\s\S]{0,100}Otherwise restore the record with git checkout <tidy commit> -- [^,]+organization\.json, end the revert with git revert --quit, which keeps what it staged, and commit both with desk_save/u);
+  assert.doesNotMatch(blocks.Migrate, /git revert --no-commit <tidy commit>, restore the record/u, "desk_save holds while REVERT_HEAD stands, so the undo must end the revert before it commits");
   assert.doesNotMatch(blocks["Safety check"], /--safety|tidy-status/u, "anything that only has to wait never fails the Safety check");
 });
 

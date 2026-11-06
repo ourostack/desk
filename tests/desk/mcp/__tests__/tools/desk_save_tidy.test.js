@@ -9,6 +9,7 @@ import { stagedChanges } from "../../../../../plugins/desk/mcp/src/util/git-stag
 import { ensureCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { assertRoute } from "./_route_around.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const CARD = "---\ntitle: One\nstatus: active\n---\nBody of the card.\n"
 
@@ -131,20 +132,156 @@ test("a non-git desk reports nothing_to_commit for a tidy", async () => {
   assert.equal((await save(root, { paths: ["other.md"], message: "m", tidy: true })).status, "nothing_to_commit")
 })
 
-test("the undo of a tidy commits through the same call", async () => {
-  const root = await makeDesk()
+// The undo the tidy migration (02-tidy-desk.md) prescribes, run for real in three cases: one tidy commit reverted cleanly, one
+// whose revert conflicts, and a sequence of tidy commits reverted in one call, cleanly and with a conflict. Each runs
+// git revert --no-commit, restores the record and calls desk_save, reading Git's own state back at every step rather than assuming
+// it (#632: Desk commits nothing while a revert is in progress, or while a path it would commit is in conflict). Another session's
+// staged selection, other.md, rides along untouched through every step.
+const UNDO_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
+const staged = (root) => git(root, ["diff", "--cached", "-M", "--name-status"]).stdout
+const index = (root) => git(root, ["ls-files", "-s"]).stdout
+const head = (root) => git(root, ["rev-parse", "HEAD"]).stdout.trim()
+const gitPath = (root, name) => git(root, ["rev-parse", "--path-format=absolute", "--git-path", name]).stdout.trim()
+
+// What Git says is in progress: the revert marker, the sequencer's folder and the paths held in conflict.
+async function gitState(root) {
+  const exists = (name) => fs.stat(gitPath(root, name)).then(() => true, () => false)
+  return { revert: await exists("REVERT_HEAD"), sequence: await exists("sequencer"), unmerged: git(root, ["ls-files", "-u"]).stdout }
+}
+
+// Everything a held desk_save must leave exactly as it was.
+async function snapshot(root) {
+  return { head: head(root), index: index(root), state: await gitState(root), status: git(root, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout }
+}
+
+async function tidyCommit(root, write, paths, message) {
+  await write()
+  const result = await save(root, { paths, message, tidy: true })
+  assert.equal(result.status, "committed")
+  return head(root)
+}
+
+async function otherSessionStages(root) {
+  await fs.writeFile(path.join(root, "other.md"), "staged elsewhere\n")
+  git(root, ["add", "other.md"])
+}
+
+// The fixed file a tidy changed, edited again by a later commit, so reverting the tidy conflicts on it.
+async function laterEdit(root, file) {
+  await fs.writeFile(path.join(root, file), "edited after the tidy\n")
+  git(root, ["add", file])
+  git(root, ["commit", "-q", "-m", "a later edit"])
+}
+
+const fixFile = (root, file) => async () => {
   await stageTidy(root)
-  const paths = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
-  await save(root, { paths, message: "Move one task", tidy: true })
-  const tidySha = git(root, ["rev-parse", "HEAD"]).stdout.trim()
-  git(root, ["revert", "--no-commit", tidySha])
-  git(root, ["checkout", tidySha, "--", "_meta/organization.json"]) // the record is restored, as the migration says
+  await fs.writeFile(path.join(root, file), "fixed by the tidy\n")
+}
+
+async function heldUnchanged(root, paths, before, why) {
   const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
+  assert.deepEqual(await snapshot(root), before, "a held undo changes nothing: not HEAD, the index, Git's state or the working tree")
+  assert.notEqual(result.status, "committed")
+  assert.match(result.commit.reason, why)
+  return result
+}
+
+async function quitKeeps(root) {
+  const before = await snapshot(root)
+  assert.equal(git(root, ["revert", "--quit"]).status, 0)
+  const after = await snapshot(root)
+  assert.equal(after.state.revert || after.state.sequence, false, "--quit ends the revert")
+  assert.equal(after.head, before.head, "--quit moves nothing")
+  assert.equal(after.index, before.index, "--quit keeps the index exactly as the revert left it, conflicts included")
+  assert.equal(after.status, before.status)
+  return after
+}
+
+test("undo case 1: a tidy reverted cleanly holds while the revert is in progress and commits once git revert --quit ends it", async () => {
+  const root = await makeDesk()
+  const tidySha = await tidyCommit(root, () => stageTidy(root), UNDO_PATHS, "Move one task")
+  await otherSessionStages(root)
+  assert.equal(git(root, ["revert", "--no-commit", tidySha]).status, 0, "the revert applies without a conflict")
+  git(root, ["checkout", tidySha, "--", "_meta/organization.json"]) // the record is restored, as the migration says
+  const reverted = await snapshot(root)
+  assert.equal(reverted.state.unmerged, "")
+  assert.match(staged(root), /^R\d+\tnew-track\/job\/task\.md\told-track\/job\/task\.md$/mu, "the card is staged as a move back")
+  // The state Git actually leaves decides what the documented desk_save does: a marked revert holds, an unmarked one commits.
+  if (reverted.state.revert || reverted.state.sequence) await heldUnchanged(root, UNDO_PATHS, reverted, /revert is in progress/u)
+  await quitKeeps(root)
+  const result = await save(root, { paths: UNDO_PATHS, message: "Undo the tidy", tidy: true })
   assert.equal(result.status, "committed")
   assert.match(subject(root), /Undo the tidy\n\nDesk-Tidy: true/u)
-  const stat = await fs.stat(path.join(root, "old-track", "job", "task.md"))
-  assert.ok(stat.isFile())
-  assert.equal(git(root, ["status", "--short"]).stdout, "")
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).stdout.trim(), tidySha, "one commit, on the tidy")
+  assert.match(git(root, ["show", "--name-status", "--format=", "-M", "HEAD"]).stdout, /^R100\tnew-track\/job\/task\.md\told-track\/job\/task\.md\n$/u, "the undo is the move back, and only that")
+  assert.equal(git(root, ["show", "HEAD:old-track/job/task.md"]).stdout, CARD)
+  assert.equal(git(root, ["show", `${tidySha}:_meta/organization.json`]).stdout, git(root, ["show", "HEAD:_meta/organization.json"]).stdout, "the record stays")
+  assert.equal(git(root, ["status", "--short"]).stdout, "M  other.md\n", "the other staged selection is still staged, and only it")
+})
+
+test("undo case 2: a tidy whose revert conflicts holds, before and after git revert --quit, and sweeps nothing into the index", async () => {
+  const root = await makeDesk()
+  await fs.writeFile(path.join(root, "fixed.md"), "loose\n")
+  git(root, ["add", "fixed.md"])
+  git(root, ["commit", "-q", "-m", "a file the tidy fixes"])
+  const paths = [...UNDO_PATHS, "fixed.md"]
+  const tidySha = await tidyCommit(root, fixFile(root, "fixed.md"), paths, "Move one task and fix a file")
+  await laterEdit(root, "fixed.md")
+  await otherSessionStages(root)
+  assert.notEqual(git(root, ["revert", "--no-commit", tidySha], { allowFail: true }).status, 0, "the revert reports the conflict")
+  git(root, ["checkout", tidySha, "--", "_meta/organization.json"])
+  const conflicted = await snapshot(root)
+  assert.match(conflicted.state.unmerged, /\tfixed\.md$/mu, "Git holds the fixed file in conflict")
+  assert.match(await fs.readFile(path.join(root, "fixed.md"), "utf8"), /^<<<<<<< /mu)
+  await heldUnchanged(root, paths, conflicted, /Git holds fixed\.md in conflict/u)
+  // A --quit taken anyway ends the revert but leaves the conflict in the index: desk_save still holds and still stages nothing.
+  const quit = await quitKeeps(root)
+  assert.equal(quit.state.unmerged, conflicted.state.unmerged)
+  await heldUnchanged(root, paths, quit, /Git holds fixed\.md in conflict/u)
+  assert.doesNotMatch(git(root, ["log", "--format=%B", "-1"]).stdout, /Undo the tidy/u)
+})
+
+test("undo case 3: a sequence of tidy commits reverted in one call holds while in progress and commits once ended", async () => {
+  const root = await makeDesk()
+  const first = await tidyCommit(root, () => stageTidy(root), UNDO_PATHS, "Move one task")
+  await fs.writeFile(path.join(root, "fixed.md"), "loose\n")
+  git(root, ["add", "fixed.md"])
+  git(root, ["commit", "-q", "-m", "a file the tidy fixes"])
+  const second = await tidyCommit(root, async () => { await fs.writeFile(path.join(root, "fixed.md"), "fixed by the tidy\n"); await fs.writeFile(path.join(root, "_meta", "organization.json"), "{\"second\":true}\n") }, ["fixed.md", "_meta/organization.json"], "Fix a file")
+  await otherSessionStages(root)
+  assert.equal(git(root, ["revert", "--no-commit", second, first]).status, 0, "both reverts apply without a conflict")
+  git(root, ["checkout", second, "--", "_meta/organization.json"])
+  const paths = [...UNDO_PATHS, "fixed.md"]
+  const reverted = await snapshot(root)
+  assert.equal(reverted.state.unmerged, "")
+  if (reverted.state.revert || reverted.state.sequence) await heldUnchanged(root, paths, reverted, /(revert|sequence) is in progress/u)
+  await quitKeeps(root)
+  const result = await save(root, { paths, message: "Undo the tidy", tidy: true })
+  assert.equal(result.status, "committed")
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).stdout.trim(), second, "one commit, on the last tidy")
+  assert.equal(git(root, ["show", "HEAD:old-track/job/task.md"]).stdout, CARD)
+  assert.equal(git(root, ["show", "HEAD:fixed.md"]).stdout, "loose\n")
+  assert.equal(git(root, ["status", "--short"]).stdout, "M  other.md\n", "the other staged selection is still staged, and only it")
+})
+
+test("undo case 3, conflicted: a sequence whose revert stops on a conflict holds, before and after git revert --quit", async () => {
+  const root = await makeDesk()
+  await fs.writeFile(path.join(root, "fixed.md"), "loose\n")
+  git(root, ["add", "fixed.md"])
+  git(root, ["commit", "-q", "-m", "a file the tidy fixes"])
+  const first = await tidyCommit(root, async () => { await fs.writeFile(path.join(root, "fixed.md"), "fixed by the tidy\n"); await fs.writeFile(path.join(root, "_meta", "organization.json"), "{}\n") }, ["fixed.md", "_meta/organization.json"], "Fix a file")
+  const second = await tidyCommit(root, async () => { await fs.mkdir(path.join(root, "new-track"), { recursive: true }); git(root, ["mv", "old-track/job", "new-track/job"]) }, ["old-track/job/task.md", "new-track/job/task.md"], "Move one task")
+  await laterEdit(root, "fixed.md")
+  await otherSessionStages(root)
+  assert.notEqual(git(root, ["revert", "--no-commit", second, first], { allowFail: true }).status, 0, "the sequence stops on the conflict")
+  git(root, ["checkout", second, "--", "_meta/organization.json"])
+  const paths = [...UNDO_PATHS, "fixed.md"]
+  const stopped = await snapshot(root)
+  assert.match(stopped.state.unmerged, /\tfixed\.md$/mu)
+  await heldUnchanged(root, paths, stopped, /Git holds fixed\.md in conflict/u)
+  const quit = await quitKeeps(root)
+  assert.equal(quit.state.unmerged, stopped.state.unmerged)
+  await heldUnchanged(root, paths, quit, /Git holds fixed\.md in conflict/u)
 })
 
 const TIDY_PATHS = ["old-track/job/task.md", "new-track/job/task.md", "_meta/organization.json"]
@@ -247,12 +384,15 @@ test("git failures are reported, not thrown", async () => {
   assert.equal((await routed(failing("add"))).status, "failed")
   assert.match((await routed(failing("diff", "--cached"))).reason, /list the staged changes/u)
   assert.match((await routed(failing("ls-files", "-s"))).reason, /read the index/u)
-  assert.equal((await routed(failing("read-tree"))).reason, "read-tree failed")
-  assert.equal((await routed(failing("update-index"))).reason, "update-index failed")
-  assert.equal((await routed(failing("commit"))).reason, "commit failed")
-  const slow = (cmd, args, options) => (args[2] === "commit" ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
+  // Since #632 the tidy commit is hooks, `git commit-tree` and one compare-and-swap `git update-ref`, never a `git commit`; each
+  // failure says which step failed and why.
+  assert.match((await routed(failing("read-tree"))).reason, /git read-tree failed: read-tree failed/u)
+  assert.match((await routed(failing("update-index"))).reason, /building the private index failed: update-index failed/u)
+  const refused = (cmd, args, options) => (beforeLanding(args) ? { status: 1, stdout: "", stderr: "commit failed", error: undefined } : spawnSync(cmd, args, options))
+  assert.match((await routed(refused)).reason, /pre-commit hook refused the commit: commit failed/u)
+  const slow = (cmd, args, options) => (beforeLanding(args) ? { status: null, stdout: "", stderr: "", error: Object.assign(new Error("slow"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, options))
   const timedOut = await routed(slow)
-  assert.equal(timedOut.reason, "timeout")
+  assert.match(timedOut.reason, /pre-commit hook was cut off/u)
   assert.equal(timedOut.status, "failed", "a timed-out tidy commit that left HEAD where it was is read back as not landed")
 })
 

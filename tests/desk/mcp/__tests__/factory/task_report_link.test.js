@@ -18,6 +18,7 @@ import { factoryStateRoot, listFinalizeRequests, readMachineSecret, setConsent }
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { jobReportUrl } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const OTHER = "example-org/team-factory"
 const REMOTE = "https://github.com/example-user/example-desk.git"
@@ -344,13 +345,14 @@ test("a failed commit of a refilled archived card is reported, and a desk outsid
   await done(desk, env)
   await task_archive({ deskRoot: desk, env, schedulePush: () => {}, input: { track: "track", slug: "finished-work" } })
   await visibility(env, "private")
-  const failingCommit = (command, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit refused" } : spawnSync(command, args, options))
+  // The archive commits from a temporary index, refused here before it lands: its pre-commit step (#632 commits without `git commit`).
+  const failingCommit = (command, args, options) => (args.includes("commit") || beforeLanding(args) ? { status: 1, stdout: "", stderr: "commit refused" } : spawnSync(command, args, options))
   const result = await task_archive({ deskRoot: desk, env, spawnGit: failingCommit, schedulePush: () => assert.fail("a failed commit is not pushed"), input: { track: "track", slug: "finished-work" } })
   assert.equal(result.status, "archive_pending")
   assert.equal(result.path, "track/_archive/finished-work/task.md")
   assert.equal(result.publication.status, "pending")
   assert.equal(result.factory_report, expectedLink())
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit refused" })
+  assert.deepEqual(result.commit, { status: "failed", reason: "nothing was committed: the repository's pre-commit hook refused the commit: commit refused" })
 }))
 
 for (const mode of ["head","journal","target"]) {
