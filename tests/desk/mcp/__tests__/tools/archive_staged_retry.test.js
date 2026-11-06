@@ -2,7 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
 import { archiveFixture, git, retry } from "./_archive_state_helpers.js"
 import { shellQuote } from "../../../../../plugins/desk/mcp/src/util/shell-quote.js"
 
@@ -174,6 +175,61 @@ test("staged recovery preserves a track index edit between qualification reads",
   assert.equal(git(f.root, "ls-files", "-s"), index)
 })
 
+async function closeHookFixture({ hook, entered, control, holdStartup, phase, t }) {
+  let hookPid, controlPid, cleanupFailure
+  try {
+    hookPid = Number(await fs.readFile(entered, "utf8"))
+    assert.ok(Number.isInteger(hookPid) && hookPid > 0)
+    try { process.kill(hookPid, "SIGTERM") } catch (error) { if (error.code !== "ESRCH") throw error }
+    t.diagnostic(`Exact owned ${phase} fixture PID ${hookPid}; independent shell receipt; SIGTERM attempted before control validation.`)
+  } catch (error) { cleanupFailure = error }
+  try { await fs.unlink(hook) } catch (error) { cleanupFailure ??= error }
+  if (cleanupFailure) throw cleanupFailure
+  if (holdStartup) {
+    controlPid = Number(await fs.readFile(control, "utf8"))
+    assert.ok(Number.isInteger(controlPid) && controlPid > 0, "the owned startup control must acknowledge its exact PID")
+    assert.equal(hookPid, controlPid, "exec must retain the shell's acknowledged process identity")
+  }
+  return { hookPid, controlPid, receiptMissing: false }
+}
+
+for (const evidence of ["absent", "invalid", "mismatched"]) test(`hook cleanup settles its owned process before reporting ${evidence} startup control evidence`, async t => {
+  if (process.platform === "win32") return t.skip("POSIX exec ownership fixture; portable recovery controls remain active")
+  const f = await archiveFixture(), hook = path.join(f.root, ".git/hooks/owned-cleanup-control")
+  const entered = path.join(f.root, ".git/owned-shell-pid"), control = path.join(f.root, ".git/owned-control-pid")
+  await fs.writeFile(hook, `#!/bin/sh\nset -e\nprintf '%s' "$$" > ${shellQuote(entered)}\nexec ${shellQuote(process.execPath)} -e 'setTimeout(() => {}, 30000)'\n`, { mode: 0o755 })
+  const child = spawn("/bin/sh", [hook], { cwd: f.root, stdio: "ignore" })
+  const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve) })
+  const sentinel = evidence === "mismatched" ? spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" }) : null
+  const sentinelExit = sentinel ? new Promise((resolve, reject) => { sentinel.once("error", reject); sentinel.once("close", resolve) }) : null
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
+    if (sentinel && sentinel.exitCode === null && sentinel.signalCode === null) sentinel.kill("SIGTERM")
+    await exited
+    if (sentinelExit) await sentinelExit
+  })
+  const deadline = Date.now() + 3000
+  while (!(await fs.stat(entered).then(() => true, error => { if (error.code !== "ENOENT") throw error; return false }))) {
+    assert.ok(Date.now() < deadline, "owned shell must acknowledge before cleanup test proceeds")
+    await delay(10)
+  }
+  const ownedPid = Number(await fs.readFile(entered, "utf8"))
+  assert.equal(ownedPid, child.pid, "directly spawned shell and exec generation must match the receipt")
+  t.diagnostic(`Owned cleanup regression PID ${child.pid}; independent sentinel ${sentinel?.pid ?? "not used"}.`)
+  if (evidence !== "absent") await fs.writeFile(control, evidence === "invalid" ? "not-a-pid" : String(sentinel.pid))
+  await assert.rejects(closeHookFixture({ hook, entered, control, holdStartup: true, phase: evidence, t }),
+    error => error.code === (evidence === "absent" ? "ENOENT" : "ERR_ASSERTION"))
+  assert.equal(await Promise.race([exited.then(() => true), delay(1000).then(() => false)]), true,
+    "control evidence failure must not leave the independently owned hook alive")
+  await assert.rejects(fs.lstat(hook), { code: "ENOENT" })
+  assert.throws(() => process.kill(ownedPid, 0), { code: "ESRCH" })
+  if (sentinel) {
+    assert.equal(sentinel.exitCode, null)
+    assert.equal(sentinel.signalCode, null)
+    assert.doesNotThrow(() => process.kill(sentinel.pid, 0), "a mismatched control PID is not owned by the hook")
+  }
+})
+
 for (const phase of ["pre-commit", "post-commit"]) for (const holdStartup of [false, true])
 test(`native ${phase} timeout retains its actual commit effect for retry${holdStartup ? " with Node startup held before the hook body" : ""}`, async t => {
   if (process.platform === "win32") return t.skip("POSIX executable hook fixture; Windows recovery uses the portable cases above")
@@ -200,21 +256,7 @@ test(`native ${phase} timeout retains its actual commit effect for retry${holdSt
       },
     })
   } finally {
-    if (holdStartup) {
-      controlPid = Number(await fs.readFile(control, "utf8"))
-      assert.ok(Number.isInteger(controlPid) && controlPid > 0, "the owned startup control must acknowledge its exact PID")
-    }
-    try {
-      hookPid = Number(await fs.readFile(entered, "utf8"))
-      assert.ok(Number.isInteger(hookPid) && hookPid > 0)
-      if (holdStartup) assert.equal(hookPid, controlPid, "exec must retain the shell's acknowledged process identity")
-    } catch (error) { if (error.code !== "ENOENT") throw error; receiptMissing = true }
-    const ownedPid = hookPid ?? controlPid
-    if (ownedPid !== undefined) {
-      try { process.kill(ownedPid, "SIGTERM") } catch (error) { if (error.code !== "ESRCH") throw error }
-      t.diagnostic(`Exact owned ${phase} fixture PID ${ownedPid}; startup control ${controlPid ?? "not used"}; hook receipt ${hookPid ?? "absent"}; SIGTERM attempted before hook removal.`)
-    }
-    await fs.unlink(hook)
+    ;({ hookPid, controlPid, receiptMissing } = await closeHookFixture({ hook, entered, control, holdStartup, phase, t }))
   }
   if (holdStartup) {
     await assert.rejects(fs.lstat(bodyEntered), { code: "ENOENT" },
