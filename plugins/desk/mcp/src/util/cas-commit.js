@@ -158,8 +158,15 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
       if (post.notRun) return { state: "unknown", reason: `the branch holds the commit, but the commit's time budget ran out before the post-commit hook could run, so it was not run; read back before anything else and never commit it again`, commit: commitId }
       return afterPostCommit({ spawnGit, root, branch, commitId, post, bound })
     }
-    if (moved.ok || moved.cut || now === null)
-      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at ${bound}` : moved.ok ? "reported success" : "failed"} and ${ref} ${nowRead.notRun ? "could not be read back inside the commit's time budget, so the post-commit hook was not run" : `does not hold ${commitId.slice(0, 12)}`}; read back before anything else`, commit: commitId }
+    // Each part says only what was read. Under a budget, a branch read that was cut off or failed is unread, and a branch update
+    // the budget left no room for was never dispatched; the hand finish's words are unchanged.
+    if (moved.ok || moved.cut || now === null) {
+      const update = moved.notRun ? "was never dispatched, because the commit's time budget ran out before it" : moved.cut ? `was cut off at ${bound}` : moved.ok ? "reported success" : "failed"
+      const branchSays = nowRead.notRun ? "could not be read back inside the commit's time budget, so the post-commit hook was not run"
+        : now === null && deadline !== null ? `could not be read (${nowRead.cut ? `cut off at ${bound}` : `git exited ${nowRead.status}`}), so whether it holds ${commitId.slice(0, 12)} is unread and the post-commit hook was not run`
+          : `does not hold ${commitId.slice(0, 12)}`
+      return { state: "unknown", reason: `the branch update ${update} and ${ref} ${branchSays}; read back before anything else`, commit: commitId }
+    }
     return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
