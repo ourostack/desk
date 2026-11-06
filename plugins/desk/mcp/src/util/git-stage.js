@@ -257,7 +257,8 @@ function branchOf(root, spawnGit) {
  * that the index no longer does removed), runs the hooks git commit runs, makes the commit on that HEAD, and moves the branch by one compare-and-swap from it:
  * another writer's commit landing at any point in between makes Git refuse, so it stands and nothing of this call's is committed over it. That is
  * `cas-commit.js`'s `commitCaptured`, the core the hand finish uses, here with Desk's own commit marker and one total `GIT_TIMEOUT_MS` budget for the whole
- * commit. While a merge, cherry-pick, revert or rebase is in progress it commits nothing. The real index is untouched, so other staged work stays staged,
+ * commit. While a merge, cherry-pick, revert or rebase is in progress it commits nothing. A pre-commit hook that changes the tree Desk judged holds the
+ * commit (what the hook wrote stays written); one that writes only to the working tree does not. The real index is untouched, so other staged work stays staged,
  * and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`, and on a failure the read-back and capture
  * (`afterFailedCommit`); never throws on a Git failure.
  */

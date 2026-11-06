@@ -907,11 +907,27 @@ test("#632: nothing to commit is no commit: absent, and no empty commit is made"
   assert.equal(headOf632(root), before)
 })
 
-test("#632 (behaviour change): a pre-commit hook that changes what would be committed is refused: Desk commits only what it judged", posix, async () => {
+// The hook runs as git commit runs it, and what it writes stays written: Desk does not undo it. Only a change to the tree Desk judged holds.
+test("#632 (behaviour change): a pre-commit hook that changes what would be committed is held: the branch does not move and the shared index loses nothing", posix, async () => {
   const root = await stagedChange()
   const before = headOf632(root)
+  const index = git(root, ["ls-files", "-s"])
   hookIn(root, "pre-commit", "echo extra > extra.txt && git add extra.txt")
   const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
   assert.deepEqual([result.ok, result.readback], [false, "absent"])
-  assert.equal(headOf632(root), before)
+  assert.equal(result.stderr, "nothing was committed: the pre-commit hook changed what would be committed; Desk commits only the captured change")
+  assert.deepEqual(result.capture, { before, branch: branchOf632(root), expected: [`100644 ${git(root, ["rev-parse", ":a.txt"]).trim()}\ta.txt`] })
+  assert.equal(headOf632(root), before, "the branch does not move")
+  assert.equal(git(root, ["ls-files", "-s"]), index, "every entry of the shared index is as it was, the other staged b.txt included")
+  assert.equal(await fs.readFile(path.join(root, "extra.txt"), "utf8"), "extra\n", "the hook ran, and what it wrote is not undone")
+})
+
+test("#632: a pre-commit hook that writes only to the working tree does not hold the commit: the tree Desk judged is committed", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "pre-commit", "echo note > hook-note.txt")
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.deepEqual(git(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n"), ["a.txt"])
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+  assert.equal(await fs.readFile(path.join(root, "hook-note.txt"), "utf8"), "note\n")
 })

@@ -4,7 +4,7 @@ What changes for these commits:
 
 - They hold while a merge, cherry-pick, revert, rebase or sequencer operation is in progress, and commit nothing. Git leaves a revert in progress even when `git revert --no-commit` applies cleanly, so the tidy migration's undo now ends the revert with `git revert --quit`, which keeps what it staged, before it commits with `desk_save`.
 - A tidy (`desk_save` with `tidy: true`) holds when Git holds one of its paths in conflict, and stages nothing, instead of staging the conflicted file and marking the conflict resolved with its markers still in it. The tidy migration's undo now stops at a conflicted revert and leaves it for the human; it never runs `git revert --abort`, which also drops other sessions' staged work.
-- A pre-commit hook that changes what is staged holds the commit instead of committing what it changed.
+- A pre-commit hook still runs as `git commit` runs it, but if it changes what would be committed, such as a formatter that stages its own edits, Desk commits nothing and holds: the branch does not move and the shared index is untouched. Desk does not undo what the hook wrote to the working tree. A hook that writes only to the working tree does not hold the commit.
 - The whole commit, hooks and reads included, has one 10-second budget, not 10 seconds for each Git call.
 - A branch update that is cut off, or a commit that landed before its post-commit hook failed or was cut off, is never read back as not committed: Desk reads back what the branch holds and answers `committed` or `unknown`, naming the commit it made. Nothing is ever repeated.
 - A failure says which step failed and why, such as `the pre-commit hook was cut off`, instead of `timeout`.
