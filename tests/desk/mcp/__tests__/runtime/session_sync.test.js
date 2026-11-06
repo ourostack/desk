@@ -741,17 +741,16 @@ test("runSessionSyncCli prints nothing for a synced result", async () => {
   assert.equal(io.err.length, 0)
 })
 
-test("runSessionSyncCli prints a one-line summary for a quarantined result", async () => {
+test("runSessionSyncCli keeps pending background recovery quiet without a quarantine claim", async () => {
   const io = fakeIo()
   await runSessionSyncCli({
     argv: ["--root", "/a/desk"],
     env: {},
     io,
-    syncFn: async () => ({ state: "quarantined", quarantinedPaths: ["_cache/stray-2026-09-28/stray.txt"] }),
+    syncFn: async () => ({ state: "recovering", operation: { id: "fixture-operation", state: "starting" } }),
   })
-  assert.equal(io.out.length, 1)
-  assert.match(io.out[0], /quarantined 1 stray path\(s\)/u)
-  assert.match(io.out[0], /stray\.txt/u)
+  assert.equal(io.out.length, 0)
+  assert.equal(io.err.length, 0)
 })
 
 test("runSessionSyncCli prints the diagnostic block for an unresolved result", async () => {

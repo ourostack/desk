@@ -42,6 +42,7 @@ import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
+import { runOwnedProcess } from "./recovery-state.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
 // get this long. The Copilot hook has 5 s in all and the registry's boot
@@ -135,7 +136,21 @@ export function readMigrations(pluginRoot) {
 // prints only the localized "no installed distributions" sentence, which cannot be matched across languages, so a relay is also recognised by its path.
 const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
-export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
+export async function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }), containment = null }) {
+  if (platform !== "win32" && bash !== null) {
+    const result = await runOwnedProcess({ command: bash, args: ["-c", block], env, cwd, deadline: Date.now() + Math.max(1, timeoutMs),
+      spawnImpl: spawn, containment, maxOutput: outputChars * 4 })
+    const stdout = result.stdout.slice(0, outputChars)
+    const stderr = result.stderr.slice(0, outputChars)
+    const failed = !result.timedOut && result.status !== 0
+    const relay = failed && ((isWslRelay(bash) && stdout === "") || RELAY_FAILURE.test(`${stderr}\n${stdout}`))
+    const custodyUnknown = !containment && (!result.resources.childrenClosed ||
+      (!result.spawnError && result.status === null && !result.timedOut))
+    return { status: result.timedOut || custodyUnknown ? null : result.status, stdout, stderr,
+      timedOut: result.timedOut, unavailable: Boolean(result.spawnError) || relay,
+      ...(custodyUnknown || containment ? { custodyUnknown, resources: result.resources } : {}),
+      ...(result.signal ? { signal: result.signal } : {}) }
+  }
   return new Promise((resolve) => {
     if (bash === null) {
       resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
@@ -155,7 +170,7 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     const timer = setTimeout(() => {
       timedOut = true
       try {
-        process.kill(posix ? -child.pid : child.pid, "SIGKILL")
+        child.kill("SIGKILL")
       } catch {
         // Already gone between the timer and its close event.
       }
@@ -217,7 +232,7 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  */
 export async function pendingMigrations({
   pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now(),
-  spawnGit = spawnSync, onIndexDrift = () => {}, host,
+  spawnGit = spawnSync, onIndexDrift = () => {}, host, inspectOnly = false, containment = null,
 }) {
   const started = now()
   const left = () => budgetMs - (now() - started)
@@ -248,11 +263,11 @@ export async function pendingMigrations({
   // waits for the slowest, not their sum.
   const detects = await watchIndex("detect", () => Promise.all(migrations.map((migration) => (left() < 1
     ? { timedOut: true }
-    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn })))))
+    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn, containment })))))
   for (const [index, migration] of migrations.entries()) {
     const { id, blocks } = migration
     const detect = detects[index]
-    if (detect.timedOut) {
+    if (detect.timedOut || detect.custodyUnknown || detect.signal) {
       pending.push({ id, state: "unchecked" })
       continue
     }
@@ -277,12 +292,24 @@ export async function pendingMigrations({
       pending.push({ id, state: "run", reason: `its safety is ${migration.safety || "not set"}, so it does not run on its own` })
       continue
     }
-    const safety = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:safety-check`, () => runBlock(blocks["Safety check"], { env: blockEnv, cwd, timeoutMs: limit(), spawn }))
+    if (inspectOnly) {
+      pending.push({ id, state: "pending", reason: "writer_custody_required" })
+      continue
+    }
+    const safety = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:safety-check`, () => runBlock(blocks["Safety check"], { env: blockEnv, cwd, timeoutMs: limit(), spawn, containment }))
+    if (safety.custodyUnknown || safety.signal) {
+      pending.push({ id, state: "unknown", reason: "helper_custody_unknown", resources: safety.resources })
+      continue
+    }
     if (safety.timedOut || safety.status !== 0) {
       pending.push({ id, state: "run", reason: safety.timedOut ? "its Safety check did not finish in time" : `its Safety check stopped it: ${oneLine(safety.stdout || safety.stderr).slice(0, OUTPUT_MAX_CHARS) || "no reason given"}` })
       continue
     }
-    const migrate = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:migrate`, () => runBlock(blocks.Migrate, { env: blockEnv, cwd, timeoutMs: limit(), spawn }))
+    const migrate = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:migrate`, () => runBlock(blocks.Migrate, { env: blockEnv, cwd, timeoutMs: limit(), spawn, containment }))
+    if (migrate.custodyUnknown || migrate.signal) {
+      pending.push({ id, state: "unknown", reason: "helper_custody_unknown", resources: migrate.resources })
+      continue
+    }
     if (migrate.timedOut || migrate.status !== 0) {
       pending.push({ id, state: "run", reason: migrate.timedOut ? "its Migrate did not finish in time" : "its Migrate failed" })
       continue
@@ -310,6 +337,10 @@ export function migrationLine(pending, pluginRoot, platform = process.platform) 
         return `${entry.id} is pending. Do it now, before other work and without asking: call desk_status, then ${run({ tools: true })} and do what it prints.`
       case "held":
         return `${entry.id} is on hold because ${entry.reason}. Nothing to do for it now; mention it to the human in one line if it matters to them.`
+      case "pending":
+        return `${entry.id} was detected but not applied: coordinated writer custody is required. Preserve its gate for dependent operations; continue independent authorized work.`
+      case "unknown":
+        return `${entry.id} has unknown helper or mutation effects. Preserve its process evidence and inspect actual effects before another attempt. Dependent operations remain gated; continue independent authorized work.`
       case "restart":
         return `${entry.id} is pending (${oneLine(entry.description)}). Run it now, before other work and without waiting for anyone to answer: ${run()}. It runs to completion on its own; when it is done, tell the human what it printed and ask them to start a new session — with no human in this session, just say in your own output that a restart is needed and carry on.`
       case "ran":

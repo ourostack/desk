@@ -264,11 +264,11 @@ test("desk_save reports a failure when git cannot list the staged changes before
   await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8")
   const spawnGit = (cmd, args, opts) => (args.includes("-M") ? { status: 1, stdout: "", stderr: "diff boom" } : spawnSync(cmd, args, opts))
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save" }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual(result, { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } })
+  assert.deepEqual(result, { status: "failed", commit: { status: "failed", reason: "git could not list the staged changes" } })
   assert.equal(commitCount(root), 0)
 })
 
-test("desk_save reports nothing_to_commit when nothing is unstaged at the paths and git cannot list what is staged", async () => {
+test("desk_save reports failed inspection when nothing is unstaged and git cannot list what is staged", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8")
@@ -276,11 +276,11 @@ test("desk_save reports nothing_to_commit when nothing is unstaged at the paths 
   spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"], { encoding: "utf8" })
   const spawnGit = (cmd, args, opts) => (args.includes("--cached") ? { status: 1, stdout: "", stderr: "diff boom" } : spawnSync(cmd, args, opts))
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save" }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual(result, { status: "nothing_to_commit" })
+  assert.deepEqual(result, { status: "failed", commit: { status: "failed", reason: "git could not list the staged changes" } })
   assert.equal(commitCount(root), 1)
 })
 
-test("desk_save reports a commit failure as nothing_to_commit with the reason, and creates no commit", async () => {
+test("desk_save reports a commit failure with uncertain effects, and creates no commit in this fixture", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
@@ -298,13 +298,15 @@ test("desk_save reports a commit failure as nothing_to_commit with the reason, a
     schedulePush,
   })
 
-  assert.equal(result.status, "nothing_to_commit")
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(result.status, "failed")
+  assert.equal(result.commit.reason, "commit boom")
+  assert.equal(result.commit.effects.status, "unknown")
+  assert.equal(result.commit.effects.readback_required, true)
   assert.equal(commitCount(root), 0)
   assert.equal(calls.length, 0, "schedulePush is never called after a commit failure")
 })
 
-test("desk_save reports a staging failure as nothing_to_commit with the reason", async () => {
+test("desk_save reports a staging failure with uncertain effects", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
@@ -322,8 +324,9 @@ test("desk_save reports a staging failure as nothing_to_commit with the reason",
     schedulePush,
   })
 
-  assert.equal(result.status, "nothing_to_commit")
-  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" })
+  assert.equal(result.status, "failed")
+  assert.equal(result.commit.reason, "add boom")
+  assert.equal(result.commit.effects.status, "unknown")
   assert.equal(calls.length, 0, "schedulePush is never called after a staging failure")
 })
 

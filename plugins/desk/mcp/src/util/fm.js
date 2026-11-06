@@ -92,24 +92,86 @@ export function serializeMarkdown(data, content) {
 // Errors a rename over a card gives when something holds it open (an editor, antivirus, OneDrive on Windows): the card is then written in place.
 const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
 
-export async function writeMarkdown(filePath, data, content, { atomic = false } = {}) {
+export async function writeMarkdown(filePath, data, content, { atomic = false, beforeWrite } = {}) {
+  if (beforeWrite) await beforeWrite()
   await fs.mkdir(path.dirname(filePath), { recursive: true })
+  if (beforeWrite) await beforeWrite()
   if (!atomic) return fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
-  return writeFileAtomic(filePath, serializeMarkdown(data, content))
+  return writeFileAtomic(filePath, serializeMarkdown(data, content), { beforeWrite })
 }
 
 /**
  * Write `text` to an existing file through a temporary file beside it and a rename (over what a symlinked file points at), so a reader sees the old file or
  * the new one. The temporary name is unique to this write and the file keeps its mode; where something holds the file open the text is written in place.
  */
-export async function writeFileAtomic(filePath, text) {
+export async function writeFileAtomic(filePath, text, { beforeWrite } = {}) {
   const target = await fs.realpath(filePath)
   const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
+  let guardRefused = false, temporaryAttempted = false, temporaryWriteAttempted = false, temporaryWritten = false, ownedTemporary, handle
+  const descriptor = { acquired: false, closed: false, closeUnknown: false }
+  const identity = stat => `${stat.dev}:${stat.ino}:${stat.mode & 0o170000n}`
+  const guard = async () => {
+    try { await beforeWrite() } catch (error) { guardRefused = true; throw error }
+  }
+  const report = (error, secondary, removed = false) => {
+    const details = { temporary, temporaryAttempted, temporaryWriteAttempted, temporaryWritten, temporaryRemoved: removed,
+      descriptor: { ...descriptor }, guardRefused, secondaryError: secondary?.message }
+    if (error !== null && (typeof error === "object" || typeof error === "function") && Object.isExtensible(error)) {
+      try { error.fmWrite = details; return } catch { /* Report without replacing the original exception. */ }
+    }
+    console.error("desk_markdown: write_effects_retained", JSON.stringify(details))
+  }
+  const closeTemporary = async () => {
+    if (!handle || descriptor.closed || descriptor.closeUnknown) return
+    try { await handle.close(); descriptor.closed = true }
+    catch (error) { descriptor.closeUnknown = true; throw error }
+  }
+  const assertOwned = async () => {
+    const named = await fs.lstat(temporary, { bigint: true })
+    if (!ownedTemporary || identity(named) !== ownedTemporary || !named.isFile() || named.nlink !== 1n)
+      throw new Error("markdown temporary no longer names its owned inode")
+  }
   try {
-    await fs.writeFile(temporary, text, "utf8")
-    await fs.chmod(temporary, (await fs.stat(target)).mode & 0o7777)
+    if (beforeWrite) await guard()
+    temporaryAttempted = true
+    if (beforeWrite) {
+      handle = await fs.open(temporary, "wx", 0o600)
+      descriptor.acquired = true
+      const original = await handle.stat({ bigint: true })
+      if (!original.isFile() || original.nlink !== 1n) throw new Error("markdown temporary ownership is unqualified")
+      ownedTemporary = identity(original)
+      await guard()
+      temporaryWriteAttempted = true
+      await fs.writeFile(handle, text, "utf8")
+      temporaryWritten = true
+      await closeTemporary()
+    } else await fs.writeFile(temporary, text, "utf8")
+    const mode = (await fs.stat(target)).mode & 0o7777
+    if (beforeWrite) { await assertOwned(); await guard() }
+    await fs.chmod(temporary, mode)
+    if (beforeWrite) { await assertOwned(); await guard() }
     await fs.rename(temporary, target)
   } catch (error) {
+    if (beforeWrite) {
+      try { await closeTemporary() } catch (secondary) { report(error, secondary); throw error }
+      if (descriptor.closeUnknown) { report(error); throw error }
+      if (guardRefused) { report(error); throw error }
+      let removed = false
+      try {
+        await guard()
+        if (!ownedTemporary) throw new Error("markdown temporary creation/ownership is unqualified")
+        await assertOwned()
+        await guard()
+        await fs.rm(temporary)
+        removed = true
+      } catch (secondary) { report(error, secondary, removed); throw error }
+      if (!HELD_OPEN.has(error.code)) { report(error, undefined, removed); throw error }
+      try {
+        await guard()
+        await fs.writeFile(target, text, "utf8")
+      } catch (secondary) { report(error, secondary, removed); throw error }
+      return
+    }
     // A failed cleanup never hides the error that led to it.
     await fs.rm(temporary, { force: true }).catch(() => {})
     if (!HELD_OPEN.has(error.code)) throw error
@@ -314,9 +376,10 @@ export function patchFrontmatterFields(rawText, fields) {
  * frontmatter to patch surgically — a malformed or fence-less card, which
  * has no pre-existing byte layout worth preserving anyway.
  */
-export async function patchMarkdownFrontmatter(filePath, fields) {
+export async function patchMarkdownFrontmatter(filePath, fields, { beforeWrite } = {}) {
   const raw = await fs.readFile(filePath, "utf8")
   const patched = patchFrontmatterFields(raw, fields)
+  if (beforeWrite) await beforeWrite()
   if (patched !== null) {
     await fs.writeFile(filePath, patched, "utf8")
     return
@@ -326,7 +389,7 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) delete data[key]
   }
-  await writeMarkdown(filePath, data, parsed.content)
+  await writeMarkdown(filePath, data, parsed.content, { beforeWrite })
 }
 
 /**

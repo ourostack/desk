@@ -29,14 +29,17 @@ export const DESK_STATUS_FIELDS = ["detail", "has_instructions"]
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
 async function syncStatus({ deskRoot, env, signal }) {
-  if (!await hasRemoteConfiguredAsync(deskRoot, { signal })) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
+  const recovery = recorded?.recovery ? { recovery: recorded.recovery } : {}
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
   const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
     ? { last_pull: recorded.last_pull }
     : {}
+  if (!await hasRemoteConfiguredAsync(deskRoot, { signal })) {
+    return recorded?.recovery || lastPull.last_pull ? { configured: false, ...lastPull, ...recovery } : "no remote configured"
+  }
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null, ...lastPull }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null, ...lastPull, ...recovery }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
@@ -45,6 +48,7 @@ async function syncStatus({ deskRoot, env, signal }) {
     behind: counts?.behind ?? 0,
     last_push_at: recorded?.last_push_at ?? null,
     ...lastPull,
+    ...recovery,
   }
 }
 

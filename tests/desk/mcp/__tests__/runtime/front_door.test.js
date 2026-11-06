@@ -173,3 +173,22 @@ test("the default handshake hook is optional", async () => {
   input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`)
   await door.closed
 })
+
+test("exceptions permit retry only for reads, not uncertain mutations or dispatch", async () => {
+  const { lines, input, door, send } = serve({ callTool: () => { throw new Error("response lost") } })
+  for (const name of ["desk_search", "desk_save", "desk_doctor", "improvement_next", "unknown"]) {
+    send({ id: name, method: "tools/call", params: { name } })
+  }
+  input.end()
+  await door.closed
+  for (const line of lines) {
+    const body = JSON.parse(line.result.content[0].text)
+    if (line.id === "desk_search") assert.match(body.fix, /Retry the call/u)
+    else {
+      assert.doesNotMatch(body.fix, /Retry the call/u)
+      assert.equal(body.effects.status, "unknown")
+      assert.equal(body.effects.readback_required, true)
+      assert.match(body.fix, /readback|Read back/u)
+    }
+  }
+})

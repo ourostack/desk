@@ -56,6 +56,8 @@ import { doctorRuntime } from "./tools/doctor.js"
 export { createSearchEngine } from "./search/engine.js"
 import { searchRouter } from "./search/files-router.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
+import { toolExceptionOutcome } from "./runtime/front-door.js"
+export { createPublicationContext, closePublicationContext } from "./runtime/publication-state.js"
 
 
 // Map tool name → implementation. Every tool now has a real body.
@@ -122,12 +124,16 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   try {
     // The session's search engine (src/search/engine.js), once admission has started it: writes tell it what they changed, and searches use it.
     const search = statusContext.search ?? null
-    const result = await impl({
+    let result = await impl({
       deskRoot, input: input ?? {}, person, statusContext, search,
       queryRouter: searchRouter(search), signal,
     })
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
+    if (result?.status === "failed" || result?.status === "error" || result?.commit?.status === "failed") {
+      const outcome = toolExceptionOutcome(name, { mutation: result.effects ?? result.commit?.effects })
+      if (outcome.effects) result = { ...result, ...outcome }
+    }
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
@@ -140,6 +146,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
             status: "error",
             tool: name,
             message: err?.message ?? String(err),
+            ...toolExceptionOutcome(name, err),
           }),
         },
       ],

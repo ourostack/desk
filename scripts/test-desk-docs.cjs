@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { extractMarkdownLinks } = require("../plugins/desk/mcp/src/util/markdown-links.cjs");
 
 const defaultRepoRoot = path.resolve(__dirname, "..");
 const CANONICAL_RFC = "plugins/desk/docs/agentic-engineering-v2-rfc.md";
@@ -401,35 +402,12 @@ function isCanonicalAssertionClause(clause) {
 }
 
 function markdownLinkDestinations(body) {
-  const renderedBody = body
-    .replace(/<!--[\s\S]*?-->/gu, "")
-    .replace(/^\s{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gmu, "")
-    .replace(/(`+)[^`\n]*\1/gu, "")
-    .replace(/!\[[^\]]*\]\([^)\n]*\)/gu, "")
-    .replace(/!\[[^\]]*\]\[[^\]]*\]/gu, "");
-  const definitions = new Map();
-  for (const match of renderedBody.matchAll(
-    /^\s{0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|([^\s]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gmu,
-  )) {
-    definitions.set(normalizeReferenceLabel(match[1]), match[2] ?? match[3]);
-  }
-
-  const destinations = [];
-  for (const match of renderedBody.matchAll(
-    /(?<!!)\[[^\]]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/gu,
-  )) {
-    destinations.push(match[1] ?? match[2]);
-  }
-  for (const match of renderedBody.matchAll(/(?<!!)\[([^\]]*)\]\[([^\]]*)\]/gu)) {
-    const label = normalizeReferenceLabel(match[2] || match[1]);
-    const destination = definitions.get(label);
-    if (destination) destinations.push(destination);
-  }
-  return destinations;
-}
-
-function normalizeReferenceLabel(label) {
-  return label.trim().replace(/\s+/gu, " ").toLowerCase();
+  const { links, diagnostics } = extractMarkdownLinks(body);
+  const incomplete = diagnostics.find((diagnostic) => diagnostic.code === "parse_budget_exceeded");
+  if (incomplete) throw new Error(`Markdown link extraction incomplete: ${incomplete.code}`);
+  return links
+    .filter((node) => node.uses.some((use) => use.kind === "link" && use.syntax !== "shortcut"))
+    .map((node) => node.destination);
 }
 
 function localMarkdownLinkPaths({
@@ -698,12 +676,13 @@ function validateAll({
   topicRequirements = TOPIC_REQUIREMENTS,
   workflowRequirements = WORKFLOW_REQUIREMENTS,
   readFile,
+  markdownFiles,
   repoRoot = defaultRepoRoot,
 } = {}) {
   const errors = [];
   validateValidatorFixtures(errors);
   try {
-    validateCanonicalRfc(errors, { readFile, repoRoot });
+    validateCanonicalRfc(errors, { readFile, repoRoot, markdownFiles });
   } catch (error) {
     errors.push(`canonical RFC validation failed: ${error.message}`);
   }

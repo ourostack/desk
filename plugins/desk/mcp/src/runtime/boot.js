@@ -60,11 +60,7 @@ import { folderHandle } from "../desk/handles.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
 import { factoryFindingLines, factoryStatus } from "../tools/factory-context.js"
-import {
-  claudeBindingPath,
-  DESK_ROOT_NOT_FOUND,
-  resolveLocalPath,
-} from "../util/paths.js"
+import { resolveLocalPath } from "../util/paths.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
@@ -83,7 +79,7 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine, bashHint } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
-import { resolveStartupDeskRoot, resolveStartupStateBranch } from "./startup-resolve.js"
+import { resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
 import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NEW_WORK_INSTRUCTION_UNATTENDED, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
@@ -94,6 +90,8 @@ import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries
 import { noteSignoffListed } from "./signoff-listed.js"
 import { consentMentioned } from "./consent-mentioned.js"
 import { resolveDeskStateDir } from "./last-start.js"
+import { BOOT_HOSTS as AGENT_HOSTS, bootResult, detectAgentHost, foregroundBoot, parseBootArgs, probeHost, resolveBootRoot } from "./boot-entry.js"
+import { inspectionContainment } from "./recovery-state.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -114,35 +112,7 @@ const DESK_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
  * but keeps the thrown error's `code` so boot can tell the two failure
  * shapes apart instead of collapsing them into one message string.
  */
-export function resolveBootRoot({
-  env = process.env,
-  cwd = process.cwd(),
-  homeDir = env.HOME || os.homedir(),
-  readActivationConfig = (file) => readSmallText(file),
-} = {}) {
-  const bindingPath = claudeBindingPath(env)
-  try {
-    // The tool server's own resolver: the Copilot session record, CLAUDE_PROJECT_DIR, then this process's folder (a weak
-    // hint unless it is a Crew workspace clone), so the boot and the server never name different desks.
-    const resolved = resolveStartupDeskRoot({ args: {}, env, cwd, homeDir, readActivationConfig })
-    return { status: "ready", path: resolved.root, source: resolved.source, binding_path: bindingPath }
-  } catch (error) {
-    const status = error.code === DESK_ROOT_NOT_FOUND ? "setup_required" : "degraded"
-    return {
-      status,
-      path: error.path ?? null,
-      source: error.source ?? null,
-      binding_path: bindingPath,
-      tried: error.tried ?? [],
-      // Every throw out of the shared resolver (`resolveDeskRootWithSource`) — including through
-      // the injectable `readActivationConfig` seam, which `loadActivationConfig`
-      // always re-wraps in a `codedError` — sets `.code` (see `util/paths.js`),
-      // so this never falls back to a message-only reason.
-      reason: error.code,
-      message: error.message,
-    }
-  }
-}
+export { resolveBootRoot } from "./boot-entry.js"
 
 // ── The session's person ────────────────────────────────────────────────
 
@@ -168,39 +138,7 @@ export function personSummary(member) {
 // ── Host identity ───────────────────────────────────────────────────────
 
 /** `{ hostname, user, cwd, platform, release, probed_at }`. Never throws. */
-export function probeHost({
-  env = process.env,
-  hostname = os.hostname,
-  userInfo = os.userInfo,
-  cwd = process.cwd,
-  platform = os.platform,
-  release = os.release,
-  now = Date.now,
-} = {}) {
-  const envUser = typeof env.USER === "string" && env.USER !== "" ? env.USER : env.USERNAME
-  let user = typeof envUser === "string" && envUser !== "" ? envUser : null
-  if (user === null) {
-    try {
-      user = userInfo().username
-    } catch {
-      user = null
-    }
-  }
-  let host
-  try {
-    host = hostname()
-  } catch {
-    host = null
-  }
-  return {
-    hostname: host,
-    user,
-    cwd: cwd(),
-    platform: platform(),
-    release: release(),
-    probed_at: new Date(now()).toISOString(),
-  }
-}
+export { probeHost } from "./boot-entry.js"
 
 // ── Prerequisite probe ──────────────────────────────────────────────────
 
@@ -933,20 +871,8 @@ async function taskOnlyBoot({ taskQuery, root, host, degraded, pending, walkFn, 
 // has its own 20 s limit (`session-sync.js`) and is never cut short; its budget here is only a backstop above it.
 const DEFAULT_BUDGET_MS = 15000
 const SYNC_BUDGET_MS = 25000
-const AGENT_HOSTS = Object.freeze(["claude", "copilot"])
-
-const HOST_ENV = Object.freeze({
-  claude: ["CLAUDECODE", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR"],
-  copilot: ["COPILOT_AGENT_SESSION_ID", "COPILOT_CLI", "GITHUB_COPILOT_CLI"],
-})
-
 /** Which of the covered agent hosts this process runs under, from the variables each host sets; "unknown" otherwise. */
-export function detectAgentHost(env) {
-  // A Copilot session started from a Claude Code shell inherits CLAUDECODE, so the session id Copilot itself sets wins.
-  if (env.COPILOT_AGENT_SESSION_ID) return "copilot"
-  const found = Object.entries(HOST_ENV).find(([, names]) => names.some((name) => Boolean(env[name])))
-  return found === undefined ? "unknown" : found[0]
-}
+export { detectAgentHost } from "./boot-entry.js"
 
 function parserName(nested) {
   return nested ? "gray-matter" : "lite"
@@ -974,33 +900,8 @@ function cardLocation(entry) {
 
 function emptyResult({ status, degraded, pending, instructions = [], root, host }) {
   return {
-    boot_complete: true,
-    status,
-    degraded,
-    pending,
-    instructions,
-    covers_hosts: AGENT_HOSTS,
-    root,
-    host,
-    migrations: [],
-    prereqs: null,
-    sync: null,
-    sync_summary: null,
-    needs_operator: null,
-    agents_md: null,
-    person_agents_md: null,
-    lessons_shelf: null,
-    active_tasks: null,
+    ...bootResult({ status, degraded, pending, instructions, root, host }),
     card_parser: parserName(NESTED_CARD_FIELDS),
-    card_validation: [],
-    push_accounts: [],
-    repo_states: [],
-    open_prs: [],
-    task: null,
-    factory: null,
-    stale_desk: null,
-    release_alert: null,
-    desk_problems: null,
   }
 }
 
@@ -1072,25 +973,7 @@ function movedPathsInstruction(sync, root) {
 // degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
 function syncInstruction(sync, root) {
   if (sync?.state !== "unresolved") return null
-  const where = sync.remote ? `origin ${sync.remote}` : "origin"
-  const why = sync.error ? ` (${sync.error})` : ""
-  if (sync.cause === "unreachable") {
-    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "auth_failed") {
-    return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
-  }
-  if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
-    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "deadline") {
-    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${shellQuote(root.path)} pull --rebase --autostash\`) before pushing anything.`
-  }
-  if (sync.cause === "diverged") {
-    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${shellQuote(root.path)} status\` and \`git -C ${shellQuote(root.path)} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
-  }
-  const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-  return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
+  return `Desk sync is unresolved (${sync.reason ?? sync.cause ?? "unknown outcome"}). Read desk_status for the captured operation and actual effects before another attempt. Preserve pending files and the index; never rebase, stash, abort or move another writer's work to retry. Continue independent authorized work; access, binding and writer barriers still govern dependent operations.`
 }
 
 // A push route worth telling the agent about: no account can deliver, the route goes through a fork, or the only
@@ -1387,10 +1270,10 @@ export async function bootOnce({
   for (const entry of migrationEntries) {
     if (entry.state === "unchecked") pending.push(`migration ${entry.id}: not checked in time`)
     if (entry.state === "bash_unavailable") degraded.push(`migration ${entry.id}: not checked, bash could not run (${bashHint(platform)})`)
-    if (entry.state === "restart" || entry.state === "run") degraded.push(`migration ${entry.id}: ${entry.state === "restart" ? "needs a restart" : entry.reason}`)
+    if (entry.state === "restart" || entry.state === "run" || entry.state === "unknown") degraded.push(`migration ${entry.id}: ${entry.state === "restart" ? "needs a restart" : entry.reason}`)
   }
   const migrationSummary = migrationEntries.map((entry) => ({ id: entry.id, state: entry.state }))
-  const stopForMigration = migrationEntries.some((entry) => entry.state === "restart" || entry.state === "run")
+  const stopForMigration = migrationEntries.some((entry) => entry.state === "restart" || entry.state === "run" || entry.state === "unknown")
 
   const root = resolveBootRoot({ env, cwd, homeDir })
   if (root.status === "setup_required") {
@@ -1464,10 +1347,11 @@ export async function bootOnce({
   let sync = null
   let syncTimedOut = false
   try {
-    const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env }), syncBudgetMs, { timedOut: true })
+    const synced = headless ? { state: "skipped", nothingToSync: "headless" } : await withinBudget(syncFn({ root: root.path, env, waitMs: 0 }), syncBudgetMs, { timedOut: true })
     if (synced.timedOut === true) {
       syncTimedOut = true
       pending.push("sync: boot_budget_exceeded")
+      sync = { state: "unresolved", reason: "custody_unknown" }
     } else sync = synced
   } catch (error) {
     degraded.push(`sync: ${error.message}`)
@@ -1690,32 +1574,38 @@ export async function bootOnce({
 }
 
 /** `--task <query>`, `--json` and `--task-only` from the command line: the named task or null, whether to print the structured result, and whether to check only the named task. */
-export function parseBootArgs(argv) {
-  const index = argv.indexOf("--task")
-  // `--task --json` names no task: a flag is never the query.
-  const value = index === -1 ? undefined : argv[index + 1]
-  return {
-    taskQuery: typeof value === "string" && value.trim() !== "" && !value.startsWith("--") ? value : null,
-    json: argv.includes("--json"),
-    taskOnly: argv.includes("--task-only"),
-  }
-}
+export { parseBootArgs } from "./boot-entry.js"
 
 /**
  * The CLI entrypoint: prints `bootOnce`'s result as readable text (or, with `--json`, as one line of JSON for tools and
  * tests) and always exits 0 — a boot script must never block session start.
  */
-export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
+export { foregroundBoot } from "./boot-entry.js"
+
+export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = foregroundBoot, refreshOptions = {} }) {
   const { taskQuery, json, taskOnly } = parseBootArgs(argv)
   let result
   try {
-    result = await bootFn({ env, taskQuery, taskOnly })
+    if (argv.includes("--background")) {
+      const containment = inspectionContainment(env)
+      const selected = resolveBootRoot({ env })
+      if (selected.status !== "ready" || !env.DESK || path.resolve(selected.path) !== path.resolve(env.DESK)) {
+        throw new Error("Background inspection refused a substituted desk binding")
+      }
+      result = await bootOnce({
+        env, taskQuery, taskOnly,
+        syncFn: async () => ({ state: "skipped", nothingToSync: "background" }),
+        migrationsFn: (options) => pendingMigrations({ ...options, inspectOnly: true, containment }),
+        cardGuardFn: () => ({ state: "skipped" }),
+        localOnlyFn: async () => {},
+      })
+    } else result = await bootFn({ env, taskQuery, taskOnly })
   } catch (error) {
     result = emptyResult({
       status: "degraded",
       degraded: [`boot: ${error.message}`],
       pending: [],
-      instructions: ["The boot script failed unexpectedly: check `gh --version`, `jq --version` and `gh auth status` by hand, and record the failure as friction."],
+      instructions: ["Desk startup could not establish its result. Preserve the binding and diagnostic, and continue independent authorized work. Resolve the specific barrier before dependent Desk operations; do not repeat an unknown mutation."],
       root: null,
       host: null,
     })
@@ -1723,7 +1613,7 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
   const finding = result.stale_desk ?? null
   // A stale Desk is refreshed on its own host, but only after the boot output is written, and by a detached runner: boot never waits for it.
   const options = { finding, env, pluginRoot: DESK_PLUGIN_ROOT, agentHost: result.host?.agent, root: result.root?.path ?? null, ...refreshOptions }
-  const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
+  const prepared = finding === null || argv.includes("--background") ? { state: "unavailable" } : planStaleRefresh(options)
   if (finding !== null) {
     const started = prepared.state === "ready"
     result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }

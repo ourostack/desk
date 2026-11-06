@@ -23,7 +23,7 @@ function fakeGit(opts = {}) {
     const rest = args.slice(2)
     calls.push(rest)
     const ok = (stdout = "") => ({ status: 0, stdout, stderr: "" })
-    if (rest[0] === "rev-parse") return opts.repo === false ? { status: 128, stdout: "", stderr: "fatal" } : ok("true\n")
+    if (rest[0] === "rev-parse") return opts.repo === false ? { status: 128, stdout: "", stderr: "fatal: not a git repository (or any of the parent directories): .git" } : ok("true\n")
     if (rest[0] === "diff" && rest.includes("--cached")) return ok((opts.staged ?? []).join("\0"))
     if (rest[0] === "diff") return opts.diffFails ? { status: 1, stdout: "", stderr: "x" } : ok((opts.dirty ?? []).join("\0"))
     if (rest[0] === "ls-files" && rest.includes("--others")) return ok((opts.untracked ?? []).join("\0"))
@@ -262,25 +262,24 @@ test("a background writer that finds the index lock held stages nothing and defe
   assert.equal((await asBackgroundWriter(() => run({ spawn: unknown, calls: git.calls }))).commit, "committed")
 })
 
-test("a person's commit waits out a briefly held lock, and a background writer's does not", () => {
+test("neither a person nor a background writer blindly redispatches a failed commit", () => {
   const lockError = { status: 128, stdout: "", stderr: "fatal: Unable to create '/desk/.git/index.lock': File exists.\n" }
   const script = (failures) => {
     let commits = 0
     const spawn = (cmd, args) => {
       if (args.includes("symbolic-ref")) return { status: 0, stdout: "main\n", stderr: "" }
+      if (args.includes("rev-parse")) return { status: 1, stdout: "", stderr: "" }
       commits += 1
       return commits <= failures ? lockError : { status: 0, stdout: "", stderr: "" }
     }
     return { spawn, commits: () => commits }
   }
   const person = script(2)
-  assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, true)
-  assert.equal(person.commits(), 3)
-  // A lock that stays held is given up on after the wait, and Git's own message comes back.
+  assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, false)
+  assert.equal(person.commits(), 1)
   const held = script(Infinity)
-  const started = Date.now()
   assert.equal(commitPaths("/desk", ["a.md"], "m", held.spawn).ok, false)
-  assert.ok(Date.now() - started >= 2900 && held.commits() > 2)
+  assert.equal(held.commits(), 1)
   const background = script(2)
   const before = process.env[YIELD_ENV]
   process.env[YIELD_ENV] = "1"

@@ -177,6 +177,7 @@ export function createDeskSession(deps) {
     headIO = headFileSystem,
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
+  let publicationSession = null
   const focus = createFocusHolder()
   let headWatch = null
   let headTimer = null
@@ -766,6 +767,8 @@ export function createDeskSession(deps) {
       member: context.member ?? null,
       focus,
       search,
+      ...(publicationSession ? { publicationContext: publicationSession.context, stateBranch: context.stateBranchName,
+        acceptedProducer: true } : {}),
     }
   }
 
@@ -859,6 +862,27 @@ export function createDeskSession(deps) {
     const branch = await inspectWriteBranch({ root: context.root.root, branch: context.stateBranchName, git })
     if (!branch.ok) {
       return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
+    }
+    if (name === "desk_save") {
+      const repository = await git({ cwd: context.root.root, args: ["rev-parse", "--is-inside-work-tree"] })
+      const plain = !repository.error && !repository.ok && (repository.status === undefined || repository.status === 128) &&
+        /^fatal: not a git repository(?: \(or any of the parent directories\))?:/iu.test(repository.stderr ?? "")
+      if (plain) {
+        publicationSession?.close(publicationSession.context)
+        publicationSession = null
+        return runtimeCall(name, input, signal)
+      }
+      if (!repository.ok || repository.stdout.trim() !== "true") throw new Error("Publication repository observation is unqualified")
+      const key = `${contextGeneration}:${context.root.root}:${context.person ?? ""}:${context.stateBranchName ?? ""}`
+      if (publicationSession?.key !== key) {
+        publicationSession?.close(publicationSession.context)
+        if (typeof context.runtimeServer.createPublicationContext !== "function") throw new Error("The admitted runtime cannot establish publication authority")
+        const publicationContext = context.runtimeServer.createPublicationContext({
+          root: context.root.root, env, person: context.person ?? null, sessionId: `desk-session:${contextGeneration}`,
+          requireCommitReceipt: true,
+        })
+        publicationSession = { key, context: publicationContext, close: context.runtimeServer.closePublicationContext }
+      }
     }
     return runtimeCall(name, input, signal)
   }
@@ -1168,6 +1192,8 @@ export function createDeskSession(deps) {
       // sample closes and forgets its own descriptor in its finally, so after it settles nothing can throw before the
       // engine is released.
       const retired = Promise.all([operationTail, headSample, statusReaderOutcome()]).then(([, , retirementError]) => {
+        publicationSession?.close(publicationSession.context)
+        publicationSession = null
         forgetSearch()
         return retirementError
       })

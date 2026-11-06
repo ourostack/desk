@@ -62,6 +62,8 @@ import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
+import { incomingFailureFingerprint, readRecoveryStatus, runRecoveryWorker } from "./recovery-state.js"
+import { verifiedIncomingResolution } from "./health.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -122,8 +124,8 @@ function readJsonIfPresent(file) {
 async function isLockLive(record, processStart, kill) {
   try {
     kill(record.pid, 0)
-  } catch {
-    return false
+  } catch (error) {
+    return error.code !== "ESRCH"
   }
   if (typeof record.start !== "string" || record.start === "") return true
   const current = await processStart(record.pid)
@@ -163,6 +165,14 @@ export async function acquireSyncLock({
     if (error.code !== DESK_TEST_REAL_STATE) throw error
     return { refused: true }
   }
+  try {
+    const recovery = readRecoveryStatus({ root, env })
+    if (recovery?.state === "unknown") return null
+    if (recovery && ["starting", "accepted", "running"].includes(recovery.state) &&
+      (recovery.owner?.pid ?? recovery.dispatch?.pid) !== pid) return null
+  } catch {
+    return null
+  }
   mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
   const token = randomUUID()
   const start = await processStart(pid)
@@ -171,6 +181,8 @@ export async function acquireSyncLock({
   if (tryCreateExclusive(lockPath, bytes)) return { token, release: () => releaseSyncLock(lockPath, token) }
 
   const existing = readLock(lockPath)
+  // An unreadable owner is unknown custody, not proof that the lock is free.
+  if (existing === null) return null
   if (existing !== null && (await isLockLive(existing, processStart, kill))) return null
 
   // Stale (or now unreadable): take over, but only if the file has not
@@ -324,11 +336,12 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
 /**
  * Records how the last desk sync (`syncWorkspace`'s pull) ended, for `desk_status`'s one health word: a failed pull
  * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
- * `degraded`. A synced outcome clears the record; so does a later successful push. A pull that really happened also
+ * `degraded`. Only a verified incoming outcome clears the record. A pull that really happened also
  * records `last_success_at`, which boot shows as "local desk is as of": FETCH_HEAD cannot say that, because a failed
  * fetch touches it too. A desk with nothing to sync against records no success time. Best effort, never throws.
  */
 export function recordPullOutcome({ root, env, result }) {
+  if (!["synced", "unresolved"].includes(result?.state)) return
   try {
     const failed = result?.state === "unresolved"
     const at = new Date().toISOString()
@@ -363,7 +376,24 @@ export function readFetchOkAt({ root, env }) {
 
 /** `desk_status`'s own read of the worker's last recorded outcome, or `null` when nothing has run yet. Never throws. */
 export function readSyncStatus({ root, env }) {
-  return readJsonIfPresent(syncStatusPath({ root, env }))
+  const recorded = readJsonIfPresent(syncStatusPath({ root, env }))
+  try {
+    const recovery = readRecoveryStatus({ root, env })
+    if (!recovery) return recorded
+    const pending = ["starting", "accepted", "running"].includes(recovery.state) ||
+      ["starting", "accepted", "running"].includes(recovery.recordedState) || (!recovery.finalized && Boolean(recovery.recordedState))
+    const rawFailure = recorded?.last_pull?.state === "unresolved" ? recorded.last_pull : null
+    const currentFailure = rawFailure && incomingFailureFingerprint(rawFailure) !== recovery.resolvedBeforeFingerprint ? rawFailure : null
+    let lastPull = currentFailure ?? recovery.priorFailure ?? null
+    if (verifiedIncomingResolution(recovery)) {
+      lastPull = rawFailure && incomingFailureFingerprint(rawFailure) !== recovery.incomingBeforeFingerprint ? rawFailure : null
+    } else if (lastPull === null && !pending && recovery.state !== "synced") {
+      lastPull = { state: "unresolved", reason: recovery.reason ?? "custody_unknown", operation: recovery, at: recovery.updatedAt ?? recovery.createdAt }
+    }
+    return { ...recorded, recovery, last_pull: lastPull }
+  } catch (error) {
+    return { ...recorded, last_pull: { state: "unresolved", reason: error.code ?? "recovery_record_unreadable" } }
+  }
 }
 
 function text(value) {
@@ -449,7 +479,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
     const delivered = deliveredSoFar(root, env)
     const pending = undeliveredCommits({ root, spawnGit, delivered })
     if (pending === null || pending.length === 0) {
-      updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+      updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt }) })
       return { result: "ok" }
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
@@ -464,7 +494,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
 
 function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, paths, error }) {
   const unpushed = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
-  updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+  updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt }) })
   if (!NOT_A_DESK_DEFECT.has(reason)) fileProblem({ root, env, reason, host: hostFromEnv(env) })
   return { result: "blocked", reason, unpushed }
 }
@@ -581,6 +611,12 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
   const options = parseSyncPushArgs(argv)
   const root = options.get("root")
   if (typeof root !== "string" || root === "") throw new Error("sync-push.js: --root <path> is required")
+  if (options.has("recovery")) {
+    const id = options.get("recovery")
+    if (!/^[0-9a-f-]{36}$/u.test(id ?? "")) throw new Error("sync-push.js: invalid recovery identity")
+    await runRecoveryWorker({ root, env, id, acquireLock: acquireSyncLock })
+    return 0
+  }
   const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
   await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
   return 0

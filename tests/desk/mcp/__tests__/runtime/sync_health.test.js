@@ -121,9 +121,14 @@ test("compact desk_status says degraded for a failed sync, the same line and wor
   assert.equal(compact.state, "degraded")
   assert.equal(compact.summary, "Desk works, but the last sync failed.")
   assert.deepEqual(compact.degraded, [syncDegradation(lastPull)])
-  assert.match(compact.fix, /git -C \/d pull --rebase --autostash/u)
+  assert.match(compact.fix, /recorded recovery operation/u)
+  assert.match(compact.fix, /desk_status/u)
+  assert.doesNotMatch(compact.fix, /pull\s+--rebase|--autostash/u)
   assert.equal(compact.sync, "last pull failed (unreachable): not known to be in sync")
-  assert.equal(compactStatus({ ...ready, root: undefined, sync: { last_pull: { state: "unresolved" } } }).fix.includes("<desk>"), true)
+  const missingRoot = compactStatus({ ...ready, root: undefined, sync: { last_pull: { state: "unresolved" } } })
+  assert.equal(missingRoot.root.path, null)
+  assert.match(missingRoot.fix, /desk_status/u)
+  assert.doesNotMatch(missingRoot.fix, /git\s+-C|pull\s+--rebase|--autostash/u)
   assert.equal(compactStatus({ ...ready, sync: { last_pull: { state: "unresolved" } } }).sync, "last pull failed: not known to be in sync")
 })
 
@@ -231,9 +236,12 @@ test("desk_status keeps a failed pull after a multi-remote fetch with one dead r
   assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.state, "unresolved")
 })
 
-test("the sync fix quotes a desk path with a space", () => {
+test("the sync fix preserves a spaced root and directs recorded-outcome inspection without mutation advice", () => {
   const compact = compactStatus({ ...ready, root: { path: "/my desk" }, sync: { last_pull: lastPull } })
-  assert.match(compact.fix, /git -C '\/my desk' pull --rebase --autostash/u)
+  assert.equal(compact.root.path, "/my desk")
+  assert.match(compact.fix, /desk_status/u)
+  assert.match(compact.fix, /pending files and the index/u)
+  assert.doesNotMatch(compact.fix, /git\s+-C|pull\s+--rebase|--autostash/u)
 })
 
 // ---- The status file's read-merge-write is locked: two writers never drop each other's fields. ----
