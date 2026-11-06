@@ -275,7 +275,7 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
   const expected = entryLines(entries)
   const failed = (reason, made) => {
     const answer = afterFailedCommit(reason, root, relPaths, message, before, expected, step, branch, made)
-    return answer.readback === "unknown" && Date.now() >= deadline ? { ...answer, stderr: `${reason}; the commit's time budget ran out before it could be read back, so it is unknown: read back before anything else` } : answer
+    return answer.readback === "unknown" && Date.now() >= deadline ? { ...answer, stderr: `${reason}; the commit's time budget ran out before the result could be read back, so its read-back is unknown: read back before anything else` } : answer
   }
   const operation = operationAnswer(step, root)
   if (operation) return failed(operation.reason, false)
