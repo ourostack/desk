@@ -622,3 +622,34 @@ test("desk_save on a detached HEAD, which the tool refuses, gets a held route th
   if (route) assertHeldReadOnly(route)
   else assert.notEqual(result.status, "committed")
 })
+
+// A held lesson that lands on the shelf itself, moving exactly one older lesson: the route names the whole change in the
+// singular, the shelf as where the line went, and both files.
+test("the route for a held lesson that goes to the shelf and moves one older lesson names that one lesson and the shelf", async () => {
+  const root = await repo()
+  const agents = `# Desk\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 20)}\n\n## Lessons\n\n- **Hidden.** ${"w".repeat(40)} (2026-01-01)\n`
+  await fs.writeFile(path.join(root, "AGENTS.md"), agents, "utf8")
+  git(root, ["add", "AGENTS.md"])
+  git(root, ["commit", "-q", "-m", "init"])
+  await fs.writeFile(path.join(root, "AGENTS.md"), agents.replace("# Desk\n", "# Desk\n\nAnother session's edit.\n"), "utf8")
+  const before = indexState(root, ["AGENTS.md", "LESSONS.md"])
+  const result = await lesson({ deskRoot: root, schedulePush: () => assert.fail("no push") })
+  assert.equal(result.tier, "shelf")
+  assert.deepEqual(result.shelved?.topics, ["Hidden"])
+  const route = result.route_around
+  assertRoute(route)
+  assert.match(route.steps[1].step, /the lesson line .* on LESSONS\.md, and the older lesson on Hidden moved from AGENTS\.md to LESSONS\.md/u)
+  assert.deepEqual(route.steps[1].arguments.paths.sort(), ["AGENTS.md", "LESSONS.md"])
+  const { head, ...rest } = indexState(root, ["AGENTS.md", "LESSONS.md"])
+  assert.deepEqual({ head, index: rest.index, cached: rest.cached }, { head: before.head, index: before.index, cached: before.cached }, "nothing staged, committed or reset")
+})
+
+// A commit Desk cannot read back, written for a desk session start cannot place: both are said, joined, and in_effect is
+// false because the not-loaded half is known.
+test("lesson_add: an unknown commit for a lesson session start would not print says both, and is not in effect", async () => {
+  const root = await repo()
+  const result = await lesson({ deskRoot: root, spawnGit: unreadable(), personOf: async () => ({ status: "unknown", reason: "no person" }), schedulePush: () => assert.fail("no push for an unknown commit") })
+  assert.equal(result.in_effect, false)
+  assert.equal(result.commit.status, "unknown")
+  assert.match(result.message, /^Written to AGENTS\.md, but not in effect: session start on this desk cannot tell whose desk this is \(no person\).*; and Desk cannot tell whether the commit landed/u)
+})
