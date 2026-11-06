@@ -47,6 +47,8 @@ const POSIX_ONLY = {
   skip: process.platform === "win32" ? "POSIX stand-in contract; native Windows uses the actual provider" : false,
   timeout: 30000,
 }
+const AMBIENT_DIRECT = !/\s/u.test(process.execPath) &&
+  !/preserve[-_]symlinks[-_]main/u.test((process.env.NODE_OPTIONS ?? "").replace(/["'\\]/gu, ""))
 
 async function writeWithOptions(providerPath, body, options) {
   const previous = process.env.NODE_OPTIONS
@@ -145,14 +147,32 @@ test("POSIX provider selects direct or legacy execution from inherited Node opti
       await writeWithOptions(provider, CONTRACT_BODY, options)
       const actual = (await fs.lstat(provider)).isSymbolicLink()
       t.diagnostic(JSON.stringify({ name, options, route: actual ? "direct" : "legacy" }))
-      assert.equal(actual, direct, `${name}: enabled preserve-main must never select an .exe main`)
-      if (direct) assert.equal(await fs.readlink(provider), `${name}.exe.cjs`)
+      assert.equal(actual, direct && !/\s/u.test(process.execPath),
+        `${name}: incompatible interpreter/options must never select a direct .exe main`)
+      if (actual) assert.equal(await fs.readlink(provider), `${name}.exe.cjs`)
     }
   })
 })
 
-test("POSIX provider direct execution bypasses a gated legacy shell with the same genuine CJS contract", POSIX_ONLY, async (t) => {
+test(AMBIENT_DIRECT
+  ? "POSIX provider direct execution bypasses a gated legacy shell with the same genuine CJS contract"
+  : "POSIX provider ambient legacy compatibility retains genuine CJS without direct gate evidence", POSIX_ONLY, async (t) => {
   await withOwnedProviders(t, async (root, start) => {
+    t.diagnostic(JSON.stringify({
+      ambientRoute: AMBIENT_DIRECT ? "direct" : "legacy",
+      nodeOptions: process.env.NODE_OPTIONS ?? "",
+    }))
+    if (!AMBIENT_DIRECT) {
+      const provider = path.join(root, "ambient legacy.exe")
+      await writePosixNodeProvider(provider, CONTRACT_BODY)
+      assert.equal((await fs.lstat(provider)).isSymbolicLink(), false, "ambient compatibility must select legacy")
+      const child = start(provider, CONTRACT_ARGS, { ...process.env })
+      child.child.stdin.end("fixture input")
+      const result = await contractResult(child, provider)
+      assert.equal(result.nodeOptions, process.env.NODE_OPTIONS ?? "")
+      t.diagnostic("legacy compatibility contract only; no direct gated-comparison evidence")
+      return
+    }
     const legacy = path.join(root, "legacy.exe")
     const direct = path.join(root, "direct.exe")
     // Select the compatibility writer explicitly; both children later inherit the same actual options.
@@ -208,11 +228,12 @@ test("POSIX provider legacy compatibility executes enabled quoted and negative p
   })
 })
 
-test("POSIX provider direct alias preserves permission denial of the selected executable", POSIX_ONLY, async (t) => {
+test(`POSIX provider ${AMBIENT_DIRECT ? "direct alias" : "legacy compatibility"} preserves permission denial of the selected executable`, POSIX_ONLY, async (t) => {
   await withOwnedProviders(t, async (root, start) => {
     const provider = path.join(root, "unrunnable.exe")
     await writePosixNodeProvider(provider, CONTRACT_BODY)
-    assert.equal((await fs.lstat(provider)).isSymbolicLink(), true)
+    assert.equal((await fs.lstat(provider)).isSymbolicLink(), AMBIENT_DIRECT, "selected executable must match ambient compatibility")
+    t.diagnostic(JSON.stringify({ permissionRoute: AMBIENT_DIRECT ? "direct" : "legacy" }))
     await fs.chmod(provider, 0o644)
     const child = start(provider, CONTRACT_ARGS, { ...process.env })
     child.child.stdin.end("fixture input")
@@ -221,5 +242,32 @@ test("POSIX provider direct alias preserves permission denial of the selected ex
     assert.notEqual(terminal.code, 0)
     assert.equal(child.stdout, "")
     await assert.rejects(fs.stat(`${provider}.cjs.entered`), { code: "ENOENT" })
+  })
+})
+
+test("POSIX provider whitespace interpreter preserves the quoted absolute Node contract", POSIX_ONLY, async (t) => {
+  await withOwnedProviders(t, async (root, start) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "execPath")
+    const interpreter = path.join(root, "node interpreter's executable")
+    const provider = path.join(root, "whitespace interpreter.exe")
+    const options = process.env.NODE_OPTIONS ?? ""
+    await fs.symlink(process.execPath, interpreter)
+    try {
+      Object.defineProperty(process, "execPath", { ...descriptor, value: interpreter })
+      await writePosixNodeProvider(provider, CONTRACT_BODY)
+    } finally {
+      Object.defineProperty(process, "execPath", descriptor)
+    }
+    assert.deepEqual(Object.getOwnPropertyDescriptor(process, "execPath"), descriptor)
+    assert.equal(process.env.NODE_OPTIONS ?? "", options)
+    assert.equal((await fs.lstat(provider)).isSymbolicLink(), false, "whitespace interpreter must select legacy before launch")
+    const shim = await fs.readFile(provider, "utf8")
+    assert.ok(shim.includes(`exec '${interpreter.replaceAll("'", "'\\''")}' "$0.cjs" "$@"\n`),
+      "legacy route must quote the exact absolute interpreter, not substitute PATH node")
+    t.diagnostic(JSON.stringify({ interpreterAlias: interpreter, route: "legacy", descriptorRestoredBeforeLaunch: true }))
+    const child = start(provider, CONTRACT_ARGS, { ...process.env })
+    child.child.stdin.end("fixture input")
+    const result = await contractResult(child, provider)
+    assert.equal(result.nodeOptions, options)
   })
 })

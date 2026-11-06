@@ -25,10 +25,11 @@ export async function mkFeedbackFixture() {
 
 export async function writePosixNodeProvider(providerPath, body) {
   // Select at creation, before launch options are fixed. Conservatively keep the explicit .cjs
-  // shell route for any preserve-main mention, including quoted/escaped/negative spellings.
+  // shell route for whitespace interpreter paths or any preserve-main mention, including
+  // quoted/escaped/negative spellings.
   // Never strip inherited Node/NYC/loader options or newly enable preserve-main after creation.
   const options = (process.env.NODE_OPTIONS ?? "").replace(/["'\\]/gu, "")
-  if (!/preserve[-_]symlinks[-_]main/u.test(options)) {
+  if (!/\s/u.test(process.execPath) && !/preserve[-_]symlinks[-_]main/u.test(options)) {
     await fs.writeFile(`${providerPath}.cjs`, `#!${process.execPath}\n${body}\n`, { mode: 0o755 })
     await fs.symlink(path.basename(`${providerPath}.cjs`), providerPath)
     return
