@@ -8,8 +8,8 @@
 // A route never commits whatever the paths hold now (R2, 0972 on #625): later bytes there may be another session's. When the
 // failure carries the change Desk captured before it dispatched (`capture`: the entries with their modes, the HEAD and the
 // branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
-// cannot qualify, and commits through one plain git commit of a private index, never touching the shared index or the
-// working tree (R1, R3). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
+// cannot qualify, builds the commit from a private index with the repository's hooks run through Git, and moves the branch
+// by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
 //
 // What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
 // card guard's override variable, a hard-coded remote or branch (the published read-back compares with the checkout's own
@@ -61,7 +61,7 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
   if (capture) {
     const check = finishArgv(root, paths, message, capture)
     const finish = card === null
-      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit in a private index, runs the repository's hooks, commits only if the branch has not moved when it looks just before, and reports unknown, naming the commit, if a move slipped in after that look; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
+      ? [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit from a private index, runs the repository's commit hooks through Git, and moves the branch by one compare-and-swap against the HEAD step 1 qualified, so a branch another writer moved is refused, never overwritten; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
       : [{
         step: `Only if step 1 exited 3 (ready): call task_update for ${card} with a one-line note saying the earlier commit did not finish. Desk commits the card itself; the card guard refuses a hand commit of a live card, and that protection stays.${paths.length > 1 ? ` Then read ${paths.slice(1).join(", ")} with \`git diff HEAD\`, and only if it shows nothing but this call's change, commit ${paths.length > 2 ? "them" : "it"} through desk_save with exactly ${paths.length > 2 ? "those paths" : "that path"}.` : ""}`,
         tool: "task_update",
