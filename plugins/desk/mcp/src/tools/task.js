@@ -1618,7 +1618,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
     const result = commit
       ? archivePendingAnswer(relPath(deskRoot, filePath), publicationOf(commit),
-        commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: publicationOf(commit) }), commit)
+        commit.route_around, commit)
       : { status: "archived", path: relPath(deskRoot, filePath) }
     if (!commit) {
       if (delivered !== null) Object.assign(result, delivered)
