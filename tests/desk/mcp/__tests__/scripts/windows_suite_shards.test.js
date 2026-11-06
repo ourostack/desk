@@ -127,6 +127,7 @@ test("refresh takes the median per file, so one outlier run does not set the wei
 test("the workflow's shard list, shard arguments and verdict all say the same number, and the always-on trigger has no path filter", () => {
   const text = readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8")
   const workflow = load(text)
+  assert.equal(workflow.jobs["windows-suite"].strategy["max-parallel"], 6)
   const shards = workflow.jobs["windows-suite"].strategy.matrix.shard
   assert.deepEqual(shards, Array.from({ length: WINDOWS_SHARDS }, (_, i) => i + 1))
   const totals = [...text.matchAll(/matrix\.shard \}\}\/(\d+)/gu)].map((m) => Number(m[1]))
