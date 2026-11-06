@@ -40,6 +40,11 @@ scripts/                          # Validation and release checks run in CI
 tools/unused-code/                # knip configuration and runner for the Unused code check
 ```
 
+## Field guides
+
+- [Make room, not casualties](docs/mac-capacity.md): a 30-second start for
+  maintaining a shared Mac's disk space without discarding other agents' work.
+
 ## Unused code
 
 All code has a purpose, so CI fails a pull request that leaves unused code behind. Run `cd tools/unused-code && npm ci && npm run knip` to find unused files, exports, dependencies and duplicate exports before you push; [`tools/unused-code/knip.jsonc`](tools/unused-code/knip.jsonc) lists the entry points and gives the reason for every exception, and the CI job is named "Unused code".
