@@ -1,0 +1,109 @@
+TAP version 13
+# Subtest: a depth-one clone recovers hidden checkpoint history before refusing another member's adoption
+not ok 1 - a depth-one clone recovers hidden checkpoint history before refusing another member's adoption
+  ---
+  duration_ms: 3365.553917
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:431:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Joined: other is on the roster as newbie, with an own desk at desks/newbie/. The roster row merged in https://github.com/acme/team/pull/12. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as other; Desk checks this before it reports the join as done.
+    + actual - expected
+    
+    + 'joined'
+    - 'refused'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'refused'
+  actual: 'joined'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:440:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EAEcRQ
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EAEcRQ/shallow-other
+# Subtest: a shallow trailer-free legacy folder remains adoptable after authenticated history recovery
+not ok 2 - a shallow trailer-free legacy folder remains adoptable after authenticated history recovery
+  ---
+  duration_ms: 2127.657
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:452:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    'true' !== 'false'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'false'
+  actual: 'true'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:458:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VVtrSp
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VVtrSp/shallow-legacy-member
+# Subtest: unavailable complete-history recovery reports its failure without adoption writes
+not ok 3 - unavailable complete-history recovery reports its failure without adoption writes
+  ---
+  duration_ms: 2451.717416
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:462:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Joined: tester is on the roster as newbie, with an own desk at desks/newbie/. The roster row merged in https://github.com/acme/team/pull/12. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as tester; Desk checks this before it reports the join as done.
+    
+    'joined' !== 'failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'failed'
+  actual: 'joined'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:478:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DcicMB
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DcicMB/shallow-unavailable
+# Subtest: a shallow upstream cannot supply complete history and no adoption is written
+not ok 4 - a shallow upstream cannot supply complete history and no adoption is written
+  ---
+  duration_ms: 2544.994583
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:488:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Joined: tester is on the roster as newbie, with an own desk at desks/newbie/. The roster row merged in https://github.com/acme/team/pull/12. A Desk session started in this clone writes to desks/newbie/ while gh is signed in as tester; Desk checks this before it reports the join as done.
+    
+    'joined' !== 'failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'failed'
+  actual: 'joined'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:499:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo
+# Synthetic shallow upstream: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo/partial-origin.git
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo/shallow-partial-member
+1..4
+# tests 4
+# suites 0
+# pass 0
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11883.180791

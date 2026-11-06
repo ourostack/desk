@@ -1,0 +1,854 @@
+TAP version 13
+# Subtest: usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2
+ok 1 - usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2
+  ---
+  duration_ms: 0.694042
+  type: 'test'
+  ...
+# Subtest: main hands each action its options and exits by the result's state
+ok 2 - main hands each action its options and exits by the result's state
+  ---
+  duration_ms: 0.864958
+  type: 'test'
+  ...
+# Subtest: the real engine through main: a team repository that is not a Crew workspace yet
+ok 3 - the real engine through main: a team repository that is not a Crew workspace yet
+  ---
+  duration_ms: 1207.450167
+  type: 'test'
+  ...
+# Subtest: run as a script, it prints the plan and exits 0; a folder that is not a clone exits 1
+ok 4 - run as a script, it prints the plan and exits 0; a folder that is not a clone exits 1
+  ---
+  duration_ms: 1778.408792
+  type: 'test'
+  ...
+# Subtest: isEntrypoint
+ok 5 - isEntrypoint
+  ---
+  duration_ms: 0.470167
+  type: 'test'
+  ...
+# Subtest: an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+ok 6 - an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+  ---
+  duration_ms: 2127.343583
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-FEYBi9
+# Subtest: confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+ok 7 - confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+  ---
+  duration_ms: 5763.410333
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-1PLjFg
+# Subtest: adoption refuses a stale content or template preview without changing existing files
+ok 8 - adoption refuses a stale content or template preview without changing existing files
+  ---
+  duration_ms: 4856.819625
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SQXJ7c
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-KVdBoG
+# Subtest: an unrelated remote change does not invalidate adoption of the reviewed desk and template
+ok 9 - an unrelated remote change does not invalidate adoption of the reviewed desk and template
+  ---
+  duration_ms: 5235.299833
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-sSs18z
+# Subtest: adoption refuses another member's alias, path reservation or recorded pending claim
+ok 10 - adoption refuses another member's alias, path reservation or recorded pending claim
+  ---
+  duration_ms: 2823.786
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jTRwg2
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ezCCNJ
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gD9BFt
+# Subtest: adoption requires the authenticated member, without switching the active account
+ok 11 - adoption requires the authenticated member, without switching the active account
+  ---
+  duration_ms: 2996.223292
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Plraix
+# Subtest: adoption rejects an invalid or absent revision instead of silently adopting
+ok 12 - adoption rejects an invalid or absent revision instead of silently adopting
+  ---
+  duration_ms: 1199.626375
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LQRoR4
+# Subtest: adoption refuses a template directory/file collision and preserves both sides
+ok 13 - adoption refuses a template directory/file collision and preserves both sides
+  ---
+  duration_ms: 1985.278542
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rFJCGy
+# Subtest: adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+ok 14 - adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+  ---
+  duration_ms: 2804.561459
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-39YYVE
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0ZcC9r
+# Subtest: the CLI accepts the reviewed adoption revision and still requires apply
+ok 15 - the CLI accepts the reviewed adoption revision and still requires apply
+  ---
+  duration_ms: 2075.036875
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rlBI3r
+# Subtest: adoption detects a changed desk during a rejected push retry and preserves the remote change
+ok 16 - adoption detects a changed desk during a rejected push retry and preserves the remote change
+  ---
+  duration_ms: 7194.244958
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-aE0Ab5
+# Subtest: an adoption desk push failure restores only additions and keeps every preexisting file
+ok 17 - an adoption desk push failure restores only additions and keeps every preexisting file
+  ---
+  duration_ms: 7774.373583
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-250VVZ
+# Subtest: a registry-only alias reservation during the desk push prevents a retry from adding templates
+ok 18 - a registry-only alias reservation during the desk push prevents a retry from adding templates
+  ---
+  duration_ms: 9554.728917
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Adii5P
+# Subtest: a token that cannot verify the requested login cannot adopt or write a roster row
+ok 19 - a token that cannot verify the requested login cannot adopt or write a roster row
+  ---
+  duration_ms: 9782.023083
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-108wlO
+# Subtest: adoption refuses a symlinked registry before adding any desk files
+ok 20 - adoption refuses a symlinked registry before adding any desk files
+  ---
+  duration_ms: 8220.039208
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-nQp9tq
+# Subtest: adoption does not merge a roster row when the reviewed content changes after its PR opens
+ok 21 - adoption does not merge a roster row when the reviewed content changes after its PR opens
+  ---
+  duration_ms: 22410.510833
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NHpDu1
+# Subtest: adoption readback reports an unconfirmed outcome if content changes after GitHub merges
+ok 22 - adoption readback reports an unconfirmed outcome if content changes after GitHub merges
+  ---
+  duration_ms: 7849.01
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-229i4P
+# Subtest: an interrupted adoption requires a fresh explicit preview and member authentication until registered
+ok 23 - an interrupted adoption requires a fresh explicit preview and member authentication until registered
+  ---
+  duration_ms: 9807.455291
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zpepH5
+# Subtest: a nonconflicting path reservation after PR creation prevents adoption's registry merge
+ok 24 - a nonconflicting path reservation after PR creation prevents adoption's registry merge
+  ---
+  duration_ms: 4668.900166
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3s3LVo
+# Subtest: explicit adoption of a complete resumable desk keeps its safeguards after interruption
+ok 25 - explicit adoption of a complete resumable desk keeps its safeguards after interruption
+  ---
+  duration_ms: 4897.417542
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SOMMLt
+# Subtest: a trailer-free complete legacy folder stays claimed by its authenticated adopter after interruption
+ok 26 - a trailer-free complete legacy folder stays claimed by its authenticated adopter after interruption
+  ---
+  duration_ms: 9030.258083
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IxFqnY
+# Subtest: a conflicting empty adoption checkpoint arriving after PR creation prevents its merge
+ok 27 - a conflicting empty adoption checkpoint arriving after PR creation prevents its merge
+  ---
+  duration_ms: 13433.841542
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SL2iMG
+# Concurrent synthetic clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SL2iMG/other-yxhhmw
+# Subtest: an empty adoption checkpoint without an identity remains an unresolved claim
+ok 28 - an empty adoption checkpoint without an identity remains an unresolved claim
+  ---
+  duration_ms: 7925.741458
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8IuxRV
+# Subtest: a depth-one clone recovers hidden checkpoint history before refusing another member's adoption
+ok 29 - a depth-one clone recovers hidden checkpoint history before refusing another member's adoption
+  ---
+  duration_ms: 23675.9875
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LWaZaI
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LWaZaI/shallow-other
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LWaZaI/shallow-original-member
+# Subtest: a shallow trailer-free legacy folder remains adoptable after authenticated history recovery
+ok 30 - a shallow trailer-free legacy folder remains adoptable after authenticated history recovery
+  ---
+  duration_ms: 11609.560958
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tTWk2z
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tTWk2z/shallow-legacy-member
+# Subtest: a shallow preview recovers history but writes no adoption checkpoint or registry row
+ok 31 - a shallow preview recovers history but writes no adoption checkpoint or registry row
+  ---
+  duration_ms: 3609.386958
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8TcP4G
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8TcP4G/shallow-preview
+# Subtest: unavailable complete-history recovery reports its failure without adoption writes
+ok 32 - unavailable complete-history recovery reports its failure without adoption writes
+  ---
+  duration_ms: 3487.386
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xESaqh
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xESaqh/shallow-unavailable
+# Subtest: a shallow upstream cannot supply complete history and no adoption is written
+ok 33 - a shallow upstream cannot supply complete history and no adoption is written
+  ---
+  duration_ms: 14326.323542
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-084Hy0
+# Synthetic shallow upstream: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-084Hy0/partial-origin.git
+# Synthetic shallow clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-084Hy0/shallow-partial-member
+# Subtest: with no gh given, the real gh runs; signed in to nothing, it writes nothing and names the sign-in it needs
+ok 34 - with no gh given, the real gh runs; signed in to nothing, it writes nothing and names the sign-in it needs
+  ---
+  duration_ms: 1586.827083
+  type: 'test'
+  ...
+# Subtest: with no wait given, the pause before asking again whether a queued pull request merged is real
+ok 35 - with no wait given, the pause before asking again whether a queued pull request merged is real
+  ---
+  duration_ms: 5083.6845
+  type: 'test'
+  ...
+# Subtest: status of things that are not a clone
+ok 36 - status of things that are not a clone
+  ---
+  duration_ms: 1.51825
+  type: 'test'
+  ...
+# Subtest: tooling inside the workspace is found by either plugin manifest; other folders and files are not tooling
+ok 37 - tooling inside the workspace is found by either plugin manifest; other folders and files are not tooling
+  ---
+  duration_ms: 883.702333
+  type: 'test'
+  ...
+# Subtest: an AGENTS.md with no final newline; a dual-repo workspace counts a leftover plugins/ as outside the shape
+ok 38 - an AGENTS.md with no final newline; a dual-repo workspace counts a leftover plugins/ as outside the shape
+  ---
+  duration_ms: 3777.572375
+  type: 'test'
+  ...
+# Subtest: an ambient GH_TOKEN counts as the account when gh has none signed in, as at Desk's boot
+ok 39 - an ambient GH_TOKEN counts as the account when gh has none signed in, as at Desk's boot
+  ---
+  duration_ms: 2724.469625
+  type: 'test'
+  ...
+# Subtest: an answer GitHub could not give is an open pull request in an unknown state
+ok 40 - an answer GitHub could not give is an open pull request in an unknown state
+  ---
+  duration_ms: 1381.024583
+  type: 'test'
+  ...
+# Subtest: a merged pull request with no merge commit in GitHub's answer uses the fetched default branch
+ok 41 - a merged pull request with no merge commit in GitHub's answer uses the fetched default branch
+  ---
+  duration_ms: 2750.264
+  type: 'test'
+  ...
+# Subtest: a local branch already named like the change's branch: refused at the branch step, the clone untouched
+ok 42 - a local branch already named like the change's branch: refused at the branch step, the clone untouched
+  ---
+  duration_ms: 1088.35275
+  type: 'test'
+  ...
+# Subtest: an unexpected error is thrown, not dressed up as a result, and the clone is put back first
+ok 43 - an unexpected error is thrown, not dressed up as a result, and the clone is put back first
+  ---
+  duration_ms: 1440.856833
+  type: 'test'
+  ...
+# Subtest: a teammate who started the crew at the same time: the rebuild refuses to overwrite, and closes its pull request
+ok 44 - a teammate who started the crew at the same time: the rebuild refuses to overwrite, and closes its pull request
+  ---
+  duration_ms: 2201.880375
+  type: 'test'
+  ...
+# Subtest: a Git step that fails with no message is named by its command
+ok 45 - a Git step that fails with no message is named by its command
+  ---
+  duration_ms: 1073.594458
+  type: 'test'
+  ...
+# Subtest: apply on a detached HEAD is refused
+ok 46 - apply on a detached HEAD is refused
+  ---
+  duration_ms: 882.849208
+  type: 'test'
+  ...
+# Subtest: a founder in a local start with no origin gets a row with no repository
+ok 47 - a founder in a local start with no origin gets a row with no repository
+  ---
+  duration_ms: 360.578125
+  type: 'test'
+  ...
+# Subtest: join: a roster file with no roster table gets one; extra columns are left empty
+ok 48 - join: a roster file with no roster table gets one; extra columns are left empty
+  ---
+  duration_ms: 2752.384291
+  type: 'test'
+  ...
+# Subtest: join: a roster row that cannot merge leaves the desk pushed and the pull request open
+ok 49 - join: a roster row that cannot merge leaves the desk pushed and the pull request open
+  ---
+  duration_ms: 2296.260334
+  type: 'test'
+  ...
+# Subtest: join refuses a dirty clone and a clone with no origin
+ok 50 - join refuses a dirty clone and a clone with no origin
+  ---
+  duration_ms: 1264.7535
+  type: 'test'
+  ...
+# Subtest: a monorepo with a declared plugin path is named in the AGENTS.md section
+ok 51 - a monorepo with a declared plugin path is named in the AGENTS.md section
+  ---
+  duration_ms: 5278.314542
+  type: 'test'
+  ...
+# Subtest: text added to files with Windows line endings keeps them: the AGENTS.md section and the roster row
+ok 52 - text added to files with Windows line endings keeps them: the AGENTS.md section and the roster row
+  ---
+  duration_ms: 22183.090292
+  type: 'test'
+  ...
+# Subtest: a new member: the plan names the desk and the roster row and writes nothing
+ok 53 - a new member: the plan names the desk and the roster row and writes nothing
+  ---
+  duration_ms: 5311.180667
+  type: 'test'
+  ...
+# Subtest: a new member joins: own desk pushed first, then the roster row merged; tooling is pointed to
+ok 54 - a new member joins: own desk pushed first, then the roster row merged; tooling is pointed to
+  ---
+  duration_ms: 8847.604292
+  type: 'test'
+  ...
+# Subtest: a returning identity keeps its recorded alias, whatever alias is offered
+ok 55 - a returning identity keeps its recorded alias, whatever alias is offered
+  ---
+  duration_ms: 2822.295875
+  type: 'test'
+  ...
+# Subtest: a new member of a dual-repo workspace whose tooling repository holds a plugin gets its install command
+ok 56 - a new member of a dual-repo workspace whose tooling repository holds a plugin gets its install command
+  ---
+  duration_ms: 3396.067125
+  type: 'test'
+  ...
+# Subtest: a monorepo made before this change, with no _meta/crew.json: join works as before and installs from plugins/
+ok 57 - a monorepo made before this change, with no _meta/crew.json: join works as before and installs from plugins/
+  ---
+  duration_ms: 2061.78775
+  type: 'test'
+  ...
+# Subtest: a teammate whose desk lands between fetch and push: the own-desk push is rebuilt and both desks survive
+ok 58 - a teammate whose desk lands between fetch and push: the own-desk push is rebuilt and both desks survive
+  ---
+  duration_ms: 5071.441625
+  type: 'test'
+  ...
+# Subtest: a teammate's conflicting roster change: the roster row is rebuilt on the new main
+ok 59 - a teammate's conflicting roster change: the roster row is rebuilt on the new main
+  ---
+  duration_ms: 10685.569917
+  type: 'test'
+  ...
+# Subtest: a join interrupted after the desk was pushed finishes the roster row on the next run
+ok 60 - a join interrupted after the desk was pushed finishes the roster row on the next run
+  ---
+  duration_ms: 24562.401709
+  type: 'test'
+  ...
+# Subtest: join refuses before writing: not a Crew workspace, a taken alias, a bad alias, a missing template, a stray desk
+ok 61 - join refuses before writing: not a Crew workspace, a taken alias, a bad alias, a missing template, a stray desk
+  ---
+  duration_ms: 29445.630209
+  type: 'test'
+  ...
+# Subtest: the template is copied whole: hidden and nested files, and only {{alias}} and {{identity}} change
+ok 62 - the template is copied whole: hidden and nested files, and only {{alias}} and {{identity}} change
+  ---
+  duration_ms: 5912.6185
+  type: 'test'
+  ...
+# Subtest: a workspace whose desks/ folder has no roster file yet gets one with the first row
+ok 63 - a workspace whose desks/ folder has no roster file yet gets one with the first row
+  ---
+  duration_ms: 4649.047667
+  type: 'test'
+  ...
+# Subtest: a join whose own-desk push is refused stops before the roster
+ok 64 - a join whose own-desk push is refused stops before the roster
+  ---
+  duration_ms: 5768.287375
+  type: 'test'
+  ...
+# Subtest: core.autocrlf=true: a start and a join that merged are reported as done, and GitHub holds LF files
+ok 65 - core.autocrlf=true: a start and a join that merged are reported as done, and GitHub holds LF files
+  ---
+  duration_ms: 12029.183542
+  type: 'test'
+  ...
+# Subtest: core.autocrlf=input: a start and a join that merged are reported as done, and GitHub holds LF files
+ok 66 - core.autocrlf=input: a start and a join that merged are reported as done, and GitHub holds LF files
+  ---
+  duration_ms: 8672.654333
+  type: 'test'
+  ...
+# Subtest: a first join never merges a pull request someone else opened under its branch name and identity line
+ok 67 - a first join never merges a pull request someone else opened under its branch name and identity line
+  ---
+  duration_ms: 7954.199084
+  type: 'test'
+  ...
+# Subtest: start never merges someone else's crew/start- pull request, whatever it holds
+ok 68 - start never merges someone else's crew/start- pull request, whatever it holds
+  ---
+  duration_ms: 4336.912334
+  type: 'test'
+  ...
+# Subtest: an open pull request is reused only when this account opened it from this repository, to the default branch, for this exact join, changing only the roster
+ok 69 - an open pull request is reused only when this account opened it from this repository, to the default branch, for this exact join, changing only the roster
+  ---
+  duration_ms: 12163.475208
+  type: 'test'
+  ...
+# Subtest: a branch name someone already took is never pushed over: the run picks the next free one
+ok 70 - a branch name someone already took is never pushed over: the run picks the next free one
+  ---
+  duration_ms: 7179.23275
+  type: 'test'
+  ...
+# Subtest: the merge uses a method the repository allows, and says so when it can tell none
+ok 71 - the merge uses a method the repository allows, and says so when it can tell none
+  ---
+  duration_ms: 46134.286292
+  type: 'test'
+  ...
+# Subtest: success is reported only once the default branch holds the result, not because GitHub said merged
+ok 72 - success is reported only once the default branch holds the result, not because GitHub said merged
+  ---
+  duration_ms: 29524.261292
+  type: 'test'
+  ...
+# Subtest: a rerun with new settings rebuilds its own open start pull request from this run's write before merging it
+ok 73 - a rerun with new settings rebuilds its own open start pull request from this run's write before merging it
+  ---
+  duration_ms: 6693.921583
+  type: 'test'
+  ...
+# Subtest: commits someone else pushed onto this run's own open pull request are never merged: the rerun rebuilds the branch first
+ok 74 - commits someone else pushed onto this run's own open pull request are never merged: the rerun rebuilds the branch first
+  ---
+  duration_ms: 11915.003084
+  type: 'test'
+  ...
+# Subtest: a rebuilt pull request that someone pushes onto meanwhile is not pushed over
+ok 75 - a rebuilt pull request that someone pushes onto meanwhile is not pushed over
+  ---
+  duration_ms: 4807.797667
+  type: 'test'
+  ...
+# Subtest: with only an ambient token, the account is the login GitHub says the token belongs to, so a rerun finds its own pull request
+ok 76 - with only an ambient token, the account is the login GitHub says the token belongs to, so a rerun finds its own pull request
+  ---
+  duration_ms: 13540.240792
+  type: 'test'
+  ...
+# Subtest: a reused join pull request whose row another machine landed meanwhile is closed, and the join reports the member
+ok 77 - a reused join pull request whose row another machine landed meanwhile is closed, and the join reports the member
+  ---
+  duration_ms: 22745.918334
+  type: 'test'
+  ...
+# Subtest: a first push GitHub took although its answer was lost: the rerun finds the workspace on GitHub and brings the clone up to date
+ok 78 - a first push GitHub took although its answer was lost: the rerun finds the workspace on GitHub and brings the clone up to date
+  ---
+  duration_ms: 2912.984625
+  type: 'test'
+  ...
+# Subtest: a local start whose origin GitHub created with a README is not reported as on GitHub
+ok 79 - a local start whose origin GitHub created with a README is not reported as on GitHub
+  ---
+  duration_ms: 3315.396
+  type: 'test'
+  ...
+# Subtest: GitHub merged the start but the fetch after it failed: published, with a note to pull; the rerun has nothing to do
+ok 80 - GitHub merged the start but the fetch after it failed: published, with a note to pull; the rerun has nothing to do
+  ---
+  duration_ms: 2274.262
+  type: 'test'
+  ...
+# Subtest: GitHub merged the roster row but the fetch after it failed: joined, with a note to pull
+ok 81 - GitHub merged the roster row but the fetch after it failed: joined, with a note to pull
+  ---
+  duration_ms: 6397.27
+  type: 'test'
+  ...
+# Subtest: a README or AGENTS.md spelled in another case is kept and appended to, never joined by a second file
+ok 82 - a README or AGENTS.md spelled in another case is kept and appended to, never joined by a second file
+  ---
+  duration_ms: 2485.351625
+  type: 'test'
+  ...
+# Subtest: a first push to an empty repository that is refused takes the commit back, so a rerun starts again for real
+ok 83 - a first push to an empty repository that is refused takes the commit back, so a rerun starts again for real
+  ---
+  duration_ms: 2860.279292
+  type: 'test'
+  ...
+# Subtest: a refused commit in a repository with history takes back only what the start wrote
+ok 84 - a refused commit in a repository with history takes back only what the start wrote
+  ---
+  duration_ms: 1187.109708
+  type: 'test'
+  ...
+# Subtest: a start the clone holds but GitHub does not, such as a local start given an origin later, is pushed by a rerun
+ok 85 - a start the clone holds but GitHub does not, such as a local start given an origin later, is pushed by a rerun
+  ---
+  duration_ms: 1653.4485
+  type: 'test'
+  ...
+# Subtest: a rebuild appends to an AGENTS.md a teammate added meanwhile instead of replacing it
+ok 86 - a rebuild appends to an AGENTS.md a teammate added meanwhile instead of replacing it
+  ---
+  duration_ms: 3580.6215
+  type: 'test'
+  ...
+# Subtest: start run again after it left a pull request open reuses that pull request and merges it
+ok 87 - start run again after it left a pull request open reuses that pull request and merges it
+  ---
+  duration_ms: 3844.308708
+  type: 'test'
+  ...
+# Subtest: a reused pull request that conflicts is rebuilt on its own branch
+ok 88 - a reused pull request that conflicts is rebuilt on its own branch
+  ---
+  duration_ms: 3832.064166
+  type: 'test'
+  ...
+# Subtest: open pull requests that cannot be listed stop the run before it could open a second one
+ok 89 - open pull requests that cannot be listed stop the run before it could open a second one
+  ---
+  duration_ms: 2254.542833
+  type: 'test'
+  ...
+# Subtest: two people joining at once with the same alias: the second is refused, its pull request closed, one row stays
+ok 90 - two people joining at once with the same alias: the second is refused, its pull request closed, one row stays
+  ---
+  duration_ms: 4137.692709
+  type: 'test'
+  ...
+# Subtest: one person joining from two machines at once ends with one row: the second run reports the first one's alias
+ok 91 - one person joining from two machines at once ends with one row: the second run reports the first one's alias
+  ---
+  duration_ms: 7261.533416
+  type: 'test'
+  ...
+# Subtest: a join run again after its row merged elsewhere finds the member after bringing the clone up to date
+ok 92 - a join run again after its row merged elsewhere finds the member after bringing the clone up to date
+  ---
+  duration_ms: 19349.6125
+  type: 'test'
+  ...
+# Subtest: a desk pushed for one identity whose row has not landed cannot be claimed by another identity
+ok 93 - a desk pushed for one identity whose row has not landed cannot be claimed by another identity
+  ---
+  duration_ms: 38802.434
+  type: 'test'
+  ...
+# Subtest: a desk another identity pushes while this join pushes its own is not taken over; the same identity's is reused
+ok 94 - a desk another identity pushes while this join pushes its own is not taken over; the same identity's is reused
+  ---
+  duration_ms: 18315.897333
+  type: 'test'
+  ...
+# Subtest: one person's other machine landing its row while this one pushes the desk: no pull request, one row
+ok 95 - one person's other machine landing its row while this one pushes the desk: no pull request, one row
+  ---
+  duration_ms: 4614.774125
+  type: 'test'
+  ...
+# Subtest: join run again after it left the roster row's pull request open reuses it; another person's open join is not reused
+ok 96 - join run again after it left the roster row's pull request open reuses it; another person's open join is not reused
+  ---
+  duration_ms: 13884.832625
+  type: 'test'
+  ...
+# Subtest: a rebuilt roster row whose push is refused leaves its pull request open for the rerun and says so
+ok 97 - a rebuilt roster row whose push is refused leaves its pull request open for the rerun and says so
+  ---
+  duration_ms: 7839.561
+  type: 'test'
+  ...
+# Subtest: a desk another identity pushed after this clone last fetched is found once the clone is brought up to date
+ok 98 - a desk another identity pushed after this clone last fetched is found once the clone is brought up to date
+  ---
+  duration_ms: 14793.09575
+  type: 'test'
+  ...
+# Subtest: one person's other machine joining with the same alias while this one pushes the desk: the desk is reused, one row
+ok 99 - one person's other machine joining with the same alias while this one pushes the desk: the desk is reused, one row
+  ---
+  duration_ms: 18983.921459
+  type: 'test'
+  ...
+# Subtest: a workspace the team took Crew out of meanwhile is not joined
+ok 100 - a workspace the team took Crew out of meanwhile is not joined
+  ---
+  duration_ms: 13769.662
+  type: 'test'
+  ...
+# Subtest: a member's clone is ready: the clone binds, even with a user-wide DESK, and the member writes to their desk
+ok 101 - a member's clone is ready: the clone binds, even with a user-wide DESK, and the member writes to their desk
+  ---
+  duration_ms: 1274.232333
+  type: 'test'
+  ...
+# Subtest: an account that is not on the roster is not ready, with the one plain message
+ok 102 - an account that is not on the roster is not ready, with the one plain message
+  ---
+  duration_ms: 859.852042
+  type: 'test'
+  ...
+# Subtest: a session that would write as someone else, or bind another desk, is not ready
+ok 103 - a session that would write as someone else, or bind another desk, is not ready
+  ---
+  duration_ms: 2537.626333
+  type: 'test'
+  ...
+# Subtest: crew.js status asks for the session; join and other callers do not
+ok 104 - crew.js status asks for the session; join and other callers do not
+  ---
+  duration_ms: 735.221125
+  type: 'test'
+  ...
+# Subtest: start on an existing team repository: the plan lists what it adds and the folders outside Crew's shape, and writes nothing
+ok 105 - start on an existing team repository: the plan lists what it adds and the folders outside Crew's shape, and writes nothing
+  ---
+  duration_ms: 1312.015125
+  type: 'test'
+  ...
+# Subtest: start a CIT-shaped repository as a dual-repo workspace: a merged pull request, every existing file byte-identical
+ok 106 - start a CIT-shaped repository as a dual-repo workspace: a merged pull request, every existing file byte-identical
+  ---
+  duration_ms: 4082.715375
+  type: 'test'
+  ...
+# Subtest: start with a founder: the founder's desk and roster row land in the same change
+ok 107 - start with a founder: the founder's desk and roster row land in the same change
+  ---
+  duration_ms: 3615.536542
+  type: 'test'
+  ...
+# Subtest: start a monorepo: its plugins/ folder is part of the shape, and the plugin is named and found
+ok 108 - start a monorepo: its plugins/ folder is part of the shape, and the plugin is named and found
+  ---
+  duration_ms: 3087.785459
+  type: 'test'
+  ...
+# Subtest: start brings a clone that is behind up to date before writing
+ok 109 - start brings a clone that is behind up to date before writing
+  ---
+  duration_ms: 2803.014
+  type: 'test'
+  ...
+# Subtest: start: a new repository gets Crew's shape and a plain front page
+ok 110 - start: a new repository gets Crew's shape and a plain front page
+  ---
+  duration_ms: 2754.232208
+  type: 'test'
+  ...
+# Subtest: start on an empty GitHub repository: the first commit is pushed, since there is nothing to merge into yet
+ok 111 - start on an empty GitHub repository: the first commit is pushed, since there is nothing to merge into yet
+  ---
+  duration_ms: 716.000167
+  type: 'test'
+  ...
+# Subtest: start on a local repository with no origin: committed, and the push is left to the agent
+ok 112 - start on a local repository with no origin: committed, and the push is left to the agent
+  ---
+  duration_ms: 314.547208
+  type: 'test'
+  ...
+# Subtest: start refuses what it cannot honor before writing anything, and never overwrites a file
+ok 113 - start refuses what it cannot honor before writing anything, and never overwrites a file
+  ---
+  duration_ms: 2065.072542
+  type: 'test'
+  ...
+# Subtest: apply refuses a checkout it cannot safely write: dirty, off the default branch, or ahead of origin
+ok 114 - apply refuses a checkout it cannot safely write: dirty, off the default branch, or ahead of origin
+  ---
+  duration_ms: 2796.2195
+  type: 'test'
+  ...
+# Subtest: a pull request that cannot merge stays open with its branch, and the clone goes back to main
+ok 115 - a pull request that cannot merge stays open with its branch, and the clone goes back to main
+  ---
+  duration_ms: 2392.93625
+  type: 'test'
+  ...
+# Subtest: a merge that only queues the pull request is reported as queued, not merged
+ok 116 - a merge that only queues the pull request is reported as queued, not merged
+  ---
+  duration_ms: 1597.303458
+  type: 'test'
+  ...
+# Subtest: a conflict rebuilds the branch on the new main and merges; GitHub still working out mergeability is a wait
+ok 117 - a conflict rebuilds the branch on the new main and merges; GitHub still working out mergeability is a wait
+  ---
+  duration_ms: 4530.074584
+  type: 'test'
+  ...
+# Subtest: a pull request that cannot be opened is a failure, and its pushed branch is removed
+ok 118 - a pull request that cannot be opened is a failure, and its pushed branch is removed
+  ---
+  duration_ms: 5494.394416
+  type: 'test'
+  ...
+# Subtest: a pull request route needs an origin on GitHub
+ok 119 - a pull request route needs an origin on GitHub
+  ---
+  duration_ms: 2460.396791
+  type: 'test'
+  ...
+# Subtest: a commit the repository's hooks refuse is reported, and the clone is put back
+ok 120 - a commit the repository's hooks refuse is reported, and the clone is put back
+  ---
+  duration_ms: 6430.1725
+  type: 'test'
+  ...
+# Subtest: a folder that is not a Git clone is refused
+ok 121 - a folder that is not a Git clone is refused
+  ---
+  duration_ms: 38.460666
+  type: 'test'
+  ...
+# Subtest: a dual-repo start checks the tooling repository and says plainly what to create when something is missing
+ok 122 - a dual-repo start checks the tooling repository and says plainly what to create when something is missing
+  ---
+  duration_ms: 3228.376917
+  type: 'test'
+  ...
+# Subtest: start signs in as the signed-in account that can push to the workspace, never simply the active one
+ok 123 - start signs in as the signed-in account that can push to the workspace, never simply the active one
+  ---
+  duration_ms: 28891.714166
+  type: 'test'
+  ...
+# Subtest: a monorepo with several plugins: start names none of them unless told which is the team's
+ok 124 - a monorepo with several plugins: start names none of them unless told which is the team's
+  ---
+  duration_ms: 10964.178125
+  type: 'test'
+  ...
+# Subtest: a folder that is not a Git clone
+ok 125 - a folder that is not a Git clone
+  ---
+  duration_ms: 19.400667
+  type: 'test'
+  ...
+# Subtest: a repository with no Crew layout, new or full of content, gets the one plain message
+ok 126 - a repository with no Crew layout, new or full of content, gets the one plain message
+  ---
+  duration_ms: 2324.863333
+  type: 'test'
+  ...
+# Subtest: a Crew workspace made before the declaration existed: a monorepo, the roster and the member
+ok 127 - a Crew workspace made before the declaration existed: a monorepo, the roster and the member
+  ---
+  duration_ms: 1210.927625
+  type: 'test'
+  ...
+# Subtest: a dual-repo workspace reports its tooling repository and the install commands, which always fetch the current plugin
+ok 128 - a dual-repo workspace reports its tooling repository and the install commands, which always fetch the current plugin
+  ---
+  duration_ms: 1006.465792
+  type: 'test'
+  ...
+# Subtest: install commands: a stub repository, a repository plugin with no marketplace, and tooling inside the workspace
+ok 129 - install commands: a stub repository, a repository plugin with no marketplace, and tooling inside the workspace
+  ---
+  duration_ms: 3528.392959
+  type: 'test'
+  ...
+# Subtest: a monorepo with its plugin inside plugins/ and no declaration keeps working as before
+ok 130 - a monorepo with its plugin inside plugins/ and no declaration keeps working as before
+  ---
+  duration_ms: 778.112084
+  type: 'test'
+  ...
+# Subtest: a monorepo with several plugins and no declaration names none of them, and says why
+ok 131 - a monorepo with several plugins and no declaration names none of them, and says why
+  ---
+  duration_ms: 1555.833458
+  type: 'test'
+  ...
+# Subtest: an unreadable declaration and a missing template are reported
+ok 132 - an unreadable declaration and a missing template are reported
+  ---
+  duration_ms: 634.556917
+  type: 'test'
+  ...
+# Subtest: a clone with no origin, or one not on GitHub
+ok 133 - a clone with no origin, or one not on GitHub
+  ---
+  duration_ms: 86.008291
+  type: 'test'
+  ...
+# Subtest: the origin is read as owner/name from the remote spellings people use
+ok 134 - the origin is read as owner/name from the remote spellings people use
+  ---
+  duration_ms: 1368.301958
+  type: 'test'
+  ...
+1..134
+# tests 134
+# suites 0
+# pass 134
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 241788.60525

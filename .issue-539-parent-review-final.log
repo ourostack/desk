@@ -1,0 +1,206 @@
+TAP version 13
+# Subtest: usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2
+ok 1 - usage errors: an unknown action, a flag the action does not take, and a flag with no value exit 2
+  ---
+  duration_ms: 0.692125
+  type: 'test'
+  ...
+# Subtest: main hands each action its options and exits by the result's state
+ok 2 - main hands each action its options and exits by the result's state
+  ---
+  duration_ms: 0.859042
+  type: 'test'
+  ...
+# Subtest: the real engine through main: a team repository that is not a Crew workspace yet
+ok 3 - the real engine through main: a team repository that is not a Crew workspace yet
+  ---
+  duration_ms: 694.081708
+  type: 'test'
+  ...
+# Subtest: run as a script, it prints the plan and exits 0; a folder that is not a clone exits 1
+ok 4 - run as a script, it prints the plan and exits 0; a folder that is not a clone exits 1
+  ---
+  duration_ms: 934.6685
+  type: 'test'
+  ...
+# Subtest: isEntrypoint
+ok 5 - isEntrypoint
+  ---
+  duration_ms: 0.499291
+  type: 'test'
+  ...
+# Subtest: an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+ok 6 - an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+  ---
+  duration_ms: 783.9135
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DhnHWD
+# Subtest: confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+ok 7 - confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+  ---
+  duration_ms: 2616.359417
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-s52fow
+# Subtest: adoption refuses a stale content or template preview without changing existing files
+ok 8 - adoption refuses a stale content or template preview without changing existing files
+  ---
+  duration_ms: 2969.032917
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-UW8yEN
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tWtiPk
+# Subtest: an unrelated remote change does not invalidate adoption of the reviewed desk and template
+ok 9 - an unrelated remote change does not invalidate adoption of the reviewed desk and template
+  ---
+  duration_ms: 2649.819625
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-vHA2tG
+# Subtest: adoption refuses another member's alias, path reservation or recorded pending claim
+ok 10 - adoption refuses another member's alias, path reservation or recorded pending claim
+  ---
+  duration_ms: 1977.431458
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-WdqykF
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ldwRTU
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-oHfMXX
+# Subtest: adoption requires the authenticated member, without switching the active account
+ok 11 - adoption requires the authenticated member, without switching the active account
+  ---
+  duration_ms: 2111.988292
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-hbrP23
+# Subtest: adoption rejects an invalid or absent revision instead of silently adopting
+ok 12 - adoption rejects an invalid or absent revision instead of silently adopting
+  ---
+  duration_ms: 521.451416
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-y1pnMO
+# Subtest: adoption refuses a template directory/file collision and preserves both sides
+ok 13 - adoption refuses a template directory/file collision and preserves both sides
+  ---
+  duration_ms: 718.41375
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xRvwBI
+# Subtest: adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+ok 14 - adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+  ---
+  duration_ms: 1403.545917
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4ead4S
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IGoTyX
+# Subtest: the CLI accepts the reviewed adoption revision and still requires apply
+ok 15 - the CLI accepts the reviewed adoption revision and still requires apply
+  ---
+  duration_ms: 566.274459
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6ZmDnw
+# Subtest: adoption detects a changed desk during a rejected push retry and preserves the remote change
+ok 16 - adoption detects a changed desk during a rejected push retry and preserves the remote change
+  ---
+  duration_ms: 1589.978292
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-fevGDf
+# Subtest: an adoption desk push failure restores only additions and keeps every preexisting file
+ok 17 - an adoption desk push failure restores only additions and keeps every preexisting file
+  ---
+  duration_ms: 1483.076625
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gAqC4b
+# Subtest: a registry-only alias reservation during the desk push prevents a retry from adding templates
+ok 18 - a registry-only alias reservation during the desk push prevents a retry from adding templates
+  ---
+  duration_ms: 1406.098291
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8IOjNj
+# Subtest: a token that cannot verify the requested login cannot adopt or write a roster row
+ok 19 - a token that cannot verify the requested login cannot adopt or write a roster row
+  ---
+  duration_ms: 588.349375
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-I1uAR0
+# Subtest: adoption refuses a symlinked registry before adding any desk files
+ok 20 - adoption refuses a symlinked registry before adding any desk files
+  ---
+  duration_ms: 623.213167
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-t6J0dH
+# Subtest: adoption does not merge a roster row when the reviewed content changes after its PR opens
+ok 21 - adoption does not merge a roster row when the reviewed content changes after its PR opens
+  ---
+  duration_ms: 2036.079625
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2Q1gtb
+# Subtest: adoption readback reports an unconfirmed outcome if content changes after GitHub merges
+ok 22 - adoption readback reports an unconfirmed outcome if content changes after GitHub merges
+  ---
+  duration_ms: 2191.927208
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BL0UIt
+# Subtest: an interrupted adoption requires a fresh explicit preview and member authentication until registered
+ok 23 - an interrupted adoption requires a fresh explicit preview and member authentication until registered
+  ---
+  duration_ms: 3854.554542
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JNwdLB
+# Subtest: a nonconflicting path reservation after PR creation prevents adoption's registry merge
+ok 24 - a nonconflicting path reservation after PR creation prevents adoption's registry merge
+  ---
+  duration_ms: 2027.229583
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-t4yPiB
+# Subtest: explicit adoption of a complete resumable desk keeps its safeguards after interruption
+ok 25 - explicit adoption of a complete resumable desk keeps its safeguards after interruption
+  ---
+  duration_ms: 3585.15675
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2MXLoh
+# Subtest: a trailer-free complete legacy folder stays claimed by its authenticated adopter after interruption
+ok 26 - a trailer-free complete legacy folder stays claimed by its authenticated adopter after interruption
+  ---
+  duration_ms: 3388.835417
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-raAj7g
+# Subtest: a conflicting empty adoption checkpoint arriving after PR creation prevents its merge
+ok 27 - a conflicting empty adoption checkpoint arriving after PR creation prevents its merge
+  ---
+  duration_ms: 2596.680708
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ZYpBxy
+# Concurrent synthetic clone: /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ZYpBxy/other-1aj4tr
+# Subtest: an empty adoption checkpoint without an identity remains an unresolved claim
+ok 28 - an empty adoption checkpoint without an identity remains an unresolved claim
+  ---
+  duration_ms: 662.811833
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dmJlzb
+1..28
+# tests 28
+# suites 0
+# pass 28
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43629.634625

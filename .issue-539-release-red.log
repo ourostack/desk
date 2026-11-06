@@ -1,0 +1,5 @@
+Uncommitted-candidate check: real release checker, isolated temporary index; diff HEAD...HEAD mapped to diff --cached HEAD. No commit or normal-index change.
+fatal: path 'plugins/crew/changelog.d' does not exist in 'HEAD'
+[
+  "crew: files under plugins/crew/ changed since HEAD but its version 0.2.10 is not above 0.2.10; bump it in every manifest and the marketplace entry, and add a changelog entry"
+]

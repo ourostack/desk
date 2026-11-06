@@ -1,0 +1,203 @@
+{
+  "repository": "https://github.com/ourostack/desk",
+  "checkout": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35",
+  "branch": "arimendelow-microsoft-crew-join-folder-adoption",
+  "base": "3fdb7524e8546191efa7f9ee4f6b0674372e4f40",
+  "head": "3fdb7524e8546191efa7f9ee4f6b0674372e4f40",
+  "acceptedProductReceipt": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-resources.json",
+  "all8AcceptedProductHashesUnchanged": true,
+  "harnessFiles": [
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/_fixtures.js",
+      "sha256": "b2615f26f9873ab21fc8f9a5d11f284aa52b61d9b7744003c7e3ec37bbb058d4"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_edges.test.js",
+      "sha256": "4fc7320a9b64ec2dd6e81dc57e9d452b118d1e522daef2cd958cbec32719f4cc"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_join.test.js",
+      "sha256": "23b23000c8e0d4eacafe826acad2a13761b030034b110633fa2681aa0be2eb71"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+      "sha256": "9387207e663c2daaee193fe42a9f2f013aa05d8f732f44be07b69ccb9f5d2a43"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js",
+      "sha256": "da5abba4cc0777565766ecfa3460f2a505ca5fd6ea2e8301ac5dbb8853f7b5cd"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "sha256": "692e02eb72958b36836e9291e5553a287c6939715dbe940fe263365e16a90cdd"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_setup.test.js",
+      "sha256": "39c36270a055a31c27487b570ff6460105d06ff5c4ca9ca2ec5474160a3bb7d8"
+    }
+  ],
+  "harnessDiff": {
+    "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-harness.diff",
+    "sha256": "ed2465a8306062f68e7e316016015bc06d85726cbb7200ba5258c10afba60545"
+  },
+  "redReference": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-suite.log",
+  "probeReference": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe.json",
+  "currentRun": {
+    "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-harness-green.log",
+    "tests": 134,
+    "pass": 133,
+    "fail": 1,
+    "failures": [
+      {
+        "test": "not ok 72 - success is reported only once the default branch holds the result, not because GitHub said merged",
+        "bareRepositoryRestriction": true
+      }
+    ],
+    "green": false
+  },
+  "authorizedChange": "Only explicit bareGit helper, imports and14 previously identified .bare-target expressions changed. Worktree calls, assertions, Git configuration and8 reviewed product files unchanged.",
+  "remainingBlocker": {
+    "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+    "line": 150,
+    "expression": "git(bare, [\"rev-parse\", \"main\"])",
+    "reason": "Prior count missed a plain bare parameter, not a .bare property. This is the same explicit-bare guard failure. Fifteenth expression correction requested from parent; not yet applied."
+  },
+  "guard": "command line:\texplicit",
+  "normalIndexUnchanged": true,
+  "recordedCurrentRunFixtureRoots": [
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-1D3qdq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3w95B7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6etEq7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-7TDpbH",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-98pdsC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-B4wvDB",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-E4w5xd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-FSIlGE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LV2naY",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NM0hcu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-P74cmM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-PWu9CZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Qr7cQQ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-RLcnQv",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-X9wa8e",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YE0Kn5",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YW2LxP",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-b1Jut9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cIXTPO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cofSVZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gr0AYs",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jxQCZ7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-k02uKG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-l7RZs8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-nejh6W",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-nlXtmi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rQYpaK",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-sYeT0f",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tzq5fh",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ucxFNg",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-uhkXFR",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-wbtWdE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-z9zdR4",
+      "absent": true
+    }
+  ],
+  "retainedFilingFixture": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance",
+  "resources": "No new child actor, background process, live registry or source commit/push/publication. Existing helper actors idle, sole source writer remains this child. Earlier evidence retained."
+}

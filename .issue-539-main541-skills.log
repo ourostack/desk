@@ -1,0 +1,8 @@
+Validated 63 skill descriptions within 1024 characters.
+No loose-skill manifest.json; skipped the skill catalog.
+Validated plugin metadata.
+Validated 4 desk MCP package scripts.
+using-desk foundation contract passed.
+git-hygiene contract passed.
+Desk host manifests verified for support-matrix, copilot-bundle, copilot-plugin-metadata, claude-plugin, factory-hooks, worker-sources, observer-sources, humanize-skill, startup-composition
+Desk generated artifacts verified for plugins/desk/mcp/artifacts/runtime-deps/1.4.0-alpha.6/darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e, plugins/desk/mcp/artifacts/runtime-deps/1.4.0-alpha.6/linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e, plugins/desk/mcp/artifacts/runtime-deps/1.4.0-alpha.6/win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e

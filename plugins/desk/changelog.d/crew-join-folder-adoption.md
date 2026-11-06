@@ -1,0 +1,3 @@
+Crew 0.2.12: Crew join can explicitly adopt a reviewed, unregistered member folder without replacing its files or choosing another alias. It verifies the authenticated member, preserves custom content, adds only missing template files and registers the member through the existing shared-write protocol. Join guidance also requires the agent to file misplaced content into its canonical work context and preserve references before declaring onboarding complete.
+
+Shallow clones recover complete Git history through the member's authenticated route before checking pending ownership claims. Join stops without adoption writes if that recovery fails or the upstream still supplies only partial history.

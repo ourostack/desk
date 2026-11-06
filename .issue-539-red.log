@@ -1,0 +1,180 @@
+TAP version 13
+# Subtest: an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+not ok 1 - an unregistered partial desk refuses by default and offers a revision-bound adoption preview
+  ---
+  duration_ms: 705.315292
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:34:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'revision')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:39:32)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Ps9ZVs
+# Subtest: confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+not ok 2 - confirmed adoption preserves loose content and custom template files, then registers once through a shared write
+  ---
+  duration_ms: 500.72975
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:47:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Nothing was written: desks/newbie/ already exists and does not match the template; it may be someone else's.
+    
+    'refused' !== 'plan'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'plan'
+  actual: 'refused'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:52:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-vBLGYj
+# Subtest: adoption refuses a stale content or template preview without changing existing files
+not ok 3 - adoption refuses a stale content or template preview without changing existing files
+  ---
+  duration_ms: 688.064875
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:68:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /changed.*preview/iu. Input:
+    
+    "Nothing was written: desks/newbie/ already exists and does not match the template; it may be someone else's."
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: "Nothing was written: desks/newbie/ already exists and does not match the template; it may be someone else's."
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:75:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rxRXhC
+# Subtest: an unrelated remote change does not invalidate adoption of the reviewed desk and template
+not ok 4 - an unrelated remote change does not invalidate adoption of the reviewed desk and template
+  ---
+  duration_ms: 662.785
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:81:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Nothing was written: desks/newbie/ already exists and does not match the template; it may be someone else's.
+    + actual - expected
+    
+    + 'refused'
+    - 'joined'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'joined'
+  actual: 'refused'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:86:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zSWpcq
+# Subtest: adoption refuses another member's alias, path reservation or recorded pending claim
+ok 5 - adoption refuses another member's alias, path reservation or recorded pending claim
+  ---
+  duration_ms: 1608.588792
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VpIAvg
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-nzZw05
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-v4RUL4
+# Subtest: adoption requires the authenticated member, without switching the active account
+not ok 6 - adoption requires the authenticated member, without switching the active account
+  ---
+  duration_ms: 391.128
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:104:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'refused'
+    - 'failed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'failed'
+  actual: 'refused'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:108:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dRe1BE
+# Subtest: adoption rejects an invalid or absent revision instead of silently adopting
+ok 7 - adoption rejects an invalid or absent revision instead of silently adopting
+  ---
+  duration_ms: 433.435583
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6sT4mC
+# Subtest: adoption refuses a template directory/file collision and preserves both sides
+ok 8 - adoption refuses a template directory/file collision and preserves both sides
+  ---
+  duration_ms: 658.307959
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-GAXyZh
+# Subtest: adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+ok 9 - adoption refuses symlinks and untracked ignored files instead of following or overwriting them
+  ---
+  duration_ms: 1008.916334
+  type: 'test'
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eMHpuR
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JzcOMY
+# Subtest: the CLI accepts the reviewed adoption revision and still requires apply
+not ok 10 - the CLI accepts the reviewed adoption revision and still requires apply
+  ---
+  duration_ms: 390.325375
+  type: 'test'
+  location: '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:153:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {
+      "state": "usage",
+      "message": "join does not take --adopt-existing. usage: crew.js <status|start|join> --repo <clone> [options]; see the comment at the top of crew.js"
+    }
+    
+    
+    2 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js:160:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Synthetic fixture root (owned by test teardown): /private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DMqHfD
+1..10
+# tests 10
+# suites 0
+# pass 4
+# fail 6
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7656.659333

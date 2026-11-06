@@ -1,0 +1,77 @@
+{
+  "repository": "https://github.com/ourostack/desk",
+  "checkout": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35",
+  "branch": "arimendelow-microsoft-crew-join-folder-adoption",
+  "beforeHead": "3fdb7524e8546191efa7f9ee4f6b0674372e4f40",
+  "fetchedMain": "89a4d5e7958f474cbd8c4669ca78e17d90c5831a",
+  "candidateFiles": [
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.claude-plugin/marketplace.json",
+      "sha256": "47f4d14dfe1c9b423bfca556e66760c57eba805d46d21c5a33ae5704c1a32b43"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/plugin.json",
+      "sha256": "2ae824e4878faa91e72ac9532e1fd17c6e3ea18d1a400f6e67e01d2d27e2db8b"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/.claude-plugin/plugin.json",
+      "sha256": "2af04fb94a20c01a9c4c008e26676612d6d07b22a22c69fc8a1dbc003b05b3e6"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/skills/join-crew/SKILL.md",
+      "sha256": "e77cc6bc6f8f9840cc7b1333156f632a28149ca5790d53e01c887b9e6ac754f6"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/mcp/src/crew/workspace.js",
+      "sha256": "3115e7128cc6568fa863405e319ad55ca16d5980ce0ff67be983d9c7b3863407"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/mcp/scripts/crew.js",
+      "sha256": "e316591cef09b2e47c68b01cf82f819778fd5dd17d069ebec17a679ea733697e"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js",
+      "sha256": "044e88316bd300529e35fda3bae84515f51dbd0ab95e6944b1959368b596d4a7"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/changelog.d/crew-join-folder-adoption.md",
+      "sha256": "472e23e7600ca2984054f598fe72bbfdf8d5e88237e3459c1e663afd8431ae38"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/_fixtures.js",
+      "sha256": "b2615f26f9873ab21fc8f9a5d11f284aa52b61d9b7744003c7e3ec37bbb058d4"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_edges.test.js",
+      "sha256": "4fc7320a9b64ec2dd6e81dc57e9d452b118d1e522daef2cd958cbec32719f4cc"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_join.test.js",
+      "sha256": "23b23000c8e0d4eacafe826acad2a13761b030034b110633fa2681aa0be2eb71"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+      "sha256": "667e64568cdecd0c9c895854c4f41ca4721d79cc017ab2873c902f20b33fdc79"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js",
+      "sha256": "da5abba4cc0777565766ecfa3460f2a505ca5fd6ea2e8301ac5dbb8853f7b5cd"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "sha256": "692e02eb72958b36836e9291e5553a287c6939715dbe940fe263365e16a90cdd"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_setup.test.js",
+      "sha256": "39c36270a055a31c27487b570ff6460105d06ff5c4ca9ca2ec5474160a3bb7d8"
+    }
+  ],
+  "patch": {
+    "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-pre-main541.patch",
+    "sha256": "67594c74187e4f5e93f31cc39094d70893c0e6bdc5c42dbb9f6f8492cacb7c3f"
+  },
+  "normalIndexEmpty": true,
+  "noGitOperationInProgress": true,
+  "trackedChangesAreExactOwnedAllowlist": true,
+  "operation": "Preserve binary patch and exact15-file hashes before supported fast-forward integration with transient autostash; no source branch commit or publication."
+}
