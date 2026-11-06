@@ -85,10 +85,12 @@ function filesNaming(version, files, root = repoRoot) {
 
 // The shipped Superpowers version appears only on these surfaces outside tests and history. The README names the
 // upstream version separately, tests derive the shipped version instead of hard-coding it, and changelog fragments,
-// including the one each refresh adds, are history the Desk release folds into the changelog.
+// including the one each refresh adds, are history the Desk release folds into the changelog. Dependency lockfiles
+// pin other packages' versions, which can coincide with Superpowers' version.
 function superpowersSurfaces(version, files, root = repoRoot) {
   return filesNaming(version, files.map((file) => file.split(path.sep).join("/")), root).filter((file) => (
     file !== "plugins/desk/CHANGELOG.md"
+    && !file.endsWith("package-lock.json")
     && !file.startsWith(`${FRAGMENT_DIR}/`)
     && file !== "plugins/superpowers/README.md"
     && !file.includes("/__tests__/")
@@ -346,6 +348,10 @@ for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-r
     }
     assert.equal(readFixture(root, "plugins/desk/CHANGELOG.md"), fs.readFileSync(path.join(repoRoot, "plugins/desk/CHANGELOG.md"), "utf8"));
     // The refreshed tree passes the repository's own surface contract, fragment included, so the refresh's CI can pass.
+    // A dependency lockfile may pin an unrelated package at the same version (hosted/package-lock.json pins
+    // http-proxy-agent 7.0.2, which Superpowers 7.0.2 matched); a lockfile is never a Superpowers surface.
+    fs.mkdirSync(path.join(root, "hosted"), { recursive: true });
+    fs.writeFileSync(path.join(root, "hosted/package-lock.json"), `${JSON.stringify({ packages: { "node_modules/http-proxy-agent": { version: newerUpstream } } })}\n`);
     assert.deepEqual(superpowersSurfaces(newerUpstream, Object.keys(snapshot(root)), root), [...SUPERPOWERS_VERSION_FILES].sort());
 
     // Upstream changes the payload again without a new version: Superpowers takes the next patch and gets its own fragment.
