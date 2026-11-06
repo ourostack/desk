@@ -119,7 +119,7 @@ async function contractResult(state, providerPath) {
   assert.deepEqual(result.args, CONTRACT_ARGS)
   assert.equal(result.input, "fixture input")
   assert.equal(result.cjs, "function")
-  assert.equal(result.filename, `${providerPath}.cjs`)
+  assert.equal(await fs.realpath(result.filename), await fs.realpath(`${providerPath}.cjs`))
   return result
 }
 
