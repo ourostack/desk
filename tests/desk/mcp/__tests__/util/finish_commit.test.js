@@ -1,9 +1,9 @@
 // R2, R3 (0972 on #625): a route finishes exactly the change Desk captured before it dispatched, never whatever the paths hold
-// later. finish-commit reads where that change stands and commits it once, through one plain git commit of a private index, only when every check passes; anything it cannot qualify is held or unknown and changes nothing.
+// later. finish-commit reads where that change stands and commits it once, building the commit from a private index and moving the branch only by a compare-and-swap against the HEAD it qualified, only when every check passes; anything it cannot qualify is held or unknown and changes nothing.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -156,41 +156,80 @@ test("a captured change that landed but a later commit overwrote is held with bo
   assert.deepEqual(snapshot(root, ["notes.md"]), before)
 })
 
-// The design rule (0972 on #625): no update-ref workaround. The finish is one plain `git commit` of a private index, so Git moves the
-// branch itself and runs every hook the repository has, prepare-commit-msg included.
-test("the finish is one plain git commit of a private index: no update-ref, commit-tree or hook emulation, and every hook runs", () => {
+// The design rule (0972 and the drain on #625): no shared-index reset and no blind ref write. The commit is built from a private
+// index, the repository's hooks run through Git itself in git commit's order, and the branch moves by one compare-and-swap
+// against the HEAD that was qualified, so a moved branch is refused, never overwritten.
+test("the finish builds the commit from a private index, runs every hook through Git, and moves the branch by one compare-and-swap", () => {
   const root = repo()
   const hooks = path.join(root, ".git", "hooks")
-  writeFileSync(path.join(hooks, "prepare-commit-msg"), "#!/bin/sh\nprintf '\\nPrepared-By: hook\\n' >> \"$1\"\n", { mode: 0o755 })
-  writeFileSync(path.join(hooks, "post-commit"), "#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/post-commit-ran\"\n", { mode: 0o755 })
+  writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\ntest -n \"$GIT_INDEX_FILE\" && git ls-files -s > \"$(git rev-parse --git-dir)/pre-commit-saw\"\n", { mode: 0o755 })
+  writeFileSync(path.join(hooks, "prepare-commit-msg"), "#!/bin/sh\ntest \"$2\" = message && printf '\\nPrepared-By: hook\\n' >> \"$1\"\n", { mode: 0o755 })
+  writeFileSync(path.join(hooks, "commit-msg"), "#!/bin/sh\ngrep -q 'Prepared-By: hook' \"$1\" && printf 'Checked-By: hook\\n' >> \"$1\"\n", { mode: 0o755 })
+  writeFileSync(path.join(hooks, "post-commit"), "#!/bin/sh\ngit rev-parse HEAD > \"$(git rev-parse --git-dir)/post-commit-saw\"\n", { mode: 0o755 })
   writeFileSync(path.join(root, "notes.md"), "mine\n")
   const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const qualified = head(root)
   const calls = []
   const spy = (cmd, args, opts) => { calls.push({ args, index: opts?.env?.GIT_INDEX_FILE ?? null }); return spawnSync(cmd, args, opts) }
   const done = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: spy })
   assert.equal(done.state, "finished", done.reason)
   const verbs = calls.map(({ args }) => args[2])
-  for (const banned of ["update-ref", "commit-tree", "hook", "reset", "checkout", "add"]) assert.equal(verbs.includes(banned), false, `never ${banned}: ${verbs.join(" ")}`)
-  const commits = calls.filter(({ args }) => args[2] === "commit")
-  assert.equal(commits.length, 1, "one commit dispatch")
-  assert.ok(commits[0].index && !commits[0].index.startsWith(root), "it commits a private index, never the shared one")
-  assert.match(git(root, ["log", "-1", "--format=%B"]), /Prepared-By: hook/u, "prepare-commit-msg ran")
-  assert.equal(spawnSync("test", ["-e", path.join(root, ".git", "post-commit-ran")]).status, 0, "post-commit ran")
+  for (const banned of ["commit", "reset", "checkout", "add", "restore", "stash"]) assert.equal(verbs.includes(banned), false, `never ${banned}: ${verbs.join(" ")}`)
+  const refs = calls.filter(({ args }) => args[2] === "update-ref")
+  assert.equal(refs.length, 1, "one ref dispatch")
+  assert.deepEqual(refs[0].args.slice(-3), ["refs/heads/main", done.commit, qualified], "a compare-and-swap from the qualified HEAD")
+  for (const call of calls.filter(({ args }) => args[2] === "hook")) assert.ok(call.index && !call.index.startsWith(root), "hooks see the private index, never the shared one")
+  assert.deepEqual(calls.filter(({ args }) => args[2] === "hook").map(({ args }) => args[5]), ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"], "git commit's hooks, in its order")
+  const body = git(root, ["log", "-1", "--format=%B"])
+  assert.match(body, /^save notes\n\nPrepared-By: hook\nChecked-By: hook\n/u, "prepare-commit-msg and commit-msg ran on the message")
+  assert.match(readFileSync(path.join(root, ".git", "pre-commit-saw"), "utf8"), /notes\.md/u, "pre-commit saw the change")
+  assert.equal(readFileSync(path.join(root, ".git", "post-commit-saw"), "utf8").trim(), done.commit, "post-commit ran after the branch moved")
   assert.equal(done.commit, head(root))
+  assert.equal(git(root, ["rev-parse", "HEAD~1"]).trim(), qualified)
+  assert.match(git(root, ["reflog", "-1", "--format=%gs", "main"]), /^commit: save notes/u, "the reflog says commit, as git commit would")
+  assert.equal(git(root, ["diff", "--cached", "--name-only"]).trim(), "", "the shared index agrees with HEAD")
+})
+
+test("a pre-commit hook that changes what would be committed is held: Desk commits only the captured change", () => {
+  const root = repo()
+  writeFileSync(path.join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho extra > extra.md && git add extra.md\n", { mode: 0o755 })
+  writeFileSync(path.join(root, "notes.md"), "mine\n")
+  const committed = capturedFailure(root, ["notes.md"], "save notes")
+  const before = snapshot(root, ["notes.md"])
+  const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true })
+  assert.equal(answer.state, "held", answer.reason)
+  assert.match(answer.reason, /changed what would be committed/u)
+  assert.deepEqual(snapshot(root, ["notes.md"]), before)
+})
+
+test("a hook cut off at the bound is unknown and moves nothing; a cut-off branch update is unknown and names the commit", () => {
+  for (const verb of ["hook", "update-ref"]) {
+    const root = repo()
+    writeFileSync(path.join(root, "notes.md"), "mine\n")
+    const committed = capturedFailure(root, ["notes.md"], "save notes")
+    const qualified = head(root)
+    const cut = (cmd, args, opts) => args[2] === verb ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) } : spawnSync(cmd, args, opts)
+    const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: cut })
+    assert.equal(answer.state, "unknown", `${verb}: ${answer.reason}`)
+    assert.match(answer.reason, /cut off at the 600 s bound/u)
+    assert.equal(head(root), qualified, `${verb}: the branch did not move`)
+    if (verb === "update-ref") assert.match(answer.commit, /^[0-9a-f]{40}$/u, "the reply names the commit it built")
+  }
 })
 
 // The finish runs from a shell, outside the tool call's budget. A hook slower than the tool's 10-second bound is what left the
 // commit unfinished, so the one commit dispatch gets room for it; every read keeps the short bound.
-test("the one commit dispatch outlasts a hook slower than the tool's bound, and every read keeps the short bound", () => {
+test("the commit's hooks, commit-tree and branch update outlast a hook slower than the tool's bound, and every read keeps the short bound", () => {
   const root = repo()
   writeFileSync(path.join(root, "notes.md"), "mine\n")
   const committed = capturedFailure(root, ["notes.md"], "save notes")
   const calls = []
   const spy = (cmd, args, opts) => { calls.push({ verb: args[2], timeout: opts?.timeout }); return spawnSync(cmd, args, opts) }
   assert.equal(finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: spy }).state, "finished")
-  const commitTimeout = calls.find(({ verb }) => verb === "commit").timeout
-  assert.ok(commitTimeout >= 300_000, `the commit dispatch's bound is ${commitTimeout} ms`)
-  for (const call of calls.filter(({ verb }) => verb !== "commit")) assert.equal(call.timeout, 10_000, `${call.verb} keeps the short bound`)
+  const slow = new Set(["hook", "commit-tree", "update-ref"])
+  for (const call of calls.filter(({ verb }) => slow.has(verb))) assert.equal(call.timeout, 600_000, `${call.verb} gets the 600 s bound`)
+  for (const call of calls.filter(({ verb }) => !slow.has(verb))) assert.equal(call.timeout, 10_000, `${call.verb} keeps the short bound`)
+  assert.ok(calls.some(({ verb }) => verb === "hook") && calls.some(({ verb }) => verb === "update-ref"))
 })
 
 function lateCommit(root) {
@@ -217,20 +256,30 @@ test("the branch moving after the checks and before the dispatch is held: nothin
   assert.equal(git(root, ["show", "HEAD:late.md"]), "late\n")
 })
 
-test("the branch moving inside the one dispatch is unknown, names the commit, and nothing is dispatched again", () => {
+// 0972/drain on #625: the window between the last read of HEAD and the moment the commit is made. A commit built from the
+// qualified HEAD must never land on a HEAD another writer moved in that window: that would silently undo their commit. The
+// branch moves only by a compare-and-swap against the HEAD that was qualified, so the other writer's commit stands.
+const MUTATING = new Set(["commit", "hook", "commit-tree", "update-ref"])
+test("HEAD moving after the last read and before the commit is made never undoes the other commit: held, nothing moved", () => {
   const root = repo()
   writeFileSync(path.join(root, "notes.md"), "mine\n")
   const committed = capturedFailure(root, ["notes.md"], "save notes")
-  const commits = []
+  let moved = false
+  const refs = []
   const racing = (cmd, args, opts) => {
-    if (args[2] === "commit") { commits.push(args); if (commits.length === 1) lateCommit(root) }
+    if (!moved && MUTATING.has(args[2])) { moved = true; lateCommit(root) }
+    if (args[2] === "commit" || args[2] === "update-ref") refs.push(args)
     return spawnSync(cmd, args, opts)
   }
+  const late = () => git(root, ["log", "-1", "--format=%H", "--", "late.md"]).trim()
   const answer = finish(root, ["notes.md"], "save notes", committed, { commit: true, spawnGit: racing })
-  assert.equal(answer.state, "unknown", answer.reason)
-  assert.equal(commits.length, 1, "one dispatch, never repeated")
-  assert.equal(answer.commit, head(root), "the reply names the commit that landed")
-  assert.match(answer.reason, /late|moved|parent/u)
+  assert.ok(moved, "the race was injected")
+  assert.equal(git(root, ["ls-tree", "--name-only", "HEAD", "--", "late.md"]).trim(), "late.md", "the other writer's file is still in HEAD")
+  assert.equal(git(root, ["log", "--format=%H", "--diff-filter=D", "--", "late.md"]).trim(), "", "no commit on the branch deleted it")
+  assert.equal(head(root), late(), "the branch is exactly where the other writer left it")
+  assert.equal(answer.state, "held", answer.reason)
+  assert.match(answer.reason, /moved|nothing was committed/u)
+  assert.ok(refs.length <= 1, "at most one ref dispatch, never repeated")
 })
 
 test("the checkout on another branch now is held: the tool's branch refusal is checked again", () => {
@@ -279,10 +328,12 @@ test("the repository's own pre-commit hook still runs: the card guard refuses a 
   const before = snapshot(root, ["greenhouse/watering-api/task.md"])
   const answer = finish(root, ["greenhouse/watering-api/task.md"], "card", committed, { commit: true })
   assert.equal(answer.state, "held")
-  assert.match(answer.reason, /hooks refused the commit/u)
+  assert.match(answer.reason, /pre-commit hook refused the commit/u)
   assert.match(answer.reason, /task/u, "the guard's own words come through")
   assert.deepEqual(snapshot(root, ["greenhouse/watering-api/task.md"]), before)
-  assert.equal(finish(root, ["greenhouse/watering-api/task.md"], "card", committed, { env: { ...env, [TOOL_COMMIT_ENV]: "1" } }).state, "held", "never runs with the guard's override set")
+  const overridden = finish(root, ["greenhouse/watering-api/task.md"], "card", committed, { env: { ...env, [TOOL_COMMIT_ENV]: "1" } })
+  assert.equal(overridden.state, "held", "never runs with the guard's override set")
+  assert.equal(overridden.reason.includes(TOOL_COMMIT_ENV), false, "the reply never names the override, so an agent cannot copy it")
 })
 
 test("the command line prints JSON and exits 0 done, 3 ready, 4 held, 5 unknown, 2 usage", () => {
