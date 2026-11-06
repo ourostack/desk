@@ -18,7 +18,7 @@ const filesRouter = Object.freeze({
   },
 })
 
-/** The search a tool call uses: the session's engine once admission has started it, else the files. */
+/** The engine owns classified index recovery; before admission, searches read files directly. */
 export function searchRouter(engine) {
   return typeof engine?.lexical === "function" ? engine : filesRouter
 }
