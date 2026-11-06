@@ -175,6 +175,57 @@ test("staged recovery preserves a track index edit between qualification reads",
   assert.equal(git(f.root, "ls-files", "-s"), index)
 })
 
+async function hookProcRetired(pid) {
+  let stat
+  try { stat = await fs.readFile(`/proc/${pid}/stat`, "utf8") }
+  catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error
+    try { process.kill(pid, 0) } catch (observation) {
+      if (observation.code !== "ESRCH") throw observation
+      return true
+    }
+    return false
+  }
+  return stat?.slice(stat.lastIndexOf(")") + 2).split(" ")[0] === "Z"
+}
+
+for (const code of ["ENOENT", "ESRCH"]) for (const reaped of [false, true])
+test(`procfs retirement error model ${code} requires independently ${reaped ? "reaped" : "live"} owned PID evidence`, async t => {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" })
+  const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve) })
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  })
+  const target = `/proc/${child.pid}/stat`, originalRead = fs.readFile.bind(fs)
+  const original = Object.assign(new Error(`${code}: owned procfs read raced retirement`), { code, syscall: "read" })
+  let observed = false
+  t.mock.method(fs, "readFile", async (file, ...args) => {
+    if (file !== target) return originalRead(file, ...args)
+    if (reaped) { child.kill("SIGKILL"); await exited }
+    observed = true
+    throw original
+  })
+  assert.doesNotThrow(() => process.kill(child.pid, 0), "the first observation must see the actual owned generation")
+  assert.equal(await hookProcRetired(child.pid), reaped)
+  assert.equal(observed, true)
+  if (reaped) assert.throws(() => process.kill(child.pid, 0), { code: "ESRCH" })
+  else assert.doesNotThrow(() => process.kill(child.pid, 0), "a missing procfs read alone cannot certify live PID retirement")
+  t.diagnostic(`Procfs ${code} model owned PID ${child.pid}; actual reaped=${reaped}; no Linux execution is implied on this host.`)
+})
+
+for (const code of ["EACCES", "EIO"]) test(`procfs retirement error model preserves exact ${code} read failure`, async t => {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" })
+  const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve) })
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited })
+  const target = `/proc/${child.pid}/stat`, originalRead = fs.readFile.bind(fs)
+  const original = Object.assign(new Error("owned procfs read unavailable"), { code })
+  t.mock.method(fs, "readFile", (file, ...args) => file === target ? Promise.reject(original) : originalRead(file, ...args))
+  await assert.rejects(hookProcRetired(child.pid), error => error === original)
+  assert.doesNotThrow(() => process.kill(child.pid, 0))
+  t.diagnostic(`Procfs ${code} error model owned PID ${child.pid}; exact error preserved.`)
+})
+
 async function closeHookFixture({ hook, entered, control, holdStartup, phase, t }) {
   let hookPid, controlPid, cleanupFailure
   try {
@@ -187,12 +238,7 @@ async function closeHookFixture({ hook, entered, control, holdStartup, phase, t 
         if (error.code !== "ESRCH") throw error
         break
       }
-      if (process.platform === "linux") {
-        let stat
-        try { stat = await fs.readFile(`/proc/${hookPid}/stat`, "utf8") }
-        catch (error) { if (error.code !== "ENOENT") throw error }
-        if (stat?.slice(stat.lastIndexOf(")") + 2).split(" ")[0] === "Z") break
-      }
+      if (process.platform === "linux" && await hookProcRetired(hookPid)) break
       assert.ok(Date.now() < deadline, `owned hook ${hookPid} did not terminate within its bounded settlement window`)
       await delay(10)
     }
@@ -329,19 +375,9 @@ test(`native ${phase} timeout retains its actual commit effect for retry${holdSt
     absent = true
   }
   if (!absent && process.platform === "linux") {
-    // Git's killed parent cannot reap the hook; Linux may retain its terminated zombie.
-    let stat
-    try { stat = await fs.readFile(`/proc/${hookPid}/stat`, "utf8") } catch (error) {
-      if (error.code !== "ENOENT") throw error
-      assert.throws(() => process.kill(hookPid, 0), { code: "ESRCH" },
-        "missing procfs cannot establish owned hook termination")
-      absent = true
-    }
-    if (!absent) {
-      const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]
-      assert.equal(state, "Z", `owned hook ${hookPid} must be terminated, not runnable: ${stat}`)
-      t.diagnostic(`Owned hook ${hookPid} is terminated but unreaped (Linux state Z); PID absence is not established.`)
-    }
+    assert.equal(await hookProcRetired(hookPid), true,
+      `owned hook ${hookPid} requires confirmed absence or Linux terminated-Z evidence, not a missing read alone`)
+    t.diagnostic(`Owned hook ${hookPid} retirement confirmed by absent-PID or Linux state Z; PID absence is not separately established.`)
   } else {
     assert.ok(absent, "owned hook process must retire before fixture cleanup")
   }
