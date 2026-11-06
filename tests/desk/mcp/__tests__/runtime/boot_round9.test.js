@@ -147,19 +147,20 @@ test("the deferred-tools hint names the exact Desk tools for the host it runs on
 
 // ── Sync wording ────────────────────────────────────────────────────────
 
-test("syncSummary says plainly what happened: a failure pulled and pushed nothing and names when the desk was last current", () => {
+test("syncSummary preserves uncertainty when a returned failure does not establish its effects", () => {
   const asOf = "2026-09-30T10:00:00.000Z"
   const failed = (cause) => syncSummary({ sync: { state: "unresolved", cause }, lastSyncAt: asOf })
-  assert.equal(failed("unreachable"), `sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of ${asOf}`)
-  assert.match(failed("auth_failed"), /^sync failed: remote refused this host's credentials; nothing was pulled or pushed/u)
-  assert.match(failed("deadline"), /^sync failed: git timed out;/u)
-  assert.match(failed("conflict"), /^sync failed: the pull hit a conflict;/u)
-  assert.match(failed("diverged"), /^sync failed: the desk and its remote have diverged;/u)
-  assert.match(failed("other"), /^sync failed: the pull did not complete;/u)
+  assert.equal(failed("unreachable"), `sync unresolved: remote unreachable; source/remote effects are unverified; read back before retry; local desk is as of ${asOf}`)
+  assert.match(failed("auth_failed"), /^sync unresolved: remote refused this host's credentials; source\/remote effects are unverified/u)
+  assert.match(failed("deadline"), /^sync unresolved: git timed out;/u)
+  assert.match(failed("conflict"), /^sync unresolved: the pull hit a conflict;/u)
+  assert.match(failed("diverged"), /^sync unresolved: the desk and its remote have diverged;/u)
+  assert.match(failed("other"), /^sync unresolved: the pull did not complete;/u)
   assert.match(syncSummary({ sync: { state: "unresolved", cause: "unreachable" } }), /local desk is as of unknown$/u)
-  assert.match(syncSummary({ sync: null, timedOut: true }), /^sync failed: it did not finish within the boot's time budget; nothing was pulled or pushed; local desk is as of unknown$/u)
-  assert.match(syncSummary({ sync: null }), /^sync failed: it did not run;/u)
-  assert.match(syncSummary({ sync: undefined }), /^sync failed: it did not run;/u)
+  assert.equal(syncSummary({ sync: null, timedOut: true }), "sync unresolved: it did not finish within the boot's time budget; source/remote effects are unverified; read back before retry; local desk is as of unknown")
+  for (const sync of [null, undefined]) {
+    assert.equal(syncSummary({ sync }), "sync unresolved: no sync result was returned; source/remote effects are unverified; read back before retry; local desk is as of unknown")
+  }
   assert.equal(syncSummary({ sync: { state: "synced" } }), "sync ok")
   assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_remote" } }), "no remote; nothing to sync")
   assert.equal(syncSummary({ sync: { state: "synced", nothingToSync: "no_upstream" } }), "no upstream branch; nothing to sync")
@@ -171,22 +172,58 @@ test("syncSummary says plainly what happened: a failure pulled and pushed nothin
 
 test("syncSummary tells a pop conflict (the pull worked) from a failed pull, and says where quarantined files went", () => {
   const pop = syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict", cause: "conflict", conflicted: ["a.md", "b.md"] }, lastSyncAt: "2026-09-30T10:00:00.000Z" })
-  assert.equal(pop, "sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md, b.md); nothing was pushed; resolve them before changing the desk")
+  assert.equal(pop, "sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in (conflicted: a.md, b.md); resolve them before changing the desk")
   assert.doesNotMatch(pop, /sync failed|nothing was pulled/u)
-  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict_after_quarantine", conflicted: [], quarantinedPaths: ["_cache/stray-d/x"] }, root: "/d" }), /^sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in; nothing was pushed; resolve them before changing the desk \(1 stray untracked path had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
-  assert.match(syncSummary({ sync: { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", quarantinedPaths: ["_cache/stray-d/x", "_cache/stray-d/y"] }, root: "/d" }), /^sync failed: the pull hit a conflict; nothing was pulled or pushed; local desk is as of unknown \(2 stray untracked paths had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+  assert.match(syncSummary({ sync: { state: "unresolved", reason: "autostash_pop_conflict_after_quarantine", conflicted: [], quarantinedPaths: ["_cache/stray-d/x"] }, root: "/d" }), /^sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in; resolve them before changing the desk \(1 stray untracked path had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
+  assert.match(syncSummary({ sync: { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", quarantinedPaths: ["_cache/stray-d/x", "_cache/stray-d/y"] }, root: "/d" }), /^sync unresolved: the pull hit a conflict; source\/remote effects are unverified; read back before retry; local desk is as of unknown \(2 stray untracked paths had been moved to \/d\/_cache\/stray-d\/ first\)$/u)
 })
 
 test("boot reports the sync summary for a failed sync, a timed-out one and one whose last-fetch lookup throws", async () => {
   const root = await desk()
   const failed = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable", reason: "pull_rebase_failed" }) })
-  assert.equal(failed.sync_summary, "sync failed: remote unreachable; nothing was pulled or pushed; local desk is as of 2026-09-30T10:00:00.000Z")
+  assert.equal(failed.sync_summary, "sync unresolved: remote unreachable; source/remote effects are unverified; read back before retry; local desk is as of 2026-09-30T10:00:00.000Z")
   const unknown = await boot(root, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }), lastSyncFn: () => { throw new Error("no git") } })
   assert.match(unknown.sync_summary, /local desk is as of unknown$/u)
   const slow = await boot(root, { budgetMs: 1, syncBudgetMs: 1, syncFn: () => new Promise(() => {}) })
   assert.match(slow.sync_summary, /did not finish within the boot's time budget/u)
   const threw = await boot(root, { syncFn: async () => { throw new Error("boom") } })
-  assert.match(threw.sync_summary, /^sync failed: it did not run/u)
+  assert.match(threw.sync_summary, /the incoming outcome is unknown; source\/remote effects are unverified/u)
+})
+
+test("boot retains structured unknown effects when a dispatched sync outlives the boot wait", async () => {
+  const root = await desk()
+  let entered = false
+  const result = await boot(root, { syncBudgetMs: 1, syncFn: () => {
+    entered = true
+    return new Promise(() => {})
+  } })
+  assert.equal(entered, true)
+  assert.equal(result.sync?.state, "unresolved")
+  assert.equal(result.sync.effects.pull, "unknown")
+  assert.match(result.sync_summary, /unknown|unverified/u)
+  assert.doesNotMatch(result.sync_summary, /nothing was pulled or pushed|it did not run/u)
+})
+
+test("boot retains structured unknown effects when dispatch throws before returning its result", async () => {
+  const root = await desk()
+  let entered = false
+  const result = await boot(root, { syncFn: async () => {
+    entered = true
+    throw new Error("synthetic dispatch interruption")
+  } })
+  assert.equal(entered, true)
+  assert.equal(result.sync?.state, "unresolved")
+  assert.equal(result.sync.effects.pull, "unknown")
+  assert.match(result.sync_summary, /unknown|unverified/u)
+  assert.doesNotMatch(result.sync_summary, /nothing was pulled or pushed|it did not run/u)
+})
+
+test("boot treats a result without an outcome as unverified, not successful sync", async () => {
+  const root = await desk()
+  const result = await boot(root, { syncFn: async () => ({}) })
+  assert.equal(result.sync.state, "unresolved")
+  assert.equal(result.sync.effects.pull, "unknown")
+  assert.match(result.sync_summary, /unverified/u)
 })
 
 test("lastSyncedAt reads the recorded last success, never FETCH_HEAD, and is null without a usable record", () => {

@@ -4,15 +4,16 @@
 // "warn the operator but proceed" text with a deterministic
 // retry-quarantine-diagnose sequence, never a silent proceed.
 //
-// `syncWorkspace` never throws: `git pull --rebase --autostash` runs once;
+// Incoming sync is fast-forward-only, with rebase and autostash explicitly disabled.
+// Existing operations and uncertain effects are preserved; sync never aborts them.
+// `syncWorkspace` never throws: the pull runs once;
 // when it fails because git names untracked files the incoming commits would
 // overwrite, exactly those files (and no others: an untracked file on a shared
 // desk is usually another session's unfinished work) are quarantined to
 // `_cache/stray-<date>[-n]/` -- moved, never deleted, and never clobbering an
 // earlier same-day quarantine (Review Focus: "same-day double quarantine") --
-// then the pull is retried once more. Anything still unresolved (git named no
-// untracked file in the way, or the retry also fails -- a genuine tracked-file
-// conflict) queues the detached
+// then the fast-forward pull is retried once more, only after a known failure
+// with an unchanged branch, HEAD and index. Other unresolved pulls queue the detached
 // Desk-problem filer (mechanism `session-sync`) and returns the same
 // honest, five-field `Desk problem:` block shape every other mechanism in
 // this codebase uses -- this is the "unresolved branch" upgrade originally
@@ -26,14 +27,16 @@
 // `spawnSync`, for tests only; real callers never pass it.
 
 import { spawn, spawnSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { formatDeskProblem } from "./index-drift.js"
-import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, recordPullOutcome } from "./sync-worker.js"
+import { hostFromEnv, inspectSyncStatus, recordPullOutcome } from "./sync-worker.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { gitErrorLine, inspectSyncState, inspectSyncTarget, PRESERVE_SYNC_WORK, sameSyncVersion, uncertainGitResult } from "./sync-safety.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
@@ -63,12 +66,12 @@ function gitEnv() {
 // `timeoutMs` runs out and reports a synthetic failure instead. Every call
 // site below threads its own budgeted timeout through explicitly (fix
 // round), so `timeoutMs` has no default of its own left to fall back to.
-function run(spawnGit, root, args, timeoutMs) {
+function run(spawnGit, root, args, timeoutMs, readOnly = false) {
   if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
-    env: gitEnv(),
+    env: { ...gitEnv(), ...(readOnly ? { GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } : {}) },
   })
 }
 
@@ -114,18 +117,7 @@ export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn }
 }
 
 function pull(root, spawnPull, timeoutMs) {
-  return run(spawnPull, root, ["pull", "--rebase", "--autostash"], timeoutMs)
-}
-
-function abortRebase(root, spawnGit, timeoutMs) {
-  // Best-effort safety net: harmless (and ignored) when there is no rebase in progress.
-  run(spawnGit, root, ["rebase", "--abort"], timeoutMs)
-}
-
-function conflictedPaths(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"], timeoutMs)
-  if (result.status !== 0 || typeof result.stdout !== "string") return []
-  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
+  return run(spawnPull, root, ["pull", "--ff-only", "--no-rebase", "--no-autostash"], timeoutMs)
 }
 
 // Untracked, non-ignored paths at `root`, unquoted (`-z`), so a name with spaces or non-ASCII letters matches git's own
@@ -159,41 +151,20 @@ export function overwrittenUntrackedPaths(stderr) {
   return [...new Set(safe)]
 }
 
-// The number of stash entries `root` currently has -- used only to notice a
-// `git stash pop` that silently failed to drop its own entry (see
-// `popConflicted`, below).
-function stashCount(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["stash", "list"], timeoutMs)
-  if (result.status !== 0 || typeof result.stdout !== "string") return 0
-  return result.stdout.split("\n").filter((line) => line.trim() !== "").length
-}
-
-// A status-0 `git pull --rebase --autostash` is not proof the tree actually
-// ended up clean (fix round, controller ruling): the rebase step can finish
-// while popping its own autostash conflicts, without necessarily failing the
-// pull's own exit code. `conflictedPaths` catches a pop that left
-// merge-conflict markers; `stashCount` growing past `stashBefore` catches
-// the other shape (an untracked file colliding with one the stash would
-// restore), which leaves the stash entry behind with no UU marker at all.
-function popConflicted(root, spawnGit, timeoutMs, stashBefore) {
-  const paths = conflictedPaths(root, spawnGit, timeoutMs)
-  const conflicted = paths.length > 0 || stashCount(root, spawnGit, timeoutMs) > stashBefore
-  return { conflicted, paths }
-}
-
-// The first `_cache/stray-<date>[-n]/` directory that does not already exist
-// today -- never clobbers an earlier quarantine from the same day.
-async function freshQuarantineDir(root) {
+// Reserve the destination atomically so concurrent calls cannot share it.
+export async function reserveQuarantineDir(root) {
   const base = path.join(root, QUARANTINE_FOLDER, `stray-${today()}`)
-  if (!(await pathExists(base))) return base
-  for (let suffix = 2; suffix <= MAX_QUARANTINE_SUFFIX; suffix += 1) {
-    const candidate = `${base}-${suffix}`
-    if (!(await pathExists(candidate))) return candidate
+  await fs.mkdir(path.dirname(base), { recursive: true })
+  for (let suffix = 1; suffix <= MAX_QUARANTINE_SUFFIX; suffix += 1) {
+    const candidate = suffix === 1 ? base : `${base}-${suffix}`
+    try {
+      await fs.mkdir(candidate)
+      return candidate
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+    }
   }
-  // istanbul ignore next -- practically unreachable (1000 same-day
-  // quarantines): falls back to the last candidate rather than looping
-  // forever.
-  return `${base}-${MAX_QUARANTINE_SUFFIX}`
+  throw new Error("quarantine destination capacity exhausted; existing paths were retained")
 }
 
 // Moves every path in `paths` (relative to `root`) into a fresh quarantine
@@ -202,17 +173,21 @@ async function freshQuarantineDir(root) {
 // Never deletes: a path that no longer exists by the time this runs (a rare
 // race) is simply skipped, not treated as an error.
 async function quarantine(root, paths) {
-  const dir = await freshQuarantineDir(root)
   const moved = []
-  for (const relative of paths) {
-    const from = path.join(root, relative)
-    if (!(await pathExists(from))) continue
-    const to = path.join(dir, relative)
-    await fs.mkdir(path.dirname(to), { recursive: true })
-    await fs.rename(from, to)
-    moved.push(path.relative(root, to))
+  try {
+    const dir = await reserveQuarantineDir(root)
+    for (const relative of paths) {
+      const from = path.join(root, relative)
+      if (!(await pathExists(from))) continue
+      const to = path.join(dir, relative)
+      await fs.mkdir(path.dirname(to), { recursive: true })
+      await fs.rename(from, to)
+      moved.push(path.relative(root, to))
+    }
+    return { moved }
+  } catch (error) {
+    return { moved, error }
   }
-  return moved
 }
 
 /**
@@ -250,7 +225,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
       "--mechanism", "session-sync",
       "--reason", safeReason,
       "--host", host,
-      "--fix-attempt", "ran git pull --rebase --autostash; when git named untracked files in the way, moved only those to _cache/ and retried once more",
+      "--fix-attempt", "attempted fast-forward-only sync without rebase or autostash; preserved existing operations and uncertain effects",
     ], { cwd: root, detached: true, stdio: "ignore", windowsHide: true, env })
     child.on("error", () => {})
     child.unref()
@@ -278,11 +253,6 @@ export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = f
 }
 
 // The first meaningful line of git's own complaint, without any credentials a remote URL carried.
-function firstErrorLine(stderr) {
-  const line = String(stderr ?? "").split(/\r?\n/u).map((value) => value.trim()).find((value) => value !== "" && !/^hint:/iu.test(value)) ?? ""
-  return line.replace(/\/\/[^/@\s]+@/gu, "//").slice(0, 200)
-}
-
 function originUrl(root, spawnGit, timeoutMs) {
   const result = run(spawnGit, root, ["remote", "get-url", "origin"], timeoutMs)
   const url = result.status === 0 && typeof result.stdout === "string" ? result.stdout.trim() : ""
@@ -292,12 +262,12 @@ function originUrl(root, spawnGit, timeoutMs) {
 const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline"])
 
 const TELL = {
-  unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
-  auth_failed: "The remote refused this host's credentials, so `git status` will read clean: sign in again (`gh auth status`), then retry sync before pushing.",
-  deadline: "Sync ran out of time before finishing: retry it before pushing.",
+  unreachable: "The remote could not be reached; local Git status does not prove remote delivery. Read back unknown effects before retry.",
+  auth_failed: "The remote refused this host's credentials. Use the existing sign-in path, then read back unknown effects before retry.",
+  deadline: "Sync ran out of time before finishing; read back unknown effects before retry.",
 }
 
-function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
+function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs, safety, effects }) {
   const cause = classifyPullFailure({
     stderr: failed?.stderr,
     conflicted,
@@ -307,19 +277,21 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
   // A network outage, an expired sign-in and a ran-out budget are the host's state, not Desk defects: they still
   // surface to the agent below, but no Desk problem is filed. A failed pull's filed reason names its cause, so the
   // issue says what happened and each cause gets its own title and fingerprint.
-  const filing = NOT_A_DESK_DEFECT.has(cause)
+  const filing = safety || NOT_A_DESK_DEFECT.has(cause)
     ? undefined
     : fileProblem({ root, env, reason: failed === undefined ? reason : `${reason}:${cause}`, host: hostFromEnv(env) })
   const diagnostic = formatDeskProblem({
     mechanism: "session-sync",
     symptom: "session-start pull did not resolve",
-    broke: `git pull --rebase --autostash failed (${reason})${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`,
+    broke: `${effects?.pull === "not_attempted" ? "sync paused before pulling" : "fast-forward-only pull did not finish cleanly"} (${reason})${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`,
     means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
-    fix: "not repaired automatically: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once -- inspect the conflict and resolve it, or ask the operator",
-    file: filing?.file ?? "filing in background",
-    tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
+    fix: "pending work and Git operation metadata were retained; no rebase, autostash, abort or reset was attempted. Read back the source and retained operation before any retry; tracked-history recovery remains unresolved.",
+    file: filing?.file ?? (safety ? "not filed: existing or unverified Git state"
+      : NOT_A_DESK_DEFECT.has(cause) ? "not filed: host or remote condition" : "filing in background"),
+    tell: TELL[cause] ?? "Run `git status` in the desk and inspect its retained operation; do not treat a clean index as recovered history.",
   })
-  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
+  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: gitErrorLine(failed?.stderr) || safety?.error || "", conflicted, cleanup: PRESERVE_SYNC_WORK, effects: effects ?? { pull: "unknown" } }
+  if (safety?.operations) result.operations = safety.operations
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result
 }
@@ -329,9 +301,8 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * "quarantined", quarantinedPaths } | { state: "unresolved", reason, diagnostic,
  * quarantinedPaths? }`. Never throws.
  *
- * A desk with no remote at all, or whose current branch has no upstream yet
- * (mirrors `runtime/sync-worker.js`'s own `canPush` guard -- `hasRemoteConfigured`
- * plus an `aheadBehindCounts` probe of `@{u}`), has nothing to sync against: this
+ * A desk with no remote at all, or whose current branch has no upstream yet,
+ * has nothing to sync against once retained operations have been ruled out: this
  * is an ordinary state for a brand-new or purely-local desk, not a defect, so it
  * is reported as `synced` without ever attempting a pull.
  *
@@ -344,70 +315,112 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * with an unbounded or zero-timeout git call.
  */
 export async function syncWorkspace(options) {
-  const result = await runSync(options)
-  // `desk_status` reads this back, so its health word carries a failed sync the way boot's does.
-  recordPullOutcome({ root: options.root, env: options.env, result })
+  const operation = { attempt: undefined, remaining: null }
+  const result = await runSync({ ...options, operation })
+  const recorded = recordPullOutcome({ root: options.root, env: options.env, result, attempt: operation.attempt,
+    waitMs: operation.attempt ? operation.remaining() : 0 })
+  if (operation.attempt && recorded === null) {
+    return { ...unresolved({ root: options.root, env: options.env, reason: "sync_status_unavailable",
+      conflicted: result.conflicted ?? [], quarantinedPaths: result.quarantinedPaths,
+      safety: { error: "the incoming attempt could not settle its own retained outcome; readback is required" },
+      effects: { pull: "unknown" }, spawnGit: options.spawnGit ?? spawnSync, timeoutMs: 0 }), attempt: operation.attempt }
+  }
   return result
 }
 
 async function runSync({
-  root, env, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
+  root, env, operation, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
   // The pull runs asynchronously unless a caller supplies its own `spawnGit`, which then runs every call.
   spawnPull = spawnGit === spawnSync ? spawnGitAsync : spawnGit,
 }) {
-  // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
-  if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
-  if (aheadBehindCounts({ root, spawnGit }) === null) return { state: "synced", nothingToSync: "no_upstream" }
-
   const deadlineAt = now() + SYNC_WORKSPACE_DEADLINE_MS
   const remaining = () => deadlineAt - now()
+  operation.remaining = remaining
   const budgetedTimeout = () => Math.min(GIT_TIMEOUT_MS, remaining())
   const deadlineExceeded = (conflicted, quarantinedPaths) => unresolved({
-    root, env, fileProblem, reason: "sync_deadline_exceeded", conflicted, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS,
+    root, env, fileProblem, reason: "sync_deadline_exceeded", conflicted, quarantinedPaths, spawnGit, timeoutMs: budgetedTimeout(),
   })
 
   if (remaining() <= 0) return deadlineExceeded([])
 
-  const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
-  const first = await pull(root, spawnPull, budgetedTimeout())
-  if (first.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
-    if (!conflicted) return { state: "synced" }
-    abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+  const inspect = () => inspectSyncState((args) => run(spawnGit, root, args, budgetedTimeout(), true), root)
+  const preserved = (safety, quarantinedPaths, failed, attempted = false) => remaining() <= 0 ? deadlineExceeded(safety.conflicted ?? [], quarantinedPaths) : unresolved({
+    root, env, fileProblem, reason: safety.reason, conflicted: safety.conflicted ?? [], safety, failed, quarantinedPaths,
+    spawnGit, timeoutMs: budgetedTimeout(), effects: { pull: attempted ? "unknown" : "not_attempted" },
+  })
+  const before = inspect()
+  if (before.state !== "clear" && before.state !== "not_git") return preserved(before)
+  const priorStatus = inspectSyncStatus({ root, env })
+  if (!priorStatus.ok) return preserved({ state: "unknown", reason: "sync_status_unavailable" })
+  if (priorStatus.value?.last_pull?.effects?.pull === "unknown") {
+    return unresolved({ root, env, fileProblem, reason: "previous_pull_outcome_unknown", conflicted: [],
+      safety: { error: "the previous incoming outcome needs source/remote readback before retry" },
+      effects: { pull: "unknown" }, spawnGit, timeoutMs: budgetedTimeout() })
   }
-  // Captured before the abort below, which is what actually clears a genuine
-  // mid-rebase conflict: reading it after cleanup would always see nothing.
-  const firstConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
+  if (before.state === "not_git") return { state: "synced", nothingToSync: "no_remote" }
+  // Absence of an upstream is ordinary only after ruling out a retained operation.
+  const target = inspectSyncTarget((args) => run(spawnGit, root, args, budgetedTimeout(), true))
+  if (target.state === "unknown") return preserved(target)
+  if (target.state === "none") return { state: "synced", nothingToSync: target.reason }
+  if (remaining() <= 0) return deadlineExceeded([])
+
+  const preparePull = (quarantinedPaths) => {
+    const attempt = operation.attempt ?? randomUUID()
+    const recorded = recordPullOutcome({ root, env, attempt: operation.attempt, waitMs: remaining(),
+      result: { state: "unresolved", reason: "pull_in_progress",
+        effects: { pull: "unknown" }, cleanup: PRESERVE_SYNC_WORK, attempt, quarantinedPaths } })
+    if (recorded?.last_pull?.attempt !== attempt) return false
+    operation.attempt = attempt
+    return true
+  }
+  if (!preparePull()) return preserved({ state: "unknown", reason: "sync_status_unavailable" })
+  const first = await pull(root, spawnPull, budgetedTimeout())
+  const after = inspect()
+  if (remaining() <= 0) return deadlineExceeded(after.conflicted ?? [])
+  if (after.state !== "clear") return preserved(after, undefined, first, true)
+  if (first.status === 0 && !uncertainGitResult(first)) {
+    return { state: "synced" }
+  }
+  const firstConflicted = []
 
   if (remaining() <= 0) return deadlineExceeded(firstConflicted)
 
   // Several sessions share a desk, so an untracked file usually belongs to another session's unfinished work. Only the
   // untracked files git itself named as in the pull's way are moved aside; any other failure (a conflict, an unreachable
   // remote, refused credentials) moves nothing.
-  const named = overwrittenUntrackedPaths(first.stderr)
+  const named = uncertainGitResult(first) || !sameSyncVersion(before, after) ? [] : overwrittenUntrackedPaths(first.stderr)
   const untracked = new Set(named.length === 0 ? [] : untrackedPaths(root, spawnGit, budgetedTimeout()))
   const stray = named.filter((relative) => untracked.has(relative))
+  if (remaining() <= 0) return deadlineExceeded([])
   if (stray.length === 0) {
-    return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+    const refused = !uncertainGitResult(first) && sameSyncVersion(before, after) &&
+      /not possible to fast-forward|would be overwritten/iu.test(String(first.stderr))
+    return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first,
+      effects: { pull: refused ? "not_applied" : "unknown" }, spawnGit, timeoutMs: budgetedTimeout() })
   }
 
-  const quarantinedPaths = await quarantine(root, stray)
+  const quarantined = await quarantine(root, stray)
+  const quarantinedPaths = quarantined.moved
+  if (quarantined.error) {
+    return unresolved({ root, env, fileProblem, reason: "quarantine_failed", conflicted: [], quarantinedPaths,
+      failed: { stderr: quarantined.error.message }, spawnGit, timeoutMs: budgetedTimeout() })
+  }
   if (remaining() <= 0) return deadlineExceeded(firstConflicted, quarantinedPaths)
 
-  const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout())
+  const retryState = inspect()
+  if (!sameSyncVersion(after, retryState)) {
+    return preserved(retryState.state === "clear" ? { reason: "source_changed", state: "unknown" } : retryState, quarantinedPaths, first, true)
+  }
+  if (!preparePull(quarantinedPaths)) return preserved({ state: "unknown", reason: "sync_status_unavailable" }, quarantinedPaths, first, true)
   const second = await pull(root, spawnPull, budgetedTimeout())
-  if (second.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
-    if (!conflicted) return { state: "quarantined", quarantinedPaths }
-    abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+  const finalState = inspect()
+  if (remaining() <= 0) return deadlineExceeded(finalState.conflicted ?? [], quarantinedPaths)
+  if (finalState.state !== "clear") return preserved(finalState, quarantinedPaths, second, true)
+  if (second.status === 0 && !uncertainGitResult(second)) {
+    return { state: "quarantined", quarantinedPaths }
   }
 
-  const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
-  return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths, failed: second, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+  return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: [], quarantinedPaths, failed: second, spawnGit, timeoutMs: budgetedTimeout() })
 }
 
 // ---------------------------------------------------------------------------

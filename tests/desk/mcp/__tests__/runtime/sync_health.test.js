@@ -49,7 +49,7 @@ test("healthWord and syncDegradation are the one source of the words boot report
   assert.equal(syncDegradation({ state: "unresolved" }), "sync: unresolved")
 })
 
-test("a failed sync is recorded for desk_status, and a later good sync clears it", async () => {
+test("a failed sync stays unknown until explicit readback before a later retry", async () => {
   const { origin, root } = await mkDeskWithOrigin()
   git(root, ["remote", "set-url", "origin", path.join(origin, "gone")])
   const failed = await syncWorkspace({ root, env, fileProblem: () => ({ file: "none" }) })
@@ -62,6 +62,10 @@ test("a failed sync is recorded for desk_status, and a later good sync clears it
   assert.equal(status.sync.last_pull.state, "unresolved")
 
   git(root, ["remote", "set-url", "origin", origin])
+  assert.equal((await syncWorkspace({ root, env })).reason, "previous_pull_outcome_unknown")
+  assert.equal(git(root, ["ls-remote", "origin", "refs/heads/main"]).trim().split(/\s/u)[0], git(root, ["rev-parse", "HEAD"]).trim())
+  assert.equal(git(root, ["status", "--porcelain"]), "")
+  updateSyncStatus(root, env, { last_pull: null })
   assert.equal((await syncWorkspace({ root, env })).state, "synced")
   assert.equal(readSyncStatus({ root, env }).last_pull, null)
   assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false)
@@ -89,14 +93,16 @@ test("a recorded sync outcome never throws when the state folder is unwritable",
   assert.doesNotThrow(() => recordFetchOk({ root, env: unwritable, at: new Date().toISOString() }))
 })
 
-test("a successful push clears a failed-pull record: the remote is reachable again", async () => {
+test("a successful push confirms reachability without owning or erasing an incoming record", async () => {
   const { root } = await mkDeskWithOrigin()
   recordPullOutcome({ root, env, result: { state: "unresolved", reason: "pull_rebase_failed", cause: "unreachable" } })
+  const incoming = readSyncStatus({ root, env }).last_pull
   await fs.writeFile(path.join(root, "more.md"), "more\n")
   git(root, ["add", "--", "more.md"])
   git(root, ["commit", "-q", "-m", "more"])
   assert.deepEqual(await runPushWorker({ root, env, clock: instantClock }), { result: "ok" })
-  assert.equal(readSyncStatus({ root, env }).last_pull, null)
+  assert.deepEqual(readSyncStatus({ root, env }).last_pull, incoming)
+  assert.equal(git(root, ["ls-remote", "origin", "refs/heads/main"]).trim().split(/\s/u)[0], git(root, ["rev-parse", "HEAD"]).trim())
 })
 
 const ready = {
@@ -113,7 +119,8 @@ test("compact desk_status says degraded for a failed sync, the same line and wor
   assert.equal(compact.state, "degraded")
   assert.equal(compact.summary, "Desk works, but the last sync failed.")
   assert.deepEqual(compact.degraded, [syncDegradation(lastPull)])
-  assert.match(compact.fix, /git -C \/d pull --rebase --autostash/u)
+  assert.match(compact.fix, /git -C \/d status --short --branch/u)
+  assert.doesNotMatch(compact.fix, /pull --rebase/u)
   assert.equal(compact.sync, "last pull failed (unreachable): not known to be in sync")
   assert.equal(compactStatus({ ...ready, root: undefined, sync: { last_pull: { state: "unresolved" } } }).fix.includes("<desk>"), true)
   assert.equal(compactStatus({ ...ready, sync: { last_pull: { state: "unresolved" } } }).sync, "last pull failed: not known to be in sync")
@@ -168,7 +175,7 @@ async function failedPullDesk() {
   return { origin, root }
 }
 
-test("desk_status keeps a failed pull when Desk's own later fetch also fails, and drops it once that fetch succeeds", async () => {
+test("desk_status keeps an unknown incoming effect even after a later fetch succeeds", async () => {
   const { origin, root } = await failedPullDesk()
   assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.state, "unresolved")
   await later()
@@ -176,7 +183,7 @@ test("desk_status keeps a failed pull when Desk's own later fetch also fails, an
   assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.state, "unresolved", "a failed fetch is not proof of anything")
   git(root, ["remote", "set-url", "origin", origin])
   assert.deepEqual(await fastForwardStateBranch({ env, root }), { result: "up_to_date" })
-  assert.equal("last_pull" in (await desk_status({ deskRoot: root, env })).sync, false, "Desk's own successful fetch cleared it")
+  assert.equal((await desk_status({ deskRoot: root, env })).sync.last_pull.effects.pull, "unknown", "reachability does not establish the earlier operation's effects")
 })
 
 test("a successful Desk fetch does not clear a diverged failure", async () => {
@@ -225,7 +232,7 @@ test("desk_status keeps a failed pull after a multi-remote fetch with one dead r
 
 test("the sync fix quotes a desk path with a space", () => {
   const compact = compactStatus({ ...ready, root: { path: "/my desk" }, sync: { last_pull: lastPull } })
-  assert.match(compact.fix, /git -C '\/my desk' pull --rebase --autostash/u)
+  assert.match(compact.fix, /git -C '\/my desk' status --short --branch/u)
 })
 
 // ---- The status file's read-merge-write is locked: two writers never drop each other's fields. ----

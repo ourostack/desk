@@ -91,7 +91,9 @@ async function mkOriginWithClone() {
 }
 
 function originCommitCount(origin) {
-  return git(origin, ["log", "--oneline", "main"]).trim().split("\n").filter(Boolean).length
+  const result = spawnSync("git", ["--git-dir", origin, "log", "--oneline", "main"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim().split("\n").filter(Boolean).length
 }
 
 function writeLockFile(root, env, record) {
@@ -529,7 +531,7 @@ test("runPushWorker pushes a real ahead commit, records last_push_at, and preser
   assert.equal(status2.last_push_at, status.last_push_at, "a later no-op must not erase the last recorded push")
 })
 
-test("runPushWorker retries once via pull --rebase --autostash and pushes, after a non-conflicting rejection", async () => {
+test("runPushWorker retains non-conflicting divergent histories after confirmed rejection without rebasing", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await writeAndCommit(cloneB, "from-b.md", "b\n", "from b")
@@ -537,14 +539,18 @@ test("runPushWorker retries once via pull --rebase --autostash and pushes, after
 
   await writeAndCommit(cloneA, "from-a.md", "a\n", "from a") // diverges from origin, but touches a different file
 
-  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock })
-  assert.deepEqual(result, { result: "ok" })
-  assert.equal(originCommitCount(origin), 3, "seed + from-b + from-a all landed")
+  const head = git(cloneA, ["rev-parse", "HEAD"])
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, fileProblem: () => {} })
+  assert.equal(result.result, "blocked")
+  assert.equal(result.reason, "push_rejected")
+  assert.equal(result.effects.push, "not_applied")
+  assert.equal(git(cloneA, ["rev-parse", "HEAD"]), head)
+  assert.equal(originCommitCount(origin), 2, "incoming history remains intact; outgoing delivery is still open")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
 })
 
-test("runPushWorker aborts the rebase and reports blocked with the conflicted paths when the retry pull conflicts", async () => {
+test("runPushWorker preserves conflicting histories after rejection without creating an operation to abort", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await fs.writeFile(path.join(cloneB, "seed.md"), "seed from b\n")
@@ -559,15 +565,17 @@ test("runPushWorker aborts the rebase and reports blocked with the conflicted pa
     root: cloneA, env: process.env, clock: instantClock,
     fileProblem: (args) => { filed = args },
   })
-  assert.deepEqual(result, { result: "blocked", reason: "pull_rebase_failed" })
+  assert.equal(result.result, "blocked")
+  assert.equal(result.reason, "push_rejected")
 
   const status = readSyncStatus({ root: cloneA, env: process.env })
   assert.equal(status.blocked, true)
-  assert.equal(status.reason, "pull_rebase_failed")
-  assert.deepEqual(status.paths, ["seed.md"])
+  assert.equal(status.reason, "push_rejected")
+  assert.deepEqual(status.paths, [])
 
   assert.notEqual(filed, null)
-  assert.equal(filed.reason, "pull_rebase_failed")
+  assert.equal(filed.reason, "push_rejected")
+  assert.equal(await fs.readFile(path.join(cloneA, "seed.md"), "utf8"), "seed from a\n")
 
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
@@ -630,7 +638,7 @@ test("GIT_SSH_COMMAND defaults to -o BatchMode=yes alone when nothing was alread
 // --rebase --autostash` prints "Applying autostash resulted in conflicts..."
 // yet still exits 0, leaves `UU seed.md` in `git status --porcelain`, and
 // does not drop its own stash entry.
-test("runPushWorker treats a pull that succeeds but leaves its own autostash pop conflicted as blocked, and never force-pushes", async () => {
+test("runPushWorker leaves overlapping working edits intact after a rejected push without autostashing", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await writeAndCommit(cloneB, "seed.md", "seed\nfrom origin\n", "origin edits seed")
@@ -647,20 +655,22 @@ test("runPushWorker treats a pull that succeeds but leaves its own autostash pop
     root: cloneA, env: process.env, clock: instantClock,
     fileProblem: (args) => { filed = args },
   })
-  assert.deepEqual(result, { result: "blocked", reason: "autostash_pop_conflict" })
+  assert.equal(result.result, "blocked")
+  assert.equal(result.reason, "push_rejected")
 
   const status = readSyncStatus({ root: cloneA, env: process.env })
   assert.equal(status.blocked, true)
-  assert.equal(status.reason, "autostash_pop_conflict")
-  assert.deepEqual(status.paths, ["seed.md"])
+  assert.equal(status.reason, "push_rejected")
+  assert.deepEqual(status.paths, [])
 
   assert.notEqual(filed, null)
-  assert.equal(filed.reason, "autostash_pop_conflict")
+  assert.equal(filed.reason, "push_rejected")
 
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
-  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the stash-pop conflict is real, left on disk exactly as real git leaves it")
-  assert.match(git(cloneA, ["stash", "list"]), /autostash/u, "the stash entry is deliberately not dropped, exactly as real git leaves it")
+  assert.equal(await fs.readFile(path.join(cloneA, "seed.md"), "utf8"), "seed\nfrom A working tree\n")
+  assert.equal(git(cloneA, ["ls-files", "-u"]), "")
+  assert.equal(git(cloneA, ["stash", "list"]), "")
   assert.equal(originCommitCount(origin), 2, "never force-pushed: origin still only has seed + b's edit")
 })
 
@@ -670,7 +680,7 @@ test("runPushWorker treats a pull that succeeds but leaves its own autostash pop
 // so -- exactly as this file's own header reserves scripted `spawnGit` for
 // ("forced-rejection paths that real Git cannot be made to hit
 // deterministically") -- this exercises it directly instead.
-test("runPushWorker also treats a stash count that grew without leaving UU markers as an autostash pop conflict", async () => {
+test("runPushWorker does not consult or pop stashes after a rejected push", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await writeAndCommit(cloneB, "other.md", "other\n", "other")
@@ -691,14 +701,17 @@ test("runPushWorker also treats a stash count that grew without leaving UU marke
     root: cloneA, env: process.env, clock: instantClock, spawnGit,
     fileProblem: (args) => { filed = args },
   })
-  assert.deepEqual(result, { result: "blocked", reason: "autostash_pop_conflict" })
-  assert.equal(filed.reason, "autostash_pop_conflict")
+  assert.equal(result.result, "blocked")
+  assert.equal(result.reason, "push_rejected")
+  assert.equal(stashListCalls, 0)
+  assert.equal(git(cloneA, ["stash", "list"]), "")
+  assert.equal(filed.reason, "push_rejected")
   const status = readSyncStatus({ root: cloneA, env: process.env })
-  assert.equal(status.reason, "autostash_pop_conflict")
+  assert.equal(status.reason, "push_rejected")
   assert.deepEqual(status.paths, [])
 })
 
-test("a conflicted-paths lookup that itself fails leaves the blocked report with an empty path list", async () => {
+test("an index safety read failure blocks the worker without guessing a conflict path", async () => {
   const { cloneA } = await (async () => {
     const origin = await mkBareOrigin()
     const a = await mkClone(origin, "a")
@@ -714,18 +727,18 @@ test("a conflicted-paths lookup that itself fails leaves the blocked report with
   git(cloneA, ["commit", "-q", "-am", "a edits seed"])
 
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("diff") && args.includes("--diff-filter=U")) return { status: 1, stdout: "", stderr: "boom" }
+    if (args.includes("ls-files")) return { status: 1, stdout: "", stderr: "boom" }
     return spawnSync(cmd, args, opts)
   }
   const result = await runPushWorker({
     root: cloneA, env: process.env, clock: instantClock, spawnGit, fileProblem: () => {},
   })
-  assert.equal(result.reason, "pull_rebase_failed")
+  assert.equal(result.reason, "git_state_unavailable")
   const status = readSyncStatus({ root: cloneA, env: process.env })
   assert.deepEqual(status.paths, [])
 })
 
-test("runPushWorker aborts the rebase defensively and reports blocked when the push is still rejected after a clean rebase", async () => {
+test("runPushWorker preserves an unconfirmed rejection without source rewrites or a second push", async () => {
   const { cloneA } = await mkOriginWithClone()
   await writeAndCommit(cloneA, "more.md", "more\n", "more")
 
@@ -742,12 +755,14 @@ test("runPushWorker aborts the rebase defensively and reports blocked when the p
     root: cloneA, env: process.env, clock: instantClock, spawnGit,
     fileProblem: (args) => { filed = args },
   })
-  assert.deepEqual(result, { result: "blocked", reason: "push_rejected_after_rebase" })
-  assert.equal(pushCalls, 2, "the one allowed retry, no more")
+  assert.equal(result.result, "blocked")
+  assert.equal(result.reason, "push_failed")
+  assert.equal(result.effects.push, "unknown")
+  assert.equal(pushCalls, 1, "an ambiguous result does not authorize replay")
   const status = readSyncStatus({ root: cloneA, env: process.env })
-  assert.equal(status.reason, "push_rejected_after_rebase")
+  assert.equal(status.reason, "push_failed")
   assert.deepEqual(status.paths, [])
-  assert.equal(filed.reason, "push_rejected_after_rebase")
+  assert.equal(filed.reason, "push_failed")
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
 })

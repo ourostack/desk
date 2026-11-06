@@ -5,7 +5,7 @@ import { deskVersion } from "../package-metadata.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
-import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
+import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, inspectSyncStatus, readFetchOkAt, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
 import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
 
 
@@ -29,14 +29,19 @@ export const DESK_STATUS_FIELDS = ["detail", "has_instructions"]
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
 async function syncStatus({ deskRoot, env, signal }) {
-  if (!await hasRemoteConfiguredAsync(deskRoot, { signal })) return "no remote configured"
-  const recorded = readSyncStatus({ root: deskRoot, env })
+  const status = inspectSyncStatus({ root: deskRoot, env })
+  if (!status.ok) return { blocked: true, reason: "sync_status_unavailable", effects: { push: "unknown", pull: "unknown" }, paths: [] }
+  const recorded = status.value
+  if (!await hasRemoteConfiguredAsync(deskRoot, { signal }) &&
+      recorded?.effects?.push !== "unknown" && recorded?.last_pull?.effects?.pull !== "unknown") return "no remote configured"
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
   const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [],
+      ...(recorded.effects ? { effects: recorded.effects, cleanup: recorded.cleanup, cause: recorded.cause ?? null,
+        error: recorded.error ?? "", operations: recorded.operations } : {}), ...lastPull }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {

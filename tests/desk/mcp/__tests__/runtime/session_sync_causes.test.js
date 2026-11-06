@@ -57,11 +57,12 @@ test("an unreachable origin is reported as unreachable with its URL and git's ow
   assert.equal(result.quarantinedPaths, undefined)
   assert.ok(existsSync(path.join(root, "stray.txt")), "the stray file stays where it was")
   assert.ok(!existsSync(path.join(root, "_cache")), "no quarantine directory appears for a network failure")
-  assert.match(result.diagnostic, /`git status` will read clean/u)
+  assert.match(result.diagnostic, /Git status does not prove remote delivery/u)
+  assert.doesNotMatch(result.diagnostic, /will read clean/u)
   assert.equal(git(root, ["status", "--porcelain"]).trim(), "?? stray.txt")
 })
 
-test("a genuine conflict keeps the conflict cause, the conflicted paths and the remote URL", async () => {
+test("divergent conflicting edits retain their remote URL without starting a rebase to discover paths", async () => {
   const { origin, root } = await mkOriginWithClone()
   const other = await mkTempRoot("desk-sync-cause-b-")
   git(other, ["clone", "-q", origin, "."])
@@ -76,8 +77,8 @@ test("a genuine conflict keeps the conflict cause, the conflicted paths and the 
 
   const result = await syncWorkspace({ root, env, fileProblem })
 
-  assert.equal(result.cause, "conflict")
-  assert.deepEqual(result.conflicted, ["seed.md"])
+  assert.equal(result.cause, "diverged")
+  assert.deepEqual(result.conflicted, [])
   assert.equal(result.remote, origin)
   assert.match(result.diagnostic, /`git status`/u)
   assert.doesNotMatch(result.diagnostic, /will read clean/u)

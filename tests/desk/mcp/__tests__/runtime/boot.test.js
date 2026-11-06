@@ -1092,7 +1092,7 @@ test("bootOnce: each step's own failure degrades only that part, never the whole
   assert.ok(result.degraded.some((line) => line.startsWith("active_tasks:")))
   assert.ok(result.degraded.some((line) => line.startsWith("card_validation:")))
   assert.ok(result.degraded.some((line) => line.startsWith("factory:")))
-  assert.equal(result.sync, null)
+  assert.deepEqual(result.sync, { state: "unresolved", reason: "boot_sync_result_unavailable", cause: "other", effects: { pull: "unknown" } })
   assert.equal(result.active_tasks, null)
   assert.equal(result.factory, null)
 })
@@ -1832,7 +1832,8 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
   assert.match(text, /Continue independent authorized work/u)
   assert.doesNotMatch(text, /never fall back to local-only/u)
   assert.doesNotMatch(text, /auth_timeout/u)
-  assert.match(text, /git sync is unresolved/u)
+  assert.match(text, /Git sync is unresolved/u)
+  assert.match(text, /Read back the source and retained remote outcome before retrying this sync/u)
   assert.match(text, /Fix the frontmatter of track-a\/bad-card\/task\.md/u)
   assert.match(text, /Do not push acme\/widgets/u)
   const quarantined = await healthyBoot(root, { syncFn: async () => ({ state: "quarantined" }) })
@@ -1921,7 +1922,7 @@ test("bootOnce: a sync that outlives the budget is pending, not a hang", async (
   const root = await mkDeskWorkspace()
   const result = await healthyBoot(root, { budgetMs: 30, syncBudgetMs: 30, syncFn: () => new Promise(() => {}) })
   assert.ok(result.pending.includes("sync: boot_budget_exceeded"))
-  assert.equal(result.sync, null)
+  assert.deepEqual(result.sync, { state: "unresolved", reason: "boot_sync_wait_expired", cause: "deadline", effects: { pull: "unknown" } })
 })
 
 test("bootOnce: a repo-state or open-PR step that throws degrades only itself; found PRs and repo states reach the result", async () => {

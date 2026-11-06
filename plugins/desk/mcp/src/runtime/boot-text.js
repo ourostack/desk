@@ -48,30 +48,35 @@ function strayDir(sync, root) {
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
- * One plain sentence about the sync, phrased for what happened, never a word like "partial". A failed sync pulled
- * nothing and pushed nothing; a conflict while restoring local changes means the pull itself succeeded; a desk with no
- * remote or upstream has nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null
- * when it did not return one); `timedOut` says the boot's time budget ended it; `lastSyncAt` is ISO text or null;
- * `root` is the desk's path, used to name where moved files went.
+ * Describe the observed sync result. An expired wait or absent result leaves effects unverified; only explicit non-dispatch data establishes that no pull was attempted.
+ * `lastSyncAt` is the recorded success time or null; `root` locates retained quarantine paths.
  */
 export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = "" }) {
   const asOf = `local desk is as of ${lastSyncAt ?? "unknown"}`
-  const failed = (why) => `sync failed: ${why}; nothing was pulled or pushed; ${asOf}`
-  if (timedOut) return failed("it did not finish within the boot's time budget")
-  if (sync === null || sync === undefined) return failed("it did not run")
+  const failed = (why) => `sync failed: ${why}; incoming update was not applied; ${asOf}`
+  const moved = Array.isArray(sync?.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
+  if (sync?.state === "unresolved" && sync.effects?.pull === "not_attempted") {
+    return `sync paused before pulling (${sync.reason ?? "unverified Git state"}); retained work was not cleaned up; ${asOf}${moved}`
+  }
+  const unverified = (why) => `sync unresolved: ${why}; source/remote effects are unverified; read back before retry; ${asOf}${moved}`
+  if (timedOut) return unverified("it did not finish within the boot's time budget")
+  if (sync === null || sync === undefined) return unverified("no sync result was returned")
   if (sync.state === "unresolved") {
-    const moved = Array.isArray(sync.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
+    if (sync.effects?.pull === "unknown") {
+      return unverified("the incoming outcome is unknown")
+    }
     if (typeof sync.reason === "string" && sync.reason.startsWith("autostash_pop_conflict")) {
       const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
-      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; nothing was pushed; resolve them before changing the desk${moved}`
+      return `sync: the pull succeeded, but the desk's uncommitted local changes conflict with what came in${paths}; resolve them before changing the desk${moved}`
     }
-    return `${failed(FAILURE_WORDS[sync.cause] ?? "the pull did not complete")}${moved}`
+    const why = FAILURE_WORDS[sync.cause] ?? "the pull did not complete"
+    return sync.effects?.pull === "not_applied" ? `${failed(why)}${moved}` : unverified(why)
   }
   if (sync.state === "quarantined") return `sync ok: moved ${plural(sync.quarantinedPaths?.length ?? 0, "stray untracked path")} to ${strayDir(sync, root)} first, then pulled`
   if (sync.nothingToSync === "headless") return "headless session; nothing synced"
   if (sync.nothingToSync === "no_remote") return "no remote; nothing to sync"
   if (sync.nothingToSync === "no_upstream") return "no upstream branch; nothing to sync"
-  return "sync ok"
+  return sync.state === "synced" ? "sync ok" : unverified("no recognized sync outcome was returned")
 }
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u

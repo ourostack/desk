@@ -73,14 +73,17 @@ test("a boot degraded by a failed sync tells the reply to open with the sync sen
   const root = await desk(["flash-valves"])
   const failed = await boot(root, null, { syncFn: async () => ({ state: "unresolved", cause: "unreachable" }) })
   const rule = failed.text_instructions.find((line) => line.startsWith("In every reply:"))
-  assert.match(formatBootText(failed), /Desk boot: degraded \(sync failed/u)
+  const header = formatBootText(failed).split("\n")[0]
+  assert.match(header, /^Desk boot: degraded \|/u)
+  assert.match(header, /\| sync unresolved: remote unreachable; source\/remote effects are unverified; read back before retry;/u)
   assert.ok(rule.includes('Desk could not sync: open your reply with "Desk could not sync with origin (remote unreachable); working from local state" before anything else, and never use "synced" for it.'), rule)
   assert.ok(!rule.includes("<reason>"), "the real reason, never a placeholder")
   assert.ok(!failed.instructions.some((line) => line.includes("never use \"synced\"")), "JSON instructions are unchanged")
   const ok = await boot(root, null)
   assert.ok(!ok.text_instructions.some((line) => line.includes("never use \"synced\"")))
   const unrun = await boot(root, null, { syncFn: async () => null })
-  assert.ok(unrun.text_instructions.some((line) => line.includes("never use \"synced\"")), "a sync that did not run is a failed sync too")
+  assert.ok(unrun.text_instructions.some((line) => line.includes("never use \"synced\"")), "an absent result does not establish non-dispatch")
+  assert.equal(unrun.sync.effects.pull, "unknown")
 })
 
 test("every repo path boot prints is already expanded against the real HOME, with the card's own spelling after it, so an agent never expands ~ itself", async () => {
@@ -126,5 +129,40 @@ test("the sync rule carries the summary's own reason for each failure, and for a
   assert.match(await rule({ state: "unresolved", cause: "auth_failed" }), /Desk could not sync with origin \(remote refused this host's credentials\); working from local state/u)
   assert.match(await rule({ state: "unresolved", cause: "diverged" }), /\(the desk and its remote have diverged\)/u)
   const conflict = await rule({ state: "unresolved", reason: "autostash_pop_conflict", conflicted: ["a/task.md"] })
-  assert.match(conflict, /Desk pulled but could not finish syncing: open your reply with "Desk pulled from origin, but the desk's uncommitted local changes conflict with what came in \(conflicted: a\/task\.md\); nothing was pushed; resolve them before changing the desk" before anything else, and never use "synced" for it\./u)
+  assert.match(conflict, /Desk pulled but could not finish syncing: open your reply with "Desk pulled from origin, but the desk's uncommitted local changes conflict with what came in \(conflicted: a\/task\.md\); resolve them before changing the desk" before anything else, and never use "synced" for it\./u)
+})
+
+test("the sync opening distinguishes non-application, non-dispatch and unknown completion", async () => {
+  const root = await desk(["flash-valves"])
+  const cases = [
+    { state: "unresolved", cause: "diverged", effects: { pull: "not_applied" } },
+    { state: "unresolved", reason: "git_operation_in_progress", effects: { pull: "not_attempted" } },
+    { state: "unresolved", cause: "other", effects: { pull: "unknown" } },
+  ]
+  for (const [index, sync] of cases.entries()) {
+    const result = await boot(root, null, { syncFn: async () => sync })
+    const rule = result.text_instructions.find((line) => line.startsWith("In every reply:"))
+    assert.match(rule, index === 1 ? /Desk paused sync/u : /Desk could not sync/u)
+    if (index === 1) assert.match(rule, /did not attempt incoming sync/u)
+    assert.doesNotMatch(rule, /nothing was pulled or pushed|it did not run/u)
+    assert.match(rule, /never use "synced"/u)
+  }
+})
+
+test("generated sync instructions require readback without destructive retry or unsupported clean-state claims", async () => {
+  const root = await desk(["flash-valves"])
+  for (const sync of [
+    { state: "unresolved", cause: "unreachable" },
+    { state: "unresolved", cause: "auth_failed" },
+    { state: "unresolved", cause: "deadline" },
+    { state: "unresolved", cause: "deadline", reason: "sync_deadline_exceeded" },
+    { state: "unresolved", cause: "diverged" },
+    { state: "unresolved", cause: "other", reason: "git_operation_in_progress", effects: { pull: "not_attempted" } },
+  ]) {
+    const result = await boot(root, null, { syncFn: async () => sync })
+    const instruction = result.instructions.find((line) => /^(?:The desk|Sync did not)/u.test(line))
+    assert.ok(instruction)
+    assert.match(instruction, /read back/iu)
+    assert.doesNotMatch(instruction, /pull --rebase|reconcile with a rebase|will read clean|remote is slow or unreachable/u)
+  }
 })

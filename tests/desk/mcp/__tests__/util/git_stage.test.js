@@ -171,7 +171,7 @@ test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call t
   assert.deepEqual(result, { ok: false, stderr: "timeout" })
 })
 
-// Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
+// A configured branch is enforced; otherwise any named branch is eligible.
 async function repoWithChange(branch = "main") {
   const root = await mkTempRepo()
   git(root, ["switch", "-q", "-c", branch])
@@ -209,19 +209,15 @@ test("a detached HEAD is refused by stage and commit whatever the caller knows, 
   assert.equal(commitCount(root), 1)
 })
 
-test("with the remote's default branch known, staging and committing off it are refused and name both branches", async () => {
+test("the remote default does not prevent staging and committing on an intentional branch", async () => {
   const root = await repoWithChange("trunk")
   originHead(root, "trunk")
   git(root, ["switch", "-q", "-c", "feature"])
   const staged = stagePaths(root, ["a.txt"], spawnSync, null)
-  assert.equal(staged.ok, false)
-  assert.match(staged.stderr, /on branch `feature`/u)
-  assert.match(staged.stderr, /only on `trunk`/u)
-  assert.equal(commitPaths(root, ["a.txt"], "off", spawnSync, null).ok, false)
+  assert.equal(staged.ok, true)
+  assert.equal(commitPaths(root, ["a.txt"], "on feature", spawnSync, null).ok, true)
   assert.equal(git(root, ["diff", "--cached", "--name-only"]).trim(), "")
-  git(root, ["switch", "-q", "trunk"])
-  assert.equal(stagePaths(root, ["a.txt"], spawnSync, null).ok, true)
-  assert.equal(commitPaths(root, ["a.txt"], "on trunk", spawnSync, null).ok, true)
+  assert.equal(lastCommitMessage(root), "on feature")
 })
 
 test("a configured state branch is the one branch Desk writes on, whatever the remote's default is", async () => {
