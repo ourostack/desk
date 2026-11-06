@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { archiveFixture, git, retry } from "./_archive_state_helpers.js"
+import { shellQuote } from "../../../../../plugins/desk/mcp/src/util/shell-quote.js"
 
 const trackBefore = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](mode-proof/notes.md) |\n"
 const trackAfter = "| Slug | State | Doing doc |\n|---|---|---|\n| `mode-proof` | done | [notes](_archive/mode-proof/notes.md) |\n"
@@ -173,29 +174,54 @@ test("staged recovery preserves a track index edit between qualification reads",
   assert.equal(git(f.root, "ls-files", "-s"), index)
 })
 
-for (const phase of ["pre-commit", "post-commit"]) test(`native ${phase} timeout retains its actual commit effect for retry`, async t => {
+for (const phase of ["pre-commit", "post-commit"]) for (const holdStartup of [false, true])
+test(`native ${phase} timeout retains its actual commit effect for retry${holdStartup ? " with Node startup held before the hook body" : ""}`, async t => {
   if (process.platform === "win32") return t.skip("POSIX executable hook fixture; Windows recovery uses the portable cases above")
   const f = await archiveFixture()
   const hook = path.join(f.root, ".git", "hooks", phase)
   const entered = path.join(f.root, "owned-hook-pid")
   const trace = path.join(f.root, "owned-commit-trace.jsonl")
-  await fs.writeFile(hook, `#!${process.execPath}\nconst fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`, { mode: 0o755 })
-  let result, hookPid
+  const control = path.join(f.root, ".git", "owned-startup-control-pid")
+  const bodyEntered = path.join(f.root, ".git", "owned-hook-body-entered")
+  const startup = path.join(f.root, ".git", "owned-startup-hold.cjs")
+  if (holdStartup) await fs.writeFile(startup,
+    `const fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(control)}, String(process.pid));\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n`)
+  const body = `${holdStartup ? `require("node:fs").writeFileSync(${JSON.stringify(bodyEntered)}, String(process.pid));\n` : ""}setTimeout(() => {}, 30000);\n`
+  await fs.writeFile(hook,
+    `#!/bin/sh\nset -e\nprintf '%s' "$$" > ${shellQuote(entered)}\nexec ${shellQuote(process.execPath)} -e ${shellQuote(body)}\n`,
+    { mode: 0o755 })
+  let result, hookPid, controlPid, receiptMissing = false
   try {
     result = await retry(f, {
       spawnGit(command, args, options) {
         return spawnSync(command, args, args[2] === "commit"
-          ? { ...options, timeout: 1500, env: { ...options.env, GIT_TRACE2_EVENT: trace } } : options)
+          ? { ...options, timeout: 1500, env: { ...options.env, GIT_TRACE2_EVENT: trace,
+            ...(holdStartup ? { NODE_OPTIONS: `${options.env?.NODE_OPTIONS ?? ""} --require=${JSON.stringify(startup)}` } : {}) } } : options)
       },
     })
   } finally {
+    if (holdStartup) {
+      controlPid = Number(await fs.readFile(control, "utf8"))
+      assert.ok(Number.isInteger(controlPid) && controlPid > 0, "the owned startup control must acknowledge its exact PID")
+    }
     try {
       hookPid = Number(await fs.readFile(entered, "utf8"))
       assert.ok(Number.isInteger(hookPid) && hookPid > 0)
-      try { process.kill(hookPid, "SIGTERM") } catch (error) { if (error.code !== "ESRCH") throw error }
-    } catch (error) { if (error.code !== "ENOENT") throw error }
+      if (holdStartup) assert.equal(hookPid, controlPid, "exec must retain the shell's acknowledged process identity")
+    } catch (error) { if (error.code !== "ENOENT") throw error; receiptMissing = true }
+    const ownedPid = hookPid ?? controlPid
+    if (ownedPid !== undefined) {
+      try { process.kill(ownedPid, "SIGTERM") } catch (error) { if (error.code !== "ESRCH") throw error }
+      t.diagnostic(`Exact owned ${phase} fixture PID ${ownedPid}; startup control ${controlPid ?? "not used"}; hook receipt ${hookPid ?? "absent"}; SIGTERM attempted before hook removal.`)
+    }
     await fs.unlink(hook)
   }
+  if (holdStartup) {
+    await assert.rejects(fs.lstat(bodyEntered), { code: "ENOENT" },
+      "startup was held before the hook body could acknowledge entry")
+    assert.equal(hookPid, controlPid)
+  }
+  assert.equal(receiptMissing, false, "hook ownership receipt must precede Node startup, not depend on its body")
   assert.equal(result.status, "archive_pending")
   assert.equal(result.commit.reason, "timeout")
   const events = (await fs.readFile(trace, "utf8")).trim().split("\n").map(line => JSON.parse(line))
