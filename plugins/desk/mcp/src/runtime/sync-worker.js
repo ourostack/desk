@@ -49,7 +49,7 @@
 
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -262,19 +262,19 @@ function canPush(root, spawnGit) {
 // The read-merge-write runs under a short-lived lock file beside the status file (`<file>.lock`, made with an exclusive
 // create, which is atomic on every platform Desk runs on), so two writers (a push worker and a boot sync) cannot each
 // read the same old record and have the later rename drop the earlier one's fields. The file is also replaced
-// atomically (a temp file, then a rename), so a reader never sees a half-written record. The lock never blocks for
-// long: a writer waits at most `waitMs`, takes over a lock older than `STATUS_LOCK_STALE_MS` (its holder died; the
-// critical section is a few milliseconds), and if the lock is still held after the wait it writes anyway, because a
-// missed status update is a smaller harm than a hung boot or tool call. `fetchOkPath`'s fetch time keeps its own file.
+// atomically (a temp file, then a rename), so a reader never sees a half-written record. Authoritative outcomes require
+// the lock and readable prior data; contention refuses the write, and age alone never disproves ownership.
+// Separate informational files retain their best-effort policy. `fetchOkPath`'s fetch time keeps its own file.
 const STATUS_LOCK_STALE_MS = 5000
 const STATUS_LOCK_WAIT_MS = 1500
+const SYNC_STATUS_MAX_BYTES = 1_048_576
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 /** Takes `lockFile` or returns `null` once `waitMs` has passed without getting it. Never throws. */
-function acquireStatusLock(lockFile, waitMs) {
+function acquireStatusLock(lockFile, waitMs, allowStale) {
   const deadline = Date.now() + waitMs
   for (;;) {
     try {
@@ -282,7 +282,7 @@ function acquireStatusLock(lockFile, waitMs) {
       return lockFile
     } catch {
       try {
-        if (Date.now() - statSync(lockFile).mtimeMs > STATUS_LOCK_STALE_MS) unlinkSync(lockFile)
+        if (allowStale && Date.now() - statSync(lockFile).mtimeMs > STATUS_LOCK_STALE_MS) unlinkSync(lockFile)
       } catch {
         // Gone already, or not removable: the next attempt decides.
       }
@@ -290,6 +290,23 @@ function acquireStatusLock(lockFile, waitMs) {
     if (Date.now() >= deadline) return null
     sleepSync(5)
   }
+}
+
+function inspectStatusForUpdate(file) {
+  try {
+    const info = lstatSync(file)
+    if (!info.isFile() || info.nlink !== 1 || info.size > SYNC_STATUS_MAX_BYTES) return { ok: false }
+    const value = JSON.parse(readFileSync(file, "utf8"))
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? { ok: true, value } : { ok: false }
+  } catch (error) {
+    return error.code === "ENOENT" ? { ok: true, value: null } : { ok: false }
+  }
+}
+
+function refuseStatusUpdate(reason) {
+  process.stderr.write(`[desk-mcp] sync status update refused: ${reason}; existing outcome preserved.\n`)
+  return null
 }
 
 /** Reads, merges `patch` into and atomically replaces the JSON file at `file`, under the lock described above. */
@@ -303,11 +320,17 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
     return null
   }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const lock = acquireStatusLock(`${file}.lock`, waitMs)
+  const authoritative = path.resolve(file) === path.resolve(syncStatusPath({ root, env }))
+  const lock = acquireStatusLock(`${file}.lock`, waitMs, !authoritative)
+  if (authoritative && lock === null) return refuseStatusUpdate("outcome lock unavailable")
   try {
-    const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
+    const prior = authoritative ? inspectStatusForUpdate(file) : { ok: true, value: readJsonIfPresent(file) }
+    if (!prior.ok) return refuseStatusUpdate("outcome record unreadable or invalid")
+    const next = { ...(prior.value ?? {}), ...patch }
+    const bytes = `${JSON.stringify(next)}\n`
+    if (authoritative && Buffer.byteLength(bytes) > SYNC_STATUS_MAX_BYTES) return refuseStatusUpdate("outcome record exceeds readable capacity")
     const temporary = `${file}.${randomUUID()}.tmp`
-    writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600 })
+    writeFileSync(temporary, bytes, { mode: 0o600 })
     renameWithRetry(temporary, file)
     return next
   } finally {
@@ -324,7 +347,7 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
 /**
  * Records how the last desk sync (`syncWorkspace`'s pull) ended, for `desk_status`'s one health word: a failed pull
  * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
- * `degraded`. A synced outcome clears the record; so does a later successful push. A pull that really happened also
+ * `degraded`. A synced incoming outcome clears the record; an outgoing push never owns it. A pull that really happened also
  * records `last_success_at`, which boot shows as "local desk is as of": FETCH_HEAD cannot say that, because a failed
  * fetch touches it too. A desk with nothing to sync against records no success time. Best effort, never throws.
  */
@@ -449,7 +472,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
     const delivered = deliveredSoFar(root, env)
     const pending = undeliveredCommits({ root, spawnGit, delivered })
     if (pending === null || pending.length === 0) {
-      updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+      updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt }) })
       return { result: "ok" }
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
@@ -464,7 +487,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
 
 function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, paths, error }) {
   const unpushed = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
-  updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
+  updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt }) })
   if (!NOT_A_DESK_DEFECT.has(reason)) fileProblem({ root, env, reason, host: hostFromEnv(env) })
   return { result: "blocked", reason, unpushed }
 }

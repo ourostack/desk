@@ -8,6 +8,12 @@ This server packages the [reviewed lexical milestone](https://github.com/ourosta
 
 Semantic scheduling and transactional recovery are not qualified yet. Repeated tombstone-policy changes fail closed but may return a generic error instead of typed `readiness_changed_during_read`. Runtime dependency packs reuse byte-identical, previously native-verified payloads with provenance; repackaging is not fresh native execution.
 
+## Sync outcome preservation
+
+Writes to the canonical sync outcome file require its exclusive status lock. A held lock, including an old lock with unverified ownership, refuses the update within the existing wait budget instead of allowing an unlocked replacement. Invalid, linked or oversized prior records are preserved; the next record must fit the same 1 MiB readable limit. Refusals are reported on stderr. Separate informational fetch-timestamp files retain their existing best-effort behavior.
+
+Outgoing delivery updates its own fields but never clears the incoming `last_pull` outcome: remote reachability or a successful push does not prove the checkout was synchronized. This is a scoped status-preservation milestone, not per-attempt dispatch ownership, automatic tracked-history recovery, arbitrary-editor exclusion or cross-version writer qualification. Do not delete an old outcome lock based on age alone; its owner and retained effects still need reconciliation.
+
 ## Run it directly
 
 ```sh
