@@ -357,6 +357,19 @@ const neverRanThenTimedOut = (counter) => (command, args, options) => {
   return etimedoutResult()
 }
 
+
+// A failure carries the change captured before dispatch (R2, R3): the HEAD and branch it was made on and the staged entries at
+// exactly its paths, so a route can finish that change and never whatever the paths hold later.
+function withoutCapture(root, result) {
+  const { capture, ...rest } = result
+  assert.deepEqual(capture, {
+    before: git(root, ["rev-list", "--max-parents=0", "HEAD"]).trim(),
+    branch: git(root, ["symbolic-ref", "--short", "HEAD"]).trim(),
+    expected: [`100644 ${git(root, ["hash-object", "a.txt"]).trim()}\ta.txt`],
+  })
+  return rest
+}
+
 for (const indexed of [false, true]) {
   const kind = indexed ? "temporary-index" : "path"
   const commit = (root, spawn, message = "save") => {
@@ -385,7 +398,7 @@ for (const indexed of [false, true]) {
     await staged(root)
     const counter = { commits: 0 }
     const result = commit(root, neverRanThenTimedOut(counter))
-    assert.deepEqual(result, { ok: false, stderr: "timeout", readback: "absent" })
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "absent" })
     assert.equal(counter.commits, 1)
     assert.equal(commitCount(root), 1)
   })
@@ -401,7 +414,7 @@ for (const indexed of [false, true]) {
       return etimedoutResult()
     }
     const result = commit(root, spawn)
-    assert.deepEqual(result, { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
     assert.equal(counter.commits, 1)
   })
 
@@ -418,7 +431,7 @@ for (const indexed of [false, true]) {
       return etimedoutResult()
     }
     const result = commit(root, spawn)
-    assert.deepEqual(result, { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
     assert.equal(counter.commits, 1)
   })
 
@@ -450,7 +463,7 @@ for (const indexed of [false, true]) {
     const root = await repoWithChange()
     await staged(root)
     const spawn = (command, args, options) => (args[2] === "commit" ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options))
-    assert.deepEqual(commit(root, spawn), { ok: false, stderr: "hook said no", readback: "absent" })
+    assert.deepEqual(withoutCapture(root, commit(root, spawn)), { ok: false, stderr: "hook said no", readback: "absent" })
   })
 }
 

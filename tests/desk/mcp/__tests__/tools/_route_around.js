@@ -10,14 +10,36 @@ export function notCommitted(commit) {
   return rest
 }
 
+// Every argv a step runs, one command per entry.
+export const argvsOf = (step) => [step.argv ?? []].flatMap((a) => (Array.isArray(a[0]) ? a : a.length ? [a] : []))
+
+// The Git subcommand an argv runs (after any `-C <dir>`), or null when it is not Git.
+function gitVerb(argv) {
+  if (argv[0] !== "git") return null
+  let i = 1
+  while (argv[i] === "-C" || argv[i] === "--git-dir") i += 2
+  return argv[i]
+}
+
+// Step 1 of every route only reads (a failed or timed-out commit can still have landed): a Git read, or finish-commit without --commit.
+export function readsOnly(step) {
+  const argvs = argvsOf(step)
+  return argvs.length > 0 && argvs.every((argv) => ["diff", "log", "status", "show", "ls-files", "rev-parse"].includes(gitVerb(argv)) ||
+    (String(argv[1] ?? "").endsWith("finish-commit.js") && !argv.includes("--commit")))
+}
+
 export function assertRoute(route) {
   assert.ok(route && typeof route === "object", "a result that is not committed carries route_around")
   assert.equal(typeof route.summary, "string")
   assert.ok(Array.isArray(route.steps) && route.steps.length >= 2, "route_around has steps")
+  assert.ok(readsOnly(route.steps[0]), "step 1 only reads")
   for (const step of route.steps) {
     assert.equal(typeof step.step, "string")
-    for (const argv of [step.argv ?? []].flatMap((a) => (Array.isArray(a[0]) ? a : a.length ? [a] : []))) {
+    for (const argv of argvsOf(step)) {
       for (const banned of ["stash", "--force", "-f", "--no-verify", "-a", "-A"]) assert.ok(!argv.includes(banned), `route_around never runs ${banned}`)
+      // R1, R2 (0972 on #625): no route commits whatever the paths hold, resets an index entry or moves a branch by hand.
+      const verb = gitVerb(argv)
+      if (verb !== null) assert.ok(!["add", "commit", "reset", "update-ref", "checkout", "restore", "worktree", "push", "rm", "mv", "update-index"].includes(verb), `route_around never runs git ${verb}`)
     }
   }
   assert.ok(!JSON.stringify(route).includes("DESK_TOOL_COMMIT"), "route_around never names or sets the card guard's override")

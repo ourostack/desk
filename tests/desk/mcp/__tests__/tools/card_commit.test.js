@@ -286,10 +286,10 @@ test("a lock-shaped commit failure is returned without redispatch for people and
     return { spawn, commits: () => commits }
   }
   const person = script(2)
-  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), { ok: false, stderr: lockError.stderr, readback: "absent" })
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), { ok: false, stderr: lockError.stderr, readback: "absent", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
   assert.equal(person.commits(), 1)
   const held = script(Infinity)
-  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), { ok: false, stderr: lockError.stderr, readback: "absent" })
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), { ok: false, stderr: lockError.stderr, readback: "absent", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
   assert.equal(held.commits(), 1)
   const background = script(2)
   const before = process.env[YIELD_ENV]
