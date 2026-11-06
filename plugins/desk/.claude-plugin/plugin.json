@@ -25,7 +25,7 @@
   "dependencies": [
     {
       "name": "superpowers",
-      "version": "^6.3.0"
+      "version": "^7.0.1"
     },
     {
       "name": "plain-language",

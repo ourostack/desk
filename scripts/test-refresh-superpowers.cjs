@@ -346,7 +346,8 @@ for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-r
 
     const hook = path.join(upstreamDir, "hooks/run-hook.cmd");
     const original = fs.readFileSync(hook, "utf8");
-    const changed = original.replace("where bash >nul 2>nul", 'for /f "delims=" %%B in (\'where bash\') do set "BASH_EXE=%%B"\nwhere bash >nul 2>nul');
+    const changed = original.replace("@echo off\n", '@echo off\nfor /f "delims=" %%B in (\'where bash\') do set "BASH_EXE=%%B"\n');
+    assert.notEqual(changed, original);
     fs.writeFileSync(hook, changed);
     commitChange(upstreamDir, "fixture batch apostrophe");
     const rawPath = path.join(root, "plugins/superpowers/hooks/upstream/run-hook.cmd");
@@ -415,7 +416,7 @@ for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-r
   try {
     const { root, upstreamDir } = buildFixture(tempRoot);
     const hook = path.join(upstreamDir, "hooks/run-hook.cmd");
-    fs.writeFileSync(hook, fs.readFileSync(hook, "utf8").replace("REM Try Git", "REM Updated Git"));
+    fs.writeFileSync(hook, fs.readFileSync(hook, "utf8").replace("@echo off\n", "@echo off\nREM Fixture upstream change\n"));
     commitChange(upstreamDir, "fixture nested UNKNOWN input");
     const upstream = require("./check-upstream-sources.cjs").createGitTreeReader({ dir: upstreamDir });
     const before = snapshot(root);

@@ -88,7 +88,12 @@ jobs:
           git switch --create "$BRANCH"
           git add --all -- .claude-plugin plugins/superpowers plugins/desk upstream-sources.lock.json
           git commit --quiet --message "Refresh Superpowers from upstream ${commit:0:12}" --message "Vendors $UPSTREAM@$commit byte for byte and releases $versions. Opened by $RUN_URL."
-          git push --force origin "HEAD:refs/heads/$BRANCH"
+          existing="$(git ls-remote --heads origin "refs/heads/$BRANCH")"
+          if [ -n "$existing" ]; then
+            git fetch origin "$BRANCH"
+            git merge --no-edit "origin/$BRANCH"
+          fi
+          git push origin "HEAD:refs/heads/$BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Open the pull request, run CI and merge on green

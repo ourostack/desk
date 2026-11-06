@@ -95,7 +95,15 @@ function createGitHubClient(run = spawnSync) {
     return response.tree.map((entry) => entry.path);
   }
 
-  return { repository, latestRelease, commit, compare, file, topLevel };
+  function tree(repository, ref) {
+    const response = get(`repos/${repository}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
+    if (!Array.isArray(response.tree) || response.truncated === true) {
+      throw new Error(`${repository}@${ref} did not return a complete recursive tree`);
+    }
+    return new Map(response.tree.filter((entry) => entry.type !== "tree").map((entry) => [entry.path, entry]));
+  }
+
+  return { repository, latestRelease, commit, compare, file, topLevel, tree };
 }
 
 // Apache-2.0 section 4(d) makes a NOTICE file's contents part of what a redistributor must carry, and a COPYING file can
@@ -174,18 +182,26 @@ function inspectSource(source, github) {
     ? "identical"
     : compareAncestry(github, source.repository, source.commit, candidateCommit);
 
-  const selectedFiles = source.files.map((file) => {
-    const candidateSha256 = sha256(github.file(source.repository, file.sourcePath, candidateCommit));
+  const selected = source.files.some((file) => skillDirectory(file.sourcePath))
+    ? selectedUpstreamPaths(source, { entries: github.tree(source.repository, candidateCommit) }).selected
+    : source.files.map((file) => file.sourcePath);
+  const lockedFiles = new Map(source.files.map((file) => [file.sourcePath, file]));
+  const addedPaths = selected.filter((sourcePath) => !lockedFiles.has(sourcePath));
+  const removedPaths = source.files.map((file) => file.sourcePath).filter((sourcePath) => !selected.includes(sourcePath));
+  const prefix = addedPaths.length > 0 ? generatedPrefix(source) : null;
+  const selectedFiles = selected.map((sourcePath) => {
+    const file = lockedFiles.get(sourcePath);
+    const candidateSha256 = sha256(github.file(source.repository, sourcePath, candidateCommit));
     return {
-      source_path: file.sourcePath,
-      generated_path: file.generatedPath,
-      ...(file.upstreamPath === undefined ? {} : { upstream_path: file.upstreamPath }),
-      locked_sha256: file.sha256,
+      source_path: sourcePath,
+      generated_path: file?.generatedPath ?? `${prefix}${sourcePath}`,
+      ...(file?.upstreamPath === undefined ? {} : { upstream_path: file.upstreamPath }),
+      locked_sha256: file?.sha256 ?? null,
       candidate_sha256: candidateSha256,
-      changed: candidateSha256 !== file.sha256,
+      changed: candidateSha256 !== file?.sha256,
     };
   });
-  const changedPaths = selectedFiles.filter((file) => file.changed).map((file) => file.source_path);
+  const changedPaths = [...selectedFiles.filter((file) => file.changed).map((file) => file.source_path), ...removedPaths];
   const vendored = new Set(source.files.map((file) => file.sourcePath));
   const unvendoredNotices = approvedGauntlet
     ? github.topLevel(source.repository, candidateCommit).filter((name) => LICENSE_NOTICE.test(name) && !vendored.has(name)).sort()
@@ -232,6 +248,8 @@ function inspectSource(source, github) {
     ancestry,
     selected_payload_digest: selectedPayloadDigest(selectedFiles),
     changed_paths: changedPaths,
+    added_paths: addedPaths,
+    removed_paths: removedPaths,
     unvendored_license_notices: unvendoredNotices,
     classification,
     reason,
