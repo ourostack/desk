@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.71 — 2026-11-06
+
+Desk now ships a native runtime dependency pack for Darwin ARM64 on Node 24 (ABI 137), alongside its existing Node 22 pack. The exact-host CI lane verifies the native payload and loads the committed pack with the current MCP source and card-persistence tools. This prevents that supported target from requiring a different Node installation; it does not upgrade a server already running from an older cached source mirror.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.70 — 2026-11-06
 
 The Windows black-box native receipt trace now reaches production. The JSON-RPC request id was dropped between the MCP front door and the runtime, so the opt-in trace never had an id to attach its frames to. The front door and session now pass the id through as an opaque safe integer, only when the CI-gated trace controls are all set; every other call is unchanged. This is observability only and does not change the capture-readiness timeout or its error.
