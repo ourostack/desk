@@ -303,6 +303,7 @@ export async function runRecovery({
     report.effects.mutation = ["nothing_to_commit", "already_archived"].includes(result.status)
       ? "reported_complete" : "reported_applied"
     report.effects.commit = result.commit?.status === "failed" ? "failed"
+      : result.commit?.status === "unknown" ? "unknown"
       : report.git.headBefore !== null && report.git.headAfter !== null
         ? report.git.headBefore !== report.git.headAfter ? "observed" : "not_observed"
         : "unknown"
