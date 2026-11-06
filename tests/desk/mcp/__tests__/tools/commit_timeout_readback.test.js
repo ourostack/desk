@@ -15,6 +15,7 @@ import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { writeCardCommitted } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
+import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { assertRoute, readsOnly } from "./_route_around.js"
@@ -486,4 +487,49 @@ test("the route for a held lesson that opens a new shelf file reads both files a
   for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)
   for (const topic of moved) assert.match(remoteShow(origin, "LESSONS.md").stdout, new RegExp(topic, "u"), "the shelf is on the remote")
   assert.match(remoteShow(origin, "AGENTS.md").stdout, /Do it\./u, "the lesson is on the remote")
+})
+
+// R2 (0972 on #625): without the change Desk captured before dispatch, no read of the paths can say which bytes are this call's,
+// so a route never commits, saves, updates a card or publishes on the strength of a diff, a log line or a clean status. It reads,
+// stops, and says so; the next write of the same thing commits it through the tool.
+function assertHeldReadOnly(route) {
+  assertRoute(route)
+  assert.equal(route.held, true, "a route without a captured change is held")
+  for (const step of route.steps) {
+    assert.equal(step.tool, undefined, `no Desk tool step: ${step.step}`)
+    assert.ok(step.argv === undefined || readsOnly(step), `every step only reads: ${step.step}`)
+  }
+  assert.doesNotMatch(JSON.stringify(route), /sync-push\.js|finish-commit\.js[^"]*--commit/u, "nothing is published or committed")
+  assert.doesNotMatch(JSON.stringify(route.steps), /the commit is in|publish/iu, "no read is promoted to proof of the commit")
+  assert.match(route.committed_locally_when.expect, /no read here proves/u)
+}
+
+test("a route without a captured change is held and only reads, whether the commit did not land or Desk cannot tell", () => {
+  for (const readback of ["absent", "unknown"]) {
+    assertHeldReadOnly(commitRoute({ root: "/desk", paths: ["notes.md"], message: "save notes", readback }))
+    assertHeldReadOnly(commitRoute({ root: "/desk", paths: ["track/slug/task.md", "track/track.md"], message: "task_update", readback, card: "track/slug" }))
+  }
+})
+
+test("a background writer that defers its card gets a held route that commits nothing, saves nothing and updates no card", async () => {
+  const { deskRoot, write } = await cardRepo()
+  await fs.writeFile(path.join(deskRoot, ".git", "index.lock"), "")
+  process.env.DESK_GIT_YIELD = "1"
+  try {
+    const out = await writeCardCommitted({ deskRoot, write, message: "improvement: open card", schedulePush: () => assert.fail("no push") })
+    assert.equal(out.commit, "deferred")
+    assertHeldReadOnly(out.route_around)
+  } finally {
+    delete process.env.DESK_GIT_YIELD
+    await fs.rm(path.join(deskRoot, ".git", "index.lock"), { force: true })
+  }
+})
+
+test("desk_save on a detached HEAD, which the tool refuses, gets a held route that never saves the paths again", async () => {
+  const { root } = await repoWithOrigin()
+  git(root, ["checkout", "-q", "--detach"])
+  const result = await desk_save({ deskRoot: root, input: { files: [{ path: "notes.md", content: "Exact notes.\n" }], message: "save notes" }, schedulePush: () => assert.fail("no push") })
+  const route = result.commit?.route_around ?? result.route_around
+  if (route) assertHeldReadOnly(route)
+  else assert.notEqual(result.status, "committed")
 })

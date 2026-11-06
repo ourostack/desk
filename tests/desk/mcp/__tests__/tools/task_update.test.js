@@ -653,6 +653,10 @@ test("task_update does not commit a card that Git holds as a conflict, and says 
   assert.equal("included_uncommitted_changes" in result, false)
   assert.equal(git("rev-parse", "HEAD").stdout, head, "no commit was made")
   assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u, "the conflict is not marked resolved")
+  // R1, R2 (0972 on #625): whose conflict this is cannot be proven, so the route only reads and stops; it never marks the
+  // conflict resolved in the shared index and never commits the card.
+  assert.equal(result.commit.route_around.held, true)
+  assert.equal(result.commit.route_around.steps.some((step) => step.tool), false)
   assert.match(await fs.readFile(filePath, "utf8"), /carried on/u, "the write itself is kept")
   assert.deepEqual(calls, [], "no push is scheduled")
 
@@ -698,8 +702,11 @@ test("task_update reports a real staging failure without losing the write, when 
     assert.equal(data.status, "processing", "the frontmatter merge is on disk despite the lock")
     assert.equal(result.commit.status, "failed", "a real `git add` failure is reported, not swallowed as a silent success")
     assert.match(result.commit.reason, /index\.lock/)
-    // The route never touches the lock: it reads back, then commits the card through task_update once the lock is gone.
-    assert.equal(result.commit.route_around.steps.find((step) => step.tool)?.tool, "task_update")
+    // The route never touches the lock. Desk captured nothing (the stage failed), so it reads, stops and is held (R2, 0972 on
+    // #625); the stop step says task_update commits the card once the lock is gone.
+    assert.equal(result.commit.route_around.held, true)
+    assert.equal(result.commit.route_around.steps.some((step) => step.tool), false)
+    assert.match(result.commit.route_around.steps.at(-1).step, /task_update for t\/book-flights/u)
     assert.equal(JSON.stringify(result.commit.route_around).includes("index.lock"), false)
   } finally {
     await fs.rm(lockPath, { force: true })
