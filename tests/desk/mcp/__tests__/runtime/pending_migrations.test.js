@@ -108,15 +108,51 @@ test("Desk's own migrations all parse", () => {
   assert.equal(readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").agentWork, true)
 })
 
+test("the real tidy instructions finish on the selected bash and preserve literal text and expanded commands", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-instructions-")
+  const report = "Tidy claim: fixture-token fixture-time\ntrack_missing_scope: billing-disputes"
+  // Only the report is controlled: execute the shipped instruction block, including its shell expansions.
+  const reporter = 'node() { printf \'%s\\n\' "$TIDY_TEST_REPORT"; }\n'
+  const pluginRoot = '/fixture/plugin "quoted" $literal `uname` %s\\n'
+  const toolsRoot = '/fixture/desk "quoted" $literal `uname` %s\\n'
+  for (const person of ["", 'fixture "person" $USER %s']) {
+    const result = await runBlock(reporter + blocks.Migrate, {
+      env: { ...process.env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: toolsRoot, DESK_TOOLS_PERSON: person, TIDY_TEST_REPORT: report },
+      cwd: root, timeoutMs: 10_000, outputChars: Infinity,
+    })
+    assert.equal(result.timedOut, false, "the instructions must not block before their reader starts")
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, "")
+    assert.ok(result.stdout.startsWith(`${report}\n\nTidy this desk now, as ordinary work in this session.`))
+    const flags = ` --root '${toolsRoot}'${person ? ` --person '${person}'` : ""} --claim 'fixture-token'`
+    assert.ok(result.stdout.includes(`run: node '${pluginRoot}/mcp/scripts/tidy-status.js' --defer '<one-line reason>'${flags}\n`))
+    assert.ok(result.stdout.includes(`with: node '${pluginRoot}/mcp/scripts/tidy-status.js' --write-record${flags}\n`))
+    assert.ok(result.stdout.includes('in the form "<what belongs>; not <what doesn\'t>".'))
+    assert.ok(result.stdout.includes("a bare `git add -A`"))
+    assert.ok(result.stdout.includes("the trailer `Desk-Tidy: true`"))
+    assert.ok(result.stdout.endsWith("a hand git commit is refused for them.\n"))
+  }
+})
+
+test("the real tidy instructions leave a held report alone and print no steps", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-held-instructions-")
+  const result = await runBlock('node() { printf \'%s\\n\' "I left my desk untidied for now."; return 1; }\n' + blocks.Migrate, {
+    env: { ...process.env, DESK_PLUGIN_ROOT: "/fixture/plugin" }, cwd: root, timeoutMs: 10_000, outputChars: Infinity,
+  })
+  assert.deepEqual(result, { status: 0, stdout: "I left my desk untidied for now.\n", stderr: "", timedOut: false, unavailable: false })
+})
+
 test("the tidy commit and its revert both go through desk_save tidy, which adds the Desk-Tidy trailer", () => {
-  const text = readFileSync(path.join(deskPluginRoot, "migrations", "02-tidy-desk.md"), "utf8")
+  const text = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").blocks.Migrate
   const step7 = text.slice(text.indexOf("\n7. Check, record and commit."), text.indexOf("\nThen send the Announce line"))
-  const revert = text.slice(text.indexOf("If the human objects"), text.indexOf("\nSTEPS"))
+  const revert = text.slice(text.indexOf("If the human objects"))
   for (const [label, part] of [["step 7", step7], ["the revert", revert]]) {
     assert.ok(part.length > 100, label)
     assert.match(part, /desk_save \(tidy: true/u, label)
   }
-  // The steps sit in a heredoc the shell expands, so the source escapes each backtick; the agent reads `Desk-Tidy: true`.
+  // The quoted instruction argument escapes each backtick; the agent reads `Desk-Tidy: true`.
   assert.match(step7, /desk_save ends it with the trailer \\`Desk-Tidy: true\\`/u)
   assert.equal(text.split("Desk-Tidy: true").length - 1, 1, "the tool adds the trailer, so the text names it once")
 })

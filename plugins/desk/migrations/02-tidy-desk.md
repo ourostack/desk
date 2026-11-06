@@ -48,9 +48,9 @@ claim=$(printf '%s\n' "$report" | sed -n 's/^Tidy claim: \([^ ]*\) .*/\1/p')
 flags="${DESK_TOOLS_ROOT:+ --root '$DESK_TOOLS_ROOT'}${DESK_TOOLS_PERSON:+ --person '$DESK_TOOLS_PERSON'} --claim '$claim'"
 record="node '$script' --write-record$flags"
 defer="node '$script' --defer '<one-line reason>'$flags"
-# The heredoc below is expanded by the shell (for $defer and $record), so every backtick in its text is escaped: an unescaped one would run its text as a command in the folder this was started from.
-cat <<STEPS
-
+# Print directly: a heredoc can block during redirection before its reader starts. The quoted argument expands
+# $defer and $record; backticks and double quotes in the instructions are escaped so they stay literal.
+printf '%s' "
 Tidy this desk now, as ordinary work in this session. Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on. This session holds the tidy's claim (above), so no other session tidies this desk meanwhile.
 
 Rules for every step:
@@ -66,7 +66,7 @@ Rules for every step:
 - Never rename or move a track or task folder with a raw git mv, a bare \`git add -A\` or a folder/pattern add, or by deleting \`.git/index.lock\` — all four are forbidden, whatever the reason. A track or task only ever moves through track_rename or task_move (step 4's loose-file git mv is not a track or task move), with one exception: step 5 and step 6's own git mv of a track this report listed into the desk's \`_archive/\` is the one raw move a track folder ever makes, because no tool for it exists yet. If a git command is refused, that is the tool protecting another session's work, not an obstacle to route around by hand.
 
 Steps, in order:
-1. Scope lines. For every track without one (track_missing_scope), write a scope line from its tasks with track_update (frontmatter.scope), in the form "<what belongs>; not <what doesn't>". Skip a track that step 5 or step 6 will move into _archive/ (a track_empty track, or a track_person_name or track_catch_all track whose tasks all move out): a scope line on a track that is archived next is wasted work.
+1. Scope lines. For every track without one (track_missing_scope), write a scope line from its tasks with track_update (frontmatter.scope), in the form \"<what belongs>; not <what doesn't>\". Skip a track that step 5 or step 6 will move into _archive/ (a track_empty track, or a track_person_name or track_catch_all track whose tasks all move out): a scope line on a track that is archived next is wasted work.
 2. Names. Rename every prompt-like, credential-like or badly shaped name (name_prompt_like, name_credential_like, name_shape) by the handle its finding shows: a task with task_move (handle, to_slug), a track with track_rename (handle, to). A path shown as <redacted segment> is a credential-like name: never list its parent, open the folder or otherwise recover the name; the handle is all the rename needs. Build the new name from the card's status, repos and the work you know about. A loose entry shown as <redacted segment> has no handle: leave it where it is and name it as left alone.
 3. Duplicates. duplicate_job only means two cards mention the same pull request. Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them. Keep the oldest task (earliest created) and merge the other into it with task_move (into_task: the kept task, and to_track when the kept task is in another track). Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge. When the kept task sits in a track that step 5 will empty, re-file that track's tasks first.
 4. Loose files. git mv each loose file or folder (loose_file) into the task it belongs to, or into the track's _planning/ when it concerns the whole track, or into _meta/ when it concerns the whole desk. Never create a task just to hold files. A loose folder that is clearly a task gets a card with task_create instead of a move. A loose entry whose name fails the name rules gets an outcome name when it moves.
@@ -77,7 +77,7 @@ Steps, in order:
 
 Then send the Announce line below with this tidy's own counts, anything left alone, and the commit link.
 If the human objects, run git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- <this session's own desk>/_meta/organization.json, and commit both with desk_save (tidy: true, paths: the reverted tidy paths plus the record, and a message), so the desk is back as it was and the tidy does not run again. The revert restores task cards as staged moves, which desk_save accepts; a hand git commit is refused for them.
-STEPS
+"
 ```
 
 ## Announce
