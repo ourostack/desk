@@ -9,7 +9,7 @@ import * as path from "node:path"
 
 import { finishCommit, runFinishCommitCli } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
 import { commitIndexPaths, commitPaths, indexEntries } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
-import { commitFailure } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
+import { commitFailure, commitFailureWords, commitRoute, heldFileRouteFor } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
 import { installCardGuard, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 
 const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; return rest })()
@@ -805,4 +805,32 @@ test("the command line without --root is bad usage, exit 2, and reads nothing", 
   assert.equal(code, 2)
   assert.deepEqual(JSON.parse(out), { state: "usage", reason: "--root is required" })
   assert.equal(calls, 0)
+})
+
+// The routes' own defaults and wording, reached directly: a live card's route names every other path its next write would commit,
+// a route with no read-back given is the unknown one, a held file's route publishes from its own folder when no desk root is
+// given, and a commit that landed but is no longer in effect says both, naming the two commits.
+test("a live card's held route names the other paths a new task_update would commit, such as its track.md", () => {
+  const capture = { before: "a".repeat(40), branch: "main", expected: [] }
+  const route = commitRoute({ root: "/desk", paths: ["t/x.md", "t/track.md"], message: "m", readback: "absent", card: "t/x", capture })
+  assert.equal(route.held, true)
+  assert.match(route.steps[1].step, /commits whatever the card and t\/track\.md hold by then/u)
+  const alone = commitRoute({ root: "/desk", paths: ["t/x.md"], message: "m", readback: "absent", card: "t/x", capture })
+  assert.doesNotMatch(alone.steps[1].step, /track\.md/u, "a card alone names no other path")
+})
+
+test("a captured route given no read-back is the unknown route: read first, never a blind repeat", () => {
+  const route = commitRoute({ root: "/desk", paths: ["notes.md"], message: "m", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
+  assert.match(route.summary, /^Desk cannot tell whether its commit landed/u)
+})
+
+test("a held file's route with no desk root given commits and publishes from the file's own folder", () => {
+  const route = heldFileRouteFor({ dir: "/desk/meta", names: ["AGENTS.md"], message: "lesson", change: "one line" })
+  assert.deepEqual(route.steps[1].arguments.paths, ["AGENTS.md"])
+  assert.ok(route.steps[2].argv.flat().includes("/desk/meta"), JSON.stringify(route.steps[2].argv))
+})
+
+test("a commit that landed but HEAD no longer holds is worded as landed and not in effect, naming both commits", () => {
+  const words = commitFailureWords({ status: "unknown", reason: "timeout", landed: { commit: "1".repeat(40), head: "2".repeat(40) } })
+  assert.equal(words, `Desk's commit ${"1".repeat(12)} landed (timeout), but HEAD ${"2".repeat(12)} no longer holds it, so Desk cannot tell whether it is in effect; route_around reads it back and changes nothing on its own`)
 })
