@@ -43,9 +43,10 @@ import {
 
 const instantClock = { sleep: () => Promise.resolve() }
 const dead = () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) }
+const bareRoots = new Set()
 
 function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  const result = spawnSync("git", [...(bareRoots.has(root) ? ["--git-dir", root] : ["-C", root]), ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
   return result.stdout
 }
@@ -61,6 +62,7 @@ async function mkPlainRepo() {
 async function mkBareOrigin() {
   const root = await mkTempRoot("desk-sync-worker-origin-")
   git(root, ["init", "--bare", "-q"])
+  bareRoots.add(root)
   return root
 }
 
@@ -528,7 +530,7 @@ test("runPushWorker pushes a real ahead commit, records last_push_at, and preser
   assert.equal(status2.last_push_at, status.last_push_at, "a later no-op must not erase the last recorded push")
 })
 
-test("runPushWorker replays a diverged commit onto the remote and pushes it, and the checkout follows", async () => {
+test("runPushWorker replays a diverged commit remotely while shared source following stays deferred", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   const cloneB = await mkClone(origin, "b", { trackMain: true })
   await writeAndCommit(cloneB, "from-b.md", "b\n", "from b")
@@ -539,9 +541,10 @@ test("runPushWorker replays a diverged commit onto the remote and pushes it, and
   const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock })
   assert.deepEqual(result, { result: "ok" })
   assert.equal(originCommitCount(origin), 3, "seed + from-b + from-a all landed")
-  assert.equal(git(cloneA, ["rev-parse", "HEAD"]), git(origin, ["rev-parse", "main"]), "the checkout moved to what was pushed")
+  assert.notEqual(git(cloneA, ["rev-parse", "HEAD"]), git(origin, ["rev-parse", "main"]), "copied delivery does not rewrite the shared source branch")
+  assert.deepEqual(readSyncStatus({ root: cloneA }).checkout, { state: "behind", reason: "source_follow_deferred" })
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
-  assert.equal(readSyncStatus({ root: cloneA, env: process.env }).checkout.state, "caught_up")
+  assert.equal(existsSync(path.join(cloneA, "from-b.md")), false, "remote-only files are not checked out implicitly")
 })
 
 test("runPushWorker keeps both sides of a conflicting Desk card, pushes, and never force-pushes", async () => {
@@ -633,7 +636,8 @@ test("a push the remote keeps rejecting is retried a bounded number of times, th
     if (args.includes("push")) {
       pushCalls += 1
       assert.equal(args.includes("--force"), false)
-      return { status: 1, stdout: "", stderr: " ! [rejected]        main -> main (fetch first)\n" }
+      assert.equal(args.includes("--porcelain"), true)
+      return { status: 1, stdout: `To fixture\n!\t${args.at(-1)}\t[rejected] (fetch first)\nDone\n`, stderr: "error: failed to push some refs\n" }
     }
     return spawnSync(cmd, args, opts)
   }

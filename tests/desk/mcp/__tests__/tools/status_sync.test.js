@@ -57,6 +57,22 @@ function seedStatus(root, patch) {
   writeFileSync(file, `${JSON.stringify(patch)}\n`)
 }
 
+test("desk_status propagates unverified delivery without asserting that remote effects did not occur", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, { blocked: true, reason: "push_outcome_unverified", unpushed: 1 })
+  const result = await desk_status({ deskRoot: cloneA, env })
+  assert.equal(result.sync.delivery_unverified, true)
+  assert.equal(result.sync.reason, "push_outcome_unverified")
+})
+
+test("desk_status names deferred source application separately from tracking-ref counts", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  seedStatus(cloneA, { blocked: false, checkout: { state: "behind", reason: "source_follow_deferred" }, unpushed: 0 })
+  const result = await desk_status({ deskRoot: cloneA, env })
+  assert.deepEqual(result.sync.checkout, { state: "behind", reason: "source_follow_deferred" })
+  assert.equal(result.sync.counts_basis, "tracking_ref")
+})
+
 test("desk_status reports sync: \"no remote configured\" on a desk with no remote at all", async () => {
   const deskRoot = await mkPlainRepo("desk-status-sync-noremote-")
   await writeAndCommit(deskRoot, "seed.md", "seed\n", "seed")
@@ -186,4 +202,3 @@ test("the close wait for a desk_status call that never settles ends in an error"
   // Once the call has settled, the next wait for the same run resolves.
   await waitForStatusInspection(run.signal, { callSettleMs: 50 })
 })
-

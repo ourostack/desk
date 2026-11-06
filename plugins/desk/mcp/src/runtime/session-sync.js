@@ -31,8 +31,8 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { formatDeskProblem } from "./index-drift.js"
-import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
-import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
+import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, pendingDeskCommits, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
+import { NOT_A_DESK_DEFECT, UNVERIFIED_DELIVERY_REASONS, classifyPullFailure, namedUntrackedPaths } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 
@@ -290,7 +290,7 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
     fix: OFFLINE.has(cause)
       ? "not repaired automatically: the remote cannot be used from this machine right now, so nothing was pulled or pushed; Desk delivers its local commits once it can"
-      : "the checkout itself is not rebased: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once. Desk's own local commits are still delivered to the remote from a clean copy in the background, and the checkout follows once nothing local is in the way -- never stash, rebase or reset the shared checkout for this",
+      : "Desk delivers its own local commits from a clean copy in the background; that delivery does not advance the shared checkout. Source application is deferred. Never stash, rebase or reset the shared checkout for delivery.",
     file: filing?.file ?? "filing in background",
     tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
@@ -333,7 +333,10 @@ export async function syncWorkspace(options) {
 function withDelivery({ root, env, spawnGit = spawnSync, scheduleDelivery = schedulePush }, result) {
   if (result.nothingToSync !== undefined) return result
   const recorded = readSyncStatus({ root, env })
-  const left = undeliveredCommits({ root, spawnGit, delivered: Array.isArray(recorded?.delivered) ? recorded.delivered : [] })
+  const left = pendingDeskCommits({ root, env, spawnGit })
+  if (recorded?.blocked && UNVERIFIED_DELIVERY_REASONS.has(recorded.reason)) {
+    return { ...result, unpushed: { count: left?.length ?? null, delivering: false, delivery_unverified: true, reason: recorded.reason, paths: recorded.paths ?? [] } }
+  }
   if (left === null || left.length === 0) return result
   const offline = result.state === "unresolved" && OFFLINE.has(result.cause)
   if (!offline) scheduleDelivery({ root, env, debounceMs: 0 })

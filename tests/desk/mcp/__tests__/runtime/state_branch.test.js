@@ -110,6 +110,7 @@ test("runGit runs git asynchronously, drops Git location variables and never rej
   assert.equal(seen.env.GIT_WORK_TREE, undefined)
   assert.equal(seen.env.KEEP, "1")
   assert.equal(seen.env.GIT_OPTIONAL_LOCKS, "0")
+  assert.equal(seen.timeout, 15000)
   const quiet = await runGit({ cwd: "/x", args: [], execFileImpl: (c, a, o, callback) => callback(null, " ok \n", "") })
   assert.deepEqual(quiet, { ok: true, stdout: "ok", stderr: "" })
   const failedQuietly = await runGit({ cwd: "/x", args: [], execFileImpl: (c, a, o, callback) => callback(Object.assign(new Error("Command failed"), { code: 2 }), "", " why \n") })
@@ -118,6 +119,40 @@ test("runGit runs git asynchronously, drops Git location variables and never rej
   assert.equal(real.ok, true)
   assert.match(real.stdout, /^git version/u)
   assert.equal(typeof (await runGit({ cwd: "/", args: ["--version"], env: undefined })).ok, "boolean")
+})
+
+test("runGit honors a finite caller deadline and cancellation signal", async () => {
+  const controller = new AbortController()
+  let observed
+  const answer = await runGit({ cwd: "/x", args: ["--version"], timeoutMs: 125, signal: controller.signal,
+    execFileImpl(command, args, options, callback) {
+      observed = options
+      callback(null, "owned\n", "")
+    } })
+  assert.equal(answer.ok, true)
+  assert.equal(observed.timeout, 125)
+  assert.equal(observed.signal, controller.signal)
+})
+
+test("runGit refuses invalid timeout, signal and runner contracts before dispatch", async () => {
+  for (const options of [{ timeoutMs: 0 }, { timeoutMs: -1 }, { timeoutMs: NaN }, { timeoutMs: Infinity },
+    { timeoutMs: 2147483648 }, { timeoutMs: "125" }, { signal: {} }, { execFileImpl: 3 }]) {
+    let dispatched = false
+    const result = await runGit({ cwd: "/x", args: [], execFileImpl(command, args, opts, callback) {
+      dispatched = true
+      callback(null, "", "")
+    }, ...options })
+    assert.equal(result.ok, false)
+    assert.match(result.stderr, /timeout|signal|runner/u)
+    assert.equal(dispatched, false)
+  }
+})
+
+test("runGit reports synchronous runner refusal without rejecting", async () => {
+  const answer = await runGit({ cwd: "/x", args: [], timeoutMs: 125,
+    execFileImpl() { throw new Error("owned runner unavailable") } })
+  assert.equal(answer.ok, false)
+  assert.match(answer.stderr, /owned runner unavailable/u)
 })
 
 test("a HEAD that moves between the check and the switch aborts the repair", async () => {

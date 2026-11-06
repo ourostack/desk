@@ -13,15 +13,15 @@
 //    resolving conflicts on Desk's own text files (task cards keep both sides' lines and the newer frontmatter; logs
 //    keep both sides' lines), and push the result. A commit with a conflict Desk cannot resolve is left out and named;
 //    every other commit still lands. A push that loses a race is fetched and replayed again.
-// 4. Move the shared checkout to what was pushed only the way `git checkout` would: files that differ are updated, and
-//    a file another session has changed, or an untracked file in the way, stops the move instead of being overwritten.
-//    An untracked file whose content is exactly what is coming in is the one exception: it is replaced by itself.
+// 4. Report whether the shared branch already matches the delivered tip. Otherwise leave its branch, index and files untouched; automatic source application needs custody this worker does not have.
 //
 // Never `--force`, never a stash, never a rebase in the shared checkout. Every Git call runs with
 // `GIT_TERMINAL_PROMPT=0` and a timeout. `spawnGit` (over `spawnSync`) is a test seam.
 
 import { spawnSync } from "node:child_process"
-import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
+import { accessSync, constants, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
@@ -55,6 +55,8 @@ const CONFLICT_TEXT = /CONFLICT|could not apply|Cannot rebase|would be overwritt
 const AUTH_TEXT = /Authentication failed|could not read Username|could not read Password|Permission denied \(publickey|Invalid username or password|Host key verification failed|Repository not found|returned error: 40[13]|HTTP 40[13]|terminal prompts disabled/iu
 const UNREACHABLE_TEXT = /Could not resolve host|unable to access '(?:https?|git|ssh):\/\/|Could not read from remote|Connection (?:refused|timed out|reset)|Network is unreachable|No route to host|Failed to connect|unable to connect|Operation timed out|timed out|Temporary failure in name resolution|ssh: connect to host/iu
 const DIVERGED_TEXT = /diverg|not possible to fast-forward|Need to specify how to reconcile/iu
+const PUSH_TRANSPORT_ERROR = /RPC failed|unexpected disconnect|remote end hung up|early EOF|broken pipe|empty reply|transfer closed|connection reset|recv failure|send failure|protocol error|timed out|HTTP 50[0-9]/iu
+const PUSH_CONNECT_REFUSAL = /Could not resolve (?:host|hostname)|Failed to connect|ssh: connect to host .*: Connection refused/iu
 
 export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = false, deadline = false } = {}) {
   if (deadline || timedOut) return "deadline"
@@ -66,7 +68,12 @@ export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = f
 }
 
 /** The host's state rather than a Desk defect: these are reported, never filed as Desk problems. */
-export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline"])
+export const UNVERIFIED_DELIVERY_REASONS = new Set([
+  "delivery_context_changed", "delivery_route_unverified", "unsupported_delivery_route",
+  "delivery_ledger_unverified", "push_outcome_unverified", "source_history_changed", "delivery_evidence_capacity",
+  "delivery_unverified",
+])
+export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", ...UNVERIFIED_DELIVERY_REASONS])
 
 const BLOCKED_WORDS = {
   auth_failed: "the remote refused this machine's credentials",
@@ -75,6 +82,14 @@ const BLOCKED_WORDS = {
   conflict: "a conflict Desk could not resolve on its own",
   push_rejected: "the remote kept rejecting the push",
   unpushed_at_session_end: "a session ended before its push finished",
+  delivery_context_changed: "the delivery destination or credential context changed",
+  delivery_route_unverified: "the configured delivery route could not be verified",
+  unsupported_delivery_route: "the configured delivery route is unsupported or ambiguous",
+  delivery_ledger_unverified: "the retained delivery record has no matching destination",
+  push_outcome_unverified: "the pinned destination could not confirm the push outcome",
+  source_history_changed: "the remote history no longer matches retained delivery evidence",
+  delivery_evidence_capacity: "retained delivery evidence needs reconciliation before another delivery",
+  delivery_unverified: "the delivery evidence could not be verified",
 }
 
 /** Plain words for why a push is blocked, from the reason the push worker recorded. */
@@ -92,8 +107,8 @@ export function blockedWords(reason, paths = []) {
  * were not already delivered as a resolved copy (`delivered`, the original commits a replay delivered). Local, never
  * a network call; `null` when there is no upstream to compare with.
  */
-export function undeliveredCommits({ root, spawnGit = spawnSync, delivered = [] }) {
-  const result = runner(spawnGit, root)(["rev-list", "--reverse", "--no-merges", "--right-only", "--cherry-pick", "@{u}...HEAD"])
+export function undeliveredCommits({ root, spawnGit = spawnSync, delivered = [], upstreamTip, localTip }) {
+  const result = runner(spawnGit, root)(["rev-list", "--reverse", "--no-merges", "--right-only", "--cherry-pick", `${upstreamTip ?? "@{u}"}...${localTip ?? "HEAD"}`])
   if (result.status !== 0) return null
   const done = new Set(delivered)
   return lines(result.stdout).filter((sha) => !done.has(sha))
@@ -236,12 +251,84 @@ function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   return { head: wt(["rev-parse", "HEAD"]).stdout.trim(), replayed, skipped }
 }
 
-function upstreamOf(git) {
+const fingerprint = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
+
+function destination(root, value) {
+  if (value.includes("::")) return null
+  if (path.isAbsolute(value) || !/^[^/]+:/u.test(value)) {
+    try { return realpathSync(path.resolve(root, value)) } catch { return null }
+  }
+  if (!value.includes("://")) return /^[^:\s]+:[^\s]+$/u.test(value) ? value : null
+  try {
+    const url = new URL(value)
+    if (url.password || url.search || url.hash || !["file:", "https:", "http:", "ssh:", "git:"].includes(url.protocol)) return null
+    if (url.protocol === "file:") return realpathSync(fileURLToPath(url))
+    if (url.username && url.protocol !== "ssh:") return null
+    return value
+  } catch { return null }
+}
+
+function upstreamOf(git, root) {
   const branch = git(["symbolic-ref", "-q", "--short", "HEAD"]).stdout.trim()
   const remote = git(["config", `branch.${branch}.remote`]).stdout.trim()
-  const merge = git(["config", `branch.${branch}.merge`]).stdout.trim()
+  const merge = git(["config", "--get-all", `branch.${branch}.merge`]).stdout.trim()
   const tracking = git(["rev-parse", "--symbolic-full-name", "@{u}"]).stdout.trim()
-  return branch === "" || remote === "" || merge === "" || tracking === "" ? null : { branch, remote, merge, tracking }
+  if (branch === "" || remote === "" || merge === "" || tracking === "") return null
+  if (!merge.startsWith("refs/heads/") || git(["check-ref-format", merge]).status !== 0) return { error: "unsupported_delivery_route" }
+  const config = git(["config", "--null", "--list"])
+  const fetch = git(["remote", "get-url", "--all", remote])
+  const push = git(["remote", "get-url", "--push", "--all", remote])
+  if (config.status !== 0 || fetch.status !== 0 || push.status !== 0) return { error: "delivery_route_unverified" }
+  const fetchUrls = lines(fetch.stdout), pushUrls = lines(push.stdout)
+  if ([fetch.stdout, push.stdout].some((value) => value.replace(/\r?\n$/u, "").split(/\r?\n/u).some((line) => line !== line.trim()))) {
+    return { error: "unsupported_delivery_route" }
+  }
+  if (fetchUrls.length !== 1 || pushUrls.length !== 1) return { error: "unsupported_delivery_route" }
+  const entries = config.stdout.split("\0").filter(Boolean).map((entry) => {
+    const split = entry.indexOf("\n")
+    return [entry.slice(0, split), entry.slice(split + 1)]
+  })
+  if (entries.some(([key, value]) => /^hook\..*\.event$/iu.test(key) && value === "pre-push")) {
+    return { error: "unsupported_delivery_route", detail: "Configured pre-push hook policy is not qualified for captured-URL delivery." }
+  }
+  const hook = git(["rev-parse", "--path-format=absolute", "--git-path", "hooks/pre-push"])
+  if (hook.status !== 0 || !hook.stdout.trim()) return { error: "delivery_route_unverified" }
+  let hookFile
+  try {
+    hookFile = statSync(hook.stdout.trim())
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes(error.code)) return { error: "delivery_route_unverified" }
+  }
+  if (hookFile !== undefined) {
+    let executable = false
+    try { accessSync(hook.stdout.trim(), constants.X_OK); executable = true } catch (error) {
+      if (!["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) return { error: "delivery_route_unverified" }
+    }
+    if (executable) return { error: "unsupported_delivery_route", detail: "An executable pre-push hook requires named-remote policy that captured-URL delivery cannot preserve." }
+  }
+  if (entries.some(([key]) => (
+    /^url\..*\.(?:insteadof|pushinsteadof)$/iu.test(key) ||
+    key.toLowerCase().startsWith(`remote.${remote.toLowerCase()}.`) &&
+      !["url", "pushurl", "fetch", "push", "tagopt"].includes(key.slice(`remote.${remote}.`.length).toLowerCase())
+  ))) return { error: "unsupported_delivery_route" }
+  const fetchUrl = destination(root, fetchUrls[0]), pushUrl = destination(root, pushUrls[0])
+  if (!fetchUrl || !pushUrl || fetchUrl !== pushUrl) return { error: "unsupported_delivery_route" }
+  const environment = Object.entries(process.env).filter(([key]) =>
+    /^(?:GIT_|SSH_|GH_|GITHUB_|GCM_|AZURE_|VSS_|SYSTEM_ACCESSTOKEN$|HOME$|XDG_CONFIG_HOME$|PATH$)/iu.test(key)).sort(([a], [b]) => a.localeCompare(b))
+  const identity = fingerprint([branch, remote, merge, tracking, fetchUrl, pushUrl, config.stdout, environment])
+  return { branch, remote, merge, tracking, fetchUrl, pushUrl, identity }
+}
+
+export function isDeliverySnapshot(snapshot) {
+  return snapshot !== null && typeof snapshot === "object" && /^[a-f0-9]{64}$/u.test(snapshot.identity ?? "") &&
+    OID.test(snapshot.tip ?? "") && /^refs\/heads\/[^\s]+$/u.test(snapshot.ref ?? "")
+}
+
+export function deliverySnapshotMatches({ root, spawnGit = spawnSync, snapshot }) {
+  if (!isDeliverySnapshot(snapshot)) return false
+  const target = upstreamOf(runner(spawnGit, root), root)
+  return target !== null && !target.error && target.identity === snapshot.identity && target.merge === snapshot.ref
 }
 
 function failure(result, reason) {
@@ -254,39 +341,90 @@ function failure(result, reason) {
  * Delivers every undelivered local commit to the upstream branch. Never throws. Returns
  * `{ state: "nothing" | "delivered" | "failed", delivered, skipped, checkout, reason?, error? }`: `delivered` lists the
  * local commits now on the remote (as themselves or as a resolved copy), `skipped` the ones with a conflict Desk could not
- * resolve (`{ commit, paths }`), and `checkout` whether the shared checkout now matches the remote (see `catchUp`).
+ * resolve (`{ commit, paths }`), and `checkout` whether the shared branch already matches the delivered tip. Source following is otherwise deferred.
  */
-export function deliver({ root, env = process.env, spawnGit = spawnSync, delivered = [] }) {
+export function deliver({ root, env = process.env, spawnGit = spawnSync, delivered = [], snapshot, expectedIdentity }) {
   const git = runner(spawnGit, root)
-  const upstream = upstreamOf(git)
+  const upstream = upstreamOf(git, root)
   if (upstream === null) return { state: "failed", reason: "no_upstream", error: "", delivered: [], skipped: [] }
+  if (upstream.error) return { state: "failed", reason: upstream.error, error: upstream.detail ?? "The configured delivery route is unsupported or could not be verified.", delivered: [], skipped: [] }
+  if (expectedIdentity !== undefined && expectedIdentity !== upstream.identity) {
+    return { state: "failed", reason: "delivery_context_changed", error: "The delivery context changed between worker rounds.", delivered: [], skipped: [], contextChanged: true }
+  }
+  if (delivered.length > 0 && snapshot?.identity !== upstream.identity) {
+    return { state: "failed", reason: "delivery_ledger_unverified", error: "Retained delivery entries have no matching destination identity.", delivered: [], skipped: [] }
+  }
   const paths = deliveryPaths({ root, env })
   const prefix = git(["rev-parse", "--show-prefix"]).stdout.trim()
   const head = git(["rev-parse", "HEAD"]).stdout.trim()
+  if (!OID.test(head)) return failure({ status: 1, stderr: "The local delivery tip could not be verified." }, "delivery_unverified")
+  const scope = `refs/desk/delivery/${lastStartRootKey(root)}`
+  const sameContext = () => upstreamOf(git, root)?.identity === upstream.identity
+  const receipt = (tip) => ({ identity: upstream.identity, tip, ref: upstream.merge })
+  const contextChanged = (tip, commits = []) => ({
+    state: "failed", reason: "delivery_context_changed", error: "Delivery context changed; the current destination was not confirmed.",
+    delivered: [], skipped: [], contextChanged: true, checkout: { state: "behind", reason: "delivery_context_changed" },
+    pinnedDelivery: { ...receipt(tip), commits, confirmed: false },
+  })
   for (let attempt = 1; ; attempt += 1) {
-    const fetched = git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], NETWORK_TIMEOUT_MS)
+    if (!sameContext()) return contextChanged(head)
+    const fetched = git(["fetch", "--quiet", "--no-tags", upstream.fetchUrl, `+${upstream.merge}:${scope}/upstream`], NETWORK_TIMEOUT_MS)
     if (fetched.status !== 0) return failure(fetched, "fetch_failed")
-    const commits = undeliveredCommits({ root, spawnGit, delivered })
-    const onto = git(["rev-parse", upstream.tracking]).stdout.trim()
-    if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: catchUp({ git, upstream, head, target: onto }) }
+    if (!sameContext()) return contextChanged(head)
+    const onto = git(["rev-parse", `${scope}/upstream`]).stdout.trim()
+    if (!OID.test(onto)) return failure({ status: 1, stderr: "The fetched tip could not be verified." }, "fetch_failed")
+    if (git(["merge-base", head, onto]).status !== 0 ||
+        snapshot && git(["merge-base", "--is-ancestor", snapshot.tip, onto]).status !== 0) {
+      return failure({ status: 1, stderr: "The source history changed; retained delivery evidence needs reconciliation." }, "source_history_changed")
+    }
+    const commits = undeliveredCommits({ root, spawnGit, delivered, upstreamTip: onto, localTip: head })
+    if (commits === null) return failure({ status: 1, stderr: "The pending commits could not be inspected." }, "delivery_unverified")
+    if (!sameContext()) return contextChanged(head)
+    if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], snapshot: receipt(onto), checkout: sourceState({ git, target: onto }) }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0
     const built = fastForward ? { head, replayed: commits, skipped: [] } : replay({ git, spawnGit, paths, onto, commits, prefix })
     if (built.error !== undefined) return { state: "failed", reason: "replay_failed", error: built.error.trim(), delivered: [], skipped: [] }
-    const pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
+    if (!sameContext()) {
+      if (!fastForward) removeWorktree(git, paths)
+      return contextChanged(built.head, built.replayed)
+    }
+    const retained = git(["update-ref", `${scope}/candidate`, built.head])
+    if (retained.status !== 0) {
+      if (!fastForward) removeWorktree(git, paths)
+      return failure(retained, "delivery_unverified")
+    }
+    const unverified = (result) => ({
+      ...failure(result, "push_outcome_unverified"), reason: "push_outcome_unverified",
+      pinnedDelivery: { ...receipt(built.head), commits: built.replayed, confirmed: false },
+    })
+    const pushed = built.head === onto ? { status: 0 } : git(["push", "--porcelain", "--quiet", upstream.pushUrl, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
     if (!fastForward) removeWorktree(git, paths)
     if (pushed.status === 0) {
-      git(["update-ref", upstream.tracking, built.head])
-      const checkout = built.skipped.length === 0 ? catchUp({ git, upstream, head, target: built.head }) : { state: "behind", reason: "skipped_commits" }
-      return { state: "delivered", delivered: built.replayed, skipped: built.skipped, checkout }
+      if (!sameContext()) return contextChanged(built.head, built.replayed)
+      const readback = git(["ls-remote", "--refs", upstream.pushUrl, upstream.merge], NETWORK_TIMEOUT_MS)
+      const observed = readback.status === 0 ? readback.stdout.trim().split(/\s+/u) : []
+      const confirmed = observed.length === 2 && observed[0] === built.head && observed[1] === upstream.merge
+      if (!sameContext()) return contextChanged(built.head, built.replayed)
+      if (!confirmed) return unverified(readback)
+      const checkout = built.skipped.length === 0 ? sourceState({ git, target: built.head }) : { state: "behind", reason: "skipped_commits" }
+      return { state: "delivered", delivered: built.replayed, skipped: built.skipped, snapshot: receipt(built.head), checkout }
     }
-    // Rejected because the remote moved on while this ran: fetch and replay again, a bounded number of times.
     const failed = failure(pushed, "push_rejected")
+    const transportUnknown = PUSH_TRANSPORT_ERROR.test(pushed.stderr)
+    const refStatuses = pushed.stdout.split(/\r?\n/u).filter(line => /^[ =*+!-]\t/u.test(line))
+    const allRejected = /(?:^|\n)Done\r?\n?$/u.test(pushed.stdout) &&
+      refStatuses.some(line => line.split("\t")[1].endsWith(`:${upstream.merge}`)) &&
+      refStatuses.every(line => line.startsWith("!\t"))
+    const beforeEffect = !transportUnknown && (failed.reason === "auth_failed" ||
+      failed.reason === "unreachable" && PUSH_CONNECT_REFUSAL.test(pushed.stderr))
+    if (pushed.status === null || transportUnknown || !allRejected && !beforeEffect) return unverified(pushed)
+    // Only confirmed rejection is retried; a transport failure can follow acceptance at any nonzero exit status.
     if (failed.reason !== "push_rejected" || attempt >= PUSH_ATTEMPTS) return failed
   }
 }
 
 // ---------------------------------------------------------------------------
-// Moving the shared checkout to what was delivered, without overwriting anyone's work.
+// Shared source observation and the overwrite-error parser also used by session sync.
 // ---------------------------------------------------------------------------
 
 const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree files would be overwritten by (?:merge|checkout):\s*$/u
@@ -305,40 +443,9 @@ export function namedUntrackedPaths(stderr) {
   return found
 }
 
-// An untracked file in the way whose bytes are exactly the incoming file's is removed: the checkout puts the same bytes back.
-function removeIdenticalUntracked(git, target, stderr) {
-  const top = git(["rev-parse", "--show-toplevel"]).stdout.trim()
-  let removed = 0
-  for (const file of namedUntrackedPaths(stderr)) {
-    const incoming = git(["rev-parse", "--verify", "--quiet", `${target}:${file}`]).stdout.trim()
-    const local = git(["hash-object", "--", path.join(top, file)]).stdout.trim()
-    if (incoming === "" || incoming !== local) continue
-    unlinkSync(path.join(top, file))
-    removed += 1
-  }
-  return removed
-}
-
-/**
- * Moves the shared checkout's branch from `head` to `target` the way `git checkout` would, only while the branch still
- * points at `head`: `{ state: "current" | "caught_up" | "behind", paths?, reason? }`. A path another session changed, or
- * an untracked file in the way, leaves the checkout where it was (`behind`), naming what stopped it.
- */
-function catchUp({ git, upstream, head, target }) {
+/** Observe the current ref; never mutate the shared branch, index or files to follow a private replay. */
+function sourceState({ git, target }) {
   const now = git(["rev-parse", "HEAD"]).stdout.trim()
   if (now === target) return { state: "current" }
-  if (now !== head) return { state: "behind", reason: "moved" }
-  git(["update-index", "-q", "--refresh"])
-  let moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
-  if (moved.status !== 0 && removeIdenticalUntracked(git, target, moved.stderr) > 0) moved = git(["read-tree", "-m", "-u", head, target], CHECKOUT_TIMEOUT_MS)
-  if (moved.status !== 0) {
-    const named = [...moved.stderr.matchAll(/^(?:error: )?Entry '(.+)' (?:not uptodate|would be overwritten)/gmu)].map((match) => match[1])
-    return { state: "behind", reason: "local_changes", paths: [...new Set([...named, ...namedUntrackedPaths(moved.stderr)])] }
-  }
-  // Through HEAD, so the move is in HEAD's reflog as well as the branch's; the old value makes it a compare-and-swap.
-  if (git(["update-ref", "-m", "desk: catch up with delivered commits", "HEAD", target, head]).status === 0) return { state: "caught_up" }
-  // Another commit landed in the moment between: put the files back to match the branch as it now is.
-  git(["read-tree", "-m", "-u", target, "HEAD"], CHECKOUT_TIMEOUT_MS)
-  return { state: "behind", reason: "moved" }
+  return { state: "behind", reason: "source_follow_deferred" }
 }
-

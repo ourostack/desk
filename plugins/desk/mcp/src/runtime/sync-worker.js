@@ -28,9 +28,8 @@
 // left undelivered. Delivery never touches the shared checkout's working tree:
 // a fast-forward is pushed as it is, and anything else is replayed onto the
 // remote in a private worktree, with conflicts on Desk's own cards and logs
-// resolved there, then pushed; the shared checkout follows only the way `git
-// checkout` would, never over another session's uncommitted or untracked
-// file. A push that still cannot happen (refused credentials, an unreachable
+// resolved there, then pushed. Shared source following is deferred; delivery never mutates its branch, index or files. See docs/delivery-safety.md.
+// A push that still cannot happen (refused credentials, an unreachable
 // remote, a conflict Desk cannot resolve) records the blocked state, its
 // reason and the number of commits left local for `desk_status`, the tool
 // replies (`deskPushNote`) and boot, and queues the detached Desk-problem filer
@@ -61,7 +60,7 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
-import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
+import { NOT_A_DESK_DEFECT, UNVERIFIED_DELIVERY_REASONS, blockedWords, deliver, deliverySnapshotMatches, gitEnv, isDeliverySnapshot, undeliveredCommits } from "./deliver.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -433,28 +432,54 @@ export function hostFromEnv(env) {
 // ---------------------------------------------------------------------------
 
 const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }
-// The local commits delivered as a resolved copy while the shared checkout could not follow yet; older entries are long since on the branch.
+// Resolved-copy evidence is retained while source following is deferred. Capacity refuses new delivery; it never forgets acknowledged commits.
 const DELIVERED_CAP = 5000
 // A delivery that reports success while the same commits stay undelivered is a defect, not a reason to spin.
 const MAX_ROUNDS = 10
 
-function deliveredSoFar(root, env) {
-  const recorded = readSyncStatus({ root, env })?.delivered
-  return Array.isArray(recorded) ? recorded : []
+function deliveryState(root, env, spawnGit) {
+  const recorded = readSyncStatus({ root, env })
+  const delivered = Array.isArray(recorded?.delivered) ? recorded.delivered : []
+  const snapshot = recorded?.deliverySnapshot
+  const matches = deliverySnapshotMatches({ root, spawnGit, snapshot })
+  return {
+    delivered: matches ? delivered : [],
+    snapshot: matches ? snapshot : undefined,
+    unverified: snapshot !== undefined && !matches || delivered.length > 0 && !isDeliverySnapshot(snapshot),
+  }
 }
 
-function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
+export function pendingDeskCommits({ root, env = process.env, spawnGit = spawnSync }) {
+  const state = deliveryState(root, env, spawnGit)
+  return state.unverified ? null : undeliveredCommits({ root, spawnGit, delivered: state.delivered, upstreamTip: state.snapshot?.tip })
+}
+
+function deliverUntilDone({ root, env, spawnGit, fileProblem, operation }) {
   let pushedAt = null
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const delivered = deliveredSoFar(root, env)
-    const pending = undeliveredCommits({ root, spawnGit, delivered })
+    const state = deliveryState(root, env, spawnGit)
+    if (state.unverified) return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: "delivery_ledger_unverified", paths: [], error: "Retained delivery entries need destination readback." })
+    const { delivered, snapshot } = state
+    const pending = undeliveredCommits({ root, spawnGit, delivered, upstreamTip: snapshot?.tip })
     if (pending === null || pending.length === 0) {
       updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
       return { result: "ok" }
     }
-    const outcome = deliver({ root, env, spawnGit, delivered })
-    const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
-    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null })
+    if (delivered.length + pending.length > DELIVERED_CAP) {
+      return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: "delivery_evidence_capacity", paths: [], error: "Retained delivery evidence is full; reconcile it before another delivery." })
+    }
+    const outcome = deliver({ root, env, spawnGit, delivered, snapshot, expectedIdentity: operation.identity })
+    operation.identity ??= outcome.snapshot?.identity ?? outcome.pinnedDelivery?.identity
+    if (outcome.contextChanged || outcome.snapshot && !deliverySnapshotMatches({ root, spawnGit, snapshot: outcome.snapshot })) {
+      const pinned = outcome.pinnedDelivery ?? (outcome.snapshot ? { ...outcome.snapshot, confirmed: true } : null)
+      updateSyncStatus(root, env, { ...(pinned ? { pinnedDelivery: pinned } : {}), checkout: outcome.checkout ?? null })
+      return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: "delivery_context_changed", paths: [], error: "Delivery to the current destination is not verified." })
+    }
+    updateSyncStatus(root, env, {
+      ...(outcome.snapshot ? { delivered: [...new Set([...delivered, ...outcome.delivered])], deliverySnapshot: outcome.snapshot } : {}),
+      ...(outcome.pinnedDelivery ? { pinnedDelivery: outcome.pinnedDelivery } : {}),
+      checkout: outcome.checkout ?? null,
+    })
     if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
     if (outcome.state !== "failed" && outcome.skipped.length === 0) continue
     return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: outcome.state === "failed" ? outcome.reason : "conflict", paths: outcome.skipped.flatMap((skip) => skip.paths), error: outcome.error ?? null })
@@ -463,7 +488,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
 }
 
 function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, paths, error }) {
-  const unpushed = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
+  const unpushed = pendingDeskCommits({ root, env, spawnGit })?.length ?? null
   updateSyncStatus(root, env, { blocked: true, reason, paths, unpushed, error, at: new Date().toISOString(), ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
   if (!NOT_A_DESK_DEFECT.has(reason)) fileProblem({ root, env, reason, host: hostFromEnv(env) })
   return { result: "blocked", reason, unpushed }
@@ -482,20 +507,21 @@ function recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason, pat
  * `fileProblem` and `stderr` are test seams.
  */
 export async function runPushWorker(options) {
+  const operation = { identity: undefined }
   for (let round = 0; ; round += 1) {
     // Only the first round waits out the debounce.
-    const result = await pushRound(round === 0 ? options : { ...options, debounceMs: 0 })
+    const result = await pushRound({ ...options, ...(round > 0 ? { debounceMs: 0 } : {}), operation })
     // A commit made after the holder's last check finds the lock still held and its own worker exits, so the holder
     // looks once more after releasing the lock and goes round again for anything left.
     if (result.result !== "ok") return result
-    const left = undeliveredCommits({ root: options.root, spawnGit: options.spawnGit, delivered: deliveredSoFar(options.root, options.env ?? process.env) })
+    const left = pendingDeskCommits({ root: options.root, env: options.env, spawnGit: options.spawnGit })
     if (!(left?.length > 0)) return result
   }
 }
 
 async function pushRound({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
-  stderr = process.stderr,
+  stderr = process.stderr, operation,
 }) {
   const lock = await acquireSyncLock({ root, env })
   if (lock?.refused) {
@@ -511,7 +537,7 @@ async function pushRound({
   try {
     if (!canPush(root, spawnGit)) return { result: "skipped" }
     await clock.sleep(debounceMs)
-    return deliverUntilDone({ root, env, spawnGit, fileProblem })
+    return deliverUntilDone({ root, env, spawnGit, fileProblem, operation })
   } finally {
     lock.release()
   }
@@ -613,7 +639,7 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
 export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(root, spawnGit)) return { state: "clean" }
   const existing = readSyncStatus({ root, env })
-  const left = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })
+  const left = pendingDeskCommits({ root, env, spawnGit })
   if (left === null || left.length === 0) return { state: "clean" }
 
   const reason = existing?.blocked && typeof existing.reason === "string" ? existing.reason : "unpushed_at_session_end"
@@ -647,7 +673,10 @@ export function deskPushNote({ root, env = process.env, spawnGit = spawnSync, no
   try {
     const recorded = readSyncStatus({ root, env })
     if (recorded?.blocked !== true) return { desk_note: note }
-    const left = undeliveredCommits({ root, spawnGit, delivered: deliveredSoFar(root, env) })?.length ?? 0
+    if (UNVERIFIED_DELIVERY_REASONS.has(recorded.reason)) {
+      return { desk_note: "Desk committed this locally, but delivery to the current destination is not verified. Read desk_status and the retained delivery outcome before retrying; do not call this pushed.", desk_push_blocked: recorded.reason, desk_unpushed: null }
+    }
+    const left = pendingDeskCommits({ root, env, spawnGit })?.length ?? 0
     // A stale record with nothing actually left local says nothing: the next push clears it.
     if (left === 0) return { desk_note: note }
     const why = blockedWords(recorded.reason, Array.isArray(recorded.paths) ? recorded.paths : [])

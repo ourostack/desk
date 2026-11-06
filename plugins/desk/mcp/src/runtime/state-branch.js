@@ -30,23 +30,30 @@ export function isStateBranchName(value) {
 }
 
 /** Run one git command in `cwd` without blocking. Never rejects: a missing git or a failed command is `{ ok: false }`. */
-export function runGit({ cwd, args, execFileImpl = execFile, env = process.env }) {
+export function runGit({ cwd, args, execFileImpl = execFile, env = process.env, timeoutMs = 15000, signal }) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647 ||
+      signal != null && !(signal instanceof AbortSignal) || typeof execFileImpl !== "function") {
+    return Promise.resolve({ ok: false, stdout: "", stderr: "invalid Git timeout, cancellation signal or runner" })
+  }
   const childEnv = { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
   for (const name of GIT_LOCATION_VARIABLES) delete childEnv[name]
   return new Promise((resolve) => {
-    execFileImpl("git", ["-C", cwd, ...args], {
+    const options = {
       encoding: "utf8",
       env: childEnv,
-      timeout: 15000,
+      timeout: timeoutMs,
+      ...(signal ? { signal } : {}),
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
-    }, (error, stdout, stderr) => {
+    }
+    const complete = (error, stdout, stderr) => {
       resolve({
         ok: !error,
         stdout: String(stdout ?? "").trim(),
-        stderr: String(stderr ?? "").trim() || (error ? error.message : ""),
+        stderr: String(stderr ?? "").trim() || (error ? String(error.message ?? error) : ""),
       })
-    })
+    }
+    try { execFileImpl("git", ["-C", cwd, ...args], options, complete) } catch (error) { complete(error, "", "") }
   })
 }
 

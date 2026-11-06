@@ -1,0 +1,5 @@
+Add a standalone bounded Git-graph fetch owner with a common-directory lane, captured route/generation, verified object closure and exact-operation cancellation. It retains candidate objects and unknown custody rather than stealing stale leases or claiming source/LFS readiness. The macOS HTTP prototype has no startup, delivery or source-application wiring; other platforms, authentication, hooks and consumers remain explicit qualification gates. Shared asynchronous Git reads accept finite caller budgets and abort signals without changing their existing default or branch policy.
+
+Helper startup/pending waits are independently bounded by the controller. Actual repository binding is revalidated and Git/common targets are pinned, so a linked-worktree rebind cannot reuse another repository's lease. Shutdown cancellation is reconciled after verified closure before terminal success publication.
+
+Blocked cleanup and unknown closure preserve captured generation/ref evidence in the returned outcome even when receipt persistence is unavailable, without implying publication or closure.

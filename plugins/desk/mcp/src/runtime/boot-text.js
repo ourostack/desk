@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
-import { blockedWords } from "./deliver.js"
+import { blockedWords, UNVERIFIED_DELIVERY_REASONS } from "./deliver.js"
 import { unsignedLines } from "../desk/unsigned-deliveries.js"
 import { memberSourceLabel } from "../desk/crew-member.js"
 
@@ -81,6 +81,7 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
  * why when a push failed, and whether Desk is delivering them now or cannot until the remote is usable. Empty otherwise.
  */
 function unpushedText(unpushed) {
+  if (UNVERIFIED_DELIVERY_REASONS.has(unpushed?.reason)) return "; delivery to the current destination is not verified; inspect its retained outcome before retrying"
   if (!(unpushed?.count > 0)) return ""
   const commits = `${plural(unpushed.count, "local commit")} ${unpushed.count === 1 ? "is" : "are"} not on the remote`
   const why = unpushed.reason ? ` (the last push failed because ${blockedWords(unpushed.reason, unpushed.paths ?? [])})` : ""

@@ -95,6 +95,7 @@ test("incident 1: an untracked file matching an incoming tracked one never stops
   const before = await dirtyOtherWork(desk)
   await commit(desk, "tasks/ship.md", card({ status: "doing", updated: "2026-10-28T21:03:00Z", progress: ["started", "card update one"] }), "desk: card update one")
   await commit(desk, "tasks/other.md", card({ status: "doing", updated: "2026-10-28T21:04:00Z", progress: ["new card"] }), "desk: card update two")
+  const localHead = git(desk, ["rev-parse", "HEAD"])
 
   const result = await runPushWorker({ root: desk, env: process.env, clock: instantClock, fileProblem: () => {} })
 
@@ -107,8 +108,9 @@ test("incident 1: an untracked file matching an incoming tracked one never stops
   assert.equal(existsSync(path.join(desk, ".git", "rebase-merge")), false)
   assert.equal(git(desk, ["stash", "list"]), "", "nothing was stashed")
   assert.equal(readSyncStatus({ root: desk, env: process.env }).blocked, false)
-  assert.equal(git(desk, ["rev-parse", "HEAD"]), bare(origin, ["rev-parse", "main"]), "the shared checkout followed the remote")
-  assert.equal(git(desk, ["status", "--porcelain", "--", "_meta"]), "", "the identical untracked file is now the tracked one")
+  assert.equal(git(desk, ["rev-parse", "HEAD"]), localHead, "delivery no longer mutates the shared checkout")
+  assert.deepEqual(readSyncStatus({ root: desk }).checkout, { state: "behind", reason: "source_follow_deferred" })
+  assert.equal(git(desk, ["status", "--porcelain", "--", "_meta/factory.json"]), "?? _meta/factory.json\n", "even identical untracked bytes stay owned by their writer")
 })
 
 test("incident 2: a task card conflict while other files are dirty resolves itself and Desk's commit reaches the remote", async () => {
@@ -119,6 +121,7 @@ test("incident 2: a task card conflict while other files are dirty resolves itse
 
   const before = await dirtyOtherWork(desk)
   await commit(desk, "tasks/ship.md", card({ status: "done", updated: "2026-10-29T14:00:00Z", progress: ["started", "desk archived the work"] }), "desk: mark done")
+  const localHead = git(desk, ["rev-parse", "HEAD"])
 
   const result = await runPushWorker({ root: desk, env: process.env, clock: instantClock, fileProblem: () => {} })
 
@@ -134,7 +137,8 @@ test("incident 2: a task card conflict while other files are dirty resolves itse
   assert.doesNotMatch(landed, /<<<<<<<|>>>>>>>/u)
   assert.deepEqual(await snapshot(desk), before, "other sessions' uncommitted files are untouched")
   assert.equal(git(desk, ["stash", "list"]), "", "nothing was stashed")
-  assert.equal(git(desk, ["rev-parse", "HEAD"]), bare(origin, ["rev-parse", "main"]), "the shared checkout followed the remote")
+  assert.equal(git(desk, ["rev-parse", "HEAD"]), localHead, "delivery is verified separately from deferred source application")
+  assert.deepEqual(readSyncStatus({ root: desk }).checkout, { state: "behind", reason: "source_follow_deferred" })
 })
 
 // ---------------------------------------------------------------------------
@@ -248,7 +252,7 @@ test("a card one side deleted and the other changed keeps the changed copy, and 
   assert.deepEqual(outcome.skipped, [])
   assert.match(bare(origin, ["show", "main:tasks/ship.md"]), /^- finished$/mu)
   assert.equal(bare(origin, ["show", "main:log.jsonl"]), "{\"from\":\"b\"}\n{\"from\":\"a\"}\n")
-  assert.equal(outcome.checkout.state, "caught_up")
+  assert.deepEqual(outcome.checkout, { state: "behind", reason: "source_follow_deferred" })
 })
 
 test("a commit with nothing left to deliver is counted delivered, and one Git will not commit is left local", async () => {
@@ -266,12 +270,12 @@ test("a commit with nothing left to deliver is counted delivered, and one Git wi
   assert.deepEqual(deliver({ root: again.desk, spawnGit: refuse }).skipped.map((skip) => skip.paths), [[]])
 })
 
-test("the shared checkout never moves over another session's change or untracked file, and names what is in the way", async () => {
+test("delivery defers all shared source application and preserves dirty or untracked paths", async () => {
   const { desk } = await mkDiverged()
   await write(desk, "notes/remote.md", "another session's different file\n")
   const untracked = deliver({ root: desk })
   assert.equal(untracked.state, "delivered")
-  assert.deepEqual(untracked.checkout, { state: "behind", reason: "local_changes", paths: ["notes/remote.md"] })
+  assert.deepEqual(untracked.checkout, { state: "behind", reason: "source_follow_deferred" })
   assert.equal(await fs.readFile(path.join(desk, "notes/remote.md"), "utf8"), "another session's different file\n")
 
   const dirty = await mkShared()
@@ -279,11 +283,11 @@ test("the shared checkout never moves over another session's change or untracked
   git(dirty.elsewhere, ["push", "-q", "origin", "main"])
   await commit(dirty.desk, "tasks/mine.md", "mine\n", "desk: local change")
   await write(dirty.desk, "notes/shared.md", "mid-edit\n")
-  assert.deepEqual(deliver({ root: dirty.desk }).checkout, { state: "behind", reason: "local_changes", paths: ["notes/shared.md"] })
+  assert.deepEqual(deliver({ root: dirty.desk }).checkout, { state: "behind", reason: "source_follow_deferred" })
   assert.equal(await fs.readFile(path.join(dirty.desk, "notes/shared.md"), "utf8"), "mid-edit\n")
 })
 
-test("the checkout is left alone when its branch moved during delivery, and put back when the branch moves under the catch-up", async () => {
+test("late source commits remain intact and delivery performs no shared checkout or restoration", async () => {
   const { desk } = await mkDiverged()
   const commitDuringPush = (cmd, args, opts) => {
     const result = spawnSync(cmd, args, opts)
@@ -294,23 +298,33 @@ test("the checkout is left alone when its branch moved during delivery, and put 
     }
     return result
   }
-  assert.deepEqual(deliver({ root: desk, spawnGit: commitDuringPush }).checkout, { state: "behind", reason: "moved" })
+  assert.deepEqual(deliver({ root: desk, spawnGit: commitDuringPush }).checkout, { state: "behind", reason: "source_follow_deferred" })
+  assert.equal(git(desk, ["log", "-1", "--format=%s"]).trim(), "late")
 
   const raced = await mkDiverged()
   const head = git(raced.desk, ["rev-parse", "HEAD"])
-  const refuseMove = intercept((args) => args.includes("update-ref") && args.includes("-m"), () => ({ status: 1, stdout: "", stderr: "fatal: cannot lock ref" }))
-  assert.deepEqual(deliver({ root: raced.desk, spawnGit: refuseMove }).checkout, { state: "behind", reason: "moved" })
+  let sourceMutations = 0
+  const refuseMove = intercept((args) => args.includes("read-tree") || args.includes("update-index") || args.includes("update-ref") && args.includes("HEAD"), () => {
+    sourceMutations += 1
+    return { status: 1, stdout: "", stderr: "fatal: cannot lock ref" }
+  })
+  assert.deepEqual(deliver({ root: raced.desk, spawnGit: refuseMove }).checkout, { state: "behind", reason: "source_follow_deferred" })
+  assert.equal(sourceMutations, 0)
   assert.equal(git(raced.desk, ["rev-parse", "HEAD"]), head)
   assert.equal(git(raced.desk, ["status", "--porcelain"]), "", "the files match the branch again")
 })
 
-test("a change the remote already has is nothing to deliver, and the checkout catches up", async () => {
+test("a change already on the remote gets a scoped observation without following the source", async () => {
   const { desk, elsewhere } = await mkShared()
   await commit(elsewhere, "tasks/same.md", "same\n", "elsewhere same")
   git(elsewhere, ["push", "-q", "origin", "main"])
   await commit(desk, "tasks/same.md", "same\n", "desk same")
   const outcome = deliver({ root: desk })
-  assert.deepEqual(outcome, { state: "nothing", delivered: [], skipped: [], checkout: { state: "caught_up" } })
+  assert.equal(outcome.state, "nothing")
+  assert.deepEqual(outcome.delivered, [])
+  assert.deepEqual(outcome.skipped, [])
+  assert.deepEqual(outcome.checkout, { state: "behind", reason: "source_follow_deferred" })
+  assert.equal(outcome.snapshot.tip, git(elsewhere, ["rev-parse", "HEAD"]).trim())
 })
 
 // ---------------------------------------------------------------------------
@@ -323,17 +337,28 @@ test("the worker reports an unreadable pending list as nothing to push, and stop
   const unreadable = intercept((args) => args.includes("--cherry-pick"), () => ({ status: 1, stdout: "", stderr: "" }))
   assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, spawnGit: unreadable }), { result: "ok" })
 
-  const sha = git(desk, ["rev-parse", "HEAD"]).trim()
   let filed = null
-  const stuck = intercept((args) => args.includes("--cherry-pick"), () => ({ status: 0, stdout: `${sha}\n`, stderr: "" }))
+  let writes = 0
+  const stuck = (command, args, options) => {
+    const answer = spawnSync(command, args, options)
+    if (args.includes("push") && answer.status === 0) {
+      writeFileSync(path.join(desk, "tasks/churn.md"), `write ${++writes}\n`)
+      git(desk, ["add", "tasks/churn.md"])
+      git(desk, ["commit", "-qm", "concurrent writer"])
+    }
+    return answer
+  }
   const result = await runPushWorker({ root: desk, clock: instantClock, spawnGit: stuck, fileProblem: (args) => { filed = args } })
   assert.deepEqual(result, { result: "blocked", reason: "push_incomplete", unpushed: 1 })
   assert.equal(filed.reason, "push_incomplete")
 
+  const faded = await mkShared()
+  await commit(faded.desk, "tasks/a.md", "a\n", "a")
+  const sha = git(faded.desk, ["rev-parse", "HEAD"]).trim()
   let reads = 0
   const fadingRead = intercept((args) => args.includes("--cherry-pick"), () => (reads++ < 1 ? { status: 0, stdout: `${sha}\n`, stderr: "" } : { status: 1, stdout: "", stderr: "" }))
   const offline = (cmd, args, opts) => (args.includes("fetch") ? { status: 128, stdout: "", stderr: "fatal: Could not read from remote repository.\n" } : fadingRead(cmd, args, opts))
-  assert.deepEqual(await runPushWorker({ root: desk, clock: instantClock, spawnGit: offline, fileProblem: () => assert.fail("not filed") }), { result: "blocked", reason: "unreachable", unpushed: 0 })
+  assert.deepEqual(await runPushWorker({ root: faded.desk, clock: instantClock, spawnGit: offline, fileProblem: () => assert.fail("not filed") }), { result: "blocked", reason: "unreachable", unpushed: null })
 })
 
 test("a commit made just after the worker's last check, while its own worker found the lock held, is still pushed", async () => {

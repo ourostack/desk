@@ -7,6 +7,7 @@ import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
 import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
 import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
+import { UNVERIFIED_DELIVERY_REASONS } from "../runtime/deliver.js"
 
 
 // desk_status's inputs are read elsewhere: `detail` where the answer is shaped for the caller (runtime/desk-session.js, which
@@ -36,7 +37,8 @@ async function syncStatus({ deskRoot, env, signal }) {
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null, ...lastPull }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null,
+      ...(UNVERIFIED_DELIVERY_REASONS.has(recorded.reason) ? { delivery_unverified: true } : {}), ...lastPull }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
@@ -44,6 +46,7 @@ async function syncStatus({ deskRoot, env, signal }) {
     ahead: counts?.ahead ?? 0,
     behind: counts?.behind ?? 0,
     last_push_at: recorded?.last_push_at ?? null,
+    ...(recorded?.checkout ? { checkout: recorded.checkout, unpushed: recorded.unpushed ?? null, counts_basis: "tracking_ref" } : {}),
     ...lastPull,
   }
 }
