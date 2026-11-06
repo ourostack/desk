@@ -2,13 +2,21 @@ name: Superpowers upstream refresh
 
 # Keeps the vendored Superpowers payload following obra/superpowers. Each run rebuilds the refresh from main: it
 # copies the selected upstream files byte for byte, updates upstream-sources.lock.json, releases a new Superpowers
-# version, adds a Desk changelog fragment, pushes the superpowers-upstream branch, opens or updates its pull request,
-# dispatches CI on it and merges when every check passes, then dispatches the Desk release on main. A failing check
-# leaves the pull request open and files an upstream-refresh issue.
+# version (moving Desk's compatibility floor when upstream crosses a major), adds a Desk changelog fragment, pushes the
+# superpowers-upstream branch, opens or updates its pull request with upstream's release notes, dispatches CI on it and
+# merges when every check passes, then dispatches the Desk release on main. A major upstream release also files a
+# superpowers-major issue to adopt what is new.
+#
+# The run succeeds only when the refresh reached main and the release was dispatched, or upstream had nothing new.
+# Anything else fails the run and files or updates one upstream-refresh issue that names each failed job's errors.
+#
+# Monday's run always reruns CI. The other days' runs are a cheap check: they rerun CI only when upstream moved past
+# what the open refresh pull request carries, and otherwise fail at once while that refresh is still not on main.
 
 on:
   schedule:
     - cron: "23 7 * * 1"
+    - cron: "23 7 * * 0,2-6"
   workflow_dispatch:
 
 permissions: {}
@@ -76,8 +84,15 @@ jobs:
             echo "The selected Superpowers files already match the upstream default branch." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Check whether the open refresh already carries this payload
+        if: steps.refresh.outputs.changed == 'true' && github.event.schedule == '23 7 * * 0,2-6'
+        id: gate
+        run: |
+          node scripts/superpowers-upstream-pr.cjs pending \
+            --repo "$REPO" --branch "$BRANCH" --base "$BASE" --lock upstream-sources.lock.json
+
       - name: Commit and push the refresh branch
-        if: steps.refresh.outputs.changed == 'true'
+        if: steps.refresh.outputs.changed == 'true' && steps.gate.outputs.rerun != 'false'
         id: push
         run: |
           set -euo pipefail
@@ -97,14 +112,16 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Open the pull request, run CI and merge on green
-        if: steps.refresh.outputs.changed == 'true'
+        if: steps.refresh.outputs.changed == 'true' && steps.gate.outputs.rerun != 'false'
+        id: publish
         run: |
           node scripts/superpowers-upstream-pr.cjs publish \
             --repo "$REPO" --branch "$BRANCH" --base "$BASE" --sha "${{ steps.push.outputs.sha }}" \
             --report "$RUNNER_TEMP/refresh-report.json" --workflows "$CI_WORKFLOWS" --run-url "$RUN_URL"
 
+      # An intentional pending refusal needs no duplicate issue; unexpected gate failures still need reporting.
       - name: File an issue when the refresh itself fails
-        if: failure()
+        if: failure() && steps.gate.outputs.rerun != 'false' && steps.publish.outputs.issue == ''
         run: |
           set -euo pipefail
           if ! gh label list --repo "$REPO" --search upstream-refresh --json name --jq '.[].name' | grep -qx upstream-refresh; then

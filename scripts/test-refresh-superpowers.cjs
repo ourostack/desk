@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
+const { runInNewContext } = require("node:vm");
 
 const {
   SUPERPOWERS_VERSION_FILES,
@@ -16,7 +17,7 @@ const {
   upstreamVersion,
   versionToken,
 } = require("./refresh-superpowers.cjs");
-const { DESK_VERSION_FILES, nextAlpha, nextReleaseVersion, replaceVersion } = require("./release-desk.cjs");
+const { DESK_VERSION_FILES, FRAGMENT_DIR, nextAlpha, nextReleaseVersion, replaceVersion } = require("./release-desk.cjs");
 const hookCompat = require("./superpowers-hook-compat.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -75,11 +76,24 @@ function trackedFiles() {
 }
 
 // A release surface names the shipped version; a stated minimum ("3.2.0-alpha.58 or later") is a floor that stays.
-function filesNaming(version, files) {
+function filesNaming(version, files, root = repoRoot) {
   return files.filter((file) => {
-    const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    const text = fs.readFileSync(path.join(root, file), "utf8");
     return versionToken(version).test(text.replaceAll(`${version} or later`, ""));
   });
+}
+
+// The shipped Superpowers version appears only on these surfaces outside tests and history. The README names the
+// upstream version separately, tests derive the shipped version instead of hard-coding it, and changelog fragments,
+// including the one each refresh adds, are history the Desk release folds into the changelog.
+function superpowersSurfaces(version, files, root = repoRoot) {
+  return filesNaming(version, files.map((file) => file.split(path.sep).join("/")), root).filter((file) => (
+    file !== "plugins/desk/CHANGELOG.md"
+    && !file.startsWith(`${FRAGMENT_DIR}/`)
+    && file !== "plugins/superpowers/README.md"
+    && !file.includes("/__tests__/")
+    && !/^scripts\/test-[^/]+\.cjs$/u.test(file)
+  )).sort();
 }
 
 // ---- Release-surface contracts over the real repository ----
@@ -95,16 +109,7 @@ function filesNaming(version, files) {
   ));
   assert.deepEqual(naming.sort(), [...DESK_VERSION_FILES].sort(), "every surface naming the Desk version must be bumped by the Desk release");
 
-  // The shipped Superpowers version appears only on these surfaces outside tests and history. The README names the
-  // upstream version separately, and tests derive the shipped version instead of hard-coding it.
-  const shipped = filesNaming(currentSuperpowers, trackedFiles()).filter((file) => (
-    file !== "plugins/desk/CHANGELOG.md"
-    && !file.startsWith("plugins/desk/changelog.d/")
-    && file !== "plugins/superpowers/README.md"
-    && !file.includes("/__tests__/")
-    && !/^scripts\/test-[^/]+\.cjs$/u.test(file)
-  ));
-  assert.deepEqual(shipped.sort(), [...SUPERPOWERS_VERSION_FILES].sort(), "every surface naming the Superpowers version must be bumped by the refresh");
+  assert.deepEqual(superpowersSurfaces(currentSuperpowers, trackedFiles()), [...SUPERPOWERS_VERSION_FILES].sort(), "every surface naming the Superpowers version must be bumped by the refresh");
 }
 
 {
@@ -123,7 +128,32 @@ function filesNaming(version, files) {
 
 {
   // The scheduled workflow refreshes from the upstream default branch, then gates the merge on every CI workflow.
+  // Monday reruns CI; every other day is a cheap check that reruns CI only when upstream moved.
   const workflow = fs.readFileSync(path.join(repoRoot, ".github/workflows/superpowers-upstream.yml"), "utf8");
+  const crons = [...workflow.matchAll(/\n {4}- cron: "([^"]+)"/gu)].map((match) => match[1]);
+  assert.deepEqual(crons, ["23 7 * * 1", "23 7 * * 0,2-6"]);
+  assert.match(workflow, /\n {8}if: steps\.refresh\.outputs\.changed == 'true' && github\.event\.schedule == '23 7 \* \* 0,2-6'\n {8}id: gate\n/u);
+  assert.match(workflow, /node scripts\/superpowers-upstream-pr\.cjs pending/u);
+  for (const step of ["Commit and push the refresh branch", "Open the pull request, run CI and merge on green"]) {
+    assert.match(workflow, new RegExp(`- name: ${step}\\n {8}if: steps\\.refresh\\.outputs\\.changed == 'true' && steps\\.gate\\.outputs\\.rerun != 'false'\\n`, "u"), step);
+  }
+  // Only an intentional pending refusal or an already reported failure suppresses the fallback.
+  assert.match(workflow, /\n {8}id: publish\n/u);
+  const failureCondition = /- name: File an issue when the refresh itself fails\n {8}if: ([^\n]+)/u.exec(workflow)?.[1];
+  assert.ok(failureCondition, "the refresh must retain its generic failure reporter");
+  for (const [name, failed, outcome, rerun, issue, expected] of [
+    ["successful run", false, "success", "true", "", false],
+    ["intentional pending refusal", true, "failure", "false", "", false],
+    ["unexpected gate failure", true, "failure", "", "", true],
+    ["failure before the gate", true, "skipped", "", "", true],
+    ["publish already reported", true, "success", "true", "https://github.com/owner/desk/issues/4", false],
+    ["unreported publish failure", true, "success", "true", "", true],
+  ]) {
+    assert.equal(runInNewContext(failureCondition, {
+      failure: () => failed,
+      steps: { gate: { outcome, outputs: { rerun } }, publish: { outputs: { issue } } },
+    }), expected, name);
+  }
   for (const required of [
     /\n {2}schedule:\n {4}- cron: "[^"]+"\n/u,
     /\n {2}workflow_dispatch:\n/u,
@@ -270,9 +300,12 @@ for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-r
     assert.deepEqual(result.updated_paths, [skillFile.sourcePath]);
     assert.deepEqual(result.added_paths, ["skills/using-superpowers/scripts-new-helper"]);
     const fragment = `plugins/desk/changelog.d/superpowers-${newerUpstream}.md`;
+    // A minor upstream release stays inside Desk's compatibility floor; an upstream without release notes has none to carry.
     assert.deepEqual(result.release, {
       superpowers: { from: currentSuperpowers, to: newerUpstream, upstream: newerUpstream },
       fragment,
+      range: null,
+      notes: [],
     });
 
     // The payload is byte-identical to upstream and the lock records it.
@@ -312,21 +345,79 @@ for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-r
       assert.doesNotMatch(text, versionToken(nextReleaseVersion(fixtureDeskVersion)), file);
     }
     assert.equal(readFixture(root, "plugins/desk/CHANGELOG.md"), fs.readFileSync(path.join(repoRoot, "plugins/desk/CHANGELOG.md"), "utf8"));
+    // The refreshed tree passes the repository's own surface contract, fragment included, so the refresh's CI can pass.
+    assert.deepEqual(superpowersSurfaces(newerUpstream, Object.keys(snapshot(root)), root), [...SUPERPOWERS_VERSION_FILES].sort());
 
     // Upstream changes the payload again without a new version: Superpowers takes the next patch and gets its own fragment.
     fs.appendFileSync(path.join(upstreamDir, skillFile.sourcePath), "A second addition.\n");
     fs.rmSync(path.join(upstreamDir, "skills/using-superpowers/scripts-new-helper"));
     const second = commitChange(upstreamDir, "unreleased change");
+    fs.mkdirSync(path.join(root, "plugins/desk/skills/fixture-adapter"), { recursive: true });
+    fs.writeFileSync(path.join(root, "plugins/desk/skills/fixture-adapter/SKILL.md"), "Run using-superpowers/scripts-new-helper first.\n");
     output = "";
     assert.equal(main(["--upstream-dir", upstreamDir, "--root", root, "--ref", second], {
       stdout: { write(value) { output += value; } },
     }), 0);
     const patch = JSON.parse(output);
     assert.deepEqual(patch.removed_paths, ["skills/using-superpowers/scripts-new-helper"]);
+    // Desk text that still names a removed upstream file is reported, so the pull request says what to fix.
+    assert.deepEqual(patch.desk_references, [{ path: "skills/using-superpowers/scripts-new-helper", files: ["plugins/desk/skills/fixture-adapter/SKILL.md"] }]);
     assert.equal(patch.release.superpowers.to, `${major}.${minor + 1}.1`);
     assert.equal(patch.release.fragment, `plugins/desk/changelog.d/superpowers-${major}.${minor + 1}.1.md`);
     assert.match(readFixture(root, patch.release.fragment), /Selected files: 1 changed, 1 removed\./u);
     assert.equal(JSON.parse(readFixture(root, "plugins/desk/.claude-plugin/plugin.json")).version, fixtureDeskVersion);
+  } finally {
+    removeFixture(tempRoot);
+  }
+}
+
+// A major upstream release moves Desk's compatibility floor with it, so CI qualifies Desk against the new major
+// instead of failing every refresh, and carries upstream's notes for each version since the one Desk shipped.
+{
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "refresh-superpowers-major-"));
+  try {
+    const { root, upstreamDir, writeManifest } = buildFixture(tempRoot);
+    const shippedUpstream = /version (\S+), commit `/u.exec(readFixture(root, "plugins/superpowers/README.md"))[1];
+    const nextMajor = `${major + 1}.0.1`;
+    const rangeFiles = ["plugins/desk/.claude-plugin/plugin.json", "plugins/desk/activation/desk.activation.json"];
+    const floor = readRepoJson("plugins/desk/activation/desk.activation.json").dependencies.find((dependency) => dependency.id === "superpowers").version_range;
+    const originals = Object.fromEntries(rangeFiles.map((file) => [file, readFixture(root, file)]));
+    fs.writeFileSync(path.join(upstreamDir, "RELEASE-NOTES.md"), [
+      "# Superpowers Release Notes",
+      "",
+      `## v${nextMajor} (2026-11-03)`,
+      "",
+      "Fewer questions.",
+      "",
+      "### Hooks",
+      "",
+      "- A hook fix.",
+      "",
+      `## v${major + 1}.0.0 (2026-10-09)`,
+      "",
+      "Rebuilt from scratch.",
+      "",
+      `## v${shippedUpstream} (2026-09-25)`,
+      "",
+      "Already shipped.",
+      "",
+    ].join("\n"));
+    fs.appendFileSync(path.join(upstreamDir, skillFile.sourcePath), "\nA major addition.\n");
+    writeManifest(nextMajor);
+    commitChange(upstreamDir, "major release");
+    const result = refresh({ root, upstream: require("./check-upstream-sources.cjs").createGitTreeReader({ dir: upstreamDir }) });
+    hookCompat.verify({ root });
+    assert.deepEqual(result.release.range, { from: floor, to: `^${nextMajor}`, files: rangeFiles });
+    assert.deepEqual(result.release.notes, [
+      { version: nextMajor, heading: `v${nextMajor} (2026-11-03)`, body: "Fewer questions.\n\n### Hooks\n\n- A hook fix." },
+      { version: `${major + 1}.0.0`, heading: `v${major + 1}.0.0 (2026-10-09)`, body: "Rebuilt from scratch." },
+    ]);
+    // Only the floor and the shipped version change in each file; its formatting is kept.
+    for (const file of rangeFiles) {
+      const expected = originals[file].replace(versionToken(currentSuperpowers), nextMajor).replace(`"${floor}"`, `"^${nextMajor}"`);
+      assert.equal(readFixture(root, file), expected, file);
+    }
+    assert.equal(JSON.parse(readFixture(root, "plugins/desk/.claude-plugin/plugin.json")).dependencies.find((dependency) => dependency.name === "superpowers").version, `^${nextMajor}`);
   } finally {
     removeFixture(tempRoot);
   }
