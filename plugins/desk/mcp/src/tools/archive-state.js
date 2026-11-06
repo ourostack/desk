@@ -122,15 +122,12 @@ function indexMatches(entries, expected) {
   return entries !== null && entries.length === expected.size && entries.every((entry) =>
     entry.stage === "0" && expected.get(entry.path)?.sha === entry.sha && expected.get(entry.path)?.mode === entry.mode)
 }
-// Every failure here carries `route_around` (#561, #623): the commit of exactly these paths, finished by hand and read back.
-// A failure that found bytes Desk did not admit starts the route with a read of those differences, so another session's
-// edit is never committed as the archive's.
+// Every failure here carries `route_around` (#561, #623). A failure that found bytes Desk did not admit gets reads only: the
+// archive's admitted entries are not what the paths hold, so nothing can tell this archive's change from another session's
+// edit, and no step commits either (R3).
 function differsRoute(git, paths, message) {
-  const route = commitRoute({ root: git.root, paths, message, readback: "absent", deskRoot: git.deskRoot })
-  route.steps.unshift({
-    step: "These paths changed after Desk admitted them. Read the differences first: continue only if every one is this archive's own change. If any is another session's edit, leave the files as they are and report it instead of committing.",
-    argv: ["git", "-C", git.root, "diff", "HEAD", "--", ...paths],
-  })
+  const route = commitRoute({ root: git.root, paths, message, readback: "unknown", deskRoot: git.deskRoot })
+  route.summary = "These paths changed after Desk admitted them, so Desk did not commit, and no step here commits: read the differences, change nothing, and report them."
   return route
 }
 function publishExpected(git, paths, expected, message, stagingPaths = paths) {

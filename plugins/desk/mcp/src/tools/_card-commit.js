@@ -141,7 +141,7 @@ export async function writeCardCommitted({ deskRoot, personPrefix = "", write, m
   const committed = commitPaths(deskRoot, stage, text, spawnGit)
   if (!committed.ok) {
     const code = committed.readback === "absent" ? "commit_failed" : "commit_unknown"
-    return { result, commit: code, left_alone: leftAlone, route_around: route(committed.readback) }
+    return { result, commit: code, left_alone: leftAlone, route_around: commitFailure({ root: deskRoot, paths: stage, message: text, committed }).route_around }
   }
   schedulePush({ root: deskRoot })
   return { result, commit: "committed", left_alone: leftAlone }
