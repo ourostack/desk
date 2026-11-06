@@ -118,13 +118,20 @@ async function productionDoor(t, { env, fail = false, slugs = ["s"] }) {
   return { send, answer, frames, root }
 }
 
+// The fake native child performed the move; publishing that move to git is the git fixture's business and may legitimately report archive_pending on Windows.
+async function archivedByNative(root, reply) {
+  const body = JSON.parse(reply.result.content[0].text)
+  assert.ok(["archived", "archive_pending"].includes(body.status), JSON.stringify(body))
+  await fs.access(path.join(root, "t", "_archive", "s"))
+}
+
 const archiveCall = (id, slug = "s") => ({ id, method: "tools/call", params: { name: "task_archive", arguments: { track: "t", slug } } })
 
 test("through the real front door and session, a gated task_archive emits one stage frame carrying its JSON-RPC id", async (t) => {
-  const { send, answer, frames } = await productionDoor(t, { env: GATE })
+  const { send, answer, frames, root } = await productionDoor(t, { env: GATE })
   send(archiveCall(41))
   const reply = await answer(41)
-  assert.equal(JSON.parse(reply.result.content[0].text).status, "archived")
+  await archivedByNative(root, reply)
   assert.deepEqual(frames.map((frame) => frame.requestId), [41])
   assert.equal(frames[0].receipt.nativeStages.length, 5)
 })
@@ -145,9 +152,9 @@ test("a gated capture that never arrives keeps the original error and emits an e
 })
 
 test("with the gate off the call reaches the tool as before and no frame is written", async (t) => {
-  const { send, answer, frames } = await productionDoor(t, { env: { CI: "", GITHUB_ACTIONS: "", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "", DESK_BLACKBOX_NATIVE_STAGE_TRACE: "" } })
+  const { send, answer, frames, root } = await productionDoor(t, { env: { CI: "", GITHUB_ACTIONS: "", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "", DESK_BLACKBOX_NATIVE_STAGE_TRACE: "" } })
   send(archiveCall(3))
-  assert.equal(JSON.parse((await answer(3)).result.content[0].text).status, "archived")
+  await archivedByNative(root, await answer(3))
   assert.equal(frames.length, 0)
 })
 
