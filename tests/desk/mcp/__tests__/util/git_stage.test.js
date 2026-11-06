@@ -942,6 +942,57 @@ test("#632: a commit made as the budget ends does not move the branch, and is un
   assert.match(result.stderr, /time budget ran out before the branch was moved/u)
 })
 
+// The answer after the branch update says only what was read: a branch that could not be read is unread, never "does not hold", and a branch
+// update the budget left no room for was never dispatched, never "cut off".
+test("#632: a branch read cut off after the branch moved says the branch could not be read, never that it does not hold the commit", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "rev-parse" && verb.at(-1) === "refs/heads/main" ? "cut" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /refs\/heads\/main could not be read \(cut off at the end of the commit's time budget\)/u)
+  assert.doesNotMatch(result.stderr, /does not hold/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n", "the branch does hold the commit")
+})
+
+test("#632: a branch read that fails after the branch moved says the branch could not be read, never that it does not hold the commit", async () => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const failure = { status: 128, signal: null, stdout: "", stderr: "fatal: the read failed" }
+  let updates = 0
+  const spawn = (command, args, options) => {
+    if (args[2] === "update-ref") updates++
+    return args[2] === "rev-parse" && args.at(-1) === "refs/heads/main" ? failure : spawnSync(command, args, options)
+  }
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.equal(updates, 1, "dispatched once, never repeated")
+  assert.match(result.stderr, /refs\/heads\/main could not be read \(git exited 128\)/u)
+  assert.doesNotMatch(result.stderr, /does not hold/u)
+  assert.deepEqual([result.ok, result.readback], [true, "committed"], "the read-back, not the failed read, says the commit is in effect")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a branch update the budget left no room for says it was never dispatched, never that it was cut off", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  let operationReads = 0
+  // The second read of which Git operation is in progress is the core's last before the branch update; it spends the rest of the budget.
+  const budget = spendsTheBudget(t, (verb) => (verb[1] === "--path-format=absolute" && operationReads++ === 1 ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.equal(operationReads, 2)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("commit-tree"), 1)
+  assert.equal(budget.dispatched("update-ref"), 0, "the branch update was never dispatched")
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /the branch update was never dispatched/u)
+  assert.doesNotMatch(result.stderr, /cut off/u)
+})
+
 // What a plain git commit did that the commit keeps.
 function hookIn(root, name, script) {
   const hooks = path.resolve(root, git(root, ["rev-parse", "--git-path", "hooks"]).trim())
