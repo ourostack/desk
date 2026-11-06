@@ -14,20 +14,24 @@
 // When all of that passes the answer is `ready`.
 //
 // With `commit: true` and a `ready` answer it builds a private temporary index (the HEAD it read plus exactly the captured
-// entries), reads the branch and HEAD again, and dispatches one plain `git commit` of that private index. Git moves the branch
-// itself and runs every hook the repository has (so the card guard still refuses a hand commit of a live task card); nothing
-// here moves a ref by hand. The shared index and the working tree are never written: they already hold this change, and
-// another session's edit beside it stays exactly where it is. The commit is then read back: exactly this change on the HEAD it
-// read is `finished`; anything else that landed is `unknown`, named, and left alone. One dispatch, never repeated.
+// entries), reads the branch and HEAD again, and makes the commit the way git commit does, with every step Git's own: the
+// pre-commit, prepare-commit-msg and commit-msg hooks through `git hook run` on that private index (so the card guard still
+// refuses a hand commit of a live task card; a hook that changes what would be committed is held), the message cleaned by
+// `git stripspace`, the commit object by `git commit-tree` on the qualified HEAD (signed when commit.gpgSign says so). The one
+// dispatch that moves anything is `git update-ref` of the branch from exactly the qualified HEAD, a compare-and-swap: a
+// branch another writer moved after the read is refused and their commit stands, never undone (git commit itself would take
+// whatever HEAD is when it starts as the parent). Then post-commit runs. The shared index and the working tree are never
+// written. The hooks, commit-tree and the branch update get a 600 s bound, since a slow hook is what left the commit
+// unfinished; every read keeps 10 s. A hook or branch update cut off at that bound is `unknown`. One dispatch, never repeated.
 
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { indexEntries, readBackCommit } from "./git-stage.js"
+import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 
-const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT"
 const GIT_TIMEOUT_MS = 10_000
 // The finish runs from a shell, not inside a tool call, and a slow hook is what left the commit unfinished: the one commit
 // dispatch gets room for it. A dispatch cut off still ends in the read-back below, never in a second dispatch.
@@ -36,7 +40,7 @@ const ZERO = "0".repeat(40)
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
-  return { ok: !answer.error && answer.status === 0, stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
+  return { ok: !answer.error && answer.status === 0, cut: Boolean(answer.error || answer.signal), stdout: String(answer.stdout ?? ""), stderr: String(answer.stderr ?? answer.error?.message ?? "").trim() }
 }
 
 function treeLines(spawnGit, root, commit, paths) {
@@ -60,7 +64,7 @@ const held = (reason, extra = {}) => ({ state: "held", reason, ...extra })
  * `committed`, `ready`, `finished` (this call made the commit), `held` or `unknown`. Never throws on a Git failure.
  */
 export function finishCommit({ root, paths, expected, before, branch, message, commit = false, spawnGit = spawnSync, env = process.env }) {
-  if (env[TOOL_COMMIT_ENV]) return held(`${TOOL_COMMIT_ENV} is set; this check runs only without it, so the card guard keeps its say`)
+  if (env[TOOL_COMMIT_ENV]) return held("the card guard's own override is set in this environment; this check runs only without it, so the card guard keeps its say")
   if (!Array.isArray(paths) || paths.length === 0 || !Array.isArray(expected) || typeof before !== "string" || !branch || !message)
     return held("the route does not carry the captured change (paths, entries, HEAD, branch and message), so nothing can be checked")
   const wanted = [...expected].sort()
@@ -108,29 +112,53 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, 
     if (!seed.ok) return held(`nothing was committed: git read-tree failed: ${seed.stderr}`)
     const update = git(spawnGit, root, ["update-index", "-z", "--index-info"], { env: own, input: lines })
     if (!update.ok) return held(`nothing was committed: building the private index failed: ${update.stderr}`)
-    // Read again just before the one dispatch: the private index is HEAD plus this change, so it is right only on that HEAD.
+    // Read again before running anything: the private index is HEAD plus this change, so it is right only on that HEAD.
     const branchNow = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
     const headNow = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
     if (!branchNow.ok || branchNow.stdout.trim() !== branch || (headNow.ok ? headNow.stdout.trim() : "") !== head)
       return held(`nothing was committed: ${branch} moved after the checks; read back again from the start`)
-    // The one dispatch that changes anything: a plain commit, so Git moves the branch and runs every hook the repository has.
-    const made = git(spawnGit, root, ["commit", "-q", "-m", message], { env: own, timeout: COMMIT_TIMEOUT_MS })
-    const afterRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
-    const after = afterRead.ok ? afterRead.stdout.trim() : null
-    if (after === null) return { state: "unknown", reason: `Git could not read HEAD after the commit dispatch${made.ok ? "" : ` (${made.stderr})`}; read back before anything else` }
-    if (after === head) return made.ok
-      ? { state: "unknown", reason: "the commit dispatch reported success but HEAD did not move; read back before anything else" }
-      : held(`nothing was committed: Git or one of the repository's hooks refused the commit: ${made.stderr || "no reason given"}`)
-    const parentRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", `${after}^`])
-    const parent = parentRead.ok ? parentRead.stdout.trim() : ""
-    const body = git(spawnGit, root, ["log", "-1", "--format=%B", after])
-    const entries = treeLines(spawnGit, root, after, paths)
-    const others = git(spawnGit, root, ["diff-tree", "--no-commit-id", "-r", "--name-only", "-z", ...(head === "" ? ["--root", after] : [head, after])])
-    const outside = others.ok ? others.stdout.split("\0").filter(Boolean).filter((p) => !paths.map(full).includes(p)) : null
-    if (parent === head && body.ok && body.stdout.startsWith(message) && same(entries, wanted) && outside !== null && outside.length === 0)
-      return { state: "finished", reason: "committed exactly the captured change", commit: after }
-    // HEAD moved, but not to exactly this change on the HEAD it read: another writer was inside the window. Nothing more is done.
-    return { state: "unknown", reason: `HEAD moved to ${after.slice(0, 12)}, which is not exactly this change on ${head.slice(0, 12) || "an unborn branch"} (another commit landed while it ran, or a hook changed it); it may undo or include another writer's commit, so only a person can say what is right`, commit: after }
+    const tree = git(spawnGit, root, ["write-tree"], { env: own })
+    if (!tree.ok) return held(`nothing was committed: git write-tree failed: ${tree.stderr}`)
+    // The hooks git commit runs, run by Git itself on the private index, in git commit's order and with its arguments.
+    const hookEnv = { ...own, GIT_EDITOR: ":" }
+    const hook = (name, ...args) => git(spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
+    const stopped = (name, answer) => answer.cut
+      ? { state: "unknown", reason: `the ${name} hook was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound and may still be running; the branch was not moved, but read back before anything else` }
+      : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
+    const pre = hook("pre-commit")
+    if (!pre.ok) return stopped("pre-commit", pre)
+    const treeAfter = git(spawnGit, root, ["write-tree"], { env: own })
+    if (!treeAfter.ok || treeAfter.stdout.trim() !== tree.stdout.trim())
+      return held("nothing was committed: the pre-commit hook changed what would be committed; Desk commits only the captured change")
+    const messageFile = path.join(dir, "COMMIT_EDITMSG")
+    writeFileSync(messageFile, `${message}\n`)
+    const prepare = hook("prepare-commit-msg", messageFile, "message")
+    if (!prepare.ok) return stopped("prepare-commit-msg", prepare)
+    const msg = hook("commit-msg", messageFile)
+    if (!msg.ok) return stopped("commit-msg", msg)
+    const cleaned = git(spawnGit, root, ["stripspace"], { input: readFileSync(messageFile, "utf8") })
+    if (!cleaned.ok || cleaned.stdout.trim() === "") return held("nothing was committed: the commit message is empty after the hooks ran")
+    writeFileSync(messageFile, cleaned.stdout)
+    const sign = git(spawnGit, root, ["config", "--type=bool", "--get", "commit.gpgSign"]).stdout.trim() === "true"
+    const made = git(spawnGit, root, ["commit-tree", tree.stdout.trim(), ...(head === "" ? [] : ["-p", head]), "-F", messageFile, ...(sign ? ["-S"] : [])], { timeout: COMMIT_TIMEOUT_MS })
+    if (!made.ok) return held(`nothing was committed: git commit-tree failed: ${made.stderr || "no reason given"}`)
+    const commitId = made.stdout.trim()
+    const branchLast = git(spawnGit, root, ["symbolic-ref", "--short", "-q", "HEAD"])
+    if (!branchLast.ok || branchLast.stdout.trim() !== branch) return held(`nothing was committed: the checkout left ${branch} while the hooks ran`)
+    // The one dispatch that moves anything: a compare-and-swap of the branch from exactly the HEAD that was qualified. If any
+    // other writer moved it since, Git refuses and nothing is overwritten; it is never repeated.
+    const subject = cleaned.stdout.split("\n")[0]
+    const ref = `refs/heads/${branch}`
+    const moved = git(spawnGit, root, ["update-ref", "-m", `commit${head === "" ? " (initial)" : ""}: ${subject}`, ref, commitId, head === "" ? ZERO : head], { timeout: COMMIT_TIMEOUT_MS })
+    const nowRead = git(spawnGit, root, ["rev-parse", "--verify", "-q", ref])
+    const now = nowRead.ok ? nowRead.stdout.trim() : null
+    if (now === commitId) {
+      hook("post-commit")
+      return { state: "finished", reason: "committed exactly the captured change", commit: commitId }
+    }
+    if (moved.ok || moved.cut || now === null)
+      return { state: "unknown", reason: `the branch update ${moved.cut ? `was cut off at the ${COMMIT_TIMEOUT_MS / 1000} s bound` : moved.ok ? "reported success" : "failed"} and ${ref} does not hold ${commitId.slice(0, 12)}; read back before anything else`, commit: commitId }
+    return held(`nothing was committed: ${branch} moved after it was qualified, so the compare-and-swap refused to overwrite it (${moved.stderr || "no reason given"}); the other writer's commit stands`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
