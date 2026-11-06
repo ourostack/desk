@@ -11,6 +11,7 @@ import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/to
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { notCommitted } from "./_route_around.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -574,7 +575,7 @@ test("task_update reports a commit failure without losing the write", async () =
   assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
   const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
   assert.equal(data.status, "processing")
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
@@ -647,11 +648,15 @@ test("task_update does not commit a card that Git holds as a conflict, and says 
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "carried on" }, schedulePush: (opts) => calls.push(opts) })
 
   assert.equal(result.status, "updated")
-  assert.deepEqual(result.commit, { status: "failed", reason: "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again." })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again." })
   assert.equal("desk_commit" in result, false)
   assert.equal("included_uncommitted_changes" in result, false)
   assert.equal(git("rev-parse", "HEAD").stdout, head, "no commit was made")
   assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u, "the conflict is not marked resolved")
+  // R1, R2 (0972 on #625): whose conflict this is cannot be proven, so the route only reads and stops; it never marks the
+  // conflict resolved in the shared index and never commits the card.
+  assert.equal(result.commit.route_around.held, true)
+  assert.equal(result.commit.route_around.steps.some((step) => step.tool), false)
   assert.match(await fs.readFile(filePath, "utf8"), /carried on/u, "the write itself is kept")
   assert.deepEqual(calls, [], "no push is scheduled")
 
@@ -671,7 +676,7 @@ test("task_update says nothing about uncommitted changes for a clean card, or wh
   await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nan uncommitted note\n")
   const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, opts))
   const failed = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "two" }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual(failed.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(failed.commit), { status: "failed", reason: "commit boom" })
   assert.equal("included_uncommitted_changes" in failed, false, "a failed commit included nothing")
 })
 
@@ -697,6 +702,12 @@ test("task_update reports a real staging failure without losing the write, when 
     assert.equal(data.status, "processing", "the frontmatter merge is on disk despite the lock")
     assert.equal(result.commit.status, "failed", "a real `git add` failure is reported, not swallowed as a silent success")
     assert.match(result.commit.reason, /index\.lock/)
+    // The route never touches the lock. Desk captured nothing (the stage failed), so it reads, stops and is held (R2, 0972 on
+    // #625); the stop step says task_update commits the card once the lock is gone.
+    assert.equal(result.commit.route_around.held, true)
+    assert.equal(result.commit.route_around.steps.some((step) => step.tool), false)
+    assert.match(result.commit.route_around.steps.at(-1).step, /task_update for t\/book-flights/u)
+    assert.equal(JSON.stringify(result.commit.route_around).includes("index.lock"), false)
   } finally {
     await fs.rm(lockPath, { force: true })
   }
@@ -1200,7 +1211,7 @@ test("a commit that fails after a delivery leaves the status and the record writ
   await task_create({ deskRoot: root, input: { track: "t", slug: "commit-fails", title: "T" }, schedulePush: () => {} })
   const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, opts))
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "commit-fails", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.equal(result.signoff, "delivered_unsigned")
   const { data } = await readFront(path.join(root, "t", "commit-fails", "task.md"))
   assert.equal(data.status, "done")
