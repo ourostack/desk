@@ -132,6 +132,82 @@ async function makeSession(t, overrides = {}) {
   return { session, base, root, lines, runtime, log: () => lines.join("") }
 }
 
+test("storage doctor session dispatch reaches the real inspector with the bound root and signal", async (t) => {
+  const { callTool } = await import("../../../../../plugins/desk/mcp/src/server.js")
+  const calls = []
+  const runtime = fakeRuntime({
+    callTool: (args) => { calls.push(args); return callTool(args) },
+  })
+  const { session, root } = await makeSession(t, { runtime, watch: quietWatch })
+  fixtureGit(root, "init")
+  fixtureGit(root, "config", "maintenance.auto", "false")
+  fixtureGit(root, "config", "gc.auto", "0")
+  writeFile(path.join(root, "_meta", ".gitkeep"), "")
+  writeFile(path.join(root, "_archive", ".gitkeep"), "")
+  writeFileSync(path.join(root, "sample.pdf"), Buffer.from([0, 1, 2, 255]))
+  fixtureGit(root, "add", "--all")
+  fixtureGit(root, "commit", "-m", "storage fixture")
+  await session.start()
+  const controller = new AbortController()
+  const result = payload(await session.callTool({
+    name: "desk_doctor", input: { storage: "inspect", repo: "/untrusted/repository" }, signal: controller.signal,
+  }))
+  const observed = calls.find((call) => call.name === "desk_doctor")
+  assert.deepEqual(observed.input, { format: "full", storage: "inspect" })
+  assert.equal(observed.deskRoot, root)
+  assert.equal(observed.signal, controller.signal)
+  assert.equal(result.storage.state, "inspected")
+  assert.equal(result.storage.worker, "exited")
+  assert.equal(result.storage.readiness, "not_checked")
+  assert.equal(result.storage.counts.tracking_candidates, 1)
+  assert.equal(result.mode, "healthy")
+})
+
+test("storage doctor preview ignores storage without runtime dispatch or branch repair", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const { session, runtime } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })
+  await session.admission.refresh()
+  const baseline = payload(await session.callTool({ name: "desk_doctor", input: { format: "preview" } }))
+  const preview = payload(await session.callTool({
+    name: "desk_doctor", input: { format: "preview", storage: "inspect", repair: "switch_state_branch" },
+  }))
+  assert.deepEqual(preview, baseline)
+  assert.equal(state.branch, "review")
+  assert.equal(state.switches, undefined)
+  assert.equal(runtime.calls.filter((call) => call.name === "desk_doctor").length, 0)
+})
+
+test("storage doctor rejects mixed repair and invalid actions before any repair or runtime dispatch", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const { session, runtime } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })
+  await session.admission.refresh()
+  const mixed = await session.callTool({ name: "desk_doctor", input: { storage: "inspect", repair: "switch_state_branch" } })
+  assert.equal(mixed.isError, true)
+  assert.match(mixed.content[0].text, /cannot combine storage inspection with repair/u)
+  for (const storage of ["setup", null, true]) {
+    const invalid = await session.callTool({ name: "desk_doctor", input: { storage } })
+    assert.equal(invalid.isError, true)
+    assert.match(invalid.content[0].text, /unsupported storage observation/u)
+  }
+  assert.equal(state.branch, "review")
+  assert.equal(state.switches, undefined)
+  assert.equal(runtime.calls.filter((call) => call.name === "desk_doctor").length, 0)
+})
+
+test("storage doctor without an admitted runtime reports not checked and never guesses a root", async (t) => {
+  const { session, runtime } = await makeSession(t, {
+    resolveInputs: () => { throw Object.assign(new Error("not bound"), { code: "DESK_ROOT_NOT_FOUND", tried: [] }) },
+  })
+  await session.start()
+  const result = payload(await session.callTool({ name: "desk_doctor", input: { storage: "inspect" } }))
+  assert.equal(result.storage.state, "not_checked")
+  assert.equal(result.storage.reason, "runtime_unavailable")
+  assert.equal(result.storage.worker, "not_started")
+  assert.equal(result.storage.readiness, "not_checked")
+  assert.equal(result.storage.counts, undefined)
+  assert.equal(runtime.calls.length, 0)
+})
+
   test("head_unchanged_no_git_poll_and_uncertainty_backoff", async (t) => {
     const h = headMemory(), state = { branch: "main", onRemote: true }
     let gitCalls = 0
