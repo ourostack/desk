@@ -1,6 +1,8 @@
-import { test } from "node:test"
+import { mock, test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
+import fs from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -8,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
   MIGRATION_BUDGET_MS,
+  bashHint,
   migrationCommand,
   migrationLine,
   parseMigration,
@@ -144,6 +147,32 @@ test("the real tidy instructions leave a held report alone and print no steps", 
   assert.deepEqual(result, { status: 0, stdout: "I left my desk untidied for now.\n", stderr: "", timedOut: false, unavailable: false })
 })
 
+test("the real tidy instructions survive the native MSYS quoted-argument limit without losing their tail", async () => {
+  const { blocks } = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk")
+  const root = await mkTempRoot("desk-tidy-msys-arguments-")
+  const block = 'node() { printf \'%s\\n\' "$TIDY_TEST_REPORT"; }\n' + blocks.Migrate
+  const env = {
+    ...process.env,
+    DESK_PLUGIN_ROOT: '/fixture/plugin "quoted" $literal `uname` %s\\n',
+    DESK_TOOLS_ROOT: '/fixture/desk "quoted" $literal `uname` %s\\n',
+    DESK_TOOLS_PERSON: 'fixture "person" $USER %s',
+    TIDY_TEST_REPORT: "Tidy claim: fixture-token fixture-time\ntrack_missing_scope: billing-disputes",
+  }
+  const options = { env, cwd: root, timeoutMs: 10_000, outputChars: Infinity }
+  const normal = await runBlock(block, options)
+  assert.equal(normal.status, 0, normal.stderr)
+  assert.ok(normal.stdout.endsWith("a hand git commit is refused for them.\n"))
+  // MSYS glob.cc uses 8192 wide characters, reserving MB_CUR_MAX (up to 6) while decoding a quoted native argument.
+  // Model only that transport boundary; the selected Bash still executes the real, unmodified migration.
+  const nativeArguments = (command, args, settings) => spawn(command, args.map((arg) =>
+    /[ \t"]/u.test(arg) ? Array.from(arg).slice(0, 8186).join("") : arg), settings)
+  const windows = await runBlock(block, { ...options, platform: "win32", bash: resolveBash(), spawn: nativeArguments })
+  assert.equal(windows.timedOut, false)
+  assert.equal(windows.status, 0, windows.stderr)
+  assert.equal(windows.stderr, "")
+  assert.equal(windows.stdout, normal.stdout, "native argument handling must preserve every instruction and expanded value")
+})
+
 test("the tidy commit and its revert both go through desk_save tidy, which adds the Desk-Tidy trailer", () => {
   const text = readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").blocks.Migrate
   const step7 = text.slice(text.indexOf("\n7. Check, record and commit."), text.indexOf("\nThen send the Announce line"))
@@ -160,6 +189,150 @@ test("the tidy commit and its revert both go through desk_save tidy, which adds 
 // ── Running blocks ───────────────────────────────────────────────────────
 
 const noBash = (command, args, options) => spawn("/nonexistent/bash", args, options)
+
+function transportedSource(args) {
+  assert.equal(args[0], "-c")
+  assert.match(args[1], /^\. '/u, "Windows must read the source from its owned file, not a native source argument")
+  return args[1].slice(3, -1).replaceAll("'\\''", "'")
+}
+
+test("runBlock on Windows executes source well above 8 KB with unchanged shell context and ignored stdin", async () => {
+  const root = await mkTempRoot("desk-windows-block-")
+  const bash = resolveBash()
+  const payload = "complete-source-".repeat(1200) + ' "quote" \'apostrophe\' $literal `text` %s\\n \u{1f642}'
+  const env = { ...process.env, TRANSPORT_VALUE: 'literal "$value" `text` %s\\n' }
+  const context = 'printf \'%s\\n\' "$0" "$#" "$TRANSPORT_VALUE" "$PWD"; if read -r line; then echo unexpected-input; else echo stdin-eof; fi'
+  const reference = spawnSync(bash, ["-c", context], { env, cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+  assert.equal(reference.status, 0, reference.stderr)
+  let source
+  const block = `printf '%s\\n' ${shellQuote(payload)}\n${context}\nprintf 'source-error\\n' >&2\nexit 7`
+  const result = await runBlock(block, {
+    env, cwd: root, timeoutMs: 10_000, outputChars: Infinity, platform: "win32", bash,
+    spawn: (command, args, options) => {
+      source = transportedSource(args)
+      assert.equal(readFileSync(source, "utf8"), block, "every source byte must reach Bash")
+      return spawn(command, args, options)
+    },
+  })
+  assert.deepEqual(result, { status: 7, stdout: `${payload}\n${reference.stdout}`, stderr: "source-error\n", timedOut: false, unavailable: false })
+  assert.equal(existsSync(path.dirname(source)), false, "nonzero execution must remove the owned source directory")
+})
+
+test("runBlock on Windows fails loudly for missing or unreadable source and removes the owned directory", async () => {
+  const root = await mkTempRoot("desk-windows-missing-source-")
+  for (const unreadable of [false, true]) {
+    let source
+    const result = await runBlock("echo must-not-run", {
+      env: process.env, cwd: root, timeoutMs: 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        unlinkSync(source)
+        // A directory cannot be read as a shell source on either OS; no ACL or root-dependent chmod fixture.
+        if (unreadable) mkdirSync(source)
+        return spawn(command, args, options)
+      },
+    })
+    assert.notEqual(result.status, 0, result.stderr)
+    assert.equal(result.timedOut, false)
+    assert.equal(result.unavailable, false)
+    assert.equal(result.stdout, "")
+    assert.notEqual(result.stderr, "")
+    assert.equal(existsSync(path.dirname(source)), false)
+  }
+})
+
+test("runBlock on Windows quotes its source path without expanding special characters", async () => {
+  const root = await mkTempRoot("desk-windows-source-path-")
+  const allocate = fs.mkdtempSync
+  const stub = mock.method(fs, "mkdtempSync", () => allocate(path.join(root, "source 'quoted' $literal `text` \u{1f642}-")))
+  syncBuiltinESMExports()
+  let source
+  try {
+    const result = await runBlock("printf 'complete\\n'", {
+      env: process.env, cwd: root, timeoutMs: 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        return spawn(command, args, options)
+      },
+    })
+    assert.deepEqual(result, { status: 0, stdout: "complete\n", stderr: "", timedOut: false, unavailable: false })
+    assert.equal(existsSync(path.dirname(source)), false)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+  }
+})
+
+test("runBlock on Windows cleans its source after success, timeout and asynchronous or synchronous launch failure", async () => {
+  const root = await mkTempRoot("desk-windows-source-cleanup-")
+  for (const outcome of ["success", "timeout", "spawn-error", "throw"]) {
+    let source
+    const run = runBlock(outcome === "timeout" ? "while :; do :; done" : "printf 'complete\\n'", {
+      env: process.env, cwd: root, timeoutMs: outcome === "timeout" ? 200 : 10_000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        if (outcome === "throw") throw new Error("owned launch failure")
+        return spawn(outcome === "spawn-error" ? "/nonexistent/bash" : command, args, options)
+      },
+    })
+    if (outcome === "throw") {
+      await assert.rejects(run, /owned launch failure/u)
+    } else {
+      const result = await run
+      assert.deepEqual(result, {
+        status: outcome === "success" ? 0 : null,
+        stdout: outcome === "success" ? "complete\n" : "", stderr: "",
+        timedOut: outcome === "timeout", unavailable: outcome === "spawn-error",
+      })
+    }
+    assert.equal(existsSync(path.dirname(source)), false, outcome)
+  }
+})
+
+test("runBlock on Windows rejects a source write failure and removes its allocated directory", async () => {
+  let source
+  const write = fs.writeFileSync
+  const stub = mock.method(fs, "writeFileSync", (file, ...args) => {
+    if (path.basename(file) !== "block.sh") return write(file, ...args)
+    source = file
+    throw new Error("source write refused")
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(runBlock("echo must-not-run", {
+      env: process.env, cwd: process.cwd(), timeoutMs: 1000, platform: "win32", bash: resolveBash(),
+      spawn: () => assert.fail("a failed source write must not launch Bash"),
+    }), /source write refused/u)
+    assert.equal(existsSync(path.dirname(source)), false)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+  }
+})
+
+test("runBlock on Windows rejects an exhausted source cleanup failure instead of reporting success", async () => {
+  let source
+  const remove = fs.rmSync
+  const stub = mock.method(fs, "rmSync", (target, options) => {
+    if (source === undefined || path.resolve(target) !== path.resolve(path.dirname(source))) return remove(target, options)
+    throw Object.assign(new Error("source cleanup refused"), { code: "EIO" })
+  })
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(runBlock("echo complete", {
+      env: process.env, cwd: process.cwd(), timeoutMs: 1000, platform: "win32", bash: resolveBash(),
+      spawn: (command, args, options) => {
+        source = transportedSource(args)
+        return spawn(command, args, options)
+      },
+    }), /source cleanup refused/u)
+  } finally {
+    stub.mock.restore()
+    syncBuiltinESMExports()
+    remove(path.dirname(source), { recursive: true, force: true })
+  }
+  assert.equal(existsSync(path.dirname(source)), false)
+})
 
 test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async () => {
   const ran = await runBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
@@ -248,6 +421,8 @@ test("a bash that is not the relay and exits 1 with no output is a real Detect r
 })
 
 test("the bash hint names Git for Windows only on Windows, in both lines", async () => {
+  assert.equal(bashHint("win32"), "on Windows, install Git for Windows")
+  assert.equal(bashHint("linux"), "install bash")
   const entry = [{ id: "09-x", state: "bash_unavailable" }]
   assert.match(migrationLine(entry, "/p", "win32"), /\(on Windows, install Git for Windows; the WSL bash\.exe with no distro cannot run Desk's scripts\)/u)
   for (const platform of ["darwin", "linux"]) {

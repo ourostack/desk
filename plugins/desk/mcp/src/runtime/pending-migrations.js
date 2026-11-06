@@ -35,13 +35,14 @@
 // and imports nothing outside Node's built-ins, because the hooks run in
 // whatever Node the host puts first on PATH.
 
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isWslRelay, resolveBash } from "../util/bash.js"
 import { isGitRepository } from "../util/git-stage.js"
+import { removeWithRetry } from "../util/remove-retry.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
 // get this long. The Copilot hook has 5 s in all and the registry's boot
@@ -136,6 +137,7 @@ export function readMigrations(pluginRoot) {
 const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
 export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
+  let temporary
   return new Promise((resolve) => {
     if (bash === null) {
       resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
@@ -143,7 +145,15 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     }
     // On Windows there are no process groups to kill; the block itself is killed.
     const posix = platform !== "win32"
-    const child = spawn(bash, ["-c", block], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    let command = block
+    if (!posix) {
+      // Native MSYS argument decoding can truncate long quoted source before Bash parses it.
+      temporary = mkdtempSync(path.join(os.tmpdir(), "desk-migration-"))
+      const source = path.join(temporary, "block.sh")
+      writeFileSync(source, block, { encoding: "utf8", mode: 0o600 })
+      command = `. ${shellQuote(source.replace(/\\/gu, "/"))}`
+    }
+    const child = spawn(bash, ["-c", command], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     let timedOut = false
@@ -175,6 +185,8 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
       const relay = failed && ((isWslRelay(bash) && stdout === "") || RELAY_FAILURE.test(`${stderr}\n${stdout}`))
       resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: relay })
     })
+  }).finally(() => {
+    if (temporary !== undefined) removeWithRetry(temporary, { recursive: true, force: true })
   })
 }
 
