@@ -238,7 +238,7 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        # A shard that has not finished after 10 minutes (a whole shard job takes about 3 to 7) is stuck, not slow. The
+        # A shard that has not finished after 15 minutes (a whole shard job takes about 3 to 8) is stuck, not slow. The
         # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
         # what is still running (the deepest node process names the test file that is not finishing), then signals
         # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
@@ -246,10 +246,10 @@ jobs:
           setsid npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard" &
           shard=$!
           (
-            sleep 600 & sleeper=$!
+            sleep 900 & sleeper=$!
             trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
             wait "$sleeper"
-            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 10 minutes; the process tree follows."
+            echo "::error title=Coverage shard ${SHARD} is stuck::still running after 15 minutes; the process tree follows."
             ps -eo pid,pgid,ppid,etimes,stat,args --forest | cut -c1-400
             touch "$RUNNER_TEMP/shard-stuck"
             kill -TERM -- "-$shard" 2>/dev/null || true
