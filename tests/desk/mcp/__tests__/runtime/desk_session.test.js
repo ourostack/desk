@@ -786,6 +786,43 @@ test("setup, missing roots and activation errors are named degraded states, from
   assert.equal((await session.admission.refresh({ force: true })).diagnostic.observed.name, "unknown")
 })
 
+test("desk_status reports a retry in flight after a missing root as admitting, not as the obsolete setup advice", async (t) => {
+  const noRoot = { rootError: { name: "Error", message: "no desk", code: "DESK_ROOT_NOT_FOUND", tried: [{ source: "home_fallback" }] } }
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  let result = noRoot
+  let stall = false
+  const { session, root } = await makeSession(t, { resolveInputs: async () => {
+    if (stall) await gate
+    return result
+  } })
+  assert.equal((await session.admission.refresh({ force: true })).state, "degraded:no_desk_root")
+  stall = true
+  const retry = session.admission.refresh({ force: true, waitMs: 0 })
+  await flush()
+  assert.equal(session.admission.running, true)
+  assert.equal(session.admission.snapshot().code, "no_desk_root")
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(status.state, "admitting")
+  assert.equal(status.summary, "Desk is admitting this session's destination; operations wait for verification.")
+  assert.doesNotMatch(JSON.stringify(status), /bootstrap/u)
+  result = inputs({ root })
+  release()
+  await retry
+  await waitUntil(() => session.admission.snapshot().state === "ready" && !session.admission.running)
+})
+
+test("desk_skill lists the skills and reads one through the session dispatch, before admission settles", async (t) => {
+  const { session } = await makeSession(t)
+  const listed = payload(await session.callTool({ name: "desk_skill", input: {} }))
+  assert.equal(listed.status, "listed")
+  assert.ok(listed.skills.length > 0)
+  const first = listed.skills[0]
+  const read = await session.callTool({ name: "desk_skill", input: { name: first.name } })
+  assert.equal(read.isError, undefined)
+  assert.match(read.content[0].text, new RegExp(`^# Desk skill: ${first.name}\\n`, "u"))
+})
+
 test("a changed policy or root drops the old authority and search engine", async (t) => {
   let policy = unsupported
   let rootName = "a"

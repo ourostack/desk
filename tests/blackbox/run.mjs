@@ -11,7 +11,7 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { McpSession, NativeReceiptCollector, nativeReceiptLaunch, nativeReceiptTraceRequested,
+import { McpSession, NativeReceiptCollector, nativeReceiptLaunch, nativeReceiptTraceRequested, nativeStageTraceRequested,
   nativeReceiptArtifactJson, NATIVE_RECEIPT_SOURCE_FILES } from "./lib/mcp.mjs"
 import { hookContext, hookEntries, runHook } from "./lib/hooks.mjs"
 import { claudeConfigDir, copyTree, deskStateDir, git, installPlugins, makeDesk, makeHome, makeTempRoot, NOTES, personEnv, WINDOWS } from "./lib/world.mjs"
@@ -1093,7 +1093,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   const tempRoot = makeTempRoot()
   const shared = { tempRoot, pluginsSource: options.plugins, tools: {}, surface: {}, hooks: {}, unpushed: {}, seeded: {}, startedAt: new Date().toISOString() }
-  if (nativeReceiptTraceRequested(process.env)) shared.nativeReceiptTrace = new NativeReceiptCollector()
+  if (nativeReceiptTraceRequested(process.env)) shared.nativeReceiptTrace = new NativeReceiptCollector({ retainPassed: nativeStageTraceRequested(process.env) })
   try {
     const registry = execFileSync(WINDOWS ? "npm.cmd" : "npm", ["config", "get", "registry"], { encoding: "utf8", shell: WINDOWS, windowsHide: true, timeout: 20000 }).trim()
     if (/^https?:\/\//u.test(registry) && !/registry\.npmjs\.org/u.test(registry)) shared.npmRegistry = registry

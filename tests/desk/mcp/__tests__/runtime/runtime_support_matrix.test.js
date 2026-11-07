@@ -26,6 +26,21 @@ function clone(value) {
   return structuredClone(value)
 }
 
+test("Darwin Node 24 admits a verified shipped pack instead of requiring an older source mirror", async () => {
+  const { inspectRuntimeDependencyPack } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
+  const inspection = inspectRuntimeDependencyPack({
+    mcpRoot,
+    platform: "darwin",
+    arch: "arm64",
+    nodeAbi: "137",
+  })
+  assert.equal(inspection.ok, true, inspection.summary)
+  assert.equal(inspection.reason, "ready")
+  assert.equal(inspection.runtime.state, "ready")
+  assert.equal(inspection.target.id, "darwin-arm64-node-137")
+  assert.equal(inspection.manifest.plugin.version, loadJson(path.join(mcpRoot, "package.json")).version)
+})
+
 test("Darwin release provenance identifies the installed production build", () => {
   const packageJson = loadJson(path.join(mcpRoot, "package.json"))
   const root = path.join(mcpRoot, "artifacts", "runtime-deps", packageJson.version)
@@ -81,6 +96,15 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
         archive_sha256: "20eded34a9894ff244647fac6141187f06cefbc4eee3407d987915175ca6ba2e",
         artifact_path: "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      },
+      {
+        id: "darwin-arm64-node-137",
+        platform: "darwin",
+        arch: "arm64",
+        node_abi: "137",
+        prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+        archive_sha256: "1dc771dbb4f56d92f318f8abc0d9897d76bb587ead19565f381f1b21e7d51bc1",
+        artifact_path: "darwin-arm64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
       {
         id: "linux-x64-node-127",

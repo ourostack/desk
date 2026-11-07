@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.71 — 2026-11-06
+
+Desk now ships a native runtime dependency pack for Darwin ARM64 on Node 24 (ABI 137), alongside its existing Node 22 pack. The exact-host CI lane verifies the native payload and loads the committed pack with the current MCP source and card-persistence tools. This prevents that supported target from requiring a different Node installation; it does not upgrade a server already running from an older cached source mirror.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.70 — 2026-11-06
+
+The Windows black-box native receipt trace now reaches production. The JSON-RPC request id was dropped between the MCP front door and the runtime, so the opt-in trace never had an id to attach its frames to. The front door and session now pass the id through as an opaque safe integer, only when the CI-gated trace controls are all set; every other call is unchanged. This is observability only and does not change the capture-readiness timeout or its error.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.69 — 2026-11-06
 
 A Desk commit that times out no longer reports a failure when it actually landed. Git runs its hooks inside the commit call, the card guard before it and Git LFS after it, so on a busy shared checkout the 10-second bound could end the call after the commit was already in `HEAD`. `lesson_add` then said the lesson was not in effect and never scheduled the push, so the commit stayed on one machine (#561, and the same for `task_update`, `task_archive` (#556) and every other tool that commits). After a commit times out or errors, Desk now reads back whether `HEAD` holds exactly the paths it committed with the content it wrote. A commit that is there counts as committed and its push is scheduled. One that is provably not there is reported as failed. When Desk cannot tell, or the commit landed but `HEAD` no longer holds it, it reports `unknown` and never commits again blind; Git commands that change the repository still run once per call ([read-back](../mcp/src/util/git-stage.js)).
