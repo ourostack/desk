@@ -14,7 +14,8 @@ import { fileURLToPath } from "node:url"
 
 export const PARTIAL_TITLE = "Partial:"
 
-// A GitHub Actions path filter pattern as a regular expression: `**` crosses folders, `*` and `?` do not.
+// A GitHub Actions path filter pattern as a regular expression: `**` crosses folders, `*` and `?` do not. Character classes and
+// `+` are read as plain text; none of our filters use them.
 export function globRegExp(pattern) {
   let source = ""
   for (let i = 0; i < pattern.length; i += 1) {

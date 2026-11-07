@@ -176,9 +176,12 @@ function normalizeExclusions(exclusions) {
   return out
 }
 
-// True when a workflow path filter entry matches the path or glob `target`: the same entry, or a `dir/**` entry above it.
+// True when a workflow path filter entry may match the path or glob `target`: the same entry, a `dir/**` entry above it, or any
+// other wildcard entry, which is treated as matching so an ignore list can never skip a required path by accident.
 function pathFilterCovers(filter, target) {
-  return filter === target || filter === "**" || (filter.endsWith("/**") && target.startsWith(filter.slice(0, -2)))
+  if (filter === target) return true
+  if (filter.endsWith("/**") && !/[*?[\]!]/u.test(filter.slice(0, -3))) return target.startsWith(filter.slice(0, -2))
+  return /[*?[\]!]/u.test(filter)
 }
 
 function extractWorkflowPathFilters(workflow) {

@@ -325,7 +325,13 @@ function publish({ gh, repo, branch, base, sha, report, workflows, runUrl, sleep
     return { outcome: "merge-blocked", delivered: false, pull: pull.url, issue, jobs, adoption, message };
   }
   closeIssues({ gh, repo, pullUrl: pull.url });
-  // A merge made with the workflow token starts no push-triggered run, so the Desk release is dispatched on main.
+  // A merge made with the workflow token starts no push-triggered run. The CI workflows are dispatched on main, because main may have
+  // moved while they ran on the branch, and the Desk release waits for a run that tested the merge commit (main-ci-gate.mjs). A failed
+  // dispatch is not fatal here: the release then finds no covering run and reports it.
+  for (const workflow of workflows) {
+    gh.call(["workflow", "run", workflow, "--repo", repo, "--ref", base], { allowFailure: true });
+  }
+  // The Desk release is dispatched on main too.
   const released = gh.call(["workflow", "run", RELEASE_WORKFLOW, "--repo", repo, "--ref", base], { allowFailure: true });
   if (released.ok) {
     return { outcome: "merged", delivered: true, pull: pull.url, issue: null, jobs, adoption, message: "Every check passed, the refresh merged and the Desk release was dispatched." };

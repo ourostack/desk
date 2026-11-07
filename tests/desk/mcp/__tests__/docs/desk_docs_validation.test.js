@@ -194,6 +194,23 @@ test("workflow validation requires docs command and host/artifact path filters",
   assert.deepEqual(ignoreErrors, [
     ".github/workflows/desk-mcp-tests.yml path filters must not ignore docs/guide.md",
   ])
+  // Any wildcard other than a plain dir/** counts as ignoring, and a pull_request filter does not stand in for the push one.
+  const wildcardErrors = []
+  docsValidator.validateWorkflowWiring(wildcardErrors, {
+    requirements: [{ path: "w.yml", command: "node scripts/test-desk-docs.cjs", paths: ["plugins/desk/README.md"] }],
+    readFile: () => [
+      "on:",
+      "  pull_request:",
+      "    paths:",
+      "      - \"plugins/**\"",
+      "  push:",
+      "    paths-ignore:",
+      "      - \"**/*.md\"",
+      "jobs:",
+      "  run: node scripts/test-desk-docs.cjs",
+    ].join("\n"),
+  })
+  assert.deepEqual(wildcardErrors, ["w.yml path filters must not ignore plugins/desk/README.md"])
 
   const commandErrors = []
   docsValidator.validateWorkflowWiring(commandErrors, {

@@ -16,15 +16,15 @@ open="$(gh issue list --repo "$repo" --state open --label "$label" --search "\"$
 
 if [ "$result" = "success" ]; then
   if [ -n "$open" ]; then
-    # Main's runs finish out of order, so a green result closes the issue only when its commit carries the newest failure.
-    failed="$(gh issue view "$open" --repo "$repo" --json body,comments --jq '[.body, .comments[].body] | map(scan("red-main-sha: ([0-9a-f]{40})") | .[0]) | last // empty')"
-    if [ -n "$failed" ]; then
-      status="$(gh api "repos/$repo/compare/$failed...$sha" --jq .status)"
+    # Main's runs finish out of order, so a green result closes the issue only when its commit carries every failure the issue
+    # records. A compare that fails leaves the issue open.
+    for failed in $(gh issue view "$open" --repo "$repo" --json body,comments --jq '[.body, .comments[].body] | map(scan("red-main-sha: ([0-9a-f]{40})") | .[0]) | unique | .[]'); do
+      status="$(gh api "repos/$repo/compare/$failed...$sha" --jq .status || echo unknown)"
       if [ "$status" != "ahead" ] && [ "$status" != "identical" ]; then
-        echo "Green on ${sha:0:12}, which does not carry the failure on ${failed:0:12}; the issue stays open."
+        echo "Green on ${sha:0:12}, which does not carry the failure on ${failed:0:12} (compare: $status); the issue stays open."
         exit 0
       fi
-    fi
+    done
     gh issue close "$open" --repo "$repo" --comment "Green again on \`${sha:0:12}\`: $run_url"
   fi
   exit 0

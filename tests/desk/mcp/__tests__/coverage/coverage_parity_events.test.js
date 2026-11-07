@@ -106,8 +106,10 @@ test("a push filtered only by paths-ignore covers the root scripts unless it ign
   writeFileSync(workflowPath, workflow(["docs/**", "LICENSE"]))
   assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }), { ok: true, issues: [] })
 
-  writeFileSync(workflowPath, workflow(["docs/**", "scripts/**"]))
-  assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }).issues, [
-    "desk MCP CI push.paths must include scripts/*.cjs",
-  ])
+  for (const ignored of ["scripts/**", "*.cjs", "**/*"]) {
+    writeFileSync(workflowPath, workflow(["docs/**", ignored]))
+    assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }).issues, [
+      "desk MCP CI push.paths must include scripts/*.cjs",
+    ], `${ignored} may skip the root scripts`)
+  }
 })
