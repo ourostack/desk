@@ -8,6 +8,8 @@
 
 Desk gives long-running engineering agents durable work state and authority. Tracks, tasks, friction notes and lessons live in the operator's desk, a Git repository, so work survives sessions, machines and harnesses. An MCP server provides desk CRUD and search, and lifecycle skills keep task state current as work moves.
 
+[ouroboros.bot/desk](https://ouroboros.bot/desk/) · [Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md) · [The factory](https://ourostack.github.io/factory/) · [More from Ouro](https://github.com/ourostack)
+
 **To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
 
 This repository is the home of **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md)**. Its `main` branch is the release channel, and installed copies update from it.
