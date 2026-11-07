@@ -416,3 +416,45 @@ test("boot adds nothing when the pending list cannot be read", async () => {
   const result = await syncWorkspace({ root: desk, env: process.env, spawnGit: unreadable, scheduleDelivery: () => assert.fail("nothing to deliver") })
   assert.equal("unpushed" in result, false)
 })
+
+// A commit made while the fetch runs (after deliver captured its head) must not be acknowledged as delivered (#567).
+async function mkArrivingCommit() {
+  const shared = await mkShared()
+  await commit(shared.desk, "tasks/before.md", "before\n", "before fetch")
+  const captured = git(shared.desk, ["rev-parse", "HEAD"]).trim()
+  let arrived = null
+  const spawnGit = (command, args, options) => {
+    if (args.includes("fetch") && arrived === null) {
+      writeFileSync(path.join(shared.desk, "tasks/during.md"), "during\n")
+      git(shared.desk, ["add", "--", "tasks/during.md"])
+      git(shared.desk, ["commit", "-q", "-m", "during fetch", "--", "tasks/during.md"])
+      arrived = git(shared.desk, ["rev-parse", "HEAD"]).trim()
+    }
+    return spawnSync(command, args, options)
+  }
+  return { ...shared, captured, spawnGit, arrived: () => arrived }
+}
+
+test("deliver acknowledges only the commits inside its captured head when a commit arrives during the fetch", async () => {
+  const { origin, desk, captured, spawnGit, arrived } = await mkArrivingCommit()
+
+  const result = deliver({ root: desk, spawnGit })
+
+  assert.equal(result.state, "delivered")
+  assert.deepEqual(result.delivered, [captured])
+  assert.ok(!result.delivered.includes(arrived()))
+  assert.equal(bare(origin, ["rev-parse", "main"]).trim(), captured)
+  assert.deepEqual(undeliveredCommits({ root: desk, delivered: result.delivered }), [arrived()], "the arriving commit is still owed")
+})
+
+test("the push worker delivers a commit that arrived during the fetch on its next run instead of suppressing it", async () => {
+  const { origin, desk, spawnGit, arrived } = await mkArrivingCommit()
+  const options = { root: desk, env: process.env, clock: instantClock, fileProblem: () => {}, debounceMs: 0, spawnGit }
+
+  await runPushWorker(options)
+  await runPushWorker(options)
+
+  assert.equal(bare(origin, ["rev-parse", "main"]).trim(), arrived())
+  assert.equal(bare(origin, ["show", "main:tasks/during.md"]), "during\n")
+  assert.equal(readSyncStatus({ root: desk, env: process.env }).blocked, false)
+})

@@ -18,6 +18,20 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
   annotations: TOOL_ANNOTATIONS[name],
 })))
 
+// Own data properties only; never runs a getter.
+const dataValue = (object, key) => {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key)
+  return descriptor !== undefined && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined
+}
+
+// Opt-in CI diagnostics only: the JSON-RPC id travels as an opaque safe integer so a tool's own trace frame can be matched to its request.
+// With any control absent the call keeps exactly its default shape.
+function opaqueRequestId(id, env) {
+  if (!Number.isSafeInteger(id) || id < 0 || env === null || typeof env !== "object") return {}
+  const on = dataValue(env, "CI") === "true" && dataValue(env, "GITHUB_ACTIONS") === "true" && dataValue(env, "DESK_BLACKBOX_NATIVE_RECEIPT_TRACE") === "1"
+  return on ? { requestId: id } : {}
+}
+
 /**
  * Serve MCP on `input`/`output`. `callTool({ name, input, signal })` returns an MCP tool result (or a promise of one).
  * `onHandshake` fires once, after the first tools/list reply is written: hosts send tools/list after notifications/initialized, often as a separate write, and admission must not start before that list is answered.
@@ -34,6 +48,7 @@ export function startFrontDoor({
   serverIcons,
   onHandshake = () => {},
   instructions,
+  env = process.env,
 }) {
   const inFlight = new Map()
   const pending = new Set()
@@ -77,7 +92,7 @@ export function startFrontDoor({
     const abort = new AbortController()
     let result
     try {
-      result = callTool({ name, input: request.params?.arguments ?? {}, signal: abort.signal })
+      result = callTool({ name, input: request.params?.arguments ?? {}, signal: abort.signal, ...opaqueRequestId(id, env) })
     } catch (error) {
       failCall(id, name, error)
       return

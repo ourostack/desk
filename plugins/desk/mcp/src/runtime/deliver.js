@@ -90,10 +90,10 @@ export function blockedWords(reason, paths = []) {
 /**
  * The local commits, oldest first, that the upstream has neither by identity nor by an identical change, and that
  * were not already delivered as a resolved copy (`delivered`, the original commits a replay delivered). Local, never
- * a network call; `null` when there is no upstream to compare with.
+ * a network call; `null` when there is no upstream to compare with. `head` bounds the range (a commit id, or HEAD).
  */
-export function undeliveredCommits({ root, spawnGit = spawnSync, delivered = [] }) {
-  const result = runner(spawnGit, root)(["rev-list", "--reverse", "--no-merges", "--right-only", "--cherry-pick", "@{u}...HEAD"])
+export function undeliveredCommits({ root, spawnGit = spawnSync, delivered = [], head = "HEAD" }) {
+  const result = runner(spawnGit, root)(["rev-list", "--reverse", "--no-merges", "--right-only", "--cherry-pick", `@{u}...${head}`])
   if (result.status !== 0) return null
   const done = new Set(delivered)
   return lines(result.stdout).filter((sha) => !done.has(sha))
@@ -266,7 +266,8 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
   for (let attempt = 1; ; attempt += 1) {
     const fetched = git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], NETWORK_TIMEOUT_MS)
     if (fetched.status !== 0) return failure(fetched, "fetch_failed")
-    const commits = undeliveredCommits({ root, spawnGit, delivered })
+    // Only commits inside the captured head are pushed, so only those may be acknowledged: HEAD can move during the fetch.
+    const commits = undeliveredCommits({ root, spawnGit, delivered, head })
     const onto = git(["rev-parse", upstream.tracking]).stdout.trim()
     if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: catchUp({ git, upstream, head, target: onto }) }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0

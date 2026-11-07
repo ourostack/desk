@@ -54,4 +54,27 @@ hash. Required jobs, their names and the scheduled dispatch list are unchanged.
 An all-pass error-only trace establishes no successful native stage timeline.
 Historical failures, root cause and normal required CI gates remain separate.
 
+## Optional #581 native stage diagnostic
+
+Adding `DESK_BLACKBOX_NATIVE_STAGE_TRACE=1` to the receipt-trace controls (all four of `CI`, `GITHUB_ACTIONS`,
+`DESK_BLACKBOX_NATIVE_RECEIPT_TRACE`, `DESK_BLACKBOX_NATIVE_STAGE_TRACE` must be exactly present) makes the measured
+Desk server run a separate PowerShell variant: the default program plus five `DESK_STAGE <stage> <pid> <microseconds>`
+lines (`start`, `compiled`, `verified`, `request_read`, `baseline_done`). The default program, its pinned hash,
+protocol, deadlines and outputs are untouched when the control is absent. The receipt records `programVariant` and
+`executedProgramSha256` (the hash of the bytes actually executed, distinct from the pinned default `programSha256`).
+
+Reading the data: `nativeUs` is child-relative (Stopwatch since the script started running); `wrapperUs` is Node's
+clock since spawn. Their first difference is a launch-plus-initial-delivery composite, not a launch time; later
+differences between `wrapperUs` and `nativeUs` intervals can show differential delivery lag. `start`..`compiled`
+covers the Reflection.Emit compile plus the script's own setup; `compiled`..`verified` covers metadata verification and the
+layout check; `verified`..`request_read` also includes waiting for and parsing the request; `request_read`..`baseline_done`
+is the baseline read. Markers are delivered through the parent, so a parent stall can delay delivery of a marker: a
+prefix of markers shows how far the child got as observed, and cannot alone prove the underlying cause of a slow
+stage. A failure with no markers is censored: it does not identify cold
+launch or any other cause. The variant is not byte-identical to production, the marker cost is unmeasured, and the
+data shows where time went, not why. The opt-in open also refuses a `captured` line unless all five markers arrived
+first in order. Passed cases keep their records under the same 64 KiB per case and 1 MiB per
+job caps; case outcome is joined from the run results by host, repeat and case id. `native-stage-context.js` (the gate and
+request scope) is pinned in the artifact's source provenance with the other executed files.
+
 Run `node tests/blackbox/run.mjs` from the repository root with Node 22 or later and Git on `PATH`; it needs no `npm install`. It copies the shipped `plugins/desk`, `superpowers`, `plain-language` and `crew` folders into a throwaway home laid out the way Copilot and Claude Code install them, builds a small Git desk with a local bare remote, and then, for each host, runs that host's hooks from its hook manifest, starts the `desk` and `desk-web` MCP servers from its MCP config and the boot script, and checks every Desk tool, search, Git commits and pushes, plain error messages and the browser. It never imports Desk's source, so a refactor that keeps behavior passes. It fails on any broken check or any place Copilot does worse than Claude Code (fewer tools, skills or agents, a weaker hook result, more failures, or clearly slower), and writes `blackbox-<label>.json` and `.md` (timings as p50 and p95, server cold start, boot time, peak memory, time to the first meaning-based recall, pass and fail counts) to `--out` (default: the OS temp folder). Useful flags: `--repeat N` reruns everything N times to find flakes, `--hosts copilot` or `--hosts claude` runs one host, `--no-browser` skips the browser, `--mine` also opens a copy of your own browser profile (local only), `--cache-dir <dir>` keeps the downloaded search model and browser driver between runs (`--no-cache` measures a true first run), and `--keep` leaves the temp folder for inspection. A check that fails on `main` because of a real bug goes in `KNOWN` in `run.mjs` with its reason, never by loosening the check. `node tests/blackbox/real-hosts.mjs` is the separate end-to-end layer: it runs a few real `agency copilot` and `claude -p` sessions on this machine and is not run in CI.

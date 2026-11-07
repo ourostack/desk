@@ -1,5 +1,43 @@
 # desk plugin — changelog
 
+## 3.2.71 — 2026-11-06
+
+Desk now ships a native runtime dependency pack for Darwin ARM64 on Node 24 (ABI 137), alongside its existing Node 22 pack. The exact-host CI lane verifies the native payload and loads the committed pack with the current MCP source and card-persistence tools. This prevents that supported target from requiring a different Node installation; it does not upgrade a server already running from an older cached source mirror.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.70 — 2026-11-06
+
+The Windows black-box native receipt trace now reaches production. The JSON-RPC request id was dropped between the MCP front door and the runtime, so the opt-in trace never had an id to attach its frames to. The front door and session now pass the id through as an opaque safe integer, only when the CI-gated trace controls are all set; every other call is unchanged. This is observability only and does not change the capture-readiness timeout or its error.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.69 — 2026-11-06
+
+A Desk commit that times out no longer reports a failure when it actually landed. Git runs its hooks inside the commit call, the card guard before it and Git LFS after it, so on a busy shared checkout the 10-second bound could end the call after the commit was already in `HEAD`. `lesson_add` then said the lesson was not in effect and never scheduled the push, so the commit stayed on one machine (#561, and the same for `task_update`, `task_archive` (#556) and every other tool that commits). After a commit times out or errors, Desk now reads back whether `HEAD` holds exactly the paths it committed with the content it wrote. A commit that is there counts as committed and its push is scheduled. One that is provably not there is reported as failed. When Desk cannot tell, or the commit landed but `HEAD` no longer holds it, it reports `unknown` and never commits again blind; Git commands that change the repository still run once per call ([read-back](../mcp/src/util/git-stage.js)).
+
+Every result that leaves a change uncommitted now carries `route_around`: steps that start with a read-back, a read-back for "committed here", and a separate one for "published to the remote". A route never commits whatever the paths hold now, because later bytes there may be another session's. When Desk captured the change before its commit call (each entry's mode and blob, the `HEAD` and the branch), the route finishes exactly that change with `scripts/finish-commit.js`. It changes nothing unless every check passes. It then builds the commit from a private index, checks the whole tree it built against the capture (every file under a captured folder included, so a deleted or renamed file is never kept), runs the repository's commit hooks through Git, and moves the branch by one compare-and-swap against the `HEAD` it checked, so the finish never undoes another writer's commit. It holds while a merge, cherry-pick, revert or rebase is in progress, and finishes a first commit on an unborn branch only when Git shows the branch has no commits yet. The finish runs from a shell, outside a tool call's budget, so each hook, the commit object and the branch update get up to 600 seconds apiece, while its reads keep 10; a tool's own commit keeps its 10-second bound. The answer depends on where it stops: a hook cut off before the commit is made is `unknown` with the branch unmoved; a hook that refuses, or a commit object Git won't make, is held with nothing committed; a branch update that is cut off, or a post-commit hook that fails, is cut off or moves the branch, is `unknown` and names the commit made. Nothing is ever repeated. Without a captured change the route is held: it reads, stops and reports. A live task card's route only reads and stops: the card guard refuses a hand commit of it, and a new `task_update` is a new write, not the captured change. A file that already held another session's edit is left as it is, staged selection included: the route reads it, names a new file to read whole, and commits through `desk_save` only once it holds nothing else. A commit Desk cannot classify stays `unknown` in every field and sentence. A route never stashes, resets, adds, forces, skips hooks or names a remote ([routes](../mcp/src/util/route-around.js), [finish](../mcp/src/util/finish-commit.js)). Improvement cards report the new `commit_unknown` code beside `commit_failed`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.68 — 2026-11-06
+
+Windows ACL provider request timeouts now carry a frozen, privacy-safe snapshot of queue wait, dispatch elapsed time, observed spawn/write/exit events and current-request output byte counts. Native failure reports print this metadata without including paths, payloads or output text. The existing deadlines, PowerShell programs and refusal behavior are unchanged; these diagnostics expose the observable stage of a timeout, not its still-unknown cause.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.67 — 2026-11-06
+
+Superpowers refresh: Desk now ships Superpowers 7.0.2, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/22f0b463e7a5e579904dd6211a520321035526f7) (upstream version 7.0.2) copied byte for byte. Selected files: 16 changed, 1 added, 5 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.66 — 2026-11-06
+
+Delivering Desk's commits no longer acknowledges a commit made while the fetch ran (#567): the commits it counts as delivered are bounded to the head it captured and pushed, so a commit that arrived at that moment stays owed and the next push worker delivers it instead of suppressing it as already delivered.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.65 — 2026-11-06
 
 Superpowers refresh: Desk now ships Superpowers 7.0.1, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/2ce8aa15d05bd57213e6f746f953aafb7ded7a8b) (upstream version 7.0.1) copied byte for byte. Selected files: 11 changed, 16 added, 6 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.

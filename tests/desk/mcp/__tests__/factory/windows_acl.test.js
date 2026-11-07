@@ -17,6 +17,11 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawn as spawnProcess, spawnSync } from "node:child_process"
+import childProcess from "node:child_process"
+import fsNative from "node:fs"
+import { EventEmitter } from "node:events"
+import { syncBuiltinESMExports } from "node:module"
+import { performance } from "node:perf_hooks"
 
 import {
   assertWindowsAclAvailable,
@@ -69,6 +74,274 @@ const PRIVATE_ENTRIES = [
   { file: DIR_ENTRY.path, directory: true },
   { file: FILE_ENTRY.path, directory: false },
 ]
+
+const TIMEOUT_DETAIL_KEYS = [
+  "phase", "queueWaitMs", "sinceAskMs", "spawned", "writeAccepted", "stdoutBytes",
+  "stderrBytes", "exited", "exitCode", "requestIndex", "sessionFresh",
+].sort()
+
+async function drainRequests() {
+  // Drain the runner's queue/retry promise chain without advancing a real clock.
+  for (let i = 0; i < 12; i += 1) await Promise.resolve()
+}
+
+async function withTimeoutProvider(t, body) {
+  const children = []
+  const root = path.resolve("synthetic-private-provider")
+  const executable = path.join(root, ...PROVIDER_SEGMENTS)
+  const realStat = fsNative.statSync
+  const realNow = Date.now
+  const realElapsed = performance.now.bind(performance)
+  let wallOffset = 0
+  let elapsedOffset = 0
+  t.mock.method(Date, "now", () => realNow() + wallOffset)
+  t.mock.method(performance, "now", () => realElapsed() + elapsedOffset)
+  t.mock.method(fsNative, "statSync", (target, ...args) =>
+    target === executable ? { isFile: () => true } : realStat(target, ...args))
+  t.mock.method(childProcess, "spawn", () => {
+    const child = new EventEmitter()
+    child.unref = child.ref = () => child
+    child.kill = () => { child.killed = true; return true }
+    for (const name of ["stdin", "stdout", "stderr"]) {
+      child[name] = new EventEmitter()
+      child[name].unref = child[name].ref = child[name].setEncoding = () => child[name]
+    }
+    child.writes = []
+    child.stdin.write = (data, callback) => { child.writes.push({ data, callback }); return false }
+    children.push(child)
+    return child
+  })
+  syncBuiltinESMExports()
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const request = (timeoutMs = 20000) => protectWindowsPaths([DIR_ENTRY], {
+    env: { SystemRoot: root }, memoize: false, timeoutMs,
+  }).catch(error => error)
+  try {
+    await body({ children, request, advanceWall: ms => { wallOffset += ms },
+      advanceElapsed: ms => { elapsedOffset += ms } })
+  } finally {
+    for (const child of children) child.emit("error", new Error("synthetic teardown"))
+    await drainRequests()
+    t.mock.timers.reset()
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
+}
+
+function checkTimeoutDetails(error, expected) {
+  assert.equal(error.message, "desk_feedback: Windows ACL provider timed out after 20000ms")
+  assert.ok(Object.hasOwn(error, "details"), "provider timeout must have own stage metadata")
+  assert.deepEqual(Object.keys(error.details).sort(), TIMEOUT_DETAIL_KEYS)
+  assert.equal(Object.isFrozen(error.details), true)
+  assert.deepEqual(Object.getOwnPropertyDescriptor(error, "details"), {
+    value: error.details, writable: false, enumerable: false, configurable: false,
+  })
+  assert.equal(JSON.stringify(error), "{}")
+  assert.equal(Object.hasOwn(error, "cause"), false)
+  for (const [key, value] of Object.entries(expected)) assert.equal(error.details[key], value, key)
+  assert.ok(Number.isSafeInteger(error.details.queueWaitMs) && error.details.queueWaitMs >= 0)
+  assert.ok(error.details.sinceAskMs === null ||
+    Number.isSafeInteger(error.details.sinceAskMs) && error.details.sinceAskMs >= 0)
+  const snapshot = JSON.stringify(error.details)
+  for (const secret of ["synthetic-private-provider", DIR_ENTRY.path, "private-payload", "private-stderr"])
+    assert.equal(snapshot.includes(secret), false, secret)
+  assert.throws(() => { error.details.phase = "changed" }, TypeError)
+  assert.throws(() => { error.details = {} }, TypeError)
+  return snapshot
+}
+
+for (const phase of ["awaiting_spawn", "awaiting_write_accept", "awaiting_first_output", "awaiting_response"]) {
+  test(`timeout diagnostics: ${phase} reflects explicit current-request events`, async t => {
+    await withTimeoutProvider(t, async ({ children, request }) => {
+      const result = request()
+      await drainRequests()
+      const child = children[0]
+      if (phase !== "awaiting_spawn") child.emit("spawn")
+      if (phase === "awaiting_first_output" || phase === "awaiting_response") child.writes[0].callback?.()
+      if (phase === "awaiting_response") {
+        child.stdout.emit("data", "private-payload")
+        child.stderr.emit("data", "private-stderr")
+        child.emit("exit", 7, null)
+      }
+      t.mock.timers.tick(20000)
+      const error = await result
+      const snapshot = checkTimeoutDetails(error, {
+        phase, spawned: phase !== "awaiting_spawn",
+        writeAccepted: phase === "awaiting_first_output" || phase === "awaiting_response",
+        stdoutBytes: phase === "awaiting_response" ? 15 : 0,
+        stderrBytes: phase === "awaiting_response" ? 14 : 0,
+        exited: phase === "awaiting_response", exitCode: phase === "awaiting_response" ? 7 : null,
+        requestIndex: 1, sessionFresh: true,
+      })
+      child.emit("spawn")
+      child.writes[0].callback?.()
+      child.stdout.emit("data", "late private-payload\n")
+      child.stderr.emit("data", "late private-stderr")
+      child.emit("exit", 0, null)
+      child.emit("close", 0, null)
+      assert.equal(JSON.stringify(error.details), snapshot, "late terminal events cannot rewrite the snapshot")
+    })
+  })
+}
+
+test("timeout diagnostics: output is byte-counted but spawn and write phase have priority", async t => {
+  await withTimeoutProvider(t, async ({ children, request }) => {
+    const result = request()
+    await drainRequests()
+    const child = children[0]
+    child.emit("spawn")
+    child.writes[0].callback?.(new Error("private-payload"))
+    child.stderr.emit("data", "\u00e9")
+    t.mock.timers.tick(20000)
+    checkTimeoutDetails(await result, {
+      phase: "awaiting_write_accept", spawned: true, writeAccepted: false,
+      stdoutBytes: 0, stderrBytes: 2, exited: false, exitCode: null,
+    })
+  })
+})
+
+test("timeout diagnostics: stderr alone is response progress only after spawn and write acceptance", async t => {
+  await withTimeoutProvider(t, async ({ children, request }) => {
+    const result = request()
+    await drainRequests()
+    const child = children[0]
+    child.writes[0].callback?.()
+    child.stderr.emit("data", "\u00e9")
+    t.mock.timers.tick(20000)
+    checkTimeoutDetails(await result, {
+      phase: "awaiting_spawn", spawned: false, writeAccepted: true, stdoutBytes: 0, stderrBytes: 2,
+    })
+    const second = request()
+    await drainRequests()
+    children[1].emit("spawn")
+    children[1].writes[0].callback?.()
+    children[1].stderr.emit("data", "\u00e9")
+    t.mock.timers.tick(20000)
+    checkTimeoutDetails(await second, {
+      phase: "awaiting_response", spawned: true, writeAccepted: true, stdoutBytes: 0, stderrBytes: 2,
+    })
+  })
+})
+
+test("timeout diagnostics: queued expiry never borrows prior write or output activity", async t => {
+  await withTimeoutProvider(t, async ({ children, request, advanceWall }) => {
+    const first = request()
+    const queued = request()
+    await drainRequests()
+    const child = children[0]
+    child.emit("spawn")
+    child.writes[0].callback?.()
+    child.stderr.emit("data", "private-stderr")
+    advanceWall(20001)
+    t.mock.timers.tick(20000)
+    checkTimeoutDetails(await first, { phase: "awaiting_response", stderrBytes: 14, writeAccepted: true })
+    checkTimeoutDetails(await queued, {
+      phase: "queued_expired", sinceAskMs: null, spawned: true, writeAccepted: false,
+      stdoutBytes: 0, stderrBytes: 0, requestIndex: 2, sessionFresh: false,
+    })
+    assert.equal(child.writes.length, 1, "expired request is never sent")
+    assert.equal(children.length, 1, "expiry is checked before dead-session restart")
+  })
+})
+
+test("timeout diagnostics: a live session's expired queued request is never dispatched", async t => {
+  await withTimeoutProvider(t, async ({ children, request, advanceWall }) => {
+    const first = request()
+    const queued = request()
+    await drainRequests()
+    const child = children[0]
+    child.emit("spawn")
+    child.writes[0].callback?.()
+    advanceWall(86400000)
+    child.stdout.emit("data", JSON.stringify({
+      status: "ok", results: [{ ...DIR_ENTRY, owner_sid: "S-1-5-21-1", owner_reassigned: false,
+        protected: true, rule_count: 1 }],
+    }) + "\n")
+    assert.equal(Array.isArray(await first), true)
+    const error = await queued
+    checkTimeoutDetails(error, {
+      phase: "queued_expired", spawned: true, writeAccepted: false, sinceAskMs: null,
+      stdoutBytes: 0, stderrBytes: 0, requestIndex: 2, sessionFresh: false,
+    })
+    assert.ok(error.details.queueWaitMs < 86400000, "wall-clock changes must not change diagnostic elapsed time")
+    assert.equal(child.writes.length, 1)
+    assert.equal(child.killed, undefined, "queue expiry alone does not retire the live session")
+  })
+})
+
+test("timeout diagnostics: a reused session counts only this request's write and output", async t => {
+  await withTimeoutProvider(t, async ({ children, request }) => {
+    const first = request()
+    await drainRequests()
+    const child = children[0]
+    child.emit("spawn")
+    child.stderr.emit("data", "private-stderr")
+    child.stdout.emit("data", JSON.stringify({
+      status: "ok", results: [{ ...DIR_ENTRY, owner_sid: "S-1-5-21-1", owner_reassigned: false,
+        protected: true, rule_count: 1 }],
+    }) + "\n")
+    assert.equal(Array.isArray(await first), true)
+    const second = request()
+    await drainRequests()
+    child.writes[0].callback?.()
+    t.mock.timers.tick(20000)
+    checkTimeoutDetails(await second, {
+      phase: "awaiting_write_accept", spawned: true, writeAccepted: false,
+      stdoutBytes: 0, stderrBytes: 0, requestIndex: 2, sessionFresh: false,
+    })
+  })
+})
+
+test("timeout diagnostics: dead-session restart inherits due instead of granting a new budget", async t => {
+  await withTimeoutProvider(t, async ({ children, request, advanceWall, advanceElapsed }) => {
+    const first = request(6000)
+    const queued = request()
+    await drainRequests()
+    children[0].emit("spawn")
+    advanceWall(6000)
+    advanceElapsed(6000)
+    t.mock.timers.tick(6000)
+    assert.match((await first).message, /timed out after 6000ms/)
+    await drainRequests()
+    assert.equal(children.length, 2)
+    children[1].emit("spawn")
+    children[1].writes[0].callback?.()
+    advanceElapsed(14000)
+    t.mock.timers.tick(14000)
+    const error = await queued
+    checkTimeoutDetails(error, {
+      phase: "awaiting_first_output", spawned: true, writeAccepted: true,
+      stdoutBytes: 0, stderrBytes: 0, requestIndex: 1, sessionFresh: true,
+    })
+    assert.ok(error.details.queueWaitMs >= 6000, "restart retains original monotonic request entry")
+    assert.ok(error.details.sinceAskMs >= 14000, "ask elapsed is separate from queue wait")
+  })
+})
+
+test("timeout diagnostics: an earlier stream error remains the first terminal result", async t => {
+  await withTimeoutProvider(t, async ({ children, request }) => {
+    const result = request()
+    await drainRequests()
+    const original = new Error("synthetic stream failure")
+    children[0].stdin.emit("error", original)
+    t.mock.timers.tick(20000)
+    assert.equal(await result, original)
+    assert.equal(Object.hasOwn(original, "details"), false)
+  })
+})
+
+test("timeout diagnostics: close before timeout preserves the existing exit refusal without metadata", async t => {
+  await withTimeoutProvider(t, async ({ children, request }) => {
+    const result = request()
+    await drainRequests()
+    children[0].emit("exit", null, "SIGTERM")
+    children[0].emit("close", null, "SIGTERM")
+    t.mock.timers.tick(20000)
+    const error = await result
+    assert.equal(error.message, "desk_feedback: Windows ACL provider exited with code null: no diagnostic output")
+    assert.equal(Object.hasOwn(error, "details"), false)
+  })
+})
 
 test("readonly verifier runs the fixed unchanged policy on every request without a repair or a decision cache", async () => {
   const base = await mkBase()
@@ -1062,7 +1335,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 
 test("native: many callers, in one process and in several, protecting one folder at once all end with the same verified owner-only list", {
   skip: isWindows ? false : "requires a native Windows host",
-}, async () => {
+}, async t => {
   const base = await mkBase()
   try {
     const parent = path.join(base, "state")
@@ -1080,7 +1353,12 @@ test("native: many callers, in one process and in several, protecting one folder
     const script = `
 import { protectWindowsPaths } from ${JSON.stringify(module)}
 const entries = ${JSON.stringify(entries(false))}
-for (let i = 0; i < 8; i += 1) await protectWindowsPaths(entries, { memoize: false })
+try {
+  for (let i = 0; i < 8; i += 1) await protectWindowsPaths(entries, { memoize: false })
+} catch (error) {
+  if (error.details) console.error(JSON.stringify(error.details))
+  throw error
+}
 `
     const children = Array.from({ length: 6 }, () => new Promise((resolve) => {
       const child = spawnProcess(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "pipe"] })
@@ -1101,6 +1379,9 @@ for (let i = 0; i < 8; i += 1) await protectWindowsPaths(entries, { memoize: fal
       assert.equal(acl.count, 1, target)
       assert.equal(acl.identity, acl.owner, target)
     }
+  } catch (error) {
+    if (error.details) t.diagnostic(JSON.stringify(error.details))
+    throw error
   } finally {
     await fs.rm(base, { recursive: true, force: true })
   }

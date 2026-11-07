@@ -23,6 +23,7 @@ import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 import { DONE_EVIDENCE, SCOPE, assertNoCandidateLeak, commitAll, gitLog, gitStatus, initGit, lastCommitMessage, mkTrack, tasksTableBody, trackBody } from "./_move_fixture.js"
+import { notCommitted } from "./_route_around.js"
 
 test("task_move renames a task within the same track (Git desk) and renames its tasks-table row", async () => {
   const root = await mkTempDeskRoot()
@@ -858,7 +859,7 @@ test("task_move reports a commit failure without losing the move", async () => {
 
   assert.equal(result.to, path.posix.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
 })
 
 test("task_move commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -967,6 +968,6 @@ test("task_move never schedules a push when the commit fails", async () => {
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.deepEqual(calls, [])
 })
