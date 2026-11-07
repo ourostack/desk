@@ -405,7 +405,7 @@ test("consumed diagnostic route stays retired and general PR gates remain dispat
   const scheduled = read(".github/workflows/superpowers-upstream.yml")
   const dispatched = /CI_WORKFLOWS: ([^\n]+)\n/u.exec(scheduled)[1].split(",").sort()
   const gating = fs.readdirSync(new URL(".github/workflows/", root))
-    .filter(file => /\n {2}pull_request:/u.test(read(`.github/workflows/${file}`)))
+    .filter(file => /\n {2}pull_request:|^# CI tier: heavy\b/mu.test(read(`.github/workflows/${file}`)))
     .sort()
   assert.deepEqual(dispatched, gating, "the refresh must dispatch every workflow that gates a pull request")
   for (const file of gating)

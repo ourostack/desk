@@ -48,7 +48,7 @@ test("the Crew member-binding tests run on Linux, macOS and Windows, Windows wit
   assert.ok(jobs["ci-gate"].needs.includes("crew-member-binding"))
 })
 
-for (const name of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
+for (const name of ["desk-mcp-tests.yml", "validate-skills.yml", "desk-windows-suite.yml", "factory-macos-protection.yml", "hosted-tests.yml"]) {
   test(`${name} cancels superseded pull-request runs and lets main and dispatched runs finish`, () => {
     const { concurrency } = read(name)
     assert.ok(concurrency, "the workflow has a concurrency group")
@@ -63,4 +63,46 @@ test("the release workflow is never cancelled by a later run", () => {
   const { concurrency } = read("desk-release.yml")
   assert.notEqual(concurrency?.["cancel-in-progress"], true)
   assert.doesNotMatch(String(concurrency?.["cancel-in-progress"] ?? ""), /true|pull_request/u)
+})
+
+// Two tiers (AGENTS.md, "CI tiers"): a pull request runs the Linux fast tier after Quick checks; main and dispatches run everything.
+test("a pull request runs only the Linux legs, and main and dispatches run every leg", () => {
+  const jobs = read("desk-mcp-tests.yml").jobs
+  const pr = '[{"os":"windows-latest"},{"os":"macos-latest"}]'
+  for (const [id, excluded] of [["browser", pr], ["crew-member-binding", pr], ["blackbox", '[{"os":"windows-latest"}]']]) {
+    assert.equal(jobs[id].strategy.matrix.exclude, `\${{ fromJSON(github.event_name == 'pull_request' && '${excluded}' || '[]') }}`, id)
+    assert.equal(jobs[id].needs, "quick-checks", id)
+    const legs = (jobs[id].strategy.matrix.os ?? jobs[id].strategy.matrix.include.map((item) => item.os)).filter((os) => !JSON.parse(excluded).some((leg) => leg.os === os))
+    assert.deepEqual(legs, ["ubuntu-latest"], `${id} keeps exactly its Linux leg on a pull request`)
+  }
+})
+
+test("the heavy jobs run only on main and dispatches, and every fast-tier job waits for Quick checks", () => {
+  const jobs = read("desk-mcp-tests.yml").jobs
+  for (const id of ["release-dry-run", "desk-native-windows"]) {
+    assert.equal(jobs[id].if, "github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'", id)
+  }
+  // The runtime packs wait for nothing, so a failing check elsewhere never stops pack production (production_runtime_pack.test.js).
+  assert.equal(jobs["desk-runtime-packs"].if, "github.event_name != 'pull_request'")
+  assert.equal(jobs["desk-runtime-packs"].needs, undefined)
+  for (const id of ["browser", "crew-member-binding", "blackbox", "desk-mcp-coverage-shards", "unused-code"]) {
+    assert.equal(jobs[id].if, "needs.quick-checks.outputs.code == 'true'", id)
+  }
+  assert.equal(jobs["offline-eval-tests"].if, "needs.quick-checks.outputs.evals == 'true'")
+  // Only a pull request narrows: main and dispatches have no base, so everything runs there.
+  const scope = jobs["quick-checks"].steps.find((step) => step.id === "scope")
+  assert.equal(scope.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}")
+})
+
+test("the Windows suite and macOS protection are the heavy tier: main and dispatches, never a pull request, with a red-main report", () => {
+  for (const name of ["desk-windows-suite.yml", "factory-macos-protection.yml"]) {
+    const workflow = read(name)
+    assert.equal(workflow.on.pull_request, undefined, name)
+    assert.deepEqual(workflow.on.push.branches, ["main"], name)
+    assert.ok("workflow_dispatch" in workflow.on, name)
+    const report = workflow.jobs["report-main-health"]
+    assert.equal(report.if, "${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}", name)
+    assert.deepEqual(report.permissions, { contents: "read", issues: "write" }, name)
+  }
+  assert.match(read("desk-mcp-tests.yml").jobs["report-main-health"].steps.at(-1).run, /report-main-health\.sh "CI gate"/u)
 })

@@ -640,8 +640,9 @@ test("CI runs the merge after a failed shard, so the aggregate check fails inste
   const job = (name) => workflow.match(new RegExp(`^  ${name}:\\n(?:(?!  \\S).*\\n)*`, "mu"))?.[0] ?? ""
   const step = (block, name) => block.match(new RegExp(`^      - name: ${name}\\n(?:(?!      - ).*\\n)*`, "mu"))?.[0] ?? ""
   const merge = job("desk-mcp-tests")
-  assert.match(merge, /^    needs: desk-mcp-coverage-shards$/mu)
-  assert.match(merge, /^    if: \$\{\{ !cancelled\(\) \}\}$/mu, "a skipped merge job counts as passing for a required check")
+  assert.match(merge, /^    needs: \[quick-checks, desk-mcp-coverage-shards\]$/mu)
+  // Skipped only for a docs-only pull request, which Quick checks decides and the CI gate checks.
+  assert.match(merge, /^    if: \$\{\{ !cancelled\(\) && needs\.quick-checks\.outputs\.code == 'true' \}\}$/mu, "a failed shard must still reach the merge")
   const upload = step(job("desk-mcp-coverage-shards"), "Retain the shard's raw coverage")
   assert.match(upload, /uses: actions\/upload-artifact@/u)
   assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu, "a failed shard must still hand its manifest to the merge")

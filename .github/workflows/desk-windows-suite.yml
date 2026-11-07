@@ -2,13 +2,25 @@ name: desk MCP tests on Windows
 
 # Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner as a standard user: a new local user outside
 # the Administrators group, which is what a managed Windows machine gives a person. The main desk MCP tests workflow covers Linux only.
-# It runs on every pull request, with no path filter: the tests read plugins/, scripts/, evals/ and the workflows, so no short list of paths is a safe stand-in for "can change a Windows result", and a required check that a filter skips never reports and blocks the pull request. The scheduled Superpowers refresh dispatches it with the
-# other pull-request workflows (CI_WORKFLOWS in superpowers-upstream.yml; scripts/test-refresh-superpowers.cjs checks that the two lists match).
+# CI tier: heavy. It runs on every push to main, not on pull requests (AGENTS.md, "CI tiers"): sixteen Windows shards on every pull request push
+# held a large share of the organization's runners while other repositories queued. Only the docs no test reads skip it (paths-ignore,
+# the same list Quick checks in desk-mcp-tests.yml lets a pull request skip): the tests read plugins/, scripts/, evals/ and the workflows,
+# so no short list of paths is a safe stand-in for "can change a Windows result". A red result on main opens a "main is red" issue, and the
+# Desk release waits for this workflow to pass on main (.github/scripts/main-ci-gate.mjs). To check a branch before the merge, dispatch it
+# there. The scheduled Superpowers refresh dispatches it with the other CI workflows (CI_WORKFLOWS in superpowers-upstream.yml;
+# scripts/test-refresh-superpowers.cjs checks the list).
 # A manual dispatch can add the elevated (administrator) mode with `elevated: true`. That mode is a diagnostic and is not gated: Desk refuses to
 # reuse a path owned by the Administrators group, which is what an elevated user's own existing files are.
 
 on:
-  pull_request:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "SETUP.md"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       only:
@@ -29,9 +41,10 @@ on:
 permissions:
   contents: read
 
+# Every push to main and every dispatch gets its own group and always finishes: the release waits for main's result.
 concurrency:
-  group: desk-windows-suite-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-suite:
@@ -134,7 +147,7 @@ jobs:
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
   # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
   # fails it. The elevated diagnostic is not counted. It is separate from "CI gate" (desk-mcp-tests.yml) because a job's `needs` cannot
-  # reach another workflow. This workflow has no path filter, so the check reports on every pull request and can be required.
+  # reach another workflow.
   windows-suite-result:
     name: Windows suite
     needs: windows-suite
@@ -163,3 +176,26 @@ jobs:
         run: node .github/scripts/windows-suite-verdict.mjs shard-results 16 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}
+
+  # A red Windows suite on main opens a "main is red: Windows suite" issue for its owner (AGENTS.md, "Red main"), and a green one closes it.
+  report-main-health:
+    name: Report main health
+    needs: windows-suite-result
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the report script
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Open, update or close the red-main issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.windows-suite-result.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/report-main-health.sh "Windows suite" "$RESULT" "$RUN_URL" "$GITHUB_SHA"

@@ -171,8 +171,10 @@ function superpowersSurfaces(version, files, root = repoRoot) {
     assert.match(workflow, required);
   }
   const dispatched = /CI_WORKFLOWS: ([^\n]+)\n/u.exec(workflow)[1].split(",").sort();
+  // A heavy-tier workflow runs on main instead of pull requests, but the refresh's token-made merge starts no main run, so the refresh
+  // dispatches it on its branch before the merge too.
   const gating = fs.readdirSync(path.join(repoRoot, ".github/workflows"))
-    .filter((file) => /\n {2}pull_request:/u.test(fs.readFileSync(path.join(repoRoot, ".github/workflows", file), "utf8")))
+    .filter((file) => /\n {2}pull_request:|^# CI tier: heavy\b/mu.test(fs.readFileSync(path.join(repoRoot, ".github/workflows", file), "utf8")))
     .sort();
   assert.deepEqual(dispatched, gating, "the refresh must dispatch every workflow that gates a pull request");
   for (const file of gating) {

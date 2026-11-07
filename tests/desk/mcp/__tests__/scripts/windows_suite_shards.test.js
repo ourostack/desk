@@ -124,7 +124,7 @@ test("refresh takes the median per file, so one outlier run does not set the wei
   }
 })
 
-test("the workflow's shard list, shard arguments and verdict all say the same number, and the always-on trigger has no path filter", () => {
+test("the workflow's shard list, shard arguments and verdict all say the same number, and main skips it only for the docs no test reads", () => {
   const text = readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8")
   const workflow = load(text)
   assert.equal(workflow.jobs["windows-suite"].strategy["max-parallel"], 6)
@@ -134,8 +134,13 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   assert.ok(totals.length >= 3)
   for (const total of totals) assert.equal(total, shards.length)
   assert.equal(Number(/windows-suite-verdict\.mjs shard-results (\d+)/u.exec(text)[1]), shards.length)
-  assert.equal(workflow.on.pull_request?.paths, undefined, "a path filter would leave the required Windows suite check missing on a skipped pull request")
-  assert.equal(workflow.on.pull_request?.["paths-ignore"], undefined)
+  // The heavy tier: every push to main, never a pull request. The docs it may skip are exactly the ones Quick checks lets a pull request skip.
+  assert.equal(workflow.on.pull_request, undefined)
+  assert.deepEqual(workflow.on.push.branches, ["main"])
+  assert.equal(workflow.on.push.paths, undefined)
+  const quick = load(readFileSync(path.join(scripts, "..", "workflows", "desk-mcp-tests.yml"), "utf8")).jobs["quick-checks"]
+  const outside = /changed-scope\.mjs --outside "\$BASE" ([^)\n]+)\)/u.exec(quick.steps.find((step) => step.id === "scope").run)[1].split(" ")
+  assert.deepEqual(workflow.on.push["paths-ignore"], outside.map((entry) => (entry.endsWith("/") ? `${entry}**` : entry)))
 })
 
 test("the shard runner runs only its own files and reports its predicted load", () => {
@@ -161,7 +166,7 @@ test("the shard runner runs only its own files and reports its predicted load", 
   }
 })
 
-// A pull request can restore a cache saved on main but not one another pull request saved, and main never runs the Windows suite, so main keeps the cache under the suite's exact key.
+// A dispatched branch run can restore a cache saved on main but not one another branch saved, so main keeps the cache under the suite's exact key.
 test("main keeps the Windows suite's installed dependencies cached under the key the shards restore", () => {
   const read = (name) => load(readFileSync(path.join(scripts, "..", "workflows", name), "utf8"))
   const suite = read("desk-windows-suite.yml")
