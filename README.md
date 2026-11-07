@@ -6,18 +6,27 @@
 
 # Desk
 
-Desk gives long-running engineering agents durable work state and authority. Tracks, tasks, friction notes and lessons live in the operator's desk, a Git repository, so work survives sessions, machines and harnesses. An MCP server provides desk CRUD and search, and lifecycle skills keep task state current as work moves.
+Your coding agent keeps its tracks, tasks and lessons in a Git repository you own, your desk, so tomorrow's session picks up where today's stopped, on any machine, in Claude Code or Copilot CLI. An MCP server lets the agent read, search and update the desk, and skills keep each task's state current as the work moves.
 
-[ouroboros.bot/desk](https://ouroboros.bot/desk/) · [Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md) · [The factory](https://ourostack.github.io/factory/) · [More from Ouro](https://github.com/ourostack)
+[ouroboros.bot/desk](https://ouroboros.bot/desk/) · [The factory](https://ourostack.github.io/factory/) · [More from Ouro](https://github.com/ourostack)
 
 **To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
 
 This repository is the home of **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md)**. Its `main` branch is the release channel, and installed copies update from it.
 
-**Install, one line per host:**
+**Or install it yourself.** Claude Code:
 
-- **Copilot CLI:** `agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot`, then start Copilot with `agency copilot`. Desk brings Superpowers and Plain Language with it.
-- **Claude Code:** `claude plugin marketplace add ourostack/desk && claude plugin install desk@ourostack`.
+```sh
+claude plugin marketplace add ourostack/desk && claude plugin install desk@ourostack
+```
+
+Copilot CLI, through the Agency launcher (then start Copilot with `agency copilot`):
+
+```sh
+agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot
+```
+
+Desk brings Superpowers and Plain Language with it.
 
 ## Plugins
 
@@ -37,13 +46,13 @@ Agency and other hosts that resolve plugins from Git use the coordinates `github
 ```
 .claude-plugin/marketplace.json   # Claude Code marketplace (ourostack)
 plugins/desk/                     # Desk plugin, MCP server, activation and browser
-plugins/superpowers/              # Vendored Superpowers; upstream-sources.lock.json records the upstream commit as evidence
+plugins/superpowers/              # Vendored Superpowers and its upstream lock
 plugins/plain-language/           # Plain Language plugin
 plugins/crew/                     # Crew plugin
-tests/desk/                       # Desk tests and fixtures, mirroring plugins/desk; kept out of the plugin so installs never download them
+tests/desk/                       # Desk tests, kept out of the installed plugin
 evals/                            # Offline evaluation contracts
 scripts/                          # Validation and release checks run in CI
-tools/unused-code/                # knip configuration and runner for the Unused code check
+tools/unused-code/                # knip config for the Unused code check
 ```
 
 ## Unused code
