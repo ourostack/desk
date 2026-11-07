@@ -211,9 +211,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Twelve
-        # shards bring every shard down to about the longest single test file (tools/desk-build/config/coverage-shards.json).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Six shards
+        # (2 to 6 minutes each) instead of twelve (1 to 3 each, most of it setup): every job takes one of the organization's
+        # 60 shared concurrent job slots, and a pull request's jobs waited 10 to 20 minutes for one (2026-11-07).
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -237,7 +238,7 @@ jobs:
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        # A shard that has not finished after 10 minutes (a whole shard job takes about 2 to 3) is stuck, not slow. The
+        # A shard that has not finished after 10 minutes (a whole shard job takes about 3 to 7) is stuck, not slow. The
         # shard runs in its own process group so the watchdog can stop exactly it and everything it started: it prints
         # what is still running (the deepest node process names the test file that is not finishing), then signals
         # that group and no other process. A stopped shard exits non-zero, so the run fails there with output.
