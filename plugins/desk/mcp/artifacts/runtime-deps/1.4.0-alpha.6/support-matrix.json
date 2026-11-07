@@ -15,6 +15,15 @@
       "artifact_path": "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
     },
     {
+      "id": "darwin-arm64-node-137",
+      "platform": "darwin",
+      "arch": "arm64",
+      "node_abi": "137",
+      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      "archive_sha256": "1dc771dbb4f56d92f318f8abc0d9897d76bb587ead19565f381f1b21e7d51bc1",
+      "artifact_path": "darwin-arm64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    },
+    {
       "id": "linux-x64-node-127",
       "platform": "linux",
       "arch": "x64",

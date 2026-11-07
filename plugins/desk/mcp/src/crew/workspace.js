@@ -1,6 +1,6 @@
 // The Crew workspace engine behind `scripts/crew.js`: tell whether a repository is a Crew workspace, start one in a new
 // or existing repository, and join a new teammate to one. Each action is one deterministic step with a plan first:
-// nothing is written until `apply`.
+// no member or shared files are written until `apply`; join may fetch missing Git history while previewing.
 //
 // Every Crew workspace has the same shape: the root AGENTS.md, `_meta/desks.md` (the roster), `desks/<alias>/`,
 // `desks/_template/`, `_shared/landscape/` and `_shared/decisions/`. It comes in two setups that differ only in where
@@ -49,6 +49,7 @@ const DECISIONS = "_shared/decisions/"
 const SHAPE = ["_meta/", "_shared/", "desks/"]
 // The line that records, in a desk's commit and a join's pull request, whose desk it is.
 const IDENTITY_TRAILER = "Crew-Identity"
+const ADOPTION_TRAILER = "Crew-Adoption"
 // The account name an ambient GH_TOKEN stands for when gh has no account signed in, as in Desk's own boot.
 const ENV_TOKEN_ACCOUNT = "env-token"
 // Agency fetches a plugin locator again on every install instead of keeping a stale copy of the team's plugin.
@@ -450,17 +451,22 @@ async function accountsFor(store, gh) {
 const troubleOf = (accounts) => accounts.find((entry) => entry.why !== undefined)?.why
 
 // The signed-in account that can push to `store`, and its token.
-async function writerFor(store, gh) {
+async function writerFor(store, gh, identity) {
   const { accounts, why } = await accountsFor(store, gh)
-  const writer = accounts?.find((entry) => entry.push)
-  if (writer === undefined) throw new Failed("account", `no signed-in GitHub account can push to ${store} (${why ?? troubleOf(accounts) ?? "none of them has write access to it"}). Sign in to gh as an account with write access to it (gh auth login), then run this again`)
+  const writer = accounts?.find((entry) => entry.push && (identity === undefined || sameIdentity(entry.account, identity)))
+  if (writer === undefined) throw new Failed("account", `no signed-in GitHub account${identity === undefined ? "" : ` matching ${identity}`} can push to ${store} (${why ?? troubleOf(accounts) ?? "none of them has write access to it"}). Sign in to gh as an account with write access to it (gh auth login), then run this again`)
+  if (identity !== undefined) {
+    const answer = await gh(["api", "user"], { token: writer.token })
+    const me = ghJson(answer)
+    if (answer.code !== 0 || typeof me.login !== "string" || !sameIdentity(me.login, identity)) throw new Failed("account", `could not verify the authenticated member as ${identity}; nothing may be adopted with another account${answer.code === 0 ? "" : ` (${firstLine(answer.stderr)})`}`)
+  }
   return writer
 }
 
 // Whether a GitHub link to the workspace can be made: the clone's origin is a GitHub repository.
-async function connectTo(git, origin, { gh, result }) {
+async function connectTo(git, origin, { gh, result, identity }) {
   if (origin === null) return undefined
-  const { account, token } = await writerFor(origin, gh)
+  const { account, token } = await writerFor(origin, gh, identity)
   result.account = account
   const remote = `https://github.com/${origin}.git`
   git.connect({ remote, token, config: route(remote) })
@@ -545,8 +551,8 @@ async function prepareCheckout(git, connect) {
 }
 
 function commitAll(git, paths, message) {
-  git.must(["add", "--", ...paths], "commit")
-  git.must(["commit", "--quiet", "-m", message], "commit", "the commit was refused (this repository's commit hooks or signing): ")
+  if (paths.length > 0) git.must(["add", "--", ...paths], "commit")
+  git.must(["commit", "--quiet", ...(paths.length === 0 ? ["--allow-empty"] : []), "-m", message], "commit", "the commit was refused (this repository's commit hooks or signing): ")
 }
 
 // Puts the clone back on `base` at `ref` (or with no commit at all when `ref` is null), dropping only what this run
@@ -669,7 +675,7 @@ const prView = async (hub, url) => ghJson(await hub(["pr", "view", url, "--json"
  * would add; it throws a Failed when a teammate's change makes the write wrong. On a conflict it runs again on the new
  * default branch; a rebuild with nothing left to add, or that fails, closes the pull request.
  */
-async function landByPullRequest({ git, base, origin, write, message, body, prefix, stamp, hub, wait, result, reuse, created }) {
+async function landByPullRequest({ git, base, origin, write, message, body, prefix, stamp, hub, wait, result, reuse, created, validate }) {
   if (origin === null) throw new Failed("pull_request", "this workspace's shared writes land through a GitHub pull request, and this clone's origin is not on GitHub")
   const start = git(["rev-parse", "HEAD"]).stdout
   const method = await mergeMethod(hub, origin)
@@ -740,6 +746,10 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
     let state = {}
     let refusal = ""
     for (let attempt = 1; ; attempt += 1) {
+      if (validate !== undefined) {
+        fetchBase(git, base)
+        validate(`origin/${base}`)
+      }
       const answer = await hub(["pr", "merge", result.pr, method])
       refusal = answer.code === 0 ? "" : firstLine(answer.stderr)
       state = await prView(hub, result.pr)
@@ -968,28 +978,111 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
 
 // ── join ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-// Who a desk was added for, from the identity line in the commits that added its files: their identities, or none.
-function deskOwners(git, desk) {
-  const log = git(["log", "--diff-filter=A", "--format=%B", "--", `${desk}/`])
-  return [...log.stdout.matchAll(new RegExp(`^${IDENTITY_TRAILER}:[ \\t]*(\\S.*)$`, "gmu"))].map((match) => match[1].trim())
+function shallowHistory(git) {
+  const shallow = git.must(["rev-parse", "--is-shallow-repository"], "history", "could not verify whether ownership history is complete: ")
+  if (shallow !== "true" && shallow !== "false") throw new Failed("history", "Git did not report whether ownership history is complete; no desk or registry changes can be made")
+  return shallow === "true"
+}
+
+function requireCompleteHistory(git) {
+  if (shallowHistory(git)) throw new Failed("history", "ownership history is incomplete; no claim can be inferred from this shallow history")
+}
+
+// Who claimed a desk, from file-addition commits and desk-scoped adoption checkpoints.
+function deskOwners(git, desk, ref = "HEAD") {
+  requireCompleteHistory(git)
+  const log = git.must(["log", ref, "--diff-filter=A", "--format=%B", "--", `${desk}/`], "verify", "could not verify existing desk claims: ")
+  return [...identityLines(log), ...adoptionClaims(git, desk, ref).flat()]
+}
+
+// A complete folder needs an empty adoption checkpoint, which a path-filtered log would omit.
+function adoptionClaims(git, desk, ref = "HEAD") {
+  requireCompleteHistory(git)
+  const log = git.must(["log", ref, "--format=%B%x00", "--extended-regexp", `--grep=^${ADOPTION_TRAILER}: ${escaped(desk)}$`], "verify", "could not verify adoption checkpoints: ")
+  return log.split("\0").filter((body) => body.trim() !== "").map(identityLines)
+}
+
+const recordedAdoption = (git, desk) => adoptionClaims(git, desk).length > 0
+
+function adoptionOwnershipProblem(git, desk, identity, ref = "HEAD") {
+  if (adoptionClaims(git, desk, ref).some((owners) => owners.length !== 1)) return `${desk}/ has an unverifiable pending adoption claim; reconcile that claim first`
+  const other = deskOwners(git, desk, ref).find((owner) => !sameIdentity(owner, identity))
+  return other === undefined ? null : `${desk}/ has a pending claim for ${other}; reconcile that claim first`
 }
 
 // Why `desk`, already on the default branch with no roster row, is not this identity's to resume; or null.
 function deskClaimProblem(git, desk, identity) {
+  if (recordedAdoption(git, desk)) return `${desk}/ has an unfinished explicit adoption; review a fresh inventory and continue with --adopt-existing`
   const owners = deskOwners(git, desk)
   if (owners.some((owner) => sameIdentity(owner, identity))) return null
   if (owners.length > 0) return `${desk}/ is already on the default branch, added for ${owners[0]}, whose roster row has not landed; choose another alias`
   return `${desk}/ is already on the default branch with no roster row, and nothing records whose it is; choose another alias`
 }
 
+function adoptionReservationProblem(roster, desk, identity) {
+  const table = markdownTables(roster).find((candidate) => candidate.header.includes("alias") && candidate.header.includes("identity"))
+  const alias = desk.slice("desks/".length)
+  for (const cells of table?.rows ?? []) {
+    const owner = cells[table.header.indexOf("identity")] ?? ""
+    const registered = cells[table.header.indexOf("alias")] ?? ""
+    if (registered === alias && sameIdentity(owner, identity)) continue
+    if (registered === alias) return `the alias ${alias} belongs to ${owner}; reconcile that reservation first`
+    if (sameIdentity(owner, identity)) return `${identity} is already registered as ${registered}; use the registered alias rather than add another row`
+    for (const field of ["path", "write_subtree"]) {
+      const value = cells[table.header.indexOf(field)] ?? ""
+      const reserved = value === "" ? "" : path.posix.normalize(value.replaceAll("\\", "/")).replace(/\/+$/u, "")
+      if (reserved !== "" && (reserved === desk || reserved.startsWith(`${desk}/`) || desk.startsWith(`${reserved}/`))) return `${desk}/ overlaps a registered path for ${owner || "another member"}; reconcile that reservation first`
+    }
+  }
+  return null
+}
+
+// Adoption is explicit authority over a reviewed tree, not an inference from who authored a document.
+function adoptionProblem(top, git, desk, identity, expected) {
+  if ((exists(top, "_meta") && !lstatSync(path.join(top, "_meta")).isDirectory()) ||
+    (exists(top, ROSTER) && !lstatSync(path.join(top, ...ROSTER.split("/"))).isFile())) return "the registry must use a regular directory and file; adoption never follows registry links"
+  const roster = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : ""
+  const reservation = adoptionReservationProblem(roster, desk, identity)
+  if (reservation !== null) return reservation
+  const ownership = adoptionOwnershipProblem(git, desk, identity)
+  if (ownership !== null) return ownership
+  if (git(["status", "--porcelain"]).stdout !== "") return "this clone has uncommitted changes; preserve and commit them before previewing adoption"
+  for (const root of [desk, TEMPLATE.replace(/\/$/u, "")]) {
+    const parts = root.split("/")
+    for (let i = 1; i <= parts.length; i += 1) {
+      const rel = parts.slice(0, i).join("/")
+      if (!exists(top, rel) || !lstatSync(path.join(top, ...rel.split("/"))).isDirectory()) return `${rel} is not a regular directory; adoption never follows links`
+    }
+    for (const rel of listFiles(path.join(top, ...parts))) {
+      if (!lstatSync(path.join(top, ...parts, ...rel.split("/"))).isFile()) return `${root}/${rel} is not a regular file; adoption never follows links`
+    }
+    const untracked = git(["ls-files", "--others", "--exclude-standard", "--", `${root}/`]).stdout !== "" ||
+      git(["ls-files", "--others", "--ignored", "--exclude-standard", "--", `${root}/`]).stdout !== ""
+    if (untracked) return `${root}/ has untracked or ignored files outside the reviewed commit; preserve them and reconcile the inventory before adoption`
+  }
+  for (const [root, tree] of Object.entries(expected)) {
+    if (tree === "" || git(["rev-parse", "--verify", `HEAD:${root}`]).stdout !== tree) return `${root}/ changed since the adoption preview; preview again and confirm the new contents`
+  }
+  for (const rel of listFiles(path.join(top, ...TEMPLATE.split("/")))) {
+    const target = `${desk}/${rel}`
+    if (exists(top, target) && !lstatSync(path.join(top, ...target.split("/"))).isFile()) return `${target} collides with a template file; preserve both and reconcile it before adoption`
+    const parts = target.split("/")
+    for (let i = 2; i < parts.length; i += 1) {
+      const parent = parts.slice(0, i).join("/")
+      if (exists(top, parent) && !lstatSync(path.join(top, ...parts.slice(0, i))).isDirectory()) return `${parent} collides with a template directory; preserve both and reconcile it before adoption`
+    }
+  }
+  return null
+}
+
 /**
- * joinWorkspace({ repo, identity, alias, apply? }) -> { state, ... }
+ * joinWorkspace({ repo, identity, alias, adoptExisting?: reviewed commit, apply? }) -> { state, ... }
  *
  * `state`: "plan", "joined", "member" (the identity already has a row; nothing written), "pr_open" (the desk is pushed
  * and the roster row waits in an open pull request), "not_crew", "refused" or "failed" (with `stage`).
  */
-export async function joinWorkspace({ repo, identity, alias, apply = false, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
-  const refuse = (message) => ({ action: "join", state: "refused", repo, identity, alias, message: `Nothing was written: ${message}.` })
+export async function joinWorkspace({ repo, identity, alias, adoptExisting, apply = false, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
+  const refuse = (message, adoption) => ({ action: "join", state: "refused", repo, identity, alias, ...(adoption === undefined ? {} : { adoption }), message: `Nothing was written: ${message}.` })
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
   if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
@@ -1011,48 +1104,88 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
   if (template.length === 0) return refuse(`${TEMPLATE} is missing or empty, so there is no desk to copy; the workspace needs a complete template first`)
   const desk = deskOf(alias)
   const files = template.map((rel) => `${desk}/${rel}`)
+  const adopting = adoptExisting !== undefined
+  const historyResult = { action: "join", repo: top, identity, alias }
+  let historyRecoveryAttempted = false
+  const recoverHistory = async (base = status.base) => {
+    if (!shallowHistory(git)) return
+    if (historyRecoveryAttempted) throw new Failed("history", "ownership history is still incomplete after this run's recovery attempt; no further history fetch will be attempted")
+    historyRecoveryAttempted = true
+    if (status.origin === null || typeof base !== "string" || base === "") throw new Failed("history", "ownership history is incomplete and this clone has no authenticated GitHub default-branch route for recovery; no desk or registry changes were written")
+    await connectTo(git, status.origin, { gh, result: historyResult, identity })
+    git.must(["fetch", "--quiet", "--unshallow", "--no-tags", git.remote, `+refs/heads/${base}:refs/remotes/origin/${base}`], "history", "ownership history is incomplete; fetching complete history failed: ", { network: true })
+    if (shallowHistory(git)) throw new Failed("history", "ownership history remains incomplete: the upstream did not supply a complete history; no desk or registry changes were written")
+  }
+  try {
+    if (exists(top, desk)) await recoverHistory()
+  } catch (error) {
+    return failedResult(historyResult, error)
+  }
+  const revision = adopting ? adoptExisting : git(["rev-parse", "HEAD"]).stdout
+  if (adopting && (typeof revision !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision) || git(["rev-parse", "--verify", `${revision}^{commit}`]).stdout !== revision)) return refuse("adoption needs the full reviewed commit from a fresh join preview")
+  const roots = [desk, TEMPLATE.replace(/\/$/u, "")]
+  const expected = Object.fromEntries(roots.map((root) => [root, git(["rev-parse", "--verify", `${revision}:${root}`]).stdout]))
+  const adoption = () => ({ revision, preserved: listFiles(path.join(top, ...desk.split("/"))).map((rel) => `${desk}/${rel}`), missing: files.filter((rel) => !exists(top, rel)) })
   const deskProblem = () => {
+    if (adopting) return adoptionProblem(top, git, desk, identity, expected)
     if (!files.every((rel) => exists(top, rel))) return `${desk}/ already exists and does not match the template; it may be someone else's`
     return deskClaimProblem(git, desk, identity)
   }
   const resumed = exists(top, desk)
-  if (resumed && deskProblem() !== null) return refuse(deskProblem())
+  if (adopting && !resumed) return refuse(`${desk}/ is absent; preview again before choosing how to join`)
+  if (resumed && deskProblem() !== null) {
+    const blocked = adopting ? null : adoptionProblem(top, git, desk, identity, expected)
+    const offer = !adopting && blocked === null ? adoption() : undefined
+    const next = offer === undefined ? (blocked === null ? "" : `; adoption cannot proceed: ${blocked}`) : `; review the adoption inventory, verify authority over this folder and confirm reuse, then preview with --adopt-existing ${revision}`
+    return refuse(`${deskProblem()}${next}`, offer)
+  }
   const member = { alias, identity, origin: status.origin }
   const roster = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : null
   const header = markdownTables(roster ?? "").find((table) => table.header.includes("alias") && table.header.includes("identity"))?.header ?? ROSTER_COLUMNS
-  const result = { action: "join", repo: top, identity, alias, desk, files, row: rosterRow(header, member), tooling: status.tooling }
+  const result = { ...historyResult, desk, files, row: rosterRow(header, member), tooling: status.tooling, ...(adopting ? { adoption: adoption() } : {}) }
   if (!apply) {
-    const deskPart = resumed ? `${desk}/ is already in place, so joining adds` : `Joining adds ${desk}/ (${plural(files.length, "file")}) and then`
+    const deskPart = adopting ? `Adopting ${desk}/ preserves every existing file, adds ${plural(result.adoption.missing.length, "missing template file")} and then` : resumed ? `${desk}/ is already in place, so joining adds` : `Joining adds ${desk}/ (${plural(files.length, "file")}) and then`
     return { ...result, state: "plan", message: `Plan only: nothing was written. ${deskPart} the roster row for ${identity}. Run again with --apply to make the change.` }
   }
   const toolingNote = status.tooling === null ? "" : ` ${status.tooling.message}`
   const created = new Set()
   let deskPushed = false
   try {
-    const checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result }))
+    const checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result, ...(adopting ? { identity } : {}) }))
     if (checkout.refused) return refuse(`this clone ${checkout.refused}`)
     if (checkout.mode !== "remote") return refuse("this clone has no origin with a default branch to push the desk to")
     // The clone is now the default branch as it is: someone may have joined, or taken the alias or the desk, meanwhile.
     const now0 = holders()
     if (now0.mine !== undefined) return memberResult(now0.mine)
     if (now0.other !== undefined) return refuse(taken(now0.other))
+    if (exists(top, desk)) await recoverHistory(checkout.base)
     if (exists(top, desk) && deskProblem() !== null) return refuse(deskProblem())
     deskPushed = exists(top, desk)
-    if (!deskPushed) {
+    if (!deskPushed || adopting) {
       const writeDesk = () => {
+        if (adopting) {
+          const current = holders()
+          if (current.mine !== undefined) return null
+          if (current.other !== undefined) throw new Failed("alias", taken(current.other))
+        }
         // Rebuilt after a teammate's push: the same desk pushed from this identity's other machine is reused.
         if (exists(top, desk)) {
           const claim = deskProblem()
           if (claim !== null) throw new Failed("desk", claim)
-          return null
+          if (!adopting) return null
+        } else if (adopting) {
+          throw new Failed("desk", `${desk}/ changed since the adoption preview; preview again`)
         }
-        writeFiles(top, Object.fromEntries(template.map((rel) => [`${desk}/${rel}`, render(readFileSync(path.join(top, ...TEMPLATE.split("/"), ...rel.split("/")), "utf8"), member)])), created)
-        return [`${desk}/`]
+        const missing = template.filter((rel) => !adopting || !exists(top, `${desk}/${rel}`))
+        if (missing.length === 0) return adopting && !recordedAdoption(git, desk) ? [] : null
+        writeFiles(top, Object.fromEntries(missing.map((rel) => [`${desk}/${rel}`, render(readFileSync(path.join(top, ...TEMPLATE.split("/"), ...rel.split("/")), "utf8"), member)])), created)
+        return missing.map((rel) => `${desk}/${rel}`)
       }
       // The member's own desk: they are its only writer, so it goes straight to the default branch.
-      await landByPush({ git, base: checkout.base, write: writeDesk, message: `Crew: add ${alias}'s desk\n\n${IDENTITY_TRAILER}: ${identity}`, created })
+      await landByPush({ git, base: checkout.base, write: writeDesk, message: `Crew: ${adopting ? "adopt" : "add"} ${alias}'s desk\n\n${IDENTITY_TRAILER}: ${identity}${adopting ? `\n${ADOPTION_TRAILER}: ${desk}` : ""}`, created })
       deskPushed = true
     }
+    if (adopting) expected[desk] = git(["rev-parse", "--verify", `HEAD:${desk}`]).stdout
     let settled
     const writeRow = () => {
       const now1 = holders()
@@ -1061,6 +1194,10 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
         return null
       }
       if (now1.other !== undefined) throw new Failed("alias", `${taken(now1.other)}. ${desk}/ is pushed and unused`)
+      if (adopting) {
+        const problem = deskProblem()
+        if (problem !== null) throw new Failed("desk", problem)
+      }
       const current = exists(top, ROSTER) ? readFileSync(path.join(top, ...ROSTER.split("/")), "utf8") : null
       writeFiles(top, { [ROSTER]: withRosterRow(current, member) }, created)
       return [ROSTER]
@@ -1070,7 +1207,19 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
     const reuse = await openPullRequest(checkout.hub, status.origin, { account: result.account, base: checkout.base, branch: new RegExp(`^${escaped(prefix)}[0-9a-z]+$`, "u"), identity, paths: [ROSTER] })
     const message = `Crew: add ${alias} to the roster`
     const body = `${message}.\n\nOpened by Crew's crew.js. It is merged at once: a pull request to a shared path here serializes concurrent writes and is not a review.\n\n${mark}`
-    const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeRow, message, body, prefix, stamp: now(), hub: checkout.hub, wait, result, reuse, created })
+    const changedAdoption = (ref) => roots.some((root) => git(["rev-parse", "--verify", `${ref}:${root}`]).stdout !== expected[root])
+    const reservationAt = (ref) => {
+      const roster = git(["show", `${ref}:${ROSTER}`])
+      return roster.ok ? adoptionReservationProblem(roster.stdout, desk, identity) : `${ROSTER} could not be verified; reconcile the registry before continuing`
+    }
+    const validate = adopting ? (ref) => {
+      if (changedAdoption(ref)) throw new Failed("verify", "the adopted desk or template changed since the preview; the roster row was not merged by this run; review the new contents before continuing")
+      const reservation = reservationAt(ref)
+      if (reservation !== null) throw new Failed("verify", reservation)
+      const ownership = adoptionOwnershipProblem(git, desk, identity, ref)
+      if (ownership !== null) throw new Failed("verify", ownership)
+    } : undefined
+    const landed = await landByPullRequest({ git, base: checkout.base, origin: status.origin, write: writeRow, message, body, prefix, stamp: now(), hub: checkout.hub, wait, result, reuse, created, validate })
     if (resumed) result.resumed = true
     if (landed.unchanged) {
       const unused = settled.alias === alias ? "" : ` It joined as ${settled.alias} from another machine meanwhile, so ${desk}/ is unused.`
@@ -1079,6 +1228,7 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
     const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
+    if (adopting && (changedAdoption("HEAD") || reservationAt("HEAD") !== null || adoptionOwnershipProblem(git, desk, identity) !== null)) return { ...result, state: "failed", stage: "verify", reason: "the adopted desk, template, registry reservations or pending claims changed during the roster merge", message: "The registry row merged, but the adopted desk, template, registry reservations or pending claims changed during the merge. Keep onboarding open and review the current contents and authority before continuing." }
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
     const missing = [
       [holders().mine?.alias !== alias, `the roster row for ${identity} as ${alias}`, "roster row"],
@@ -1087,6 +1237,6 @@ export async function joinWorkspace({ repo, identity, alias, apply = false, spaw
     if (missing.length > 0) return notConfirmed(result, checkout.base, missing.map(([, item]) => item), `${identity}'s ${missing.map(([, , plain]) => plain).join(" and ")}`, "Next: run the same join again; it adds only what is missing.")
     return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. ${next}` }
   } catch (error) {
-    return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; run join again to add the roster row.` : "")
+    return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; ${adopting ? "review a fresh adoption preview and confirm --adopt-existing again to finish the roster row" : "run join again to add the roster row"}.` : "")
   }
 }

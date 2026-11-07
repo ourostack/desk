@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { writeCardCommitted, cardCommitMessage, stagingAllowed, stageAndCommitFile, COMMIT_CODES } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
 import { commitPaths, YIELD_ENV } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
+import { assertRoute, notCommitted } from "./_route_around.js"
 
 const ROOT = "/desk"
 const CARDS = "/desk/_meta/improvement"
@@ -124,11 +125,17 @@ test("a desk that is not a Git repository keeps the card uncommitted and schedul
 })
 
 test("a Git that cannot list the folder, stage or commit gives its code and keeps the card", async () => {
-  assert.equal((await run(fakeGit({ diffFails: true }))).commit, "stage_failed")
-  assert.equal((await run(fakeGit({ addFails: true, dirty: [`_meta/improvement/${NAME}`] }))).commit, "stage_failed")
+  for (const opts of [{ diffFails: true }, { addFails: true, dirty: [`_meta/improvement/${NAME}`] }]) {
+    const stage = await run(fakeGit(opts))
+    assert.equal(stage.commit, "stage_failed")
+    assertRoute(stage.route_around)
+  }
+  // A write that reported no file has nothing to commit, so a Git that cannot list the folder gives no route that could commit everything staged.
+  assert.equal((await run(fakeGit({ diffFails: true }), {}, { result: "none_open" })).commit, "no_files")
   const failed = fakeGit({ commitFails: true, dirty: [`_meta/improvement/${NAME}`] })
   const out = await run(failed)
   assert.equal(out.commit, "commit_failed")
+  assertRoute(out.route_around)
   assert.deepEqual(out.pushes, [])
   assert.deepEqual(out.result, { result: "opened", file_name: NAME })
 })
@@ -156,8 +163,8 @@ test("the friction helpers keep their old behaviour", () => {
   assert.equal(stagingAllowed("/desk/_meta/friction.md", git.spawn), true)
   assert.equal(stagingAllowed("/desk/_meta/friction.md", fakeGit({ repo: false }).spawn), false)
   assert.equal(stageAndCommitFile("/desk/_meta/friction.md", "m", git.spawn), undefined)
-  assert.deepEqual(stageAndCommitFile("/desk/_meta/friction.md", "m", fakeGit({ addFails: true }).spawn), { status: "failed", reason: "x" })
-  assert.deepEqual(stageAndCommitFile("/desk/_meta/friction.md", "m", fakeGit({ commitFails: true }).spawn), { status: "failed", reason: "x" })
+  assert.deepEqual(notCommitted(stageAndCommitFile("/desk/_meta/friction.md", "m", fakeGit({ addFails: true }).spawn)), { status: "failed", reason: "x" })
+  assert.deepEqual(notCommitted(stageAndCommitFile("/desk/_meta/friction.md", "m", fakeGit({ commitFails: true }).spawn)), { status: "failed", reason: "x" })
 })
 
 test("on a real repository the card and a moved-aside file land in one commit and nothing else is staged", async () => {
@@ -251,9 +258,10 @@ test("a background writer that finds the index lock held stages nothing and defe
   const out = await asBackgroundWriter(() => run({ spawn, calls: git.calls }))
   assert.equal(out.commit, "deferred")
   assert.ok(COMMIT_CODES.includes(out.commit))
+  assertRoute(out.route_around)
   assert.deepEqual(out.pushes, [])
   assert.equal(git.calls.some((call) => call[0] === "add" || call[0] === "commit"), false)
-  // A person's write in the same state commits: it does not check the lock first, and Git's own lock is retried (below).
+  // A person's write waits before staging; this fake Git succeeds even when the observed lock remains.
   assert.equal((await run({ spawn, calls: git.calls })).commit, "committed")
   // No lock, or Git cannot say where it would be: the background write commits.
   const free = (cmd, args) => args.includes("--git-path") ? { status: 0, stdout: `${path.join(base, "no.lock")}\n`, stderr: "" } : git.spawn(cmd, args)
@@ -262,25 +270,27 @@ test("a background writer that finds the index lock held stages nothing and defe
   assert.equal((await asBackgroundWriter(() => run({ spawn: unknown, calls: git.calls }))).commit, "committed")
 })
 
-test("a person's commit waits out a briefly held lock, and a background writer's does not", () => {
+test("a lock-shaped commit failure is returned without redispatch for people and background writers", () => {
   const lockError = { status: 128, stdout: "", stderr: "fatal: Unable to create '/desk/.git/index.lock': File exists.\n" }
   const script = (failures) => {
     let commits = 0
     const spawn = (cmd, args) => {
       if (args.includes("symbolic-ref")) return { status: 0, stdout: "main\n", stderr: "" }
+      // The read-back (#561) reads HEAD before and after the commit; it has not moved, so the commit is absent.
+      if (args.includes("rev-parse")) return { status: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" }
+      // What the commit is about to take is read before dispatch (R4); those reads succeed and are not dispatches.
+      if (args[2] !== "commit") return { status: 0, stdout: "", stderr: "" }
       commits += 1
       return commits <= failures ? lockError : { status: 0, stdout: "", stderr: "" }
     }
     return { spawn, commits: () => commits }
   }
   const person = script(2)
-  assert.equal(commitPaths("/desk", ["a.md"], "m", person.spawn).ok, true)
-  assert.equal(person.commits(), 3)
-  // A lock that stays held is given up on after the wait, and Git's own message comes back.
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", person.spawn), { ok: false, stderr: lockError.stderr, readback: "absent", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
+  assert.equal(person.commits(), 1)
   const held = script(Infinity)
-  const started = Date.now()
-  assert.equal(commitPaths("/desk", ["a.md"], "m", held.spawn).ok, false)
-  assert.ok(Date.now() - started >= 2900 && held.commits() > 2)
+  assert.deepEqual(commitPaths("/desk", ["a.md"], "m", held.spawn), { ok: false, stderr: lockError.stderr, readback: "absent", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
+  assert.equal(held.commits(), 1)
   const background = script(2)
   const before = process.env[YIELD_ENV]
   process.env[YIELD_ENV] = "1"

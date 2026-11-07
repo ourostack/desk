@@ -24,6 +24,7 @@ import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
+import { commitFailure, commitRoute } from "../util/route-around.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
@@ -243,13 +244,13 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   if (unstaged.length > 0) {
     const staged = stagePaths(deskRoot, unstaged, spawnGit, undefined, { all: true })
     if (!staged.ok) {
-      return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+      return { status: "nothing_to_commit", commit: notCommitted(deskRoot, paths, message, staged.stderr) }
     }
   }
   // A staged move committed by one side only keeps both files (the new path listed) or deletes the file on the remote while its
   // content stays staged here (the old path listed), so both paths must be listed, as a tidy requires.
   const everything = stagedChanges(deskRoot, [], spawnGit)
-  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  if (everything === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, paths, message, "git could not list the staged changes") }
   const listed = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
   const covered = (p) => listed.some((rel) => rel === "" || p === rel || p.startsWith(`${rel}/`))
   for (const change of everything) {
@@ -260,13 +261,19 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   }
   const committed = commitPaths(deskRoot, paths, message, spawnGit)
   if (!committed.ok) {
-    return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
+    return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: listed, message, committed }) }
   }
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = headSha(deskRoot, spawnGit)
   schedulePush({ root: deskRoot })
   const answer = { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
   return deskCommit === null ? answer : { ...answer, desk_commit: deskCommit, desk_commit_note: DESK_COMMIT_HASH_NOTE }
+}
+
+// A stage or read failure: nothing was committed, and the route finishes the commit by hand (#623).
+function notCommitted(deskRoot, paths, message, reason) {
+  const rels = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
+  return { status: "failed", reason, route_around: commitRoute({ root: deskRoot, paths: rels, message, readback: "absent" }) }
 }
 
 // Said in the answer so no agent pushes by hand or reads `desk_pushed: false` as a failure.
@@ -295,11 +302,11 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
   if (unstaged.length > 0) {
     const staged = stagePaths(deskRoot, unstaged, spawnGit)
-    if (!staged.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+    if (!staged.ok) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), staged.stderr) }
   }
   const listed = new Set(rels)
   const everything = stagedChanges(deskRoot, [], spawnGit)
-  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  if (everything === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), "git could not list the staged changes") }
   for (const change of everything) {
     const missing = change.paths.filter((p) => !listed.has(p))
     if (change.paths.length === 2 && missing.length === 1) {
@@ -315,12 +322,12 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
     }
   }
   const entries = indexEntries(deskRoot, rels, spawnGit)
-  if (entries === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not read the index" } }
+  if (entries === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), "git could not read the index") }
   if (entries.filter((entry) => isCard(entry.path)).some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
     throw new Error("desk_save: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
   }
   const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
-  if (!committed.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
+  if (!committed.ok) return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: rels, message: tidyTrailer(message), committed }) }
   schedulePush({ root: deskRoot })
   return { status: "committed" }
 }
