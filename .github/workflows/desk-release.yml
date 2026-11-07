@@ -82,7 +82,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Waits for the newest main run of each workflow that covers this commit, and fails unless each passed. The build below
+      # Waits for the newest run of each workflow that covers this commit (nothing changed since that run would have started the
+      # workflow), and fails unless each passed. The build below
       # releases exactly this commit, so a merge that lands while the release waits goes out in the next run.
       - name: Wait for main's CI on the commit to release
         id: gate
@@ -92,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           head="$(git rev-parse HEAD)"
-          node .github/scripts/main-ci-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$head" --workflows desk-mcp-tests.yml,desk-windows-suite.yml --timeout-min 50
+          node .github/scripts/main-ci-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$head" --workflows desk-mcp-tests.yml,desk-windows-suite.yml,factory-macos-protection.yml --timeout-min 50
           echo "head=$head" >> "$GITHUB_OUTPUT"
 
   build:

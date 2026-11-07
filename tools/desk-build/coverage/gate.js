@@ -98,13 +98,16 @@ export function assertCoverageCommandParity({ packageJsonPath, workflowPath }) {
   if (/run:\s*npm test\b/.test(workflow)) {
     issues.push("desk MCP CI still runs npm test instead of npm run test:coverage")
   }
-  const { filters: pathFilters, declared, limited } = extractWorkflowPathFilters(workflow)
+  const { filters: pathFilters, ignores, declared, limited } = extractWorkflowPathFilters(workflow)
   for (const eventName of REQUIRED_WORKFLOW_EVENTS) {
     const eventPaths = pathFilters.get(eventName) ?? []
     // A pull request with no path filter runs on every change, which covers the root scripts. Main requires the workflow's
     // "CI gate" job, and a filter that skipped the workflow would leave that required check missing.
     const runsOnEveryPullRequest = eventName === "pull_request" && declared.has(eventName) && !limited.has(eventName)
-    if (!runsOnEveryPullRequest && !eventPaths.includes(REQUIRED_WORKFLOW_PATH_FILTER)) {
+    // A push with only paths-ignore runs on every change it does not ignore.
+    const pushIgnoresOnly = eventName === "push" && declared.has(eventName) && !pathFilters.has(eventName)
+      && !(ignores.get(eventName) ?? []).some((ignored) => pathFilterCovers(ignored, REQUIRED_WORKFLOW_PATH_FILTER))
+    if (!runsOnEveryPullRequest && !pushIgnoresOnly && !eventPaths.includes(REQUIRED_WORKFLOW_PATH_FILTER)) {
       issues.push(
         `desk MCP CI ${eventName}.paths must include ${REQUIRED_WORKFLOW_PATH_FILTER}`,
       )
@@ -173,8 +176,14 @@ function normalizeExclusions(exclusions) {
   return out
 }
 
+// True when a workflow path filter entry matches the path or glob `target`: the same entry, or a `dir/**` entry above it.
+function pathFilterCovers(filter, target) {
+  return filter === target || filter === "**" || (filter.endsWith("/**") && target.startsWith(filter.slice(0, -2)))
+}
+
 function extractWorkflowPathFilters(workflow) {
   const filters = new Map()
+  const ignores = new Map()
   const declared = new Set()
   const limited = new Set()
   const stack = []
@@ -186,12 +195,13 @@ function extractWorkflowPathFilters(workflow) {
 
     if (trimmed.startsWith("- ")) {
       const keys = stack.map((entry) => entry.key)
-      if (keys.at(-1) === "paths" && keys.at(-3) === "on") {
+      if ((keys.at(-1) === "paths" || keys.at(-1) === "paths-ignore") && keys.at(-3) === "on") {
         const eventName = keys.at(-2)
         if (REQUIRED_WORKFLOW_EVENTS.includes(eventName)) {
-          const existing = filters.get(eventName) ?? []
+          const target = keys.at(-1) === "paths" ? filters : ignores
+          const existing = target.get(eventName) ?? []
           existing.push(unquoteYamlScalar(trimmed.slice(2).trim()))
-          filters.set(eventName, existing)
+          target.set(eventName, existing)
         }
       }
       continue
@@ -204,7 +214,7 @@ function extractWorkflowPathFilters(workflow) {
     if (stack.length === 2 && stack[0].key === "on") declared.add(keyMatch[2])
     if (stack.length === 3 && stack[0].key === "on" && EVENT_LIMITS.has(keyMatch[2])) limited.add(stack[1].key)
   }
-  return { filters, declared, limited }
+  return { filters, ignores, declared, limited }
 }
 
 function collectFiles(dir, extension) {

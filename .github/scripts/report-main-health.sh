@@ -16,6 +16,15 @@ open="$(gh issue list --repo "$repo" --state open --label "$label" --search "\"$
 
 if [ "$result" = "success" ]; then
   if [ -n "$open" ]; then
+    # Main's runs finish out of order, so a green result closes the issue only when its commit carries the newest failure.
+    failed="$(gh issue view "$open" --repo "$repo" --json body,comments --jq '[.body, .comments[].body] | map(scan("red-main-sha: ([0-9a-f]{40})") | .[0]) | last // empty')"
+    if [ -n "$failed" ]; then
+      status="$(gh api "repos/$repo/compare/$failed...$sha" --jq .status)"
+      if [ "$status" != "ahead" ] && [ "$status" != "identical" ]; then
+        echo "Green on ${sha:0:12}, which does not carry the failure on ${failed:0:12}; the issue stays open."
+        exit 0
+      fi
+    fi
     gh issue close "$open" --repo "$repo" --comment "Green again on \`${sha:0:12}\`: $run_url"
   fi
   exit 0
@@ -25,7 +34,9 @@ fi
 
 body="\`$check\` failed on main at \`${sha:0:12}\`: $run_url
 
-Who fixes it (AGENTS.md, \"Red main\"): the author of the pull request that turned it red, within 30 minutes, by a fix or a revert. If that agent is gone, whoever reads this first reverts the commit. The Desk release ships nothing until main is green again."
+Who fixes it (AGENTS.md, \"Red main\"): the author of the pull request that turned it red, within 30 minutes, by a fix or a revert. If that agent is gone, whoever reads this first reverts the commit. The Desk release ships nothing until main is green again.
+
+<!-- red-main-sha: $sha -->"
 if [ -n "$open" ]; then
   gh issue comment "$open" --repo "$repo" --body "$body"
 else

@@ -31,6 +31,28 @@ test("the Darwin runtime pack selects a supported standard Apple-silicon image",
   assert.equal(darwin.node_abi, "127")
 })
 
+// A matrix chooses its legs by event in one of two ways: a base `os` axis with an `exclude` expression, or an `include` expression
+// (GitHub applies `exclude` before `include`, so an include-only matrix cannot drop legs with `exclude`). Both have the form
+// ${{ fromJSON(github.event_name == 'pull_request' && '<pull request JSON>' || '<other JSON>') }}.
+function byEvent(expression, event) {
+  const match = /^\$\{\{ fromJSON\(github\.event_name == 'pull_request' && '(\[.*?\])' \|\| '(\[.*?\])'\) \}\}$/u.exec(expression)
+  assert.ok(match, `not an event-chosen matrix: ${expression}`)
+  return JSON.parse(event === "pull_request" ? match[1] : match[2])
+}
+function prExclusions(expression) {
+  return byEvent(expression, "pull_request")
+}
+function legs(job, event) {
+  const matrix = job.strategy.matrix
+  if (typeof matrix.include === "string") {
+    assert.equal(matrix.exclude, undefined, "an include-only matrix has no exclude")
+    return byEvent(matrix.include, event).map((item) => item.os)
+  }
+  assert.ok(Array.isArray(matrix.os), "a matrix with exclude legs has a base os axis to drop them from")
+  const excluded = byEvent(matrix.exclude, event)
+  return matrix.os.filter((os) => !excluded.some((leg) => leg.os === os))
+}
+
 test("the real browser check runs on Linux, Windows and macOS", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   assert.deepEqual([...jobs.browser.strategy.matrix.os].sort(), ["macos-latest", "ubuntu-latest", "windows-latest"])
@@ -40,7 +62,7 @@ test("the real browser check runs on Linux, Windows and macOS", () => {
 test("the Crew member-binding tests run on Linux, macOS and Windows, Windows with CRLF checkouts, and gate main", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   const job = jobs["crew-member-binding"]
-  assert.deepEqual(job.strategy.matrix.include.map((item) => item.os).sort(), ["macos-latest", "ubuntu-latest", "windows-latest"])
+  assert.deepEqual(legs(job, "push").sort(), ["macos-latest", "ubuntu-latest", "windows-latest"])
   assert.ok(job.steps.some((step) => step.if === "runner.os == 'Windows'" && step.run === "git config --global core.autocrlf true"))
   const run = job.steps.find((step) => step.name === "Run the member-binding tests").run
   assert.match(run, /runtime\/crew_member_end_to_end\.test\.js/u)
@@ -68,24 +90,28 @@ test("the release workflow is never cancelled by a later run", () => {
 // Two tiers (AGENTS.md, "CI tiers"): a pull request runs the Linux fast tier after Quick checks; main and dispatches run everything.
 test("a pull request runs only the Linux legs, and main and dispatches run every leg", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
-  const pr = '[{"os":"windows-latest"},{"os":"macos-latest"}]'
-  for (const [id, excluded] of [["browser", pr], ["crew-member-binding", pr], ["blackbox", '[{"os":"windows-latest"}]']]) {
-    assert.equal(jobs[id].strategy.matrix.exclude, `\${{ fromJSON(github.event_name == 'pull_request' && '${excluded}' || '[]') }}`, id)
+  for (const [id, all] of [
+    ["browser", ["macos-latest", "ubuntu-latest", "windows-latest"]],
+    ["crew-member-binding", ["macos-latest", "ubuntu-latest", "windows-latest"]],
+    ["blackbox", ["ubuntu-latest", "windows-latest"]],
+  ]) {
     assert.equal(jobs[id].needs, "quick-checks", id)
-    const legs = (jobs[id].strategy.matrix.os ?? jobs[id].strategy.matrix.include.map((item) => item.os)).filter((os) => !JSON.parse(excluded).some((leg) => leg.os === os))
-    assert.deepEqual(legs, ["ubuntu-latest"], `${id} keeps exactly its Linux leg on a pull request`)
+    assert.deepEqual(legs(jobs[id], "pull_request"), ["ubuntu-latest"], `${id} keeps exactly its Linux leg on a pull request`)
+    assert.deepEqual(legs(jobs[id], "push").sort(), all, `${id} runs every leg on main`)
   }
+  // The release dry run checks a pull request's changelog fragments on the auto stage; rc and stable are the heavy tier.
+  const dry = jobs["release-dry-run"].strategy.matrix
+  assert.deepEqual(dry.stage, ["auto", "rc", "stable"])
+  assert.deepEqual(prExclusions(dry.exclude), [{ stage: "rc" }, { stage: "stable" }])
 })
 
 test("the heavy jobs run only on main and dispatches, and every fast-tier job waits for Quick checks", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
-  for (const id of ["release-dry-run", "desk-native-windows"]) {
-    assert.equal(jobs[id].if, "github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'", id)
-  }
+  assert.equal(jobs["desk-native-windows"].if, "github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'")
   // The runtime packs wait for nothing, so a failing check elsewhere never stops pack production (production_runtime_pack.test.js).
   assert.equal(jobs["desk-runtime-packs"].if, "github.event_name != 'pull_request'")
   assert.equal(jobs["desk-runtime-packs"].needs, undefined)
-  for (const id of ["browser", "crew-member-binding", "blackbox", "desk-mcp-coverage-shards", "unused-code"]) {
+  for (const id of ["browser", "crew-member-binding", "blackbox", "desk-mcp-coverage-shards", "unused-code", "release-dry-run"]) {
     assert.equal(jobs[id].if, "needs.quick-checks.outputs.code == 'true'", id)
   }
   assert.equal(jobs["offline-eval-tests"].if, "needs.quick-checks.outputs.evals == 'true'")

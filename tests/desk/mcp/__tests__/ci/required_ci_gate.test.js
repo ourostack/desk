@@ -77,7 +77,7 @@ function gateVerdict({ heavy, code, evals, quick = "success", results = {} }) {
   }
 }
 const skipped = (...ids) => Object.fromEntries(ids.map((id) => [id, "skipped"]))
-const heavyJobs = ["release-dry-run", "desk-runtime-packs", "desk-native-windows"]
+const heavyJobs = ["desk-runtime-packs", "desk-native-windows"]
 
 test("the CI gate lets a pull request skip only the heavy tier, the offline evals it cannot affect, and everything for a docs-only change", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
   assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests") }), 0)
@@ -90,7 +90,8 @@ test("the CI gate lets a pull request skip only the heavy tier, the offline eval
 test("the CI gate fails for a job that had to run but was skipped, failed or was cancelled, and for a failed Quick checks", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
   assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests", "desk-mcp-coverage-shards") }), 1)
   assert.equal(gateVerdict({ heavy: false, code: true, evals: true, results: skipped(...heavyJobs, "offline-eval-tests") }), 1)
-  assert.equal(gateVerdict({ heavy: true, code: true, evals: true, results: skipped("release-dry-run") }), 1, "main never skips the heavy tier")
+  assert.equal(gateVerdict({ heavy: true, code: true, evals: true, results: skipped("desk-native-windows") }), 1, "main never skips the heavy tier")
+  assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests", "release-dry-run") }), 1, "a pull request checks its changelog fragments")
   assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: { ...skipped(...heavyJobs, "offline-eval-tests"), browser: "failure" } }), 1)
   assert.equal(gateVerdict({ heavy: true, code: true, evals: true, results: { browser: "cancelled" } }), 1)
   assert.equal(gateVerdict({ heavy: false, code: true, evals: true, quick: "failure", results: skipped(...jobIds) }), 1)

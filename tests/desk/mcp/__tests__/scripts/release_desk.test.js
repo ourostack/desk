@@ -656,16 +656,19 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("pull request CI dry-runs auto, RC and stable through the full shared helper, and the CI gate waits for both", () => {
+test("CI dry-runs auto on pull requests and auto, RC and stable on main through the full shared helper, and the CI gate waits for them", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc", "stable"] } })
+  // A pull request runs the auto stage, which checks the changelog fragments it adds; rc and stable are the heavy tier (main and dispatches).
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: {
+    stage: ["auto", "rc", "stable"],
+    exclude: "${{ fromJSON(github.event_name == 'pull_request' && '[{\"stage\":\"rc\"},{\"stage\":\"stable\"}]' || '[]') }}",
+  } })
   assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
   assert.equal(job["timeout-minutes"], 15)
   assert.deepEqual(job.permissions, { contents: "read" })
   assert.equal(job["continue-on-error"], undefined)
-  // The heavy tier: main and dispatches only, and the release waits for main's CI before it builds.
-  assert.equal(job.if, "github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'")
+  assert.equal(job.if, "needs.quick-checks.outputs.code == 'true'")
   const step = stepNamed(job, "Build and check the release without keeping it")
   assert.equal(step.env.RELEASE_STAGE, "${{ matrix.stage }}")
   for (const stage of job.strategy.matrix.stage) {

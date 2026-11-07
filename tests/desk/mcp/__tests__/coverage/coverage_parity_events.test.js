@@ -80,3 +80,34 @@ test("a pull request trigger that can skip a pull request is refused whatever li
     ], limit[0])
   }
 })
+
+test("a push filtered only by paths-ignore covers the root scripts unless it ignores them", t => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const packageJsonPath = path.join(root, "package.json")
+  const workflowPath = path.join(root, "workflow.yml")
+  writeFileSync(packageJsonPath, JSON.stringify({
+    scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
+  }))
+  const workflow = (ignored) => [
+    "on:",
+    "  pull_request:",
+    "  push:",
+    "    branches:",
+    "      - main",
+    "    paths-ignore:",
+    ...ignored.map((entry) => `      - "${entry}"`),
+    "jobs:",
+    "  tests:",
+    "    steps:",
+    "      - run: npm run test:coverage",
+  ].join("\n")
+
+  writeFileSync(workflowPath, workflow(["docs/**", "LICENSE"]))
+  assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }), { ok: true, issues: [] })
+
+  writeFileSync(workflowPath, workflow(["docs/**", "scripts/**"]))
+  assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }).issues, [
+    "desk MCP CI push.paths must include scripts/*.cjs",
+  ])
+})

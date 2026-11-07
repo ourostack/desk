@@ -525,6 +525,17 @@ function validateWorkflowWiring(errors, {
     if (!body.includes(requirement.command)) {
       errors.push(`${requirement.path} must run ${requirement.command}`);
     }
+    // A workflow whose push is filtered only by paths-ignore runs on every path it does not ignore.
+    const ignoreBlock = /^\s*paths-ignore:\s*\n((?:[ \t]*-[ \t]+.*(?:\n|$))+)/mu.exec(body);
+    if (ignoreBlock && !/^\s*paths:\s*$/mu.test(body)) {
+      const ignored = [...ignoreBlock[1].matchAll(/-\s+["']?([^"'\n]+?)["']?\s*$/gmu)].map((match) => match[1]);
+      for (const requiredPath of requirement.paths ?? []) {
+        if (ignored.some((entry) => entry === requiredPath || (entry.endsWith("/**") && requiredPath.startsWith(entry.slice(0, -2))))) {
+          errors.push(`${requirement.path} path filters must not ignore ${requiredPath}`);
+        }
+      }
+      continue;
+    }
     for (const requiredPath of requirement.paths ?? []) {
       const pathPattern = new RegExp(`^\\s*-\\s+["']?${escapeRegExp(requiredPath)}["']?\\s*$`, "mu");
       if (!pathPattern.test(body)) {

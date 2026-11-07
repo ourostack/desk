@@ -173,6 +173,28 @@ test("workflow validation requires docs command and host/artifact path filters",
     ".github/workflows/desk-mcp-tests.yml path filters must include scripts/test-desk-docs.cjs",
   ])
 
+  // A push filtered only by paths-ignore covers every required path it does not ignore.
+  const ignoreErrors = []
+  docsValidator.validateWorkflowWiring(ignoreErrors, {
+    requirements: [{
+      path: ".github/workflows/desk-mcp-tests.yml",
+      command: "node scripts/test-desk-docs.cjs",
+      paths: ["plugins/desk/README.md", "docs/guide.md"],
+    }],
+    readFile: () => [
+      "on:",
+      "  push:",
+      "    paths-ignore:",
+      '      - "docs/**"',
+      "      - LICENSE",
+      "jobs:",
+      "  run: node scripts/test-desk-docs.cjs",
+    ].join("\n"),
+  })
+  assert.deepEqual(ignoreErrors, [
+    ".github/workflows/desk-mcp-tests.yml path filters must not ignore docs/guide.md",
+  ])
+
   const commandErrors = []
   docsValidator.validateWorkflowWiring(commandErrors, {
     requirements: [{

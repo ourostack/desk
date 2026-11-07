@@ -12,13 +12,15 @@ name: desk MCP tests on Windows
 # A manual dispatch can add the elevated (administrator) mode with `elevated: true`. That mode is a diagnostic and is not gated: Desk refuses to
 # reuse a path owned by the Administrators group, which is what an elevated user's own existing files are.
 
+# A dispatch that runs only some files is titled "Partial: ...", and the Desk release's gate never counts it as a pass on main.
+run-name: "${{ inputs.only != '' && format('Partial: only {0}', inputs.only) || github.event.head_commit.message || github.workflow }}"
+
 on:
   push:
     branches:
       - main
     paths-ignore:
       - "docs/**"
-      - "README.md"
       - "SETUP.md"
       - "LICENSE"
   workflow_dispatch:

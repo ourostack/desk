@@ -138,9 +138,15 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   assert.equal(workflow.on.pull_request, undefined)
   assert.deepEqual(workflow.on.push.branches, ["main"])
   assert.equal(workflow.on.push.paths, undefined)
-  const quick = load(readFileSync(path.join(scripts, "..", "workflows", "desk-mcp-tests.yml"), "utf8")).jobs["quick-checks"]
+  const tests = load(readFileSync(path.join(scripts, "..", "workflows", "desk-mcp-tests.yml"), "utf8"))
+  const quick = tests.jobs["quick-checks"]
   const outside = /changed-scope\.mjs --outside "\$BASE" ([^)\n]+)\)/u.exec(quick.steps.find((step) => step.id === "scope").run)[1].split(" ")
-  assert.deepEqual(workflow.on.push["paths-ignore"], outside.map((entry) => (entry.endsWith("/") ? `${entry}**` : entry)))
+  const ignored = outside.map((entry) => (entry.endsWith("/") ? `${entry}**` : entry))
+  assert.deepEqual(workflow.on.push["paths-ignore"], ignored)
+  assert.deepEqual(tests.on.push["paths-ignore"], ignored)
+  assert.equal(tests.on.push.paths, undefined)
+  // A test reads the root README (superpowers_callers.test.js), so a README change is never skipped.
+  assert.ok(!ignored.includes("README.md"))
 })
 
 test("the shard runner runs only its own files and reports its predicted load", () => {
