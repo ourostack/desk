@@ -25,6 +25,7 @@ import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { commitFailure, commitRoute } from "../util/route-around.js"
+import { operationAnswer } from "../util/cas-commit.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
@@ -299,6 +300,10 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
     const conflicted = rels.filter((p) => hasUnmergedPath(deskRoot, [p], spawnGit)).join(", ")
     return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), `Git holds ${conflicted} in conflict, so Desk staged and committed nothing; resolve the conflict, or leave it for the human`) }
   }
+  // A merge, cherry-pick, revert or rebase in progress holds the same way, before anything is staged: commitIndexPaths would hold
+  // anyway, and staging first would leave this tidy's files in the index for that operation's own commit.
+  const operation = operationAnswer(spawnGit, deskRoot)
+  if (operation) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), operation.reason) }
   const isCard = (p) => isLiveCardPath(p)
   const cards = rels.filter(isCard)
   const others = rels.filter((p) => !isCard(p))

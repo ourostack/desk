@@ -1116,3 +1116,16 @@ test("#632: a pre-commit hook that writes only to the working tree does not hold
   assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
   assert.equal(await fs.readFile(path.join(root, "hook-note.txt"), "utf8"), "note\n")
 })
+
+test("#632: a Git without `git hook run` holds with that reason, not as a hook refusal", async () => {
+  const root = await stagedChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const spawn = (command, args, options) => (args[2] === "hook"
+    ? { status: 1, stdout: "", stderr: "git: 'hook' is not a git command. See 'git --help'." }
+    : spawnSync(command, args, options))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.deepEqual([result.ok, result.readback], [false, "absent"])
+  assert.match(result.stderr, /needs Git 2\.36 or later/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), before)
+})

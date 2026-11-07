@@ -14,6 +14,8 @@ const GIT_TIMEOUT_MS = 10_000
 // dispatch gets room for it. A dispatch cut off still ends in the read-back below, never in a second dispatch.
 const COMMIT_TIMEOUT_MS = 600_000
 const ZERO = "0".repeat(40)
+// What a Git older than 2.36 says to `git hook run`.
+const NO_HOOK_RUN = /'hook' is not a git command/u
 
 function git(spawnGit, root, args, { env, input, timeout = GIT_TIMEOUT_MS } = {}) {
   const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout, env, input })
@@ -120,7 +122,9 @@ function commitCaptured({ root, paths, wanted, head, branch, message, spawnGit: 
     const hook = (name, ...args) => git(spawnGit, root, ["hook", "run", "--ignore-missing", name, ...(args.length > 0 ? ["--", ...args] : [])], { env: hookEnv, timeout: COMMIT_TIMEOUT_MS })
     const stopped = (name, answer) => answer.cut
       ? { state: "unknown", reason: `the ${name} hook was cut off at ${bound} and may still be running; the branch was not moved, but read back before anything else` }
-      : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
+      : NO_HOOK_RUN.test(answer.stderr)
+        ? held("nothing was committed: this Git has no `git hook run` (it needs Git 2.36 or later), so Desk cannot run the repository's hooks; update Git")
+        : held(`nothing was committed: the repository's ${name} hook refused the commit: ${answer.stderr || "no reason given"}`)
     const pre = hook("pre-commit")
     if (!pre.ok) return stopped("pre-commit", pre)
     const treeAfter = git(spawnGit, root, ["write-tree"], { env: own })
