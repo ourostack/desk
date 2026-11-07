@@ -181,9 +181,12 @@ test("the bootstrap reads engines.node and the runtime pack ABIs from the same f
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "9.9.9", engines: {} }))
   assert.deepEqual(bootstrap.readPackage(root), { range: ">=20.0.0", version: "9.9.9" })
 
-  const matrix = JSON.parse(readFileSync(path.join(mcpRoot, "artifacts", "runtime-deps", packageJson.version, "support-matrix.json"), "utf8"))
-  for (const target of matrix.targets) {
-    assert.deepEqual(bootstrap.packAbis(mcpRoot, packageJson.version, target.platform, target.arch), [String(target.node_abi)])
+  for (const [platform, arch, abis] of [
+    ["darwin", "arm64", ["127", "137"]],
+    ["linux", "x64", ["127"]],
+    ["win32", "x64", ["137"]],
+  ]) {
+    assert.deepEqual(bootstrap.packAbis(mcpRoot, packageJson.version, platform, arch), abis)
   }
   assert.deepEqual(bootstrap.packAbis(mcpRoot, packageJson.version, "sunos", "sparc"), [])
   assert.deepEqual(bootstrap.packAbis(mcpRoot, null, "darwin", "arm64"), [])
@@ -321,18 +324,25 @@ test("selection prefers the newest Node whose ABI has a runtime pack, then the n
   const root = await mkTempRoot("desk-bootstrap-select-")
   const home = path.join(root, "home")
   const nvm = (version) => path.join(home, ".nvm", "versions", "node", `v${version}`, "bin", "node")
-  fakeNode(nvm("24.1.0"), "24.1.0", "137")
-  const packed = fakeNode(nvm("22.9.0"), "22.9.0", "127")
+  fakeNode(nvm("25.1.0"), "25.1.0", "141")
+  const packed = fakeNode(nvm("24.1.0"), "24.1.0", "137")
+  fakeNode(nvm("24.2.0"), "24.2.0", "137", { broken: true })
+  const olderPacked = fakeNode(nvm("22.9.0"), "22.9.0", "127")
   fakeNode(nvm("22.10.0"), "22.10.0", "127", { broken: true })
   fakeNode(nvm("20.11.1"), "20.11.1", "115")
   let selection = bootstrap.selectNode(machine(root))
   assert.equal(selection.range, packageJson.engines.node)
-  assert.deepEqual(selection.packAbis, ["127"])
-  assert.equal(selection.node.path, packed, "a broken 22.10.0 is skipped; 22.9.0 has a pack; 24.1.0 does not")
+  assert.deepEqual(selection.packAbis, ["127", "137"])
+  assert.equal(selection.node.path, packed, "a broken 24.2.0 is skipped; 24.1.0 has a pack; 25.1.0 does not")
+
+  selection = bootstrap.selectNode(machine(root, {
+    probe: (file) => file === packed ? null : probeFixtureNode(file, {}, FAKE_PROBE_TIMEOUT_MS),
+  }))
+  assert.equal(selection.node.path, olderPacked, "Node 22 remains supported when packed Node 24 binaries cannot run")
 
   // No packed ABI installed: the newest compatible Node.
   selection = bootstrap.selectNode(machine(root, { arch: "x64", platform: "sunos" }))
-  assert.equal(selection.node.path, nvm("24.1.0"))
+  assert.equal(selection.node.path, nvm("25.1.0"))
 
   // A major the bootstrap has no ABI for, and a path with no version, are asked.
   const unknown = fakeNode(path.join(root, "path-bin", "node"), "26.0.0", "127")
@@ -478,8 +488,8 @@ test("with no compatible Node the bootstrap serves the MCP handshake itself and 
   assert.equal(payload.code, "node_missing")
   assert.equal(payload.required_node, packageJson.engines.node)
   assert.equal(payload.running_node, "v16.20.2")
-  assert.equal(payload.recommended_node_major, "22")
-  assert.match(payload.fix, /nvm install 22|brew install node@22/u)
+  assert.equal(payload.recommended_node_major, "24")
+  assert.match(payload.fix, /nvm install 24|brew install node@24/u)
   assert.match(payload.fix, /^Run `.+` in a shell, then reconnect the Desk MCP server/u)
   assert.equal(gated.result.isError, true)
   assert.deepEqual(toolPayload(gated), payload)

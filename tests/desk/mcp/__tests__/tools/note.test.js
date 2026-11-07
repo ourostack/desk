@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process"
 import { note_ack, note_leave, localIso, noteFileName } from "../../../../../plugins/desk/mcp/src/tools/note.js"
 import { parseNote, renderNote } from "../../../../../plugins/desk/mcp/src/runtime/inbox.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { notCommitted } from "./_route_around.js"
 
 const URL = "https://github.com/acme/cit"
 const PR = `${URL}/pull/9`
@@ -284,8 +285,29 @@ test("note_ack writes but does not commit when it cannot, and says why", async (
   const failing = await saranyaDesk()
   const spawnGit = (cmd, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(cmd, args, options))
   const refused = await run(failing, { spawnGit })
-  assert.deepEqual([refused.committed, refused.commit], [false, { status: "failed", reason: "hook said no" }])
-  assert.match(refused.message, /not committed \(the commit failed: hook said no\)/u)
+  assert.deepEqual([refused.committed, notCommitted(refused.commit)], [false, { status: "failed", reason: "hook said no" }])
+  assert.match(refused.message, /not committed \(the commit failed: hook said no; route_around finishes it\)/u)
+})
+
+// R5 (0972 on #625): a commit Desk cannot read back is unknown in the fields and the words; `committed` is null, never a
+// false that claims the note is not committed, and the reply never says the sender does not see it.
+test("note_ack: a commit Desk cannot read back is unknown, never reported as not committed", async () => {
+  const desk = await saranyaDesk()
+  let dispatched = false
+  const spawnGit = (cmd, args, options) => {
+    if (args.includes("commit") && !args.includes("rev-parse")) {
+      dispatched = true
+      return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+    }
+    if (dispatched && args.includes("rev-parse")) return { status: 128, stdout: "", stderr: "fatal: cannot lock ref" }
+    return spawnSync(cmd, args, options)
+  }
+  const result = await note_ack({ deskRoot: desk.root, person: "saranya", input: { note: desk.rel }, spawnGit, schedulePush: () => assert.fail("no push for an unknown commit") })
+  assert.equal(result.status, "acknowledged")
+  assert.equal(result.committed, null)
+  assert.equal(result.commit.status, "unknown")
+  assert.match(result.message, /cannot tell whether the commit landed/u)
+  assert.doesNotMatch(result.message, /not committed|does not see it/u)
 })
 
 test("note_ack refuses anything but a note in the person's own inbox", async () => {

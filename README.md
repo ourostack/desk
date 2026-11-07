@@ -1,6 +1,6 @@
 <!-- ourostack:brand:start -->
 <p align="center">
-  <a href="https://github.com/ourostack"><img src="https://raw.githubusercontent.com/ourostack/.github/main/brand/desk.png" alt="Desk" width="160" height="160"></a>
+  <a href="https://github.com/ourostack"><img src="https://raw.githubusercontent.com/ourostack/.github/main/brand/headers/desk.webp" alt="Ouro curled beside a tidy wooden desk with papers, a card tray and a lamp, on a dawn meadow, with teammates' desks on the hills behind" width="100%"></a>
 </p>
 <!-- ourostack:brand:end -->
 

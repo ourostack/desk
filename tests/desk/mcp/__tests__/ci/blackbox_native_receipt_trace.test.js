@@ -21,7 +21,7 @@ const maximumSource = {
   head: "a".repeat(64), dirty: false,
   hashes: Object.fromEntries([
     "plugins/desk/mcp/src/server.js", "tests/blackbox/lib/mcp.mjs", "tests/blackbox/run.mjs",
-    "plugins/desk/mcp/src/tools/archive-native-session.js", "tests/blackbox/lib/world.mjs",
+    "plugins/desk/mcp/src/tools/archive-native-session.js", "plugins/desk/mcp/src/tools/native-stage-context.js", "tests/blackbox/lib/world.mjs",
     ".github/workflows/desk-native-receipt-diagnostic-581.yml", ".github/workflows/desk-mcp-tests.yml",
   ].map(file => [file, "b".repeat(64)])),
 }

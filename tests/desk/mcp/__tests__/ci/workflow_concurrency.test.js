@@ -11,9 +11,14 @@ const { load } = require("js-yaml")
 const workflows = path.resolve(fileURLToPath(new URL("../../../../../.github/workflows", import.meta.url)))
 const read = (name) => load(readFileSync(path.join(workflows, name), "utf8"))
 
-test("the runtime packs are built for every platform", () => {
+test("the runtime packs are built for every shipped target", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
-  assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.platform).sort(), ["darwin", "linux", "win32"])
+  assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.target).sort(), [
+    "darwin-arm64-node-127",
+    "darwin-arm64-node-137",
+    "linux-x64-node-127",
+    "win32-x64-node-137",
+  ])
 })
 
 test("the Darwin runtime pack selects a supported standard Apple-silicon image", () => {

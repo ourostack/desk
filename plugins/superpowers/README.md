@@ -1,6 +1,6 @@
 # Superpowers provider
 
-This package contains the selected, unmodified source payload from [obra/superpowers](https://github.com/obra/superpowers) version 7.0.1, commit `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`. The MIT license and source notices remain intact. `upstream-sources.lock.json` records every selected source path and SHA-256; the upstream tree is `5e3a3c9af45c3474506fb62a3ce664bd03a2cdc4`.
+This package contains the selected, unmodified source payload from [obra/superpowers](https://github.com/obra/superpowers) version 7.0.2, commit `22f0b463e7a5e579904dd6211a520321035526f7`. The MIT license and source notices remain intact. `upstream-sources.lock.json` records every selected source path and SHA-256; the upstream tree is `8fddc972a73e9af7501442df0e638d8e29842b6b`.
 
 The root `plugin.json`, `.claude-plugin/plugin.json`, this README, and `hooks/copilot-hooks.json` are Ourostack-authored packaging, not upstream files. Copilot uses the explicit `PLUGIN_ROOT` adapter with a bounded timeout. Upstream source bytes remain locked separately from the one maintained wrapper described below.
 

@@ -11,7 +11,7 @@ const TRACE_CASE_BYTES = 65536
 const TRACE_JOB_BYTES = 1048576
 export const NATIVE_RECEIPT_SOURCE_FILES = Object.freeze([
   "plugins/desk/mcp/src/server.js", "tests/blackbox/lib/mcp.mjs", "tests/blackbox/run.mjs",
-  "plugins/desk/mcp/src/tools/archive-native-session.js", "tests/blackbox/lib/world.mjs",
+  "plugins/desk/mcp/src/tools/archive-native-session.js", "plugins/desk/mcp/src/tools/native-stage-context.js", "tests/blackbox/lib/world.mjs",
   ".github/workflows/desk-native-receipt-diagnostic-581.yml", ".github/workflows/desk-mcp-tests.yml",
 ])
 const TRACE_EVENTS = new Set(["native_spawn", "capture_requested", "native_captured", "admission_requested", "native_ready",
@@ -26,6 +26,7 @@ const TRACE_STATUS = new Set(["present", "absent", "unknown", "invalid", "trunca
 const TRACE_COUNTERS = ["invalid", "oversized", "unmatched", "evicted", "duplicate", "truncated", "dropped", "channelEndUnobserved"]
 const traceInteger = value => Number.isSafeInteger(value) && value >= 0
 const traceBoolean = value => typeof value === "boolean"
+const traceStageUs = value => Number.isSafeInteger(value) && value >= 0 && value <= 900000000
 const traceEnum = choices => value => typeof value === "string" && value.length <= 64 && choices.has(value)
 const traceHash = value => typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/u.test(value)
 
@@ -66,7 +67,13 @@ export function nativeReceiptTraceRequested(env) {
 
 export function nativeReceiptLaunch(launch, env) {
   if (!nativeReceiptTraceRequested(env)) return launch
-  return { ...launch, env: { ...launch.env, CI: "true", GITHUB_ACTIONS: "true", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "1" } }
+  const stage = nativeStageTraceRequested(env) ? { DESK_BLACKBOX_NATIVE_STAGE_TRACE: "1" } : {}
+  return { ...launch, env: { ...launch.env, CI: "true", GITHUB_ACTIONS: "true", DESK_BLACKBOX_NATIVE_RECEIPT_TRACE: "1", ...stage } }
+}
+
+// Stage diagnostic is a second explicit control on top of the receipt trace; never implied by it.
+export function nativeStageTraceRequested(env) {
+  try { return nativeReceiptTraceRequested(env) && traceData(env, "DESK_BLACKBOX_NATIVE_STAGE_TRACE") === "1" } catch { return false }
 }
 
 // JSON decoding is not validation: copy only fixed schema fields into fresh records.
@@ -144,8 +151,20 @@ function traceReceipt(input) {
     return code
   })
   out.fieldStatus = {}
+  if (traceData(input, "programVariant") !== undefined) {
+    out.programVariant = exact(input, "programVariant", "stage_diag")
+    let previous = null
+    out.nativeStages = array(input, "nativeStages", 5).map((entry, index) => {
+      const value = record(entry, { stage: traceEnum(new Set(["start", "compiled", "verified", "request_read", "baseline_done"])),
+        nativeUs: traceStageUs, wrapperUs: traceStageUs })
+      if (value.stage !== ["start", "compiled", "verified", "request_read", "baseline_done"][index] || value.nativeUs === null ||
+          value.wrapperUs === null || previous && (value.nativeUs < previous.nativeUs || value.wrapperUs < previous.wrapperUs)) throw new Error("invalid")
+      previous = value
+      return value
+    })
+  }
   const statuses = traceData(input, "fieldStatus")
-  const keys = [...Object.keys(fields), "bounds", "handles", "archiveMove", "exit", "close", "events", "protocolIssues",
+  const keys = [...Object.keys(fields), "bounds", "handles", "archiveMove", "exit", "close", "events", "protocolIssues", "programVariant", "nativeStages",
     ...Object.keys(bounds).map(key => `bounds.${key}`), ...Object.keys(handles).map(key => `handles.${key}`),
     ...Object.keys(move).map(key => `archiveMove.${key}`), "exit.code", "exit.signal", "close.code", "close.signal"]
   for (let i = 0; i < 128; i++) keys.push(`events.${i}.type`, `events.${i}.sequence`)
@@ -160,7 +179,8 @@ function traceReceipt(input) {
 
 /** One collector owns all sessions/repetitions, including provisional failed-case data. */
 export class NativeReceiptCollector {
-  constructor() {
+  constructor({ retainPassed = false } = {}) {
+    this.retainPassed = retainPassed === true
     this.counters = Object.fromEntries(TRACE_COUNTERS.map(key => [key, 0]))
     this.cases = new Map()
     this.current = new Map()
@@ -196,7 +216,7 @@ export class NativeReceiptCollector {
     const entry = this.cases.get(key)
     if (!entry || entry.outcome === "passed") return
     entry.outcome = ok ? "passed" : "failed"
-    if (ok) {
+    if (ok && !this.retainPassed) {
       const count = entry.records.length
       const separators = Math.max(0, this.recordCount - 1) - Math.max(0, this.recordCount - count - 1)
       this.bytes -= entry.metadataBytes + (this.caseCount > 1 ? 1 : 0) + entry.recordBytes + separators
@@ -227,7 +247,7 @@ export class NativeReceiptCollector {
         if (binding.seen) { this.count("duplicate"); return }
         binding.seen = true
         const entry = this.cases.get(binding.key)
-        if (!entry || entry.outcome === "passed") { this.count("dropped"); return }
+        if (!entry || entry.outcome === "passed" && !this.retainPassed) { this.count("dropped"); return }
         const record = { correlation: { host, repeat, caseId: entry.caseId, role: "desk", instance, requestId: id }, receipt }
         // A reprojected record is schema-bounded before encoding. Never build the
         // accumulating job to discover its size; charge each actual array element.
@@ -298,7 +318,7 @@ export class NativeReceiptCollector {
   snapshot() {
     const records = [], cases = []
     for (const entry of this.cases.values()) {
-      if (entry.outcome !== "failed") continue
+      if (entry.outcome !== "failed" && !(this.retainPassed && entry.outcome === "passed")) continue
       cases.push(traceCase(entry))
       records.push(...entry.records)
     }

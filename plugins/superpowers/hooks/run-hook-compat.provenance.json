@@ -2,10 +2,10 @@
   "schema_version": 1,
   "source": {
     "repository": "obra/superpowers",
-    "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+    "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
     "source_path": "hooks/run-hook.cmd",
     "path": "plugins/superpowers/hooks/upstream/run-hook.cmd",
-    "sha256": "d1fcecfe19df2d083994803f73417710f745bd96c0938f594f87096005b1e403"
+    "sha256": "324b298bd370d6f3ea71c165e0b732d5678e5cff68d0d7f7e47c13bc2cb2559a"
   },
   "transform": {
     "id": "split-batch-unix-v1",
@@ -19,7 +19,7 @@
     },
     {
       "path": "plugins/superpowers/hooks/run-hook-unix",
-      "sha256": "1dc2d257188d87f06a656f3a0df026ec39b6bf22b6c53c352e4fee8e6ace0de7"
+      "sha256": "1e914f95b4b91e24935c74cd89af39f8e3411844738bd5f4d45a3b4f5ac2dc3d"
     }
   ]
 }
