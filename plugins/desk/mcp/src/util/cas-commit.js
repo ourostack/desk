@@ -66,7 +66,7 @@ function budgeted(spawnGit, deadline) {
   if (deadline === null) return spawnGit
   return (command, args, options) => {
     const left = deadline - Date.now()
-    return left <= 0 ? NOT_RUN : spawnGit(command, args, { ...options, timeout: Math.min(options.timeout, left) })
+    return left <= 0 ? NOT_RUN : spawnGit(command, args, { ...options, windowsHide: true, timeout: Math.min(options.timeout, left) })
   }
 }
 
