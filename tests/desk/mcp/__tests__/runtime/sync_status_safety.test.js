@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -27,6 +28,40 @@ for (const age of [0, 60_000]) {
     assert.ok(updateSyncStatus(root, env, { blocked: false }, file, { waitMs: 0 }) === null)
     assert.equal(readFileSync(file, "utf8"), original)
     assert.equal(readFileSync(`${file}.lock`, "utf8"), "retained owner\n")
+  })
+}
+
+const deadPid = () => {
+  const child = spawnSync(process.execPath, ["-e", ""], { windowsHide: true })
+  assert.equal(child.status, 0)
+  return child.pid
+}
+
+for (const [name, owner, age, takenOver] of [
+  ["an old lock whose owner on this host has exited is taken over", () => ({ pid: deadPid(), host: os.hostname() }), 60_000, true],
+  ["a fresh lock whose owner has exited is kept", () => ({ pid: deadPid(), host: os.hostname() }), 0, false],
+  ["an old lock whose owner is still running is kept", () => ({ pid: process.ppid, host: os.hostname() }), 60_000, false],
+  ["an old lock whose owner ran on another host is kept", () => ({ pid: deadPid(), host: `${os.hostname()}-elsewhere` }), 60_000, false],
+  ["an old lock this process names as its own is kept", () => ({ pid: process.pid, host: os.hostname() }), 60_000, false],
+]) {
+  test(`authoritative status: ${name}`, async (t) => {
+    const { root, env, file } = await fixture(t)
+    const original = '{"blocked":true}\n'
+    writeFileSync(file, original)
+    const lock = `${JSON.stringify(owner())}\n`
+    writeFileSync(`${file}.lock`, lock)
+    const at = new Date(Date.now() - age)
+    utimesSync(`${file}.lock`, at, at)
+
+    const result = updateSyncStatus(root, env, { blocked: false }, file, { waitMs: takenOver ? 1000 : 0 })
+    if (takenOver) {
+      assert.deepEqual(result, { blocked: false })
+      assert.equal(existsSync(`${file}.lock`), false, "the writer releases the lock it took over")
+    } else {
+      assert.equal(result, null)
+      assert.equal(readFileSync(file, "utf8"), original)
+      assert.equal(readFileSync(`${file}.lock`, "utf8"), lock)
+    }
   })
 }
 

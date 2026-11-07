@@ -49,7 +49,8 @@
 
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -278,17 +279,31 @@ function acquireStatusLock(lockFile, waitMs, allowStale) {
   const deadline = Date.now() + waitMs
   for (;;) {
     try {
-      closeSync(openSync(lockFile, "wx", 0o600))
+      writeFileSync(lockFile, `${JSON.stringify({ pid: process.pid, host: os.hostname() })}\n`, { flag: "wx", mode: 0o600 })
       return lockFile
     } catch {
       try {
-        if (allowStale && Date.now() - statSync(lockFile).mtimeMs > STATUS_LOCK_STALE_MS) unlinkSync(lockFile)
+        if (Date.now() - statSync(lockFile).mtimeMs > STATUS_LOCK_STALE_MS && (allowStale || lockOwnerGone(lockFile))) unlinkSync(lockFile)
       } catch {
         // Gone already, or not removable: the next attempt decides.
       }
     }
     if (Date.now() >= deadline) return null
     sleepSync(5)
+  }
+}
+
+// An authoritative lock is taken over only when it is old, names its owner, that owner ran on this host, and the process
+// is gone: age alone never disproves ownership, but a holder that crashed inside the few-millisecond critical section must
+// not wedge every later outcome. A lock that names no owner (an older Desk's, or anything else) stays put.
+function lockOwnerGone(lockFile) {
+  try {
+    const { pid, host } = JSON.parse(readFileSync(lockFile, "utf8"))
+    if (host !== os.hostname() || pid === process.pid) return false
+    process.kill(pid, 0)
+    return false
+  } catch (error) {
+    return error.code === "ESRCH"
   }
 }
 
