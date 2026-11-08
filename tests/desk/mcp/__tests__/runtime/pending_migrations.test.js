@@ -108,11 +108,12 @@ test("Desk's own migrations all parse", () => {
   assert.equal(readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").agentWork, true)
 })
 
-test("Desk's own migration blocks never put a backslash before a double quote, which Windows garbles on bash's command line", () => {
+test("Desk's own migration blocks never put a backslash before a double quote or a double quote inside single quotes, which Windows garbles on bash's command line", () => {
   // runBlock passes a block to bash as `-c <block>`; on Windows that is one command line, and bash misreads a backslash-quote pair from it.
   for (const migration of readMigrations(deskPluginRoot)) {
     for (const [name, block] of Object.entries(migration.blocks)) {
       assert.equal(/\\"/u.test(block), false, `${migration.id} ${name}`)
+      assert.equal(/'"'/u.test(block), false, `${migration.id} ${name}: a double quote inside single quotes is garbled the same way`)
     }
   }
 })

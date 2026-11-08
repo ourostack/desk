@@ -50,8 +50,8 @@ record="node '$script' --write-record$flags"
 defer="node '$script' --defer '<one-line reason>'$flags"
 # Print directly: a heredoc can block during redirection before its reader starts. The quoted argument expands
 # $defer and $record, and backticks in the instructions are escaped so they stay literal. A double quote comes from
-# $q, never from a backslash before a quote: Windows passes this block to bash on a command line, where that pair is garbled.
-q='"'
+# $q, never from a backslash before a quote or a quote inside single quotes: Windows passes this block to bash on a command line, where both are garbled.
+q=$(printf '\042')
 printf '%s' "
 Tidy this desk now, as ordinary work in this session. Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on. This session holds the tidy's claim (above), so no other session tidies this desk meanwhile.
 
