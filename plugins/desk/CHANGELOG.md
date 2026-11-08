@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.74 — 2026-11-08
+
+Hosted Desk no longer fills its disk with a desk's screenshots and videos. Its copy of the desk leaves out images, video, audio, PDFs, archives and Office files, which stay in Git. Desk's task moves and staging keep those files when a task moves or is archived, and the instructions a hosted agent receives name what is left out, so the agent never reports a screenshot as lost. Fixes the recurring "disk full" push failures behind #589.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.73 — 2026-11-08
 
 Migrations run each shell block from a temporary file instead of passing it to bash as `-c <block>`. Windows hands a child its arguments as one command line, and bash garbled the tidy migration's quotes when it split that line back up, so the tidy failed on Windows.
