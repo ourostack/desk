@@ -971,3 +971,23 @@ test("task_move never schedules a push when the commit fails", async () => {
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
   assert.deepEqual(calls, [])
 })
+
+test("task_move moves a task whose evidence a sparse checkout leaves out (a hosted desk excludes media), left-out files included", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["shot-task"] })
+  await mkTrack(root, "track-b", { rows: [] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "shot-task", title: "T" } })
+  await fs.mkdir(path.join(root, "track-a", "shot-task", "evidence"))
+  await fs.writeFile(path.join(root, "track-a", "shot-task", "evidence", "shot.png"), "png")
+  commitAll(root)
+  const git = (...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  assert.equal(git("sparse-checkout", "set", "--no-cone", "/*", "!*.png").status, 0)
+  assert.equal(await exists(path.join(root, "track-a", "shot-task", "evidence", "shot.png")), false, "the screenshot is left out of the checkout")
+
+  await task_move({ deskRoot: root, input: { track: "track-a", slug: "shot-task", to_track: "track-b" }, schedulePush: () => {} })
+
+  const tracked = git("ls-files", "--", "track-a", "track-b").stdout.split("\n").filter((file) => file.endsWith(".png"))
+  assert.deepEqual(tracked, ["track-b/shot-task/evidence/shot.png"], "the left-out screenshot moved with its task")
+  assert.ok(await exists(path.join(root, "track-b", "shot-task", "task.md")))
+})

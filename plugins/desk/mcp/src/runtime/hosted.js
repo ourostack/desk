@@ -4,7 +4,7 @@
 //
 // The front door imports this before the runtime pack is restored, so it imports only `node:` modules, the tool names and the dependency-free AGENTS.md reader.
 
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../tool-names.js"
 import { readAgentsMd } from "./agents-md.js"
@@ -84,9 +84,33 @@ export function hostedInstructions({ root, pluginRoot }) {
     SKILLS,
     `Tools Desk refuses here:\n${list(HOSTED_UNAVAILABLE)}`,
     `Skills to skip, because they need a shell:\n${list(HOSTED_SHELL_SKILLS)}`,
+    ...leftOutNote(root),
     DESK_STATUS_FIRST,
   ].join("\n\n"))
   return `${sections.join("\n\n")}\n`
+}
+
+// What this desk's checkout leaves out, from its sparse-checkout patterns: the hosted gateway clones the desk without large media (hosted/src/clone.js)
+// so it fits the container's disk. An agent reading a card whose evidence is a screenshot must know the file exists, not conclude it is missing.
+function leftOutNote(root) {
+  const excluded = typeof root === "string" ? sparseExclusions(root) : []
+  if (excluded.length === 0) return []
+  return [`Large files are left out of this hosted copy of the desk: files matching ${excluded.map((pattern) => `\`${pattern}\``).join(", ")} are not on disk here. They are still in the desk on GitHub and on the user's own machines, and Desk's tools keep them when a task moves or is archived. A card can name a screenshot, video or PDF you cannot open here: it is not missing, so never report it lost, recreate it or remove the reference. Say it is left out of the hosted copy, and if the work needs it, ask the user to open it on their machine.`]
+}
+
+// The exclusion patterns (`!*.png`) of the sparse checkout at or above `root`, when sparse checkout is on. Nothing when it is off or unreadable.
+function sparseExclusions(root) {
+  let dir = path.resolve(root)
+  while (!existsSync(path.join(dir, ".git"))) {
+    const parent = path.dirname(dir)
+    if (parent === dir) return []
+    dir = parent
+  }
+  const gitDir = path.join(dir, ".git")
+  const config = ["config", "config.worktree"].map((name) => readText(path.join(gitDir, name)) ?? "").join("\n")
+  if (!/^\s*sparsecheckout\s*=\s*true\s*$/imu.test(config)) return []
+  const patterns = readText(path.join(gitDir, "info", "sparse-checkout")) ?? ""
+  return patterns.split(/\r?\n/u).filter((line) => line.startsWith("!")).map((line) => line.slice(1))
 }
 
 function readText(file) {

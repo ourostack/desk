@@ -297,7 +297,9 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
     const deadline = Date.now() + LOCK_WAIT_MS
     while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
   }
-  const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
+  // `--sparse` stages a path a sparse checkout leaves out, such as a screenshot added in a hosted desk that excludes media; on a full checkout it
+  // changes nothing, and with `-A` it never stages a left-out file as deleted.
+  const result = run(spawnGit, root, ["add", "--sparse", ...(all ? ["-A"] : []), "--", ...relPaths])
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }

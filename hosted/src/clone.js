@@ -30,20 +30,33 @@ async function configure(dir, git) {
   await git(["-C", dir, "config", "pull.rebase", "true"]);
 }
 
+// The media a desk's evidence folders fill up with. The container's disk
+// cannot hold them (they are most of a desk's size and grow every day), so the
+// clone leaves them out with a sparse checkout: they stay in Git, Desk's moves
+// and staging keep them (`--sparse`), and Desk's hosted instructions tell the
+// agent which files are not on disk here (runtime/hosted.js). Text, including
+// JSON and logs, stays, because an agent reads it.
+const MEDIA = ["png", "jpg", "jpeg", "gif", "webp", "heic", "mp4", "mov", "webm", "mp3", "m4a", "wav", "pdf", "zip", "gz", "tgz", "pptx", "docx", "xlsx"];
+export const LEFT_OUT = MEDIA.flatMap((ext) => [`*.${ext}`, `*.${ext.toUpperCase()}`]);
+
 // Clones https://github.com/<repo>.git into `dir` when `dir` is absent or
 // empty. The clone is partial (no blobs until Git needs them), which keeps the
 // first start short; Desk's push, with its replay onto origin, works the same
 // on it, and Git fetches any missing blob through the credential helper.
-// An existing clone is left as it is (Desk's own boot syncs it); only
-// its credential settings are written again, so they follow this gateway's
-// install location.
+// It checks out everything but LEFT_OUT. An existing clone is not re-cloned
+// (Desk's own boot syncs it); its credential settings and its sparse patterns
+// are written again, so they follow this gateway's install and LEFT_OUT.
 export async function ensureClone({ dir, repo, git = runGit }) {
   const present = existsSync(dir) && readdirSync(dir).length > 0;
   if (present && !existsSync(join(dir, ".git"))) {
     throw new Error(`${dir} holds files but is not a Git checkout; refusing to clone over it.`);
   }
   if (!present) {
-    await git(["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, "clone", "--quiet", "--filter=blob:none", `https://github.com/${repo}.git`, dir]);
+    await git(["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, "clone", "--quiet", "--no-checkout", "--filter=blob:none", `https://github.com/${repo}.git`, dir]);
   }
   await configure(dir, git);
+  // Non-cone patterns: everything, then each left-out kind. On an existing
+  // clone this also removes left-out files that are unchanged on disk.
+  await git(["-C", dir, "sparse-checkout", "set", "--no-cone", "/*", ...LEFT_OUT.map((pattern) => `!${pattern}`)]);
+  if (!present) await git(["-C", dir, "checkout", "--quiet", (await git(["-C", dir, "symbolic-ref", "--short", "HEAD"])).trim()]);
 }

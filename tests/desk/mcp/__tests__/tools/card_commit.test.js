@@ -49,7 +49,7 @@ test("a written card is staged by exact path, committed with the fixed message a
   assert.deepEqual(out.result, { result: "opened", file_name: NAME })
   assert.equal(out.commit, "committed")
   assert.deepEqual(out.pushes, [{ root: ROOT }])
-  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--", `_meta/improvement/${NAME}`])
+  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--sparse", "--", `_meta/improvement/${NAME}`])
   assert.deepEqual(git.calls.find((call) => call[0] === "commit"), ["commit", "-m", `improvement: open ${NAME}`, "--", `_meta/improvement/${NAME}`])
   assert.equal(JSON.stringify({ result: out.result, commit: out.commit }).includes(ROOT), false, "no absolute path comes back")
   assert.ok(COMMIT_CODES.includes(out.commit))
@@ -71,7 +71,7 @@ test("leftover card files and set-aside moves in the card folder are committed w
   assert.equal(out.left_alone, 0)
   assert.equal(out.result.set_aside, 1)
   assert.equal("set_aside_files" in out.result, false)
-  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--", "_meta/improvement/bad.md", "_meta/improvement/andon--aaaaaaaaaaaa.md", `_meta/improvement/${NAME}`, "_meta/improvement/invalid/bad.md.aaaaaa"])
+  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--sparse", "--", "_meta/improvement/bad.md", "_meta/improvement/andon--aaaaaaaaaaaa.md", `_meta/improvement/${NAME}`, "_meta/improvement/invalid/bad.md.aaaaaa"])
 })
 
 test("something in the card folder that is not a card file or a set-aside file is left alone and counted", async () => {
@@ -79,7 +79,7 @@ test("something in the card folder that is not a card file or a set-aside file i
   const out = await run(git)
   assert.equal(out.commit, "committed")
   assert.equal(out.left_alone, 4)
-  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--", `_meta/improvement/${NAME}`])
+  assert.deepEqual(git.calls.find((call) => call[0] === "add"), ["add", "--sparse", "--", `_meta/improvement/${NAME}`])
   const only = fakeGit({ dirty: ["_meta/improvement/notes.txt"] })
   const nothing = await run(only, {}, { result: "none_open" })
   assert.deepEqual({ commit: nothing.commit, left_alone: nothing.left_alone }, { commit: "no_files", left_alone: 1 })

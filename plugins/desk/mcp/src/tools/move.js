@@ -214,14 +214,16 @@ async function moveInto({ root, from, to, spawnGit }) {
   const relFrom = relPath(root, from)
   const relTo = relPath(root, to)
 
-  const addResult = spawnGit("git", ["-C", root, "add", "-A", "--", relFrom], { windowsHide: true,
+  // `--sparse` on both: a folder holding files a sparse checkout leaves out (a hosted desk excludes media) still moves whole, left-out files
+  // included. On a full checkout it changes nothing.
+  const addResult = spawnGit("git", ["-C", root, "add", "--sparse", "-A", "--", relFrom], { windowsHide: true,
     encoding: "utf8",
   })
   if (addResult.status !== 0) {
     throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging ${shownPath(relFrom)}: ${addResult.stderr}`))
   }
 
-  const mvResult = spawnGit("git", ["-C", root, "mv", relFrom, relTo], { windowsHide: true,
+  const mvResult = spawnGit("git", ["-C", root, "mv", "--sparse", relFrom, relTo], { windowsHide: true,
     encoding: "utf8",
   })
   if (mvResult.status !== 0) {

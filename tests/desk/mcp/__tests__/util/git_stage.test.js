@@ -122,6 +122,20 @@ test("stagePaths adds exactly the given paths, never -a or -A", async () => {
   assert.equal(untracked, "two.txt")
 })
 
+test("stagePaths stages a new file a sparse checkout leaves out, and never stages a left-out file as deleted", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "old.png"), "png\n")
+  await fs.writeFile(path.join(root, "card.md"), "card\n")
+  git(root, ["add", "--", "old.png", "card.md"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  git(root, ["sparse-checkout", "set", "--no-cone", "/*", "!*.png"])
+  await fs.writeFile(path.join(root, "new.png"), "png\n")
+  await fs.writeFile(path.join(root, "card.md"), "card, edited\n")
+  assert.equal(stagePaths(root, ["new.png"], spawnSync).ok, true, "a screenshot added in a hosted desk stages")
+  assert.equal(stagePaths(root, ["."], spawnSync, undefined, { all: true }).ok, true)
+  assert.equal(git(root, ["diff", "--cached", "--name-status"]).trim(), "M\tcard.md\nA\tnew.png")
+})
+
 test("stagePaths reports failure without throwing when the pathspec matches nothing", async () => {
   const root = await mkTempRepo()
   const result = stagePaths(root, ["does-not-exist.txt"], spawnSync)
