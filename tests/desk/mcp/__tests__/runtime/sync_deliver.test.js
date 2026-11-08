@@ -275,6 +275,20 @@ test("in a desk below the repository top with diff.relative set, a conflicting c
   assert.equal(bare(origin, ["show", "main:desks/ari/tasks/card.md"]), "remote\nlocal\n")
 })
 
+test("a sparse replay still delivers when the touched paths cannot be read, and reports a worktree it cannot populate", async () => {
+  const { origin, desk } = await mkDiverged()
+  const noPaths = intercept((args) => args.includes("log") && args.includes("--no-walk=unsorted"), () => ({ status: 128, stdout: "", stderr: "fatal: bad object\n" }))
+  const outcome = deliver({ root: desk, spawnGit: noPaths })
+  assert.equal(outcome.state, "delivered", JSON.stringify(outcome))
+  assert.equal(bare(origin, ["show", "main:tasks/mine.md"]), "mine\n")
+
+  const second = await mkDiverged()
+  const noPatternFile = intercept((args) => args.includes("--git-path"), () => ({ status: 128, stdout: "", stderr: "fatal: not a git repository\n" }))
+  assert.deepEqual(deliver({ root: second.desk, spawnGit: noPatternFile }), { state: "failed", reason: "replay_failed", error: "could not locate the replay worktree's sparse-checkout file", delivered: [], skipped: [] })
+  const noReadTree = intercept((args) => args.includes("read-tree"), () => ({ status: 128, stdout: "", stderr: "fatal: no space left on device\n" }))
+  assert.deepEqual(deliver({ root: second.desk, spawnGit: noReadTree }), { state: "failed", reason: "replay_failed", error: "fatal: no space left on device", delivered: [], skipped: [] })
+})
+
 test("a lone commit Desk cannot merge is left local, nothing is pushed, and the checkout stays where it is", async () => {
   const { origin, desk, elsewhere } = await mkShared()
   await commit(elsewhere, "state.json", "{\"b\":1}\n", "elsewhere state")
