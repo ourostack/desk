@@ -1531,8 +1531,9 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   let moved = relocated
   let published = false
   // A file a sparse checkout leaves out (a hosted desk leaves media out) has no bytes to hash or move, and Git will not stage its old path's
-  // deletion: bring the task's folder and its archive folder wholly into the checkout for the archive, and take them out again after.
-  const included = relocated ? [] : includeInCheckout(effectiveRoot, [srcDir, archiveDir], spawnGit)
+  // deletion: bring the task's folder and its archive folder wholly into the checkout for the archive, and take them out again after. A retry of
+  // an archive left pending (relocated) needs the archive folder's staged files on disk too.
+  const included = includeInCheckout(effectiveRoot, [srcDir, archiveDir], spawnGit)
   try {
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })

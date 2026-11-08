@@ -167,6 +167,11 @@ test("includeInCheckout brings folders wholly into a sparse checkout until relea
   assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], noFile), [], "nor does a pattern file Git cannot name")
   releaseFromCheckout(root, ["/job/**"], noFile)
   assert.deepEqual(includeInCheckout(path.join(root, "nowhere"), [path.join(root, "nowhere", "x")], spawnSync), [], "nor a folder outside any repository")
+  const broken = () => { throw new Error("spawn boom") }
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], broken), [], "a failure brings nothing in, never throws")
+  releaseFromCheckout(root, ["/job/**"], broken)
+  git(root, ["sparse-checkout", "set", "--cone", "job"])
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], spawnSync), [], "a cone-mode checkout is left as it is")
 })
 
 test("stagePaths reports failure without throwing when the pathspec matches nothing", async () => {

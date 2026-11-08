@@ -54,10 +54,10 @@ export async function ensureClone({ dir, repo, git = runGit }) {
   if (!present) {
     await git(["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER}`, "clone", "--quiet", "--no-checkout", "--filter=blob:none", `https://github.com/${repo}.git`, dir]);
   }
-  await configure(dir, git);
   // Non-cone patterns: everything, then each left-out kind. On an existing
   // clone this also removes left-out files that are unchanged on disk.
   try {
+    await configure(dir, git);
     await git(["-C", dir, "sparse-checkout", "set", "--no-cone", "/*", ...LEFT_OUT.map((pattern) => `!${pattern}`)]);
     if (!present && (await hasCommit(dir, git))) await git(["-C", dir, "checkout", "--quiet", (await git(["-C", dir, "symbolic-ref", "--short", "HEAD"])).trim()]);
   } catch (error) {
@@ -68,5 +68,6 @@ export async function ensureClone({ dir, repo, git = runGit }) {
   }
 }
 
-// False for a repository with no commits yet, which has nothing to check out.
-const hasCommit = (dir, git) => git(["-C", dir, "rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false);
+// False for a repository with no commits yet, which has nothing to check out: its clone has no remote branches. A failed read rejects, so the
+// clone is emptied rather than left unchecked-out.
+const hasCommit = async (dir, git) => (await git(["-C", dir, "for-each-ref", "--count=1", "refs/remotes/origin/"])).trim() !== "";
