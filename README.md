@@ -6,11 +6,14 @@
 
 # Desk
 
-Your coding agent keeps its tracks, tasks and lessons in a Git repository you own, your desk, so tomorrow's session picks up where today's stopped, on any machine, in Claude Code or Copilot CLI. An MCP server lets the agent read, search and update the desk, and skills keep each task's state current as the work moves.
+**Your coding agent's work survives the session.**
+
+- Tracks, tasks and lessons live in a Git repository you own, your desk, so tomorrow's session picks up where today's stopped, on any machine.
+- Works in Claude Code and GitHub Copilot CLI. An MCP server lets the agent read, search and update the desk.
 
 [ouroboros.bot/desk](https://ouroboros.bot/desk/) · [The factory](https://ourostack.github.io/factory/) · [More from Ouro](https://github.com/ourostack)
 
-**Status:** alpha, for Claude Code and GitHub Copilot CLI. `main` is the release channel, and installed copies update from it.
+**Status:** alpha. `main` is the release channel, and installed copies update from it.
 
 **To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
 
@@ -20,13 +23,25 @@ Your coding agent keeps its tracks, tasks and lessons in a Git repository you ow
 claude plugin marketplace add ourostack/desk && claude plugin install desk@ourostack
 ```
 
-Copilot CLI, through [Agency](https://aka.ms/agency) (then start Copilot with `agency copilot`):
+Copilot CLI, through [Agency](https://aka.ms/agency) (Microsoft-internal; then start Copilot with `agency copilot`):
 
 ```sh
 agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot
 ```
 
-Desk brings Superpowers and Plain Language with it.
+Desk brings Superpowers (an engineering method) and Plain Language (a prose policy) with it.
+
+A desk looks like this:
+
+```text
+my-desk/
+  ouro-ui/                 # a track: one area of work
+    track.md
+    menu-fix/              # a task: one outcome
+      task.md              # state, next step, links to evidence
+      evidence/
+  _meta/friction.md        # what got in the way, so it gets fixed
+```
 
 Desk is the product; **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md)** is the way of working it carries, and this repository is its home.
 
@@ -39,7 +54,11 @@ The `ourostack` marketplace in this repository ships four plugins:
 - **Plain Language** (`plain-language@ourostack`): the prose policy for human-readable agent output. Installing Desk pulls it in.
 - **[Crew](plugins/crew/README.md)** (`crew@ourostack`): the multi-person shared-workspace layer on top of Desk.
 
-Agency and other hosts that resolve plugins from Git use the coordinates `github:ourostack/desk:plugins/<name>@main`.
+Agency and other hosts that resolve plugins from Git use these coordinates:
+
+```text
+github:ourostack/desk:plugins/<name>@main
+```
 
 ## Repository layout
 
