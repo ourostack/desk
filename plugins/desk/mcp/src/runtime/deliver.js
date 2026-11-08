@@ -186,7 +186,8 @@ function resolveConflict({ git, tree, scratch, file, prefix, commit }) {
   const merged = kept ?? mergeDeskText({ base, ours, theirs, oursIsNewer: oursTime > theirsTime, union })
   mkdirSync(path.dirname(path.join(tree, file)), { recursive: true })
   writeFileSync(path.join(tree, file), merged)
-  return git(["add", "--", file]).status === 0
+  // `--sparse`: cherry-pick follows renames, so a conflict can land on a path outside the replay worktree's patterns.
+  return git(["add", "--sparse", "--", file]).status === 0
 }
 
 // ---------------------------------------------------------------------------
@@ -208,11 +209,14 @@ function removeWorktree(git, paths) {
 // A sparse-checkout pattern (gitignore syntax, non-cone) that matches exactly one path from the top of the tree.
 const exactPattern = (file) => `/${file.replace(/[\\*?[\]!#]/gu, "\\$&").replace(/ $/u, "\\ ")}`
 
-// Every path the commits add, change, delete or rename, from both sides of a rename. (`git log --no-walk` lists each
-// commit against its own parent; `git diff-tree` given exactly two commits would compare them with each other instead.)
+// Every path the commits add, change, delete or rename, from both sides of a rename, from the repository's top.
+// (`git log --no-walk` lists each commit against its own parent; `git diff-tree` given exactly two commits would compare
+// them with each other instead.) The list only saves disk: a path missing from it is still merged in the index, and a
+// conflict on it is written out and staged with `--sparse`, so a failed read falls back to checking out nothing.
 function touchedPaths(git, commits) {
-  const out = git(["log", "--no-walk=unsorted", "--format=", "--name-only", "-z", "--no-renames", ...commits]).stdout
-  return [...new Set(out.split("\0").filter((file) => file !== ""))]
+  const listed = git(["log", "--no-walk=unsorted", "--no-relative", "--format=", "--name-only", "-z", "--no-renames", ...commits])
+  if (listed.status !== 0) return []
+  return [...new Set(listed.stdout.split("\0").filter((file) => file !== ""))]
 }
 
 // Replays `commits` onto `onto` in the private worktree: `{ head, replayed, skipped }`, or `{ error }` when the worktree

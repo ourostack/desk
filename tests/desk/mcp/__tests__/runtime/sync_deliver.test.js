@@ -243,6 +243,38 @@ test("the replay worktree checks out only the files the replayed commits touch",
   assert.match(landed, /^- elsewhere progress$/mu)
 })
 
+// Cherry-pick follows renames, so a conflict can land on a path no replayed commit touched. It still resolves.
+test("a conflict that lands on a path the remote renamed, outside the replayed paths, still resolves", async () => {
+  const { origin, desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "notes/shared.md", "shared notes\nremote line\n", "elsewhere edits notes")
+  git(elsewhere, ["mv", "notes/shared.md", "notes/moved.md"])
+  git(elsewhere, ["commit", "-q", "-m", "elsewhere renames notes"])
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  await commit(desk, "notes/shared.md", "shared notes\ndesk line\n", "desk edits notes")
+
+  const outcome = deliver({ root: desk })
+
+  assert.deepEqual(outcome.skipped, [], JSON.stringify(outcome))
+  assert.equal(outcome.delivered.length, 1)
+  const landed = bare(origin, ["show", "main:notes/moved.md"])
+  assert.match(landed, /^remote line$/mu)
+  assert.match(landed, /^desk line$/mu)
+})
+
+// The touched-path list is read from the repository's top, whatever `diff.relative` says, and a wrong list never stops a conflict resolving.
+test("in a desk below the repository top with diff.relative set, a conflicting card still resolves", async () => {
+  const { origin, desk, elsewhere } = await mkShared()
+  await commit(elsewhere, "desks/ari/tasks/card.md", "remote\n", "elsewhere card")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  await commit(desk, "desks/ari/tasks/card.md", "local\n", "desk card")
+  git(desk, ["config", "diff.relative", "true"])
+
+  const outcome = deliver({ root: path.join(desk, "desks", "ari") })
+
+  assert.deepEqual(outcome.skipped, [], JSON.stringify(outcome))
+  assert.equal(bare(origin, ["show", "main:desks/ari/tasks/card.md"]), "remote\nlocal\n")
+})
+
 test("a lone commit Desk cannot merge is left local, nothing is pushed, and the checkout stays where it is", async () => {
   const { origin, desk, elsewhere } = await mkShared()
   await commit(elsewhere, "state.json", "{\"b\":1}\n", "elsewhere state")
