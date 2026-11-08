@@ -525,6 +525,24 @@ function validateWorkflowWiring(errors, {
     if (!body.includes(requirement.command)) {
       errors.push(`${requirement.path} must run ${requirement.command}`);
     }
+    // A workflow whose push is filtered only by paths-ignore runs on every path it does not ignore. Only the push block is read.
+    const lines = body.split("\n");
+    const pushStart = lines.indexOf("  push:");
+    const pushEnd = pushStart === -1 ? -1 : lines.findIndex((line, index) => index > pushStart && /^ {0,2}\S/u.test(line));
+    const push = pushStart === -1 ? "" : lines.slice(pushStart + 1, pushEnd === -1 ? lines.length : pushEnd).join("\n");
+    const ignoreBlock = /^ {4}paths-ignore:\s*\n((?: {6}-[ \t]+.*(?:\n|$))+)/mu.exec(push);
+    if (ignoreBlock && !/^ {4}paths:\s*$/mu.test(push)) {
+      const ignored = [...ignoreBlock[1].matchAll(/-\s+["']?([^"'\n]+?)["']?\s*$/gmu)].map((match) => match[1]);
+      // An exact name or a plain `dir/**` is compared; any other wildcard counts as ignoring the path, to stay on the safe side.
+      const ignores = (entry, target) => entry === target
+        || (entry.endsWith("/**") && !/[*?[\]!]/u.test(entry.slice(0, -3)) ? target.startsWith(entry.slice(0, -2)) : /[*?[\]!]/u.test(entry));
+      for (const requiredPath of requirement.paths ?? []) {
+        if (ignored.some((entry) => ignores(entry, requiredPath))) {
+          errors.push(`${requirement.path} path filters must not ignore ${requiredPath}`);
+        }
+      }
+      continue;
+    }
     for (const requiredPath of requirement.paths ?? []) {
       const pathPattern = new RegExp(`^\\s*-\\s+["']?${escapeRegExp(requiredPath)}["']?\\s*$`, "mu");
       if (!pathPattern.test(body)) {

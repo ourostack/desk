@@ -5,59 +5,27 @@ name: desk MCP tests
 # Skill-manifest validation lives in validate-skills.yml and does NOT exercise
 # the MCP code, so without this job desk-core changes can merge untested.
 # Every pull request runs it, with no path filter: main requires the "CI gate" job below, and a required check from a
-# workflow that a path filter skipped would never report and would block the pull request forever. Pushes to main are
-# still path-filtered, because nothing requires a check there.
+# workflow that a path filter skipped would never report and would block the pull request forever. Pushes to main skip only
+# the docs no test reads; the Desk release waits for the run that covers the commit it ships (main-ci-gate.mjs).
+#
+# Two tiers (AGENTS.md, "CI tiers"). A pull request runs the fast tier on Linux: Quick checks first (every changed file parses and the
+# changed tests pass, in about two minutes), then the coverage shards, the offline eval tests when the change touches them, unused code
+# and the Linux legs of the browser, Crew member-binding and black-box checks. A pull request that changes only the docs no test reads
+# (the --outside list in Quick checks) skips all of that and still gets a green CI gate. A push to main or a dispatch runs everything,
+# with no narrowing: the fast tier plus the heavy tier, the Windows and macOS legs, the runtime packs, the release dry runs and native
+# Windows. A red heavy tier on main opens a "main is red" issue, and the Desk release waits until main is green (main-ci-gate.mjs).
 
 on:
   pull_request:
   push:
     branches:
       - main
-    paths:
-      - ".gitattributes"
-      - "evals/offline/**"
-      - "evals/*.json"
-      - "AGENTIC-ENGINEERING-V2.md"
-      - "evals/**"
-      - "skills/**"
-      - "worker/**"
-      - "plugins/**"
-      - "manifest.json"
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - ".github/workflows/**"
-      - "**/package.json"
-      - "**/package-lock.json"
-      - "package.json"
-      - "package-lock.json"
-      - "tools/unused-code/**"
-      - "tools/desk-build/**"
-      - "plugins/desk/mcp/**"
-      - "tests/**"
-      - "plugins/desk/activation/**"
-      - "plugins/desk/.claude-plugin/plugin.json"
-      - "plugins/desk/.mcp.json"
-      - "plugins/desk/.mcp.claude-codex.json"
-      - "plugins/desk/.mcp.copilot.json"
-      - "plugins/desk/agents/**"
-      - "plugins/desk/hooks/**"
-      - "plugins/desk/plugin.json"
-      - "plugins/desk/skills/**"
-      - "plugins/superpowers/**"
-      - "plugins/plain-language/**"
-      - "upstream-sources.lock.json"
-      - "plugins/desk/mcp/artifacts/runtime-deps/**"
-      - "plugins/desk/artifacts/tombstones/**"
-      - "plugins/desk/README.md"
-      - "plugins/desk/docs/**"
-      - "plugins/desk/mcp/README.md"
-      - "plugins/desk/activation/README.md"
-      - "plugins/desk/mcp/scripts/build-runtime-deps-pack.js"
-      - "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js"
-      - "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"
-      - "scripts/*.cjs"
-      - "scripts/test-desk-docs.cjs"
-      - ".github/workflows/desk-mcp-tests.yml"
+    # The same docs Quick checks lets a pull request skip (windows_suite_shards.test.js keeps the lists equal), so every commit that
+    # can change a test result gets the full run on main.
+    paths-ignore:
+      - "docs/**"
+      - "SETUP.md"
+      - "LICENSE"
   # The scheduled Superpowers refresh dispatches this workflow on its branch, because pull request events raised by
   # the workflow token start no runs. A dispatched run has no base, so the coverage gate falls back to origin/main.
   workflow_dispatch:
@@ -69,8 +37,61 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The fail-fast pass the rest of this workflow waits for, and the one place that decides what a pull request can affect. `code` is false
+  # only when every changed file is a doc no test reads; `evals` is true when the change touches what the offline eval tests read. A push
+  # to main or a dispatch has no base here, so both are true and everything runs.
+  quick-checks:
+    name: Quick checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      evals: ${{ steps.scope.outputs.evals }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A pull request is compared with its base (the merge commit's first parent).
+      - name: Decide what this change can affect
+        id: scope
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: |
+          set -euo pipefail
+          code="$(node .github/scripts/changed-scope.mjs --outside "$BASE" docs/ SETUP.md LICENSE)"
+          evals="$(node .github/scripts/changed-scope.mjs "$BASE" evals/ scripts/skill-evals.cjs scripts/test-skill-evals.cjs plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json .github/workflows/desk-mcp-tests.yml .github/scripts/changed-scope.mjs)"
+          echo "code=${code#run=}" >> "$GITHUB_OUTPUT"
+          echo "evals=${evals#run=}" >> "$GITHUB_OUTPUT"
+          echo "Can affect the code: ${code#run=}; can affect the offline eval tests: ${evals#run=}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install dependencies
+        if: steps.scope.outputs.code == 'true'
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Parse every changed file and run the changed tests
+        if: steps.scope.outputs.code == 'true'
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: node .github/scripts/quick-checks.mjs "$BASE"
+
   browser:
     name: Browser fresh and mine (${{ matrix.os }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -79,6 +100,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # The Windows and macOS legs are the heavy tier: main and dispatches only.
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"windows-latest"},{"os":"macos-latest"}]' || '[]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -100,6 +123,8 @@ jobs:
   # it, so the checkout and the test clones carry CRLF line endings. The coverage shards run these files on Linux only.
   crew-member-binding:
     name: Crew member binding (${{ matrix.os }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
@@ -107,14 +132,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Each Node matches the runtime pack Desk ships for that platform; the end-to-end test starts the real server.
-          - os: ubuntu-latest
-            node: "22"
-          - os: macos-latest
-            node: "22"
-          - os: windows-latest
-            node: "24"
+        # Each Node matches the runtime pack Desk ships for that platform; the end-to-end test starts the real server. The macOS and
+        # Windows legs are the heavy tier: main and dispatches only. GitHub applies `exclude` before `include`, so an include-only
+        # matrix cannot drop legs with `exclude`; the whole list is chosen by event instead.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"22"}]' || '[{"os":"ubuntu-latest","node":"22"},{"os":"macos-latest","node":"22"},{"os":"windows-latest","node":"24"}]') }}
     steps:
       - name: Use CRLF line endings, as Git for Windows does
         if: runner.os == 'Windows'
@@ -151,6 +172,8 @@ jobs:
   # behavior through each host's own MCP config and hook manifest against a throwaway desk, compares the two hosts and measures them.
   blackbox:
     name: Black-box tester (${{ matrix.os }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -158,12 +181,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Each Node matches the runtime pack Desk ships for that platform.
-          - os: ubuntu-latest
-            node: "22"
-          - os: windows-latest
-            node: "24"
+        # Each Node matches the runtime pack Desk ships for that platform. The Windows leg is the heavy tier: main and dispatches
+        # only (chosen by event, because `exclude` cannot remove `include` entries).
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"22"}]' || '[{"os":"ubuntu-latest","node":"22"},{"os":"windows-latest","node":"24"}]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -204,6 +224,8 @@ jobs:
   # coverage gate once, over the combined result.
   desk-mcp-coverage-shards:
     name: desk MCP tests (shard ${{ matrix.shard }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -278,9 +300,12 @@ jobs:
 
   # The offline evaluation's own unit tests (evals/offline/__tests__, 907 tests, pure Node, no agent runs). They took about five
   # minutes in one process, so Node splits the files across four runners. No coverage gate applies: they are not Desk MCP code.
-  # They run only when the change touches what they read (see the first step); most pull requests change neither.
+  # They run only when the change touches what they read (Quick checks decides, so a pull request that cannot affect them takes no
+  # runner for them); most pull requests change neither. Main and dispatches always run them.
   offline-eval-tests:
     name: offline eval tests (shard ${{ matrix.shard }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.evals == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -295,20 +320,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The tests read only evals/offline, the scripts/skill-evals.cjs bridge and its contract test, and the MCP package's installed
-      # dependencies, so a change that touches none of those skips them and the job still succeeds for the CI gate. A pull request
-      # is compared with its base (the merge commit's first parent); a push with the commit before it; a dispatch runs everything.
-      - name: Decide whether this change can affect the offline eval tests
-        id: scope
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'push' && github.event.before || '' }}
-        run: >-
-          node .github/scripts/changed-scope.mjs "$BASE" evals/ scripts/skill-evals.cjs scripts/test-skill-evals.cjs
-          plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json
-          .github/workflows/desk-mcp-tests.yml .github/scripts/changed-scope.mjs >> "$GITHUB_OUTPUT"
-
       - name: Set up Node
-        if: steps.scope.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -316,13 +328,11 @@ jobs:
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       - name: Install dependencies
-        if: steps.scope.outputs.run == 'true'
         working-directory: plugins/desk/mcp
         run: npm ci
 
       # A throwaway HOME keeps the tests off the runner's real one.
       - name: Run the offline eval unit tests
-        if: steps.scope.outputs.run == 'true'
         env:
           SHARD: ${{ matrix.shard }}
         run: |
@@ -332,9 +342,12 @@ jobs:
   # The release's own build and checks, as a dry run on this pull request merged into main: it folds the pending changelog
   # fragments, commits the result to a throwaway HEAD and runs every check the release workflow runs on that commit
   # (scripts/build-and-check-release.sh, shared with desk-release.yml), then discards it. A pull request the release would
-  # reject, or whose release tests run nothing, fails here instead of on main after the merge.
+  # reject, or whose release tests run nothing, fails here instead of in the release. It is the heavy tier: it runs on main after the
+  # merge and on dispatches, and the release waits for main's CI to pass before it builds.
   release-dry-run:
     name: Release dry run (${{ matrix.stage }})
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -343,6 +356,8 @@ jobs:
       fail-fast: false
       matrix:
         stage: [auto, rc, stable]
+        # A pull request runs the auto leg, which checks the changelog fragments it adds; the rc and stable legs are the heavy tier.
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"stage":"rc"},{"stage":"stable"}]' || '[]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -371,6 +386,8 @@ jobs:
   # dependency or a duplicate export. Its entry points and every exception are in tools/unused-code/knip.jsonc, each with its reason.
   unused-code:
     name: Unused code
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -398,10 +415,10 @@ jobs:
 
   desk-mcp-tests:
     name: desk MCP test suite
-    needs: desk-mcp-coverage-shards
+    needs: [quick-checks, desk-mcp-coverage-shards]
     # Runs even when a shard failed, so this check fails with the merge's refusal naming the shard. Without it the
-    # job would be skipped, and a skipped job counts as passing for a required status check.
-    if: ${{ !cancelled() }}
+    # job would be skipped, and the CI gate would have to tell that skip from a docs-only one.
+    if: ${{ !cancelled() && needs.quick-checks.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     # Public, read-only and credential-free. This job carries no secret, no Microsoft or private Desk record and no
     # model access, so it can publish a relevant-revision request and status but can never mint a scored evaluation.
@@ -544,6 +561,8 @@ jobs:
 
   desk-runtime-packs:
     name: desk runtime pack (${{ matrix.target }})
+    # The heavy tier: main and dispatches only. It waits for no job, not even Quick checks (see below).
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     # A runtime dependency pack embeds its platform's real native binaries, so each target can only be produced
@@ -746,6 +765,9 @@ jobs:
 
   desk-native-windows:
     name: desk on native Windows
+    needs: quick-checks
+    # The heavy tier: main and dispatches only.
+    if: github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -807,11 +829,13 @@ jobs:
 
   # The one check main requires from this workflow (.github/rulesets/main-requires-ci.json). It needs every other job
   # here, so a new job that is not listed fails the guard test instead of slipping past the gate, and it runs even
-  # when a job failed or was skipped: a skipped job counts as passing for a required check, so this one fails unless
-  # every job succeeded. It starts no checkout and holds no token.
+  # when a job failed or was skipped. A skipped job counts as passing for a required check, so this one decides from
+  # Quick checks' scope and the event which jobs had to run: each of those must have succeeded, and any other job must
+  # have succeeded or been skipped. Quick checks itself must always succeed. It starts no checkout and holds no token.
   ci-gate:
     name: CI gate
     needs:
+      - quick-checks
       - blackbox
       - browser
       - crew-member-binding
@@ -827,14 +851,51 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Require every job to have succeeded
+      - name: Require every job that had to run to have succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
+          HEAVY: ${{ github.event_name != 'pull_request' }}
         run: |
           printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          if printf '%s\n' "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null; then
-            echo "Every job succeeded."
+          if printf '%s\n' "$RESULTS" | jq -e --arg heavy "$HEAVY" '
+            (.["quick-checks"].outputs.code == "true") as $code
+            | (.["quick-checks"].outputs.evals == "true") as $evals
+            | {
+                "quick-checks": true,
+                "offline-eval-tests": $evals,
+                "desk-runtime-packs": ($heavy == "true"),
+                "desk-native-windows": ($code and $heavy == "true")
+              } as $special
+            | .["quick-checks"].result == "success"
+              and all(to_entries[]; .key as $job
+                | (if ($special | has($job)) then $special[$job] else $code end) as $must
+                | .value.result == "success" or (.value.result == "skipped" and ($must | not)))
+          ' > /dev/null; then
+            echo "Every job that had to run succeeded."
           else
-            echo "::error::A job did not succeed, so the gate fails."
+            echo "::error::A job that had to run did not succeed, so the gate fails."
             exit 1
           fi
+
+  # A red CI gate on main opens a "main is red: CI gate" issue for its owner (AGENTS.md, "Red main"), and a green one closes it.
+  report-main-health:
+    name: Report main health
+    needs: ci-gate
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the report script
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Open, update or close the red-main issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.ci-gate.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/report-main-health.sh "CI gate" "$RESULT" "$RUN_URL" "$GITHUB_SHA"

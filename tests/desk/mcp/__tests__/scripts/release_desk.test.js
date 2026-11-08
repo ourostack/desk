@@ -428,7 +428,14 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.match(workflow.on.schedule[0].cron, /\S/u)
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
-  assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
+  assert.deepEqual(Object.keys(workflow.jobs), ["main-ci", "build", "push", "announce", "report"])
+  // The release builds only after main's CI passed on the commit it ships, and releases exactly that commit.
+  const mainCi = workflow.jobs["main-ci"]
+  assert.deepEqual(mainCi.permissions, { actions: "read", contents: "read" })
+  assert.equal(mainCi.env.SELF_PUSH, workflow.jobs.build.env.SELF_PUSH)
+  assert.match(stepNamed(mainCi, "Wait for main's CI on the commit to release").run, /node \.github\/scripts\/main-ci-gate\.mjs --repo "\$GITHUB_REPOSITORY" --head "\$head" --workflows desk-mcp-tests\.yml,desk-windows-suite\.yml/u)
+  assert.equal(workflow.jobs.build.needs, "main-ci")
+  assert.match(stepNamed(workflow.jobs.build, "Release the commit main's CI passed").run, /git checkout --quiet -B main "\$CHECKED"/u)
   // The release's own push builds and pushes nothing, but still marks and reports, so a marking failure in the pushing run is retried.
   const buildJob = workflow.jobs.build
   assert.equal(buildJob.if, undefined, "the build job always runs, so the marking and the report that need it run too")
@@ -447,9 +454,9 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
   assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
-  assert.deepEqual(report.needs, ["build", "push", "announce"])
+  assert.deepEqual(report.needs, ["main-ci", "build", "push", "announce"])
   assert.deepEqual(report.permissions, { issues: "write" })
-  assert.equal(stepNamed(report, "Report the failed release").if, "needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result == 'failure'")
+  assert.equal(stepNamed(report, "Report the failed release").if, "needs.main-ci.result == 'failure' || needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result == 'failure'")
   assert.match(stepNamed(report, "Report the failed release").run, /gh issue create --repo "\$GITHUB_REPOSITORY" --title "\$ISSUE_TITLE"/u)
   // A run that handed its release to a new run leaves the issue open: its fragments are still pending.
   assert.match(stepNamed(report, "Close the release issue after a successful run").if, /needs\.push\.outputs\.handed_off != 'true'/u)
@@ -649,15 +656,19 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("pull request CI dry-runs auto, RC and stable through the full shared helper, and the CI gate waits for both", () => {
+test("CI dry-runs auto on pull requests and auto, RC and stable on main through the full shared helper, and the CI gate waits for them", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc", "stable"] } })
+  // A pull request runs the auto stage, which checks the changelog fragments it adds; rc and stable are the heavy tier (main and dispatches).
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: {
+    stage: ["auto", "rc", "stable"],
+    exclude: "${{ fromJSON(github.event_name == 'pull_request' && '[{\"stage\":\"rc\"},{\"stage\":\"stable\"}]' || '[]') }}",
+  } })
   assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
   assert.equal(job["timeout-minutes"], 15)
   assert.deepEqual(job.permissions, { contents: "read" })
   assert.equal(job["continue-on-error"], undefined)
-  assert.equal(job.if, undefined)
+  assert.equal(job.if, "needs.quick-checks.outputs.code == 'true'")
   const step = stepNamed(job, "Build and check the release without keeping it")
   assert.equal(step.env.RELEASE_STAGE, "${{ matrix.stage }}")
   for (const stage of job.strategy.matrix.stage) {
@@ -669,7 +680,7 @@ test("pull request CI dry-runs auto, RC and stable through the full shared helpe
     assert.deepEqual(result.stdout.trim().split("\n"), ["--dry-run", "--stage", stage])
   }
   assert.deepEqual(tests.jobs["ci-gate"].needs, [
-    "blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards",
+    "quick-checks", "blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards",
     "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
     "desk-native-windows", "unused-code",
   ])

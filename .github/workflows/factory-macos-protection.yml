@@ -1,7 +1,11 @@
 name: Factory macOS protection
 
+# CI tier: heavy. macOS runners are the organization's scarcest (five at a time), so this runs on main after the merge, not on pull
+# requests (AGENTS.md, "CI tiers"). Dispatch it on a branch to check a factory change before the merge.
 on:
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - ".github/workflows/factory-macos-protection.yml"
       - "plugins/desk/mcp/src/factory/**"
@@ -35,3 +39,26 @@ jobs:
           --test-concurrency=1 --test
           tests/desk/mcp/__tests__/factory/os_protect.test.js
           tests/desk/mcp/__tests__/factory/marker_identity.test.js
+
+  # A red result on main opens a "main is red: Native macOS protection" issue for its owner (AGENTS.md, "Red main"); a green one closes it.
+  report-main-health:
+    name: Report main health
+    needs: native-macos-protection
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the report script
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Open, update or close the red-main issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.native-macos-protection.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/report-main-health.sh "Native macOS protection" "$RESULT" "$RUN_URL" "$GITHUB_SHA"

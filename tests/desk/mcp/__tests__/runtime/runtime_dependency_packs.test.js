@@ -658,7 +658,7 @@ function unique(values) {
   return [...new Set(values)]
 }
 
-function workflowPathFilters(workflow, eventName) {
+function workflowPathFilters(workflow, eventName, key = "paths") {
   const lines = workflow.split(/\r?\n/u)
   const eventStart = lines.findIndex((line) => line === `  ${eventName}:`)
   assert.notEqual(eventStart, -1, `workflow must define ${eventName}`)
@@ -667,8 +667,8 @@ function workflowPathFilters(workflow, eventName) {
     && (/^[a-z_]+:/u.test(line) || /^  [a-z_]+:/u.test(line))
   ))
   const eventLines = lines.slice(eventStart, eventEnd === -1 ? lines.length : eventEnd)
-  const pathsStart = eventLines.findIndex((line) => line === "    paths:")
-  assert.notEqual(pathsStart, -1, `${eventName} must define paths`)
+  const pathsStart = eventLines.findIndex((line) => line === `    ${key}:`)
+  assert.notEqual(pathsStart, -1, `${eventName} must define ${key}`)
   const paths = []
   for (const line of eventLines.slice(pathsStart + 1)) {
     if (/^\s*$/.test(line)) {
@@ -2680,9 +2680,11 @@ test("runtime pack defaults retain host routing and surface filesystem failure w
 
 test("CI workflow verifies runtime dependency packs for release-maintained artifacts", () => {
   const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml"), "utf8")
-  // Every pull request runs this workflow with no path filter (main requires its "CI gate" job); only pushes to main are filtered.
+  // Every pull request runs this workflow with no path filter (main requires its "CI gate" job); a push to main skips only the
+  // docs no test reads (paths-ignore), so it must never ignore a runtime pack input.
   assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "desk MCP CI runs on every pull request")
-  const pushPathFilters = workflowPathFilters(workflow, "push")
+  assert.throws(() => workflowPathFilters(workflow, "push"), /push must define paths/u, "a push to main is not narrowed to a list of paths")
+  const pushIgnored = workflowPathFilters(workflow, "push", "paths-ignore")
   const deskMcpJob = workflowJob(workflow, "desk-mcp-tests")
 
   assert.throws(
@@ -2806,14 +2808,12 @@ test("CI workflow verifies runtime dependency packs for release-maintained artif
   )
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "runtime:deps-pack:build")
   assertWorkflowJobRunsMcpScript(deskMcpJob, "desk-mcp-tests", "runtime:deps-pack:verify")
-  for (const [eventName, pathFilters] of [
-    ["push", pushPathFilters],
+  for (const input of [
+    "plugins/desk/mcp/artifacts/runtime-deps/manifest.json",
+    "plugins/desk/mcp/scripts/build-runtime-deps-pack.js",
+    "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js",
   ]) {
-    assertIncludesAll(pathFilters, [
-      "plugins/desk/mcp/artifacts/runtime-deps/**",
-      "plugins/desk/mcp/scripts/build-runtime-deps-pack.js",
-      "plugins/desk/mcp/scripts/verify-runtime-deps-pack.js",
-    ], `${eventName} path filters`)
+    assert.ok(!pushIgnored.some((ignored) => input === ignored || (ignored.endsWith("/**") && input.startsWith(ignored.slice(0, -2)))), `push must not ignore ${input}`)
   }
 })
 

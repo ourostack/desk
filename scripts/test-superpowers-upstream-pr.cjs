@@ -110,6 +110,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
       { type: "required_status_checks", parameters: { required_status_checks: [{ context: "Validate skills" }] } },
     ])],
     [`pr merge 7 --repo ${repo} --merge --match-head-commit ${sha} --delete-branch`, ok("")],
+    [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
     [`issue list --repo ${repo} --label upstream-refresh --state open --limit 20`, ok([{ number: 3 }])],
     [`issue close 3 --repo ${repo}`, ok("")],
     [`workflow run desk-release.yml --repo ${repo} --ref main`, ok("")],
@@ -119,6 +120,12 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
   // The merge used the workflow token, which starts no push-triggered run, so the Desk release is dispatched on main.
   assert.equal(result.message, "Every check passed, the refresh merged and the Desk release was dispatched.");
   assert.equal(calls.at(-1).line, `workflow run desk-release.yml --repo ${repo} --ref main`);
+  // main may have moved while CI ran on the branch, so CI runs again on the merge commit, which the release waits for.
+  assert.deepEqual(calls.filter((call) => / --ref main$/u.test(call.line)).map((call) => call.line), [
+    `workflow run ci.yml --repo ${repo} --ref main`,
+    `workflow run lint.yml --repo ${repo} --ref main`,
+    `workflow run desk-release.yml --repo ${repo} --ref main`,
+  ]);
   assert.equal(result.pull, "https://github.com/owner/desk/pull/7");
   assert.equal(polls, 3);
   assert.deepEqual(result.jobs.map((job) => job.conclusion), ["success", "success"]);
@@ -319,6 +326,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
       jobs(61, [{ name: "a", conclusion: "success", html_url: "https://job/61" }]),
       noRules,
       ["pr merge 7", ok("")],
+      [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
       ["issue list", ok([])],
     ]);
     const { now, sleep } = clock();
@@ -395,6 +403,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     ...base,
     [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "", stderr: "" }],
     ["pr merge 7", ok("")],
+    [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
     ["issue list", ok([])],
     labelExists,
     ["issue create", ok("https://github.com/owner/desk/issues/14\n")],
@@ -513,6 +522,7 @@ const majorReport = {
     jobs(92, [{ name: "b", conclusion: "success", html_url: "https://job/92" }]),
     noRules,
     ["pr merge 7", ok("")],
+    [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
     ["issue list --repo owner/desk --label upstream-refresh", ok([])],
   ], { report: majorReport });
   assert.equal(result.outcome, "merged");
@@ -537,6 +547,7 @@ const majorReport = {
     jobs(94, [{ name: "b", conclusion: "success", html_url: "https://job/94" }]),
     noRules,
     ["pr merge 7", ok("")],
+    [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
     ["issue list --repo owner/desk --label upstream-refresh", ok([])],
   ], { report: majorReport });
   assert.equal(again.result.adoption, "https://github.com/owner/desk/issues/21");
@@ -560,6 +571,7 @@ const majorReport = {
       jobs(95, [{ name: "a", conclusion: "success", html_url: "https://job/95" }]),
       noRules,
       ["pr merge 7", ok("")],
+      [/^workflow run (?!desk-release\.yml)\S+ --repo \S+ --ref main$/u, ok("")],
       [`issue list --repo ${repo} --label upstream-refresh`, ok([])],
     ]);
     const { now, sleep } = clock();

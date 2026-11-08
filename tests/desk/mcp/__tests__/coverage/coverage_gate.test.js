@@ -1362,13 +1362,21 @@ test("Desk MCP package exposes the local test:coverage command contract", () => 
   )
 })
 
-test("Desk MCP CI uses the same local coverage command", () => {
+test("Desk MCP CI uses the same local coverage command", async () => {
+  const { assertCoverageCommandParity } = await loadGate()
   const workflow = readFileSync(
     path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml"),
     "utf8",
   )
 
   assert.match(workflow, /npm run test:coverage/)
-  assert.match(workflow, /scripts\/\*\.cjs/)
+  // A push to main runs on every change but the docs no test reads, so the root scripts are covered (assertCoverageCommandParity).
+  assert.deepEqual(
+    assertCoverageCommandParity({
+      packageJsonPath: path.join(repoRoot, "plugins", "desk", "mcp", "package.json"),
+      workflowPath: path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml"),
+    }).issues,
+    [],
+  )
   assert.doesNotMatch(workflow, /run:\s*npm test\b/)
 })

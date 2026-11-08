@@ -6,8 +6,11 @@ name: Desk release
 # release straight to main (scripts/release-desk.cjs). Runs one at a time; a run that finds no fragment, because an
 # earlier run already released them, does nothing.
 #
-# Three jobs, because steps in one job share a runner and anything a step leaves behind (a git hook, a background
+# Separate jobs, because steps in one job share a runner and anything a step leaves behind (a git hook, a background
 # process, git configuration) runs in the later steps:
+# - main-ci waits for main's CI on the commit to release and stops the release unless it passed. Pull requests run only
+#   the fast tier; the Windows suite and the rest of the heavy tier run on main after the merge (AGENTS.md, "CI tiers"),
+#   so a release never ships a commit main's full CI has not passed. It holds a read-only token and runs one script.
 # - build holds only a read token. It installs dependencies, builds the release commit and checks that exact commit,
 #   because a push made with the workflow token starts no CI on main.
 # - push holds the write token and runs no npm and no repository script. It takes the checked commit from build as a
@@ -54,8 +57,48 @@ concurrency:
   queue: max
 
 jobs:
+  main-ci:
+    name: Wait for main's CI to pass
+    runs-on: ubuntu-latest
+    # The Windows suite on main takes about half an hour with its runner wait; the gate itself gives up after 50 minutes.
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      head: ${{ steps.gate.outputs.head }}
+    env:
+      SELF_PUSH: ${{ github.event_name == 'push' && github.event.head_commit.author.email == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message, 'Release Desk ') }}
+    steps:
+      - name: Skip the release's own push
+        if: env.SELF_PUSH == 'true'
+        run: echo "This run was started by the release commit itself, so it releases nothing and has no CI to wait for." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out main
+        if: env.SELF_PUSH != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Waits for the newest run of each workflow that covers this commit (nothing changed since that run would have started the
+      # workflow), and fails unless each passed. The build below
+      # releases exactly this commit, so a merge that lands while the release waits goes out in the next run.
+      - name: Wait for main's CI on the commit to release
+        id: gate
+        if: env.SELF_PUSH != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          node .github/scripts/main-ci-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$head" --workflows desk-mcp-tests.yml,desk-windows-suite.yml,factory-macos-protection.yml --timeout-min 50
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and check the Desk release
+    needs: main-ci
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -84,6 +127,18 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      # main may have moved since main-ci checked it; the release builds on the commit whose CI passed. If main moved, the push job
+      # hands off to a new run, which waits for CI on the newer commit.
+      - name: Release the commit main's CI passed
+        if: env.SELF_PUSH != 'true'
+        env:
+          CHECKED: ${{ needs.main-ci.outputs.head }}
+        run: |
+          set -euo pipefail
+          [[ "$CHECKED" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::main-ci handed over no checked commit."; exit 1; }
+          git merge-base --is-ancestor "$CHECKED" HEAD || { echo "::error::The checked commit $CHECKED is not on main."; exit 1; }
+          git checkout --quiet -B main "$CHECKED"
 
       - name: Set up Node
         if: env.SELF_PUSH != 'true'
@@ -292,8 +347,8 @@ jobs:
   # closes it. A run that handed its release to a new run leaves it open, because its fragments are still pending.
   report:
     name: Report the release outcome
-    needs: [build, push, announce]
-    if: always() && needs.build.result != 'cancelled' && needs.push.result != 'cancelled' && needs.announce.result != 'cancelled'
+    needs: [main-ci, build, push, announce]
+    if: always() && needs.main-ci.result != 'cancelled' && needs.build.result != 'cancelled' && needs.push.result != 'cancelled' && needs.announce.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -305,10 +360,12 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Report the failed release
-        if: needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result == 'failure'
+        if: needs.main-ci.result == 'failure' || needs.build.result == 'failure' || needs.push.result == 'failure' || needs.announce.result == 'failure'
         run: |
           set -euo pipefail
-          if [ "${{ needs.announce.result }}" = "failure" ] && [ "${{ needs.build.result }}" != "failure" ] && [ "${{ needs.push.result }}" != "failure" ]; then
+          if [ "${{ needs.main-ci.result }}" = "failure" ]; then
+            body="The Desk release did not build because main's CI has not passed on the commit it would ship, in $RUN_URL. The heavy tier (the Windows suite, the macOS and Windows legs, the runtime packs, the release dry runs) runs on main after the merge, and a red result there has a \"main is red\" issue with its owner (AGENTS.md, \"Red main\"). Once main is green, dispatch desk-release.yml or wait for the next merge or the daily run."
+          elif [ "${{ needs.announce.result }}" = "failure" ] && [ "${{ needs.build.result }}" != "failure" ] && [ "${{ needs.push.result }}" != "failure" ]; then
             body="The Desk release was published, but marking the pull requests it carries failed in $RUN_URL. Those pull requests have no released label yet, so Desk's done-gate refuses to close tasks that cite them as delivered. Read the failed step and re-run the failed jobs of that run; marking is safe to repeat."
           else
             body="The Desk release failed in $RUN_URL. The changelog fragments on main stay unreleased, and the Desk changes they describe ship without a new version, until a release succeeds. Read the failed step, fix the cause on main (a fragment the release rejects, a failing release check or a refused push), then dispatch desk-release.yml or wait for the daily run."
