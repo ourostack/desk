@@ -1,1 +1,0 @@
-Migrations run each shell block from a temporary file instead of passing it to bash as `-c <block>`. Windows hands a child its arguments as one command line, and bash garbled the tidy migration's quotes when it split that line back up, so the tidy failed on Windows.

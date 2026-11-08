@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.73 — 2026-11-08
+
+Migrations run each shell block from a temporary file instead of passing it to bash as `-c <block>`. Windows hands a child its arguments as one command line, and bash garbled the tidy migration's quotes when it split that line back up, so the tidy failed on Windows.
+
+Desk's push no longer needs room for a second copy of the whole desk. When local commits have to be replayed onto a remote that moved on, the private worktree now checks out only the files those commits touch, instead of every file in the desk. On a large desk with little free disk, the full copy failed with `replay_failed` and every later write stayed local ([#589](https://github.com/ourostack/desk/issues/589)). Conflict resolution and what lands on the remote are unchanged, and the shared checkout's own Git settings are never touched.
+
+The one-time desk tidy now prints its instructions directly instead of passing them through a shell heredoc, which could block before the reader started on affected Bash installations. Its instructions, claim metadata and repeat-run behavior are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.72 — 2026-11-08
 
 Desk's commits from a temporary index, which `task_archive` and the desk tidy (`desk_save` with `tidy: true`) make, no longer overwrite another writer's commit (#632). Desk used to seed a private index from `HEAD` and then run a plain `git commit` with it, so a commit another session made in between was silently undone by the next one. These commits now go through the same core as `scripts/finish-commit.js`: Desk builds the commit from the private index, checks the whole tree it built against the entries it judged (every file under a selected folder included, and in a desk that sits in a subfolder of its repository), runs the repository's commit hooks through Git with Desk's own commit marker, and moves the branch with one compare-and-swap against the `HEAD` it read, so a branch that moved is refused and the other writer's commit stands ([core](../mcp/src/util/cas-commit.js), [temporary-index commit](../mcp/src/util/git-stage.js)). Commits Desk makes with `git commit -- <paths>`, as most tools do, are unchanged.
