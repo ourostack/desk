@@ -2,7 +2,7 @@
 // in. Git authenticates to GitHub only through the credential helper, which
 // asks the gateway's token socket; no token is written to the clone.
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,6 +57,16 @@ export async function ensureClone({ dir, repo, git = runGit }) {
   await configure(dir, git);
   // Non-cone patterns: everything, then each left-out kind. On an existing
   // clone this also removes left-out files that are unchanged on disk.
-  await git(["-C", dir, "sparse-checkout", "set", "--no-cone", "/*", ...LEFT_OUT.map((pattern) => `!${pattern}`)]);
-  if (!present) await git(["-C", dir, "checkout", "--quiet", (await git(["-C", dir, "symbolic-ref", "--short", "HEAD"])).trim()]);
+  try {
+    await git(["-C", dir, "sparse-checkout", "set", "--no-cone", "/*", ...LEFT_OUT.map((pattern) => `!${pattern}`)]);
+    if (!present && (await hasCommit(dir, git))) await git(["-C", dir, "checkout", "--quiet", (await git(["-C", dir, "symbolic-ref", "--short", "HEAD"])).trim()]);
+  } catch (error) {
+    // A fresh clone that never checked out would look present next start, with every file staged as deleted: empty the directory (it may be a
+    // volume mount, so it stays) so the next start clones again.
+    if (!present) for (const entry of readdirSync(dir)) rmSync(join(dir, entry), { recursive: true, force: true });
+    throw error;
+  }
 }
+
+// False for a repository with no commits yet, which has nothing to check out.
+const hasCommit = (dir, git) => git(["-C", dir, "rev-parse", "--verify", "--quiet", "HEAD"]).then(() => true, () => false);

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -181,4 +181,31 @@ test("ensureClone leaves media out of the checkout but keeps it in Git, on a fre
   await ensureClone({ dir: full, repo: "arimendelow/desk", git });
   assert.deepEqual(onDisk(full), kept, "an existing full clone drops its unchanged media too");
   assert.deepEqual(tracked(full), all);
+});
+
+test("ensureClone empties a fresh clone whose first checkout fails, so the next start clones again, and keeps an existing clone", async (t) => {
+  const { root, git } = fakeRemote(t, { "work/job/evidence/shot.png": "png" });
+  const failing = (args, options) => (args.includes("checkout") ? Promise.reject(new Error("git checkout failed: network")) : git(args, options));
+  const dir = join(root, "mount");
+  mkdirSync(dir);
+  await assert.rejects(ensureClone({ dir, repo: "arimendelow/desk", git: failing }), /network/);
+  assert.deepEqual(readdirSync(dir), [], "the mount point stays, empty");
+  await ensureClone({ dir, repo: "arimendelow/desk", git });
+  assert.ok(existsSync(join(dir, "AGENTS.md")), "the next start clones and checks out");
+
+  const refusing = (args, options) => (args.includes("sparse-checkout") ? Promise.reject(new Error("git sparse-checkout failed")) : git(args, options));
+  await assert.rejects(ensureClone({ dir, repo: "arimendelow/desk", git: refusing }), /sparse-checkout failed/);
+  assert.ok(existsSync(join(dir, "AGENTS.md")), "an existing clone is never emptied");
+});
+
+test("ensureClone clones a repository with no commits yet", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "desk-clone-empty-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bare = join(root, "remotes", "arimendelow", "desk.git");
+  mkdirSync(bare, { recursive: true });
+  execFileSync("git", ["init", "--bare", "-q", "-b", "main", bare]);
+  const git = (args, options = {}) => runGit(args, { ...options, env: { ...process.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.file://${join(root, "remotes")}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" } });
+  const dir = join(root, "desk");
+  await ensureClone({ dir, repo: "arimendelow/desk", git });
+  assert.ok(existsSync(join(dir, ".git")));
 });

@@ -711,7 +711,7 @@ test("track_rename reports a commit failure without losing the rename", async ()
   await mkTrack(root, "old-track", { rows: [] })
 
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    if (args.includes("commit") || args.includes("commit-tree")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
@@ -720,7 +720,7 @@ test("track_rename reports a commit failure without losing the rename", async ()
 
   assert.equal(result.to, "new-track", "the rename itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
-  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
 })
 
 test("track_rename commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -786,7 +786,7 @@ test("track_rename never schedules a push when the commit fails", async () => {
   await mkTrack(root, "old-track", { rows: [] })
 
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    if (args.includes("commit") || args.includes("commit-tree")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
@@ -799,7 +799,7 @@ test("track_rename never schedules a push when the commit fails", async () => {
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
   assert.deepEqual(calls, [])
 })
 

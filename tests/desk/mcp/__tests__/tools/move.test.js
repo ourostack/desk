@@ -846,7 +846,7 @@ test("task_move reports a commit failure without losing the move", async () => {
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
 
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    if (args.includes("commit") || args.includes("commit-tree")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
@@ -859,7 +859,19 @@ test("task_move reports a commit failure without losing the move", async () => {
 
   assert.equal(result.to, path.posix.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
-  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
+})
+
+test("task_move reports a commit failure when Git cannot read the index it would commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+  commitAll(root)
+  const spawnGit = (cmd, args, opts) => args.includes("ls-files") && args.includes("-s") ? { status: 128, stdout: "", stderr: "index boom" } : spawnSync(cmd, args, opts)
+  const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, spawnGit })
+  assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")), "the move itself is never lost")
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "git could not read the index" })
 })
 
 test("task_move commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -955,7 +967,7 @@ test("task_move never schedules a push when the commit fails", async () => {
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
 
   const spawnGit = (cmd, args, opts) => {
-    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    if (args.includes("commit") || args.includes("commit-tree")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
@@ -968,7 +980,7 @@ test("task_move never schedules a push when the commit fails", async () => {
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
   assert.deepEqual(calls, [])
 })
 
@@ -987,7 +999,8 @@ test("task_move moves a task whose evidence a sparse checkout leaves out (a host
 
   await task_move({ deskRoot: root, input: { track: "track-a", slug: "shot-task", to_track: "track-b" }, schedulePush: () => {} })
 
-  const tracked = git("ls-files", "--", "track-a", "track-b").stdout.split("\n").filter((file) => file.endsWith(".png"))
-  assert.deepEqual(tracked, ["track-b/shot-task/evidence/shot.png"], "the left-out screenshot moved with its task")
+  const committed = git("ls-tree", "-r", "--name-only", "HEAD").stdout.split("\n").filter((file) => file.endsWith(".png"))
+  assert.deepEqual(committed, ["track-b/shot-task/evidence/shot.png"], "the commit moves the left-out screenshot with its task, never deletes it")
+  assert.equal(git("status", "--porcelain", "--", "track-a", "track-b").stdout, "", "and leaves nothing staged behind")
   assert.ok(await exists(path.join(root, "track-b", "shot-task", "task.md")))
 })

@@ -26,7 +26,7 @@ import {
 } from "../util/fm.js"
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitIndexPaths, indexEntries } from "../util/git-stage.js"
 import { commitFailure } from "../util/route-around.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
@@ -190,7 +190,10 @@ function stageWrites({ root, files, spawnGit }) {
 function commitMove({ root, movedDirs, writtenFiles, message, spawnGit, deskRoot }) {
   if (!isGitRepository(root, spawnGit)) return undefined
   const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
-  const committed = commitPaths(root, relPaths, message, spawnGit)
+  // Commits what the index holds at those paths, through a private index: `git commit -- <paths>` leaves out a file a sparse checkout leaves out
+  // (a hosted desk leaves media out), so a moved screenshot would be committed as deleted and never added at its new path.
+  const entries = indexEntries(root, relPaths, spawnGit)
+  const committed = entries === null ? { ok: false, stderr: "git could not read the index", readback: "absent" } : commitIndexPaths(root, relPaths, entries, message, spawnGit)
   return committed.ok ? undefined : commitFailure({ root, paths: relPaths, message, committed, deskRoot })
 }
 
