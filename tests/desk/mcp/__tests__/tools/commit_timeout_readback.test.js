@@ -50,6 +50,8 @@ const landedThenTimedOut = (cmd, args, opts) => {
 
 // The call times out before the commit lands: what a slow pre-commit hook (the card guard) does.
 const timedOutBeforeCommit = (cmd, args, opts) => (isCommit(args) ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: timeout() } : spawnSync(cmd, args, opts))
+// task_move and track_rename commit through a private index (commit-tree), not `git commit`.
+const timedOutBeforeCommitTree = (cmd, args, opts) => (args.includes("commit-tree") ? { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: timeout() } : spawnSync(cmd, args, opts))
 
 // Desk cannot read back: the commit times out and every read of HEAD after it fails.
 function unreadable() {
@@ -383,7 +385,7 @@ test("the route of a task move that did not land, run by hand, commits the move 
   await fs.writeFile(path.join(root, "trip", "old-name", "notes.md"), "notes\n", "utf8")
   git(root, ["add", "-A"])
   git(root, ["commit", "-q", "-m", "fixture"])
-  const result = await task_move({ deskRoot: root, input: { track: "trip", slug: "old-name", to_slug: "new-name" }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
+  const result = await task_move({ deskRoot: root, input: { track: "trip", slug: "old-name", to_slug: "new-name" }, spawnGit: timedOutBeforeCommitTree, schedulePush: () => assert.fail("no push") })
   const route = result.commit.route_around
   assertRoute(route)
   const { code, first } = await followRoute(route)
