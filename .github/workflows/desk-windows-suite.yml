@@ -35,20 +35,20 @@ concurrency:
 
 jobs:
   windows-suite:
-    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/16)
+    name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/8)
     runs-on: windows-latest
     timeout-minutes: 60
     # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
       fail-fast: false
-      # Limit this matrix to six concurrent jobs to share the runner pool with other repositories.
-      # This per-run cap preserves all sixteen shards; it does not cap total organization concurrency.
-      max-parallel: 6
+      # All eight shards run at once: fewer, longer shards already leave room in the shared runner pool.
+      # (Sixteen shards were capped at six at a time.)
+      max-parallel: 8
       matrix:
         mode: ${{ fromJSON(inputs.elevated && '["elevated","standard"]' || '["standard"]') }}
-        # Sixteen shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about an hour of test time in all, so under four minutes per shard; the longest single file takes about two). Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 100 minutes of test time in all, so about 13 minutes per shard; the longest single file, factory/factory_cli.test.js, takes about 12, so more shards cannot finish sooner). Sixteen shards used twice the jobs from the organization's 60 concurrent job slots, which every repository shares, for no gain in wall time (2026-11-07). Each shard runs its files one at a time: with three at once on the four-core runner, Git calls, sync and admission ran past their own time limits, and three of six runs failed (2026-10-26). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments, the verdict and WINDOWS_SHARDS in suite-shards.mjs agree.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
       - name: Run the suite (elevated)
         if: matrix.mode == 'elevated'
         shell: pwsh
-        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/16 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
+        run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "$env:ONLY_FILES" --repeat "$env:REPEAT"
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
@@ -101,7 +101,7 @@ jobs:
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/16 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '" --repeat ' + $env:REPEAT
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
@@ -111,7 +111,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/16" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/8" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
@@ -160,6 +160,6 @@ jobs:
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 16 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}
