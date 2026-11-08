@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -109,7 +109,7 @@ test("Desk's own migrations all parse", () => {
 })
 
 test("Desk's own migration blocks never put a backslash before a double quote or a double quote inside single quotes, which Windows garbles on bash's command line", () => {
-  // runBlock passes a block to bash as `-c <block>`; on Windows that is one command line, and bash misreads a backslash-quote pair from it.
+  // runBlock runs a block from a file now, but a block an older Desk passes as `-c <block>` is garbled on Windows by either pair, so neither comes back.
   for (const migration of readMigrations(deskPluginRoot)) {
     for (const [name, block] of Object.entries(migration.blocks)) {
       assert.equal(/\\"/u.test(block), false, `${migration.id} ${name}`)
@@ -202,6 +202,22 @@ test("runBlock runs the block with the bash it is given, which on Windows defaul
   await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
   await runBlock("exit 0", { env: {}, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
   assert.deepEqual(seen, ["C:\\Git\\bin\\bash.exe", resolveBash(), resolveBash()])
+})
+
+test("runBlock runs the block from a file, never as a command-line argument Windows would garble, and leaves no file behind", async () => {
+  const runs = []
+  const spy = (command, args, options) => { runs.push({ args, block: readFileSync(args[0], "utf8") }); return spawn("bash", args, options) }
+  const block = `q='"'; printf '%s' "say $q\\"hi\\"$q it's done"`
+  const ran = await runBlock(block, { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
+  assert.equal(ran.status, 0)
+  assert.equal(ran.stdout, `say ""hi"" it's done`)
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0].args.length, 1, "only the file path reaches bash's command line")
+  assert.equal(runs[0].block, block)
+  assert.equal(existsSync(path.dirname(runs[0].args[0])), false, "the block's file is removed once bash exits")
+  const failed = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: (command, args) => { runs.push({ args }); return spawn(path.join(path.dirname(args[0]), "no-such-bash"), [], {}) } })
+  assert.equal(failed.unavailable, true)
+  assert.equal(existsSync(path.dirname(runs[1].args[0])), false, "and when bash cannot start")
 })
 
 const RELAY_ERROR = "<3>WSL (9 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed: No such file or directory"

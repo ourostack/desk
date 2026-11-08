@@ -35,7 +35,7 @@
 // and imports nothing outside Node's built-ins, because the hooks run in
 // whatever Node the host puts first on PATH.
 
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -143,7 +143,13 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     }
     // On Windows there are no process groups to kill; the block itself is killed.
     const posix = platform !== "win32"
-    const child = spawn(bash, ["-c", block], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    // The block runs from a file, never as `-c <block>`: Windows hands a child its arguments as one command line, and bash garbles a block's
+    // quotes when it splits that line back up. A file path has no quotes to garble.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "desk-migration-"))
+    const file = path.join(dir, "block.sh")
+    writeFileSync(file, block)
+    const cleanUp = () => rmSync(dir, { recursive: true, force: true })
+    const child = spawn(bash, [file], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     let timedOut = false
@@ -162,10 +168,12 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     }, Math.max(1, Math.floor(timeoutMs)))
     child.once("error", () => {
       clearTimeout(timer)
+      cleanUp()
       resolve({ status: null, stdout, stderr, timedOut: false, unavailable: true })
     })
     child.once("close", (code) => {
       clearTimeout(timer)
+      cleanUp()
       // A relay with a working distro runs the block for real: exit 0, or a non-zero exit that printed something, is a genuine result. A relay that
       // failed with nothing on stdout is treated as unavailable, even though a distro that has bash and a Detect that legitimately exits 1 with no
       // output looks the same. That ambiguity resolves toward the loud degraded state ("could not be checked") over a silent "not needed", because
