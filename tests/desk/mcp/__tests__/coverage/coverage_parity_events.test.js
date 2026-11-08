@@ -80,3 +80,49 @@ test("a pull request trigger that can skip a pull request is refused whatever li
     ], limit[0])
   }
 })
+
+test("a push filtered only by paths-ignore covers the root scripts unless it ignores them", t => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const packageJsonPath = path.join(root, "package.json")
+  const workflowPath = path.join(root, "workflow.yml")
+  writeFileSync(packageJsonPath, JSON.stringify({
+    scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
+  }))
+  const workflow = (ignored) => [
+    "on:",
+    "  pull_request:",
+    "  push:",
+    "    branches:",
+    "      - main",
+    "    paths-ignore:",
+    ...ignored.map((entry) => `      - "${entry}"`),
+    "jobs:",
+    "  tests:",
+    "    steps:",
+    "      - run: npm run test:coverage",
+  ].join("\n")
+
+  writeFileSync(workflowPath, workflow(["docs/**", "LICENSE"]))
+  assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }), { ok: true, issues: [] })
+
+  // An exact entry, a plain dir/** above the scripts, and any other wildcard (even one ending in /**) all count as skipping them.
+  for (const ignored of ["scripts/**", "*.cjs", "**/*", "scripts/*.cjs", "**/scripts/**"]) {
+    writeFileSync(workflowPath, workflow(["docs/**", ignored]))
+    assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }).issues, [
+      "desk MCP CI push.paths must include scripts/*.cjs",
+    ], `${ignored} may skip the root scripts`)
+  }
+})
+
+test("a push to main with no path filter at all covers the root scripts", t => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const packageJsonPath = path.join(root, "package.json")
+  const workflowPath = path.join(root, "workflow.yml")
+  writeFileSync(packageJsonPath, JSON.stringify({
+    scripts: { "test:coverage": "node ../../../tools/desk-build/scripts/run-coverage.js" },
+  }))
+  writeFileSync(workflowPath, ["on:", "  pull_request:", "  push:", "    branches:", "      - main", "jobs:", "  tests:", "    steps:", "      - run: npm run test:coverage"].join("\n"))
+  assert.deepEqual(assertCoverageCommandParity({ packageJsonPath, workflowPath }), { ok: true, issues: [] })
+})

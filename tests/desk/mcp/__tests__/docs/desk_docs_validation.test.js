@@ -173,6 +173,79 @@ test("workflow validation requires docs command and host/artifact path filters",
     ".github/workflows/desk-mcp-tests.yml path filters must include scripts/test-desk-docs.cjs",
   ])
 
+  // A push filtered only by paths-ignore covers every required path it does not ignore.
+  const ignoreErrors = []
+  docsValidator.validateWorkflowWiring(ignoreErrors, {
+    requirements: [{
+      path: ".github/workflows/desk-mcp-tests.yml",
+      command: "node scripts/test-desk-docs.cjs",
+      paths: ["plugins/desk/README.md", "docs/guide.md"],
+    }],
+    readFile: () => [
+      "on:",
+      "  push:",
+      "    paths-ignore:",
+      '      - "docs/**"',
+      "      - LICENSE",
+      "jobs:",
+      "  run: node scripts/test-desk-docs.cjs",
+    ].join("\n"),
+  })
+  assert.deepEqual(ignoreErrors, [
+    ".github/workflows/desk-mcp-tests.yml path filters must not ignore docs/guide.md",
+  ])
+  // Any wildcard other than a plain dir/** counts as ignoring, and a pull_request filter does not stand in for the push one.
+  const wildcardErrors = []
+  docsValidator.validateWorkflowWiring(wildcardErrors, {
+    requirements: [{ path: "w.yml", command: "node scripts/test-desk-docs.cjs", paths: ["plugins/desk/README.md"] }],
+    readFile: () => [
+      "on:",
+      "  pull_request:",
+      "    paths:",
+      "      - \"plugins/**\"",
+      "  push:",
+      "    paths-ignore:",
+      "      - \"**/*.md\"",
+      "jobs:",
+      "  run: node scripts/test-desk-docs.cjs",
+    ].join("\n"),
+  })
+  assert.deepEqual(wildcardErrors, ["w.yml path filters must not ignore plugins/desk/README.md"])
+  // A push block that ends the file is read to its end; an exact entry and a dir/** under a wildcard both count as ignoring.
+  const tailErrors = []
+  docsValidator.validateWorkflowWiring(tailErrors, {
+    requirements: [{ path: "t.yml", command: "node scripts/test-desk-docs.cjs", paths: ["SETUP.md", "plugins/desk/docs/a.md", "scripts/x.cjs"] }],
+    readFile: () => [
+      "jobs:",
+      "  run: node scripts/test-desk-docs.cjs",
+      "on:",
+      "  push:",
+      "    paths-ignore:",
+      "      - SETUP.md",
+      "      - \"**/docs/**\"",
+    ].join("\n"),
+  })
+  // `**/docs/**` has a wildcard before its /**, so it counts as ignoring every path, scripts/x.cjs included.
+  assert.deepEqual(tailErrors, [
+    "t.yml path filters must not ignore SETUP.md",
+    "t.yml path filters must not ignore plugins/desk/docs/a.md",
+    "t.yml path filters must not ignore scripts/x.cjs",
+  ])
+  // With no push block at all, the listed path filters are what count.
+  const noPushErrors = []
+  docsValidator.validateWorkflowWiring(noPushErrors, {
+    requirements: [{ path: "n.yml", command: "node scripts/test-desk-docs.cjs", paths: ["scripts/x.cjs"] }],
+    readFile: () => ["on:", "  pull_request:", "    paths:", '      - "scripts/x.cjs"', "  run: node scripts/test-desk-docs.cjs"].join("\n"),
+  })
+  assert.deepEqual(noPushErrors, [])
+  // A requirement that names no paths needs only its command, even when the push skips some paths.
+  const commandOnlyErrors = []
+  docsValidator.validateWorkflowWiring(commandOnlyErrors, {
+    requirements: [{ path: "c.yml", command: "node scripts/test-desk-docs.cjs" }],
+    readFile: () => ["on:", "  push:", "    paths-ignore:", "      - LICENSE", "jobs:", "  run: node scripts/test-desk-docs.cjs"].join("\n"),
+  })
+  assert.deepEqual(commandOnlyErrors, [])
+
   const commandErrors = []
   docsValidator.validateWorkflowWiring(commandErrors, {
     requirements: [{

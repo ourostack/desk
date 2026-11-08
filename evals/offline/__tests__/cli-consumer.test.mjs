@@ -236,9 +236,11 @@ test("the public workflow reports relevant-revision status without carrying any 
   assert.match(job, /permissions:\n {6}contents: read/);
   assert.doesNotMatch(job, /secrets\./);
   assert.doesNotMatch(workflow, /\/Users\/|\.local\/state|private-reports/);
-  for (const trigger of ["evals/offline/**", "evals/*.json", "AGENTIC-ENGINEERING-V2.md"]) {
-    // Only the push trigger filters paths; every pull request runs the workflow so main's required "CI gate" check always reports.
-    assert.equal(workflow.split(`- "${trigger}"`).length, 2, trigger);
+  // Every pull request runs the workflow so main's required "CI gate" check always reports, and a push to main skips only the docs
+  // no test reads (paths-ignore); none of the evaluation sources is on that list.
+  const [ignored] = workflowPathFilters(workflow, "paths-ignore");
+  for (const trigger of ["evals/offline/cases/v2-alpha-v1/dataset.json", "evals/engineering-v2-kernel.json", "AGENTIC-ENGINEERING-V2.md"]) {
+    assert.ok(!ignored.some(pattern => triggerMatches(pattern, trigger)), trigger);
   }
   // The single existing verified-pack upload stays last; the status step publishes no second artifact.
   assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
@@ -277,11 +279,11 @@ function triggerMatches(pattern, target) {
 // meaning, so such a pattern must be refused rather than silently mis-modelled.
 const modelledPattern = (pattern) => /^[A-Za-z0-9._/*-]+$/u.test(pattern);
 
-function workflowPathFilters(workflow) {
+function workflowPathFilters(workflow, key = "paths") {
   const lines = workflow.split("\n");
   const blocks = [];
   for (const [index, line] of lines.entries()) {
-    if (line !== "    paths:") continue;
+    if (line !== `    ${key}:`) continue;
     const filters = [];
     for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
       const match = lines[cursor].match(/^ {6}- "(.+)"$/u);
@@ -341,7 +343,9 @@ test("the public status step refuses a forbidden evaluation state before it publ
 
 test("every path the status routing calls relevant also starts the public workflow", () => {
   const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
-  const blocks = workflowPathFilters(workflow);
+  // A push to main runs on every path but the docs no test reads (paths-ignore), so a relevant path must match no ignore entry.
+  assert.equal(workflowPathFilters(workflow).length, 0, "no event narrows the workflow to a list of paths");
+  const blocks = workflowPathFilters(workflow, "paths-ignore");
   assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "every pull request starts the workflow, so no path can miss it");
   assert.equal(blocks.length, 1, "only push declares path filters");
   const probes = [
@@ -361,7 +365,7 @@ test("every path the status routing calls relevant also starts the public workfl
   assert.deepEqual(relevant, probes, "every probe is a relevant category representative");
   for (const value of relevant) {
     for (const [index, filters] of blocks.entries()) {
-      assert.ok(filters.some(pattern => triggerMatches(pattern, value)), `path filter block ${index} must start this workflow for ${value}`);
+      assert.ok(!filters.some(pattern => triggerMatches(pattern, value)), `path filter block ${index} must not skip this workflow for ${value}`);
     }
   }
   // An unrelated own-desk note is neither relevant nor a reason to claim evaluation coverage.
@@ -380,8 +384,6 @@ test("every path the status routing calls relevant also starts the public workfl
   assert.equal(triggerMatches("evals/**", "evals/offline/cases/v2-alpha-v1/dataset.json"), true);
   for (const [index, filters] of blocks.entries()) {
     assert.equal(new Set(filters).size, filters.length, `path filter block ${index} must be duplicate-free`);
-    assert.ok(filters.includes("package.json") && filters.includes("package-lock.json"), `path filter block ${index} keeps its explicit root manifest entries`);
-    assert.ok(filters.includes("**/package.json") && filters.includes("**/package-lock.json"), `path filter block ${index} keeps its recursive manifest entries`);
     // The bounded matcher models `*` and `**` only; these filters must therefore use no other wildcard feature.
     for (const pattern of filters) assert.ok(modelledPattern(pattern), `path filter ${pattern} stays inside the modelled syntax`);
   }

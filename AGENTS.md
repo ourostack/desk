@@ -1,0 +1,28 @@
+# AGENTS.md
+
+## Pull requests merge within 30 minutes
+
+Follow ourostack's shared rule, [every PR merges within 30 minutes](https://github.com/ourostack/.github/blob/main/agents/prs-merge-within-30-minutes.md). Finish, review and validate on your branch first, then publish with `gh ouro-pr`, which turns auto-merge on so green means merged. When a PR here shows on the [PR clock](https://github.com/ourostack/.github/issues?q=is%3Aissue+is%3Aopen+label%3Apr-clock), act on it now: merge it if green, fix the cause if red (file an issue before any rerun), rebase it if conflicted, or close it with a reason if it isn't going anywhere.
+
+## CI tiers
+
+A pull request runs the fast tier, about 10 minutes, all on Linux:
+
+- **Quick checks** (`desk-mcp-tests.yml`) runs first, in about 2 minutes. It parses every changed JavaScript, JSON and YAML file and runs the changed Desk test files that fit its budget. Everything else waits for it, so a syntax error fails fast.
+- After it: the coverage shards and the coverage gate, unused code, the offline eval tests when the change touches them, and the Linux legs of the browser, Crew member-binding and black-box checks.
+- `Validate skills` and `Claude Code plugin load` run alongside.
+- A change to nothing but `docs/`, `SETUP.md` or `LICENSE` skips all but Quick checks and the skill checks (which read `SETUP.md`). The root `README.md` is not on the list, because a test reads it. That list is the only one that may skip anything, and `windows_suite_shards.test.js` keeps it the same in Quick checks and in both main workflows.
+
+Main requires `CI gate`, `Validate skills` and `Claude Code plugin load`. `CI gate` knows which jobs a pull request may skip, so a skipped job never passes it by accident.
+
+The heavy tier runs after the merge, on every push to `main` and on any dispatch: the Windows suite (16 shards), the Windows and macOS legs, the runtime packs, the RC and stable release dry runs (the auto one runs on pull requests, to check changelog fragments), native Windows and Factory macOS protection. Nothing on `main` is ever cancelled. To check a risky Windows or macOS change before you merge, dispatch the workflow on your branch (`gh workflow run desk-windows-suite.yml --ref <branch>`).
+
+The Desk release waits for `desk MCP tests`, `desk MCP tests on Windows` and `Factory macOS protection` to pass on the commit it ships (`.github/scripts/main-ci-gate.mjs`). An older run counts only when nothing changed since would have started that workflow; a dispatch with `only` set never counts. A red `main` stops releases until it is fixed. While merges keep landing faster than main's CI finishes, a release hands off to the next run instead of shipping; the daily run and any quiet half hour release what is pending.
+
+## Red main
+
+When a heavy-tier check fails on `main`, its workflow opens a `main is red: <check>` issue labelled `red-main`. The issue closes itself when the check passes on a `main` commit that carries the failure.
+
+- **Who fixes it:** the author of the pull request whose merge turned `main` red. Fix it or revert it within 30 minutes of the issue opening.
+- **If that author is gone** (the session ended, or nothing happens within 30 minutes): whoever reads the issue first reverts the merge commit through a pull request. Agents draining this repository's issues take `red-main` issues before anything else.
+- A random failure gets its own issue before anyone reruns it.

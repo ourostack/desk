@@ -1,5 +1,20 @@
 # desk plugin — changelog
 
+## 3.2.72 — 2026-11-08
+
+Desk's commits from a temporary index, which `task_archive` and the desk tidy (`desk_save` with `tidy: true`) make, no longer overwrite another writer's commit (#632). Desk used to seed a private index from `HEAD` and then run a plain `git commit` with it, so a commit another session made in between was silently undone by the next one. These commits now go through the same core as `scripts/finish-commit.js`: Desk builds the commit from the private index, checks the whole tree it built against the entries it judged (every file under a selected folder included, and in a desk that sits in a subfolder of its repository), runs the repository's commit hooks through Git with Desk's own commit marker, and moves the branch with one compare-and-swap against the `HEAD` it read, so a branch that moved is refused and the other writer's commit stands ([core](../mcp/src/util/cas-commit.js), [temporary-index commit](../mcp/src/util/git-stage.js)). Commits Desk makes with `git commit -- <paths>`, as most tools do, are unchanged.
+
+What changes for these commits:
+
+- They hold while a merge, cherry-pick, revert, rebase or sequencer operation is in progress, and commit nothing. Git leaves a revert in progress even when `git revert --no-commit` applies cleanly, so the tidy migration's undo now ends the revert with `git revert --quit`, which keeps what it staged, before it commits with `desk_save`.
+- A tidy (`desk_save` with `tidy: true`) holds when Git holds one of its paths in conflict, and stages nothing, instead of staging the conflicted file and marking the conflict resolved with its markers still in it. The tidy migration's undo now stops at a conflicted revert and leaves it for the human; it never runs `git revert --abort`, which also drops other sessions' staged work.
+- A pre-commit hook still runs as `git commit` runs it, but if it changes what would be committed, such as a formatter that stages its own edits, Desk commits nothing and holds: the branch does not move and the shared index is untouched. Desk does not undo what the hook wrote to the working tree. A hook that writes only to the working tree does not hold the commit.
+- The whole commit has one 10-second budget, not 10 seconds for each Git call: the hooks, the reads after the branch update and the read-back after a failure all share it. Once it runs out, Desk runs no further Git call, so it never moves the branch twice, and an answer it could not read back is `unknown`, never `not committed`. Its reason says what happened: a branch it could not read after the update is reported as unread, not as missing the commit, and a branch update the budget left no room for is reported as never dispatched, not as cut off.
+- A branch update that is cut off, or a commit that landed before its post-commit hook failed or was cut off, is never read back as not committed: Desk reads back what the branch holds and answers `committed` or `unknown`, naming the commit it made. Nothing is ever repeated.
+- A failure says which step failed and why, such as `the pre-commit hook was cut off`, instead of `timeout`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.71 — 2026-11-06
 
 Desk now ships a native runtime dependency pack for Darwin ARM64 on Node 24 (ABI 137), alongside its existing Node 22 pack. The exact-host CI lane verifies the native payload and loads the committed pack with the current MCP source and card-persistence tools. This prevents that supported target from requiring a different Node installation; it does not upgrade a server already running from an older cached source mirror.

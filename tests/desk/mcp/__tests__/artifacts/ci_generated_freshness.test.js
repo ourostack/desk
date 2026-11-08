@@ -367,15 +367,6 @@ function pathFilterCovers(actualFilter, requiredPath) {
   return false
 }
 
-function assertPathFiltersCoverAll(actual, expected, label) {
-  for (const value of expected) {
-    assert.ok(
-      actual.some((filter) => pathFilterCovers(filter, value)),
-      `${label} must include or cover ${value}`,
-    )
-  }
-}
-
 function scriptExists(scriptPath) {
   return existsSync(path.join(repoRoot, scriptPath))
 }
@@ -1074,19 +1065,18 @@ test("desk MCP CI path filters include every host-facing freshness input", () =>
   const workflow = loadText(".github", "workflows", "desk-mcp-tests.yml")
 
   // Every pull request runs the workflow with no path filter, because main requires its "CI gate" job and a required check a
-  // filter skipped would never report (required_ci_gate.test.js). Only pushes to main are filtered.
+  // filter skipped would never report (required_ci_gate.test.js). A push to main skips only the docs no test reads (paths-ignore),
+  // so no freshness input may be on that list.
   assert.match(workflow, /^on:\n  pull_request:\n  push:\n/mu, "desk MCP CI runs on every pull request")
 
-  for (const eventName of ["push"]) {
-    const filters = workflowPathFilters(workflow, eventName)
-    assertPathFiltersCoverAll(
-      filters,
-      requiredHostFreshnessPathFilters,
-      `desk MCP CI ${eventName}.paths`,
-    )
+  const { data } = matter(`---\n${workflow}\n---\n`)
+  assert.deepEqual(workflowPathFilters(workflow, "push"), [], "a push to main is not narrowed to a list of paths")
+  const ignored = data.on.push["paths-ignore"]
+  assert.ok(Array.isArray(ignored) && ignored.length > 0, "a push to main skips only a listed set of docs")
+  for (const required of [...requiredHostFreshnessPathFilters, "scripts/*.cjs", hostManifestScript]) {
     assert.ok(
-      filters.includes("scripts/*.cjs") || filters.includes(hostManifestScript),
-      `desk MCP CI ${eventName}.paths must include root host verifier script changes`,
+      !ignored.some((filter) => pathFilterCovers(filter, required)),
+      `desk MCP CI push.paths-ignore must not skip ${required}`,
     )
   }
 })
