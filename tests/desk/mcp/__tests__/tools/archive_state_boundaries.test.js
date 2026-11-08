@@ -9,6 +9,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
 import { archiveFixture,git } from "./_archive_state_helpers.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { beforeLanding } from "../_index_commit_seam.js"
 
 const prepare = (f,extra = {}) => prepareArchiveState({
   effectiveRoot:f.root,srcDir:f.source,archiveDir:f.destination,srcFile:path.join(f.source,"task.md"),
@@ -435,7 +436,8 @@ for (const fault of ["stage failure","missing stage","wrong stage","metadata rea
         }
         if (fault === "metadata status") { intercepted = true; return {status:1,stdout:"",stderr:""} }
       }
-      if (args[2] === "commit" && fault === "commit failure") { intercepted = true; return failed }
+      // The archive's commit is refused before it lands: its pre-commit step (#632 commits without `git commit`).
+      if (beforeLanding(args) && fault === "commit failure") { intercepted = true; return failed }
       return spawnSync(command,args,options)
     }
     const state = await prepare(f,{spawnGit})

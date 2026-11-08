@@ -23,8 +23,9 @@ import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
-import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { commitFailure, commitRoute } from "../util/route-around.js"
+import { operationAnswer } from "../util/cas-commit.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
@@ -162,7 +163,8 @@ async function writeFiles(checked) {
  * unstaged changes are staged here. A task card is never staged here, and it is accepted only as a staged pure rename (`R100`) or deletion, so a
  * card edit cannot ride through. The commit is limited to `paths`, so other staged work stays staged, and the message ends with the
  * `Desk-Tidy: true` trailer (added when missing) so reports count it as housekeeping. The same call commits the undo of a tidy after
- * `git revert --no-commit`.
+ * `git revert --no-commit` once a revert that applied cleanly is ended with `git revert --quit`; while the revert is still in progress, or a listed
+ * path is in conflict, it holds and commits nothing (#632).
  *
  * Refuses (throws) any path that resolves outside the resolved --person
  * write prefix — a crew participant can commit only their own paths.
@@ -292,6 +294,16 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
       throw new Error(`desk_save: replace ${paths[i]} with the file paths of the tidy (the old and new path of each moved task card, and each file you fixed); tidy: true takes files, never a folder or a pattern`)
     }
   }
+  // A path Git holds in conflict (an unfinished merge, cherry-pick or revert, the tidy's undo included) is never staged: staging it
+  // would mark the conflict resolved with its markers in the file. It holds before anything is staged, so the index stays as it was.
+  if (hasUnmergedPath(deskRoot, rels, spawnGit)) {
+    const conflicted = rels.filter((p) => hasUnmergedPath(deskRoot, [p], spawnGit)).join(", ")
+    return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), `Git holds ${conflicted} in conflict, so Desk staged and committed nothing; resolve the conflict, or leave it for the human`) }
+  }
+  // A merge, cherry-pick, revert or rebase in progress holds the same way, before anything is staged: commitIndexPaths would hold
+  // anyway, and staging first would leave this tidy's files in the index for that operation's own commit.
+  const operation = operationAnswer(spawnGit, deskRoot)
+  if (operation) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), operation.reason) }
   const isCard = (p) => isLiveCardPath(p)
   const cards = rels.filter(isCard)
   const others = rels.filter((p) => !isCard(p))

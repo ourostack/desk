@@ -24,6 +24,8 @@ import {
   readBackCommit,
   YIELD_ENV,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
+import { finishCommit } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
+import { afterLanding, beforeLanding, branchUpdate } from "../_index_commit_seam.js"
 
 async function mkTempRepo() {
   const root = await mkTempRoot("desk-git-stage-test-")
@@ -286,8 +288,10 @@ for (const indexed of [false, true]) test(`a ${indexed ? "temporary-index" : "pa
   git(root, ["add", "a.txt"])
   const entries = indexEntries(root, ["a.txt"], spawnSync)
   let dispatches = 0
+  // The temporary-index commit's lock-shaped failure comes after the commit landed: its post-commit step (#632).
+  const landing = indexed ? afterLanding : (args) => args[2] === "commit"
   const spawn = (command, args, options) => {
-    if (args[2] !== "commit") return spawnSync(command, args, options)
+    if (!landing(args)) return spawnSync(command, args, options)
     dispatches++
     if (dispatches === 1) {
       const applied = spawnSync(command, args, options)
@@ -345,15 +349,16 @@ test("staging waits for an observed index lock before its single mutation dispat
 // was killed after it had already written. A failed commit call is read back once, never redispatched: the commit is `committed` when a new commit on
 // HEAD holds exactly this call's message, only these paths and the content this call meant to commit; `absent` when HEAD shows no new commit to them;
 // and `unknown` otherwise. Only the read-back reads Git again.
-const landedThenTimedOut = (counter) => (command, args, options) => {
+const isCommit = (args) => args[2] === "commit"
+const landedThenTimedOut = (counter, landing = isCommit) => (command, args, options) => {
   const actual = spawnSync(command, args, options)
-  if (args[2] !== "commit") return actual
+  if (!landing(args)) return actual
   counter.commits++
   assert.equal(actual.status, 0, actual.stderr)
   return etimedoutResult()
 }
-const neverRanThenTimedOut = (counter) => (command, args, options) => {
-  if (args[2] !== "commit") return spawnSync(command, args, options)
+const neverRanThenTimedOut = (counter, dispatch = isCommit) => (command, args, options) => {
+  if (!dispatch(args)) return spawnSync(command, args, options)
   counter.commits++
   return etimedoutResult()
 }
@@ -381,12 +386,24 @@ for (const indexed of [false, true]) {
     await fs.writeFile(path.join(root, "a.txt"), "two\n")
     git(root, ["add", "--", "a.txt"])
   }
+  // The path commit is one `git commit`. The temporary-index commit (#632) is hooks, `git commit-tree` and one compare-and-swap
+  // `git update-ref`: a cut-off before it lands is its pre-commit step's, after it lands its post-commit step's, a race its branch
+  // update's; and its failures say which step and why, where the path commit says `timeout` or Git's own words.
+  const before = indexed ? beforeLanding : isCommit
+  const landing = indexed ? afterLanding : isCommit
+  const racing = indexed ? branchUpdate : isCommit
+  const said = (result, words, pattern) => {
+    const { stderr, ...rest } = result
+    if (indexed) assert.match(stderr, pattern)
+    else assert.equal(stderr, words)
+    return rest
+  }
 
   test(`a ${kind} commit that lands but times out is read back as committed, dispatched once`, async () => {
     const root = await repoWithChange()
     await staged(root)
     const counter = { commits: 0 }
-    const result = commit(root, landedThenTimedOut(counter))
+    const result = commit(root, landedThenTimedOut(counter, landing))
     assert.equal(result.ok, true)
     assert.equal(result.readback, "committed")
     assert.equal(counter.commits, 1)
@@ -398,8 +415,8 @@ for (const indexed of [false, true]) {
     const root = await repoWithChange()
     await staged(root)
     const counter = { commits: 0 }
-    const result = commit(root, neverRanThenTimedOut(counter))
-    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "absent" })
+    const result = commit(root, neverRanThenTimedOut(counter, before))
+    assert.deepEqual(said(withoutCapture(root, result), "timeout", /pre-commit hook was cut off/u), { ok: false, readback: "absent" })
     assert.equal(counter.commits, 1)
     assert.equal(commitCount(root), 1)
   })
@@ -409,13 +426,13 @@ for (const indexed of [false, true]) {
     await staged(root)
     const counter = { commits: 0 }
     const spawn = (command, args, options) => {
-      if (args[2] !== "commit") return spawnSync(command, args, options)
+      if (!racing(args)) return spawnSync(command, args, options)
       counter.commits++
       git(root, ["commit", "-q", "-m", "someone else", "--", "a.txt"])
       return etimedoutResult()
     }
     const result = commit(root, spawn)
-    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.deepEqual(said(withoutCapture(root, result), "timeout", /branch update was cut off/u), { ok: false, readback: "unknown" })
     assert.equal(counter.commits, 1)
   })
 
@@ -426,13 +443,13 @@ for (const indexed of [false, true]) {
     let broken = false
     const spawn = (command, args, options) => {
       if (broken) return etimedoutResult()
-      if (args[2] !== "commit") return spawnSync(command, args, options)
+      if (!racing(args)) return spawnSync(command, args, options)
       counter.commits++
       broken = true
       return etimedoutResult()
     }
     const result = commit(root, spawn)
-    assert.deepEqual(withoutCapture(root, result), { ok: false, stderr: "timeout", readback: "unknown" })
+    assert.deepEqual(said(withoutCapture(root, result), "timeout", /branch update was cut off/u), { ok: false, readback: "unknown" })
     assert.equal(counter.commits, 1)
   })
 
@@ -444,7 +461,7 @@ for (const indexed of [false, true]) {
     const counter = { commits: 0 }
     const spawn = (command, args, options) => {
       const actual = spawnSync(command, args, options)
-      if (args[2] !== "commit") return actual
+      if (!landing(args)) return actual
       counter.commits++
       assert.equal(actual.status, 0, actual.stderr)
       writeFileSync(path.join(root, "a.txt"), "someone else\n")
@@ -453,8 +470,7 @@ for (const indexed of [false, true]) {
     }
     const result = commit(root, spawn)
     assert.equal(result.ok, false)
-    assert.equal(result.readback, "unknown")
-    assert.equal(result.stderr, "timeout")
+    assert.equal(said(result, "timeout", /post-commit hook/u).readback, "unknown")
     assert.equal(result.landed.head, git(root, ["rev-parse", "HEAD"]).trim())
     assert.equal(git(root, ["log", "-1", "--format=%s", result.landed.commit]).trim(), "save")
     assert.equal(counter.commits, 1)
@@ -463,8 +479,8 @@ for (const indexed of [false, true]) {
   test(`a ${kind} commit Git refused with an error is read back as absent`, async () => {
     const root = await repoWithChange()
     await staged(root)
-    const spawn = (command, args, options) => (args[2] === "commit" ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options))
-    assert.deepEqual(withoutCapture(root, commit(root, spawn)), { ok: false, stderr: "hook said no", readback: "absent" })
+    const spawn = (command, args, options) => (before(args) ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options))
+    assert.deepEqual(said(withoutCapture(root, commit(root, spawn)), "hook said no", /pre-commit hook refused the commit: hook said no/u), { ok: false, readback: "absent" })
   })
 }
 
@@ -615,4 +631,501 @@ test("a path commit whose working tree differs from the index carries no capture
   await fs.writeFile(path.join(root, "a.txt"), "three\n")
   const result = commitPaths(root, ["a.txt"], "save", (command, args, options) => (args[2] === "commit" ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(command, args, options)))
   assert.deepEqual(result, { ok: false, stderr: "hook said no", readback: "absent" })
+})
+
+// #632: the normal temporary-index commit publishes only against the HEAD it qualified. It used to seed a private index from HEAD and then run a
+// plain `git commit`, which takes whatever HEAD is when it starts as the parent: another writer's commit landing in between was silently undone
+// by a tree built before it. Now the commit is made on exactly the HEAD it read and moves the branch by one compare-and-swap, so the other
+// writer's commit stands, nothing of this call's is committed, and the call carries its capture for the route to finish later.
+const headOf632 = (root) => git(root, ["rev-parse", "HEAD"]).trim()
+const branchOf632 = (root) => git(root, ["symbolic-ref", "--short", "HEAD"]).trim()
+
+async function stagedChange() {
+  const root = await repoWithChange()
+  git(root, ["add", "--", "a.txt"])
+  await fs.writeFile(path.join(root, "b.txt"), "someone's staged selection\n")
+  git(root, ["add", "--", "b.txt"])
+  return root
+}
+
+function foreignCommit(root) {
+  writeFileSync(path.join(root, "foreign.txt"), "theirs\n")
+  git(root, ["add", "--", "foreign.txt"])
+  git(root, ["commit", "-q", "-m", "another writer", "--", "foreign.txt"])
+  return headOf632(root)
+}
+
+// A real commit by another writer, made once, at the first Git call `when` picks.
+function raceAt(when) {
+  let theirs = null
+  let seeded = false
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    if (theirs === null && when(verb, seeded)) theirs = foreignCommit(args[1])
+    if (verb[0] === "update-index" && verb.includes("--index-info")) seeded = true
+    return spawnSync(command, args, options)
+  }
+  return { spawn, theirs: () => theirs }
+}
+
+const publishing = (verb) => verb[0] === "commit" || verb[0] === "update-ref"
+const afterSeeding = (verb, seeded) => seeded
+
+for (const [label, when] of [["after the private index is built", afterSeeding], ["at the call that would publish the commit", publishing]]) {
+  test(`#632: another writer's commit ${label} stands: nothing is committed over it, and the call carries its capture`, async () => {
+    const root = await stagedChange()
+    const before = headOf632(root)
+    const entries = indexEntries(root, ["a.txt"], spawnSync)
+    const race = raceAt(when)
+    const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
+    const theirs = race.theirs()
+    assert.ok(theirs, "the other writer committed")
+    assert.equal(headOf632(root), theirs, "HEAD is the other writer's commit")
+    assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n", "their commit is not undone")
+    assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n", "nothing of this call's is committed")
+    assert.equal(result.ok, false)
+    assert.equal(result.readback, "absent")
+    assert.deepEqual(result.capture, { before, branch: branchOf632(root), expected: [`100644 ${git(root, ["rev-parse", ":a.txt"]).trim()}\ta.txt`] })
+    assert.deepEqual(git(root, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["a.txt", "b.txt"], "the shared index and its staged selection are as they were")
+  })
+}
+
+test("#632: a HEAD that moves before the private index is seeded is not committed on: the capture names the HEAD that was read", async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const race = raceAt((verb) => verb[0] === "read-tree")
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
+  assert.equal(headOf632(root), race.theirs())
+  assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n")
+  assert.deepEqual([result.ok, result.readback, result.capture?.before], [false, "absent", before])
+})
+
+test("#632: the refused commit's capture finishes later on top of the other writer's commit, which stands", async () => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const race = raceAt(publishing)
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", race.spawn)
+  const { before, branch, expected } = result.capture
+  const finished = finishCommit({ root, paths: ["a.txt"], expected, before, branch, message: "save", commit: true, env: {} })
+  assert.equal(finished.state, "finished", finished.reason)
+  assert.equal(git(root, ["rev-parse", "HEAD^"]).trim(), race.theirs())
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+  assert.equal(git(root, ["show", "HEAD:foreign.txt"]), "theirs\n")
+})
+
+// What the commit holds is exactly the selected entries, as the index holds them, and HEAD's own entries everywhere else; the shared index is untouched.
+const treeLine = (entry, at = entry.path) => `${entry.mode} blob ${entry.sha}\t${at}\n`
+
+test("#632: a desk in a subfolder of the repository commits its paths there, not at the repository's top", async () => {
+  const top = await mkTempRepo()
+  const desk = path.join(top, "desk")
+  await fs.mkdir(desk)
+  await fs.writeFile(path.join(desk, "a.txt"), "one\n")
+  await fs.writeFile(path.join(top, "top.txt"), "top\n")
+  git(top, ["add", "--", "desk/a.txt", "top.txt"])
+  git(top, ["commit", "-q", "-m", "first"])
+  const outside = git(top, ["ls-tree", "HEAD", "--", "top.txt"])
+  await fs.writeFile(path.join(desk, "a.txt"), "two\n")
+  git(desk, ["add", "--", "a.txt"])
+  await fs.writeFile(path.join(desk, "b.txt"), "someone's staged selection\n")
+  git(desk, ["add", "--", "b.txt"])
+  const index = git(top, ["ls-files", "-s"])
+  const entries = indexEntries(desk, ["a.txt"], spawnSync)
+  const result = commitIndexPaths(desk, ["a.txt"], entries, "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(top, ["show", "HEAD:desk/a.txt"]), "two\n")
+  assert.equal(git(top, ["ls-tree", "-r", "HEAD"]), `${treeLine(entries[0], "desk/a.txt")}${outside}`, "the selected entry lands under the desk with its mode and blob; nothing lands at the repository's top")
+  assert.equal(git(top, ["ls-files", "-s"]), index, "the shared index is as it was")
+  assert.deepEqual(git(top, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["desk/b.txt"], "the other staged selection stays staged and uncommitted")
+})
+
+async function docsChange(change) {
+  const root = await mkTempRepo()
+  await fs.mkdir(path.join(root, "docs"))
+  await fs.writeFile(path.join(root, "docs", "keep.txt"), "keep\n")
+  await fs.writeFile(path.join(root, "docs", "old.txt"), "old\n")
+  await fs.writeFile(path.join(root, "out.txt"), "outside\n")
+  git(root, ["add", "--", "docs", "out.txt"])
+  git(root, ["commit", "-q", "-m", "first"])
+  await fs.writeFile(path.join(root, "docs", "keep.txt"), "kept and edited\n")
+  git(root, ["add", "--", "docs/keep.txt"])
+  change(root)
+  await fs.writeFile(path.join(root, "staged.txt"), "someone's staged selection\n")
+  git(root, ["add", "--", "staged.txt"])
+  return root
+}
+
+for (const [label, change, leaves] of [
+  ["a deleted file", (root) => git(root, ["rm", "-q", "--", "docs/old.txt"]), ["docs/keep.txt"]],
+  ["a renamed file", (root) => git(root, ["mv", "docs/old.txt", "docs/new.txt"]), ["docs/keep.txt", "docs/new.txt"]],
+]) {
+  test(`#632: a folder path with ${label} is committed as the index holds it: no leaf HEAD held under it survives`, async () => {
+    const root = await docsChange(change)
+    const outside = git(root, ["ls-tree", "HEAD", "--", "out.txt"])
+    const index = git(root, ["ls-files", "-s"])
+    const entries = indexEntries(root, ["docs"], spawnSync)
+    assert.deepEqual(entries.map((entry) => entry.path), leaves)
+    const result = commitIndexPaths(root, ["docs"], entries, "save", spawnSync)
+    assert.equal(result.ok, true, result.stderr)
+    assert.deepEqual(git(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n"), [...leaves, "out.txt"])
+    assert.equal(git(root, ["ls-tree", "-r", "HEAD"]), `${entries.map((entry) => treeLine(entry)).join("")}${outside}`, "each selected leaf with its mode and blob, and HEAD's entry outside the folder")
+    assert.equal(git(root, ["ls-files", "-s"]), index, "the shared index is as it was")
+    assert.deepEqual(git(root, ["diff", "--cached", "--name-only"]).trim().split("\n"), ["staged.txt"], "the other staged selection stays staged and uncommitted")
+  })
+}
+
+test("#632 (behaviour change): a commit while a merge is in progress is refused: nothing is committed, and the merge is left as it was", async () => {
+  const root = await repoWithChange()
+  const main = branchOf632(root)
+  git(root, ["switch", "-q", "-c", "other"])
+  await fs.writeFile(path.join(root, "o.txt"), "other\n")
+  git(root, ["add", "--", "o.txt"])
+  git(root, ["commit", "-q", "-m", "other"])
+  git(root, ["switch", "-q", main])
+  await fs.writeFile(path.join(root, "m.txt"), "main\n")
+  git(root, ["add", "--", "m.txt"])
+  git(root, ["commit", "-q", "-m", "main"])
+  git(root, ["merge", "-q", "--no-commit", "--no-ff", "other"])
+  git(root, ["add", "--", "a.txt"])
+  const before = headOf632(root)
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.deepEqual([result.ok, result.readback], [false, "absent"])
+  assert.match(result.stderr, /merge is in progress/u)
+  assert.equal(headOf632(root), before)
+  assert.equal(spawnSync("git", ["-C", root, "rev-parse", "-q", "--verify", "MERGE_HEAD"]).status, 0, "MERGE_HEAD is still there")
+})
+
+const cutOff = () => ({ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) })
+
+test("#632: a branch update cut off before it moved the branch is unknown, never absent: the commit was made and its dispatch is uncertain", async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  let updates = 0
+  const spawn = (command, args, options) => (args[2] === "update-ref" ? (updates++, cutOff()) : spawnSync(command, args, options))
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawn)
+  assert.equal(updates, 1, "dispatched once, never repeated")
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+})
+
+// One 10 s budget for the whole commit, not 10 s for each step: three hooks of 4 s each outlast it, and the third is given only what is left.
+// Time is Date's mock, advanced by the stand-in hooks; every other Git call is real.
+function budgetedHooks(t, seconds) {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() })
+  const seen = []
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    if (verb[0] === "hook" && ["pre-commit", "prepare-commit-msg", "commit-msg"].includes(verb[3])) {
+      seen.push({ hook: verb[3], timeout: options.timeout })
+      if (options.timeout < seconds * 1000) {
+        t.mock.timers.tick(options.timeout)
+        return cutOff()
+      }
+      t.mock.timers.tick(seconds * 1000)
+    }
+    return spawnSync(command, args, options)
+  }
+  return { spawn, seen }
+}
+
+test("#632: hooks that together outlast the one 10 s budget are cut off at what is left, and nothing is committed", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const { spawn, seen } = budgetedHooks(t, 4)
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.deepEqual(seen.map((s) => s.hook), ["pre-commit", "prepare-commit-msg", "commit-msg"])
+  assert.ok(seen[2].timeout <= 2000, `the third hook is given only what is left (${seen[2].timeout} ms)`)
+  assert.equal(result.ok, false)
+  assert.equal(headOf632(root), before)
+})
+
+test("#632: hooks that together stay inside the one 10 s budget commit", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const { spawn, seen } = budgetedHooks(t, 3)
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.equal(seen.length, 3)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+// The one 10 s budget is the whole commit's: the reads after the branch update and the read-back after a failure are inside it too. One step
+// spends the rest of the budget ("ran": it runs for real and the clock moves to the end; "cut": it is cut off at the end). The double records
+// every call that reaches Git and whether it was given time past the end. No call may be, the branch is moved at most once, and an answer the
+// budget left unread is unknown, never absent or committed.
+function spendsTheBudget(t, spends) {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() })
+  const end = Date.now() + 10_000
+  const calls = []
+  const toEnd = () => t.mock.timers.tick(Math.max(0, end - Date.now()))
+  const spawn = (command, args, options) => {
+    const verb = args.slice(2)
+    calls.push({ verb: verb.join(" "), past: Date.now() + options.timeout > end })
+    const how = spends(verb)
+    if (how === "cut") {
+      toEnd()
+      return cutOff()
+    }
+    const answer = spawnSync(command, args, options)
+    if (how === "ran") toEnd()
+    return answer
+  }
+  const past = () => calls.filter((call) => call.past).map((call) => call.verb)
+  const dispatched = (start) => calls.filter((call) => call.verb.startsWith(start)).length
+  return { spawn, past, dispatched }
+}
+const hookNamed = (name) => (verb) => verb[0] === "hook" && verb.at(-1) === name
+
+test("#632: a post-commit hook that spends the rest of the budget: HEAD is not read past the budget, and the commit is unknown, never committed", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (hookNamed("post-commit")(verb) ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n", "the commit stands; only reading it back was left undone")
+})
+
+test("#632: a branch update that spends the rest of the budget is dispatched once and is unknown: nothing is read and no hook is run past the budget", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "update-ref" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0, "the post-commit hook is not run once the budget has ended")
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /could not be read back inside the commit's time budget/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a branch read that spends the rest of the budget after the branch moved: the post-commit hook is not run, and the commit is unknown", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "rev-parse" && verb.at(-1) === "refs/heads/main" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out before the post-commit hook could run/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a pre-commit hook cut off at the end of the budget is unknown, never absent: it may still be running, and the read-back is not run past the budget", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (hookNamed("pre-commit")(verb) ? "cut" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("commit-tree") + budget.dispatched("update-ref"), 0)
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /pre-commit hook was cut off/u)
+})
+
+test("#632: a commit made as the budget ends does not move the branch, and is unknown, never absent: the read-back is not run past the budget", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "commit-tree" ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 0, "the branch is not moved once the budget has ended")
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /time budget ran out before the branch was moved/u)
+})
+
+// The answer after the branch update says only what was read: a branch that could not be read is unread, never "does not hold", and a branch
+// update the budget left no room for was never dispatched, never "cut off".
+test("#632: a branch read cut off after the branch moved says the branch could not be read, never that it does not hold the commit", async (t) => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const budget = spendsTheBudget(t, (verb) => (verb[0] === "rev-parse" && verb.at(-1) === "refs/heads/main" ? "cut" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("update-ref"), 1)
+  assert.equal(budget.dispatched("hook run --ignore-missing post-commit"), 0)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /refs\/heads\/main could not be read \(cut off at the end of the commit's time budget\)/u)
+  assert.doesNotMatch(result.stderr, /does not hold/u)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n", "the branch does hold the commit")
+})
+
+test("#632: a branch read that fails after the branch moved says the branch could not be read, never that it does not hold the commit", async () => {
+  const root = await stagedChange()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const failure = { status: 128, signal: null, stdout: "", stderr: "fatal: the read failed" }
+  let updates = 0
+  const spawn = (command, args, options) => {
+    if (args[2] === "update-ref") updates++
+    return args[2] === "rev-parse" && args.at(-1) === "refs/heads/main" ? failure : spawnSync(command, args, options)
+  }
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.equal(updates, 1, "dispatched once, never repeated")
+  assert.match(result.stderr, /refs\/heads\/main could not be read \(git exited 128\)/u)
+  assert.doesNotMatch(result.stderr, /does not hold/u)
+  assert.deepEqual([result.ok, result.readback], [true, "committed"], "the read-back, not the failed read, says the commit is in effect")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a branch update the budget left no room for says it was never dispatched, never that it was cut off", async (t) => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  let operationReads = 0
+  // The second read of which Git operation is in progress is the core's last before the branch update; it spends the rest of the budget.
+  const budget = spendsTheBudget(t, (verb) => (verb[1] === "--path-format=absolute" && operationReads++ === 1 ? "ran" : null))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", budget.spawn)
+  assert.equal(operationReads, 2)
+  assert.deepEqual(budget.past(), [], "no Git call is given time past the one budget")
+  assert.equal(budget.dispatched("commit-tree"), 1)
+  assert.equal(budget.dispatched("update-ref"), 0, "the branch update was never dispatched")
+  assert.equal(headOf632(root), before)
+  assert.deepEqual([result.ok, result.readback], [false, "unknown"])
+  assert.match(result.stderr, /the branch update was never dispatched/u)
+  assert.doesNotMatch(result.stderr, /cut off/u)
+})
+
+// What a plain git commit did that the commit keeps.
+function hookIn(root, name, script) {
+  const hooks = path.resolve(root, git(root, ["rev-parse", "--git-path", "hooks"]).trim())
+  writeFileSync(path.join(hooks, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
+}
+const posix = { skip: process.platform === "win32" ? "POSIX shell hooks" : false }
+
+test("#632: the hooks see Desk's own commit marker, so the card guard still lets Desk commit", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "pre-commit", '[ "$DESK_TOOL_COMMIT" = 1 ] || { echo "not Desk" >&2; exit 1; }')
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+})
+
+test("#632: a pre-commit hook that refuses commits nothing: absent, with its capture", posix, async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  hookIn(root, "pre-commit", 'echo "no" >&2; exit 1')
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.deepEqual([result.ok, result.readback, result.capture?.before], [false, "absent", before])
+  assert.equal(headOf632(root), before)
+})
+
+test("#632: a commit-msg hook's rewrite is the message committed", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "commit-msg", 'printf "\\nSigned-off-by: Hook <h@example.com>\\n" >> "$1"')
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["log", "-1", "--format=%B"]).trim(), "save\n\nSigned-off-by: Hook <h@example.com>")
+})
+
+test("#632: commit.gpgSign still signs the commit", posix, async () => {
+  const root = await stagedChange()
+  const signer = path.join(root, ".git", "fake-gpg")
+  writeFileSync(signer, '#!/bin/sh\ncat >/dev/null\nprintf "\\n[GNUPG:] SIG_CREATED D 1 8 00 0 0 0\\n" >&2\nprintf -- "-----BEGIN PGP SIGNATURE-----\\n\\nfake\\n-----END PGP SIGNATURE-----\\n"\n', { mode: 0o755 })
+  git(root, ["config", "commit.gpgSign", "true"])
+  git(root, ["config", "gpg.program", signer])
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.match(git(root, ["cat-file", "commit", "HEAD"]), /^gpgsig -----BEGIN PGP SIGNATURE-----$/mu)
+})
+
+test("#632: a post-commit hook that fails does not undo a commit HEAD holds", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "post-commit", "exit 1")
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: a post-commit hook that commits other paths after it leaves this commit in effect", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "post-commit", 'unset GIT_INDEX_FILE; [ -e hooked.txt ] || { echo hooked > hooked.txt; git add hooked.txt; git commit -q -m hooked -- hooked.txt; }')
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(lastCommitMessage(root), "hooked")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+})
+
+test("#632: the first commit on an unborn branch is a root commit", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "--", "a.txt"])
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.equal(git(root, ["rev-list", "--count", "HEAD"]).trim(), "1")
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "one\n")
+})
+
+test("#632: nothing to commit is no commit: absent, and no empty commit is made", async () => {
+  const root = await repoWithChange()
+  const before = headOf632(root)
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.deepEqual([result.ok, result.readback], [false, "absent"])
+  assert.equal(headOf632(root), before)
+})
+
+// A HEAD or branch Git cannot read before anything is built: nothing that could commit was run, so it is absent, with no capture to finish.
+for (const [label, unreadable] of [["HEAD", "rev-parse"], ["the branch", "symbolic-ref"]]) {
+  test(`#632: ${label} that Git cannot read before the commit is built dispatches nothing and commits nothing`, async () => {
+    const root = await stagedChange()
+    const before = headOf632(root)
+    const entries = indexEntries(root, ["a.txt"], spawnSync)
+    const verbs = []
+    let branchReads = 0
+    const spawn = (command, args, options) => {
+      const verb = args[2]
+      verbs.push(verb)
+      // The branch refusal's own symbolic-ref read passes; the read of the branch to commit on after it fails.
+      if (verb === unreadable && (verb === "rev-parse" || branchReads++ > 0)) return { status: 128, stdout: "", stderr: "fatal: cannot read" }
+      return spawnSync(command, args, options)
+    }
+    const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+    assert.deepEqual(result, { ok: false, stderr: "Git could not read the branch and HEAD to commit on, so nothing was committed", readback: "absent" })
+    assert.equal(headOf632(root), before)
+    assert.deepEqual(verbs.filter((verb) => ["read-tree", "hook", "commit-tree", "update-ref"].includes(verb)), [], "nothing was built, hooked or dispatched")
+  })
+}
+
+// The hook runs as git commit runs it, and what it writes stays written: Desk does not undo it. Only a change to the tree Desk judged holds.
+test("#632 (behaviour change): a pre-commit hook that changes what would be committed is held: the branch does not move and the shared index loses nothing", posix, async () => {
+  const root = await stagedChange()
+  const before = headOf632(root)
+  const index = git(root, ["ls-files", "-s"])
+  hookIn(root, "pre-commit", "echo extra > extra.txt && git add extra.txt")
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.deepEqual([result.ok, result.readback], [false, "absent"])
+  assert.equal(result.stderr, "nothing was committed: the pre-commit hook changed what would be committed; Desk commits only the captured change")
+  assert.deepEqual(result.capture, { before, branch: branchOf632(root), expected: [`100644 ${git(root, ["rev-parse", ":a.txt"]).trim()}\ta.txt`] })
+  assert.equal(headOf632(root), before, "the branch does not move")
+  assert.equal(git(root, ["ls-files", "-s"]), index, "every entry of the shared index is as it was, the other staged b.txt included")
+  assert.equal(await fs.readFile(path.join(root, "extra.txt"), "utf8"), "extra\n", "the hook ran, and what it wrote is not undone")
+})
+
+test("#632: a pre-commit hook that writes only to the working tree does not hold the commit: the tree Desk judged is committed", posix, async () => {
+  const root = await stagedChange()
+  hookIn(root, "pre-commit", "echo note > hook-note.txt")
+  const result = commitIndexPaths(root, ["a.txt"], indexEntries(root, ["a.txt"], spawnSync), "save", spawnSync)
+  assert.equal(result.ok, true, result.stderr)
+  assert.deepEqual(git(root, ["ls-tree", "-r", "--name-only", "HEAD"]).trim().split("\n"), ["a.txt"])
+  assert.equal(git(root, ["show", "HEAD:a.txt"]), "two\n")
+  assert.equal(await fs.readFile(path.join(root, "hook-note.txt"), "utf8"), "note\n")
+})
+
+test("#632: a Git without `git hook run` holds with that reason, not as a hook refusal", async () => {
+  const root = await stagedChange()
+  const before = git(root, ["rev-parse", "HEAD"]).trim()
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const spawn = (command, args, options) => (args[2] === "hook"
+    ? { status: 1, stdout: "", stderr: "git: 'hook' is not a git command. See 'git --help'." }
+    : spawnSync(command, args, options))
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", spawn)
+  assert.deepEqual([result.ok, result.readback], [false, "absent"])
+  assert.match(result.stderr, /needs Git 2\.36 or later/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), before)
 })
