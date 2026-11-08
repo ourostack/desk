@@ -311,3 +311,24 @@ test("by default a hosted session runs Desk's own session-sync CLI after the han
   input.end()
   await handle.closed
 })
+
+test("hostedInstructions names the files a sparse checkout leaves out, and says nothing when the checkout is full", async () => {
+  const { desk, pluginRoot } = await scratchDesk()
+  const git = (...args) => spawnSync("git", ["-C", desk, ...args], { encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  const leftOut = /Large files are left out of this hosted copy/u
+  assert.doesNotMatch(hostedInstructions({ root: desk, pluginRoot }), leftOut, "a full checkout has nothing left out")
+  assert.equal(git("sparse-checkout", "set", "--no-cone", "/*", "!*.png", "!*.mp4").status, 0)
+  mkdirSync(path.join(desk, "track", "job"), { recursive: true })
+  const text = hostedInstructions({ root: path.join(desk, "track", "job"), pluginRoot })
+  assert.match(text, leftOut)
+  assert.match(text, /files matching `\*\.png`, `\*\.mp4` are not on disk here/u)
+  assert.match(text, /never report it lost, recreate it or remove the reference/u)
+  assert.ok(text.trimEnd().endsWith(DESK_STATUS_LINE))
+  assert.equal(git("sparse-checkout", "disable").status, 0)
+  assert.doesNotMatch(hostedInstructions({ root: desk, pluginRoot }), leftOut, "a disabled sparse checkout keeps its pattern file but leaves nothing out")
+  const bare = (await scratchDesk()).desk
+  mkdirSync(path.join(bare, ".git"))
+  writeFileSync(path.join(bare, ".git", "config"), "[core]\n\tsparseCheckout = true\n")
+  assert.doesNotMatch(hostedInstructions({ root: bare, pluginRoot }), leftOut, "sparse checkout on with no pattern file names nothing")
+})

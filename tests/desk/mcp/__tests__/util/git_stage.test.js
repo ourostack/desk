@@ -22,6 +22,8 @@ import {
   commitIndexPaths,
   indexEntries,
   readBackCommit,
+  includeInCheckout,
+  releaseFromCheckout,
   YIELD_ENV,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { finishCommit } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
@@ -120,6 +122,56 @@ test("stagePaths adds exactly the given paths, never -a or -A", async () => {
   assert.equal(staged, "one.txt")
   const untracked = git(root, ["ls-files", "--others", "--exclude-standard"]).trim()
   assert.equal(untracked, "two.txt")
+})
+
+test("stagePaths stages a new file a sparse checkout leaves out, and never stages a left-out file as deleted", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "old.png"), "png\n")
+  await fs.writeFile(path.join(root, "card.md"), "card\n")
+  git(root, ["add", "--", "old.png", "card.md"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  git(root, ["sparse-checkout", "set", "--no-cone", "/*", "!*.png"])
+  await fs.writeFile(path.join(root, "new.png"), "png\n")
+  await fs.writeFile(path.join(root, "card.md"), "card, edited\n")
+  assert.equal(stagePaths(root, ["new.png"], spawnSync).ok, true, "a screenshot added in a hosted desk stages")
+  assert.equal(stagePaths(root, ["."], spawnSync, undefined, { all: true }).ok, true)
+  assert.equal(git(root, ["diff", "--cached", "--name-status"]).trim(), "M\tcard.md\nA\tnew.png")
+})
+
+test("includeInCheckout brings folders wholly into a sparse checkout until releaseFromCheckout takes them out; both do nothing on a full one", async () => {
+  const root = await mkTempRepo()
+  await fs.mkdir(path.join(root, "job"))
+  await fs.writeFile(path.join(root, "job", "shot.png"), "png\n")
+  await fs.writeFile(path.join(root, "job", "card.md"), "card\n")
+  git(root, ["add", "--", "job"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], spawnSync), [], "a full checkout has nothing to bring in")
+  releaseFromCheckout(root, [], spawnSync)
+  git(root, ["sparse-checkout", "set", "--no-cone", "/*", "!*.png"])
+  const shot = path.join(root, "job", "shot.png")
+  await assert.rejects(fs.access(shot))
+  const patterns = git(root, ["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"]).trim()
+  const before = await fs.readFile(patterns, "utf8")
+
+  const added = includeInCheckout(root, [path.join(root, "job"), path.join(root, "_archive", "j*b")], spawnSync)
+  assert.deepEqual(added, ["/job/**", "/_archive/j\\*b/**"])
+  assert.equal(await fs.readFile(shot, "utf8"), "png\n", "the left-out screenshot is on disk while the folder is brought in")
+  assert.equal(git(root, ["ls-files", "-t", "--", "job/shot.png"]).trim(), "H job/shot.png")
+
+  releaseFromCheckout(root, [...added, "/never-added/"], spawnSync)
+  assert.equal(await fs.readFile(patterns, "utf8"), before, "only the added patterns come out")
+  await assert.rejects(fs.access(shot), "and the screenshot leaves the disk again")
+
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], (command, args, options) => args.includes("--show-toplevel") ? { status: 128, stdout: "", stderr: "no" } : spawnSync(command, args, options)), [], "a top Git cannot read brings nothing in")
+  const noFile = (command, args, options) => args.includes("--git-path") ? { status: 0, stdout: "", stderr: "" } : spawnSync(command, args, options)
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], noFile), [], "nor does a pattern file Git cannot name")
+  releaseFromCheckout(root, ["/job/**"], noFile)
+  assert.deepEqual(includeInCheckout(path.join(root, "nowhere"), [path.join(root, "nowhere", "x")], spawnSync), [], "nor a folder outside any repository")
+  const broken = () => { throw new Error("spawn boom") }
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], broken), [], "a failure brings nothing in, never throws")
+  releaseFromCheckout(root, ["/job/**"], broken)
+  git(root, ["sparse-checkout", "set", "--cone", "job"])
+  assert.deepEqual(includeInCheckout(root, [path.join(root, "job")], spawnSync), [], "a cone-mode checkout is left as it is")
 })
 
 test("stagePaths reports failure without throwing when the pathspec matches nothing", async () => {

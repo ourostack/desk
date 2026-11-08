@@ -11,7 +11,7 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
@@ -297,9 +297,64 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
     const deadline = Date.now() + LOCK_WAIT_MS
     while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
   }
-  const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
+  // `--sparse` stages a path a sparse checkout leaves out, such as a screenshot added in a hosted desk that excludes media; on a full checkout it
+  // changes nothing, and with `-A` it never stages a left-out file as deleted.
+  const result = run(spawnGit, root, ["add", "--sparse", ...(all ? ["-A"] : []), "--", ...relPaths])
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
+}
+
+// A sparse-checkout pattern that matches every file under one folder, with Git's pattern characters escaped. `/dir/` alone would not: an exclusion
+// such as `!*.png` matches the file itself, so it wins over a pattern that only matches its folder.
+const folderPattern = (rel) => `/${rel.split(path.sep).join("/").replace(/[\\*?[\]!#]/gu, "\\$&").replace(/ $/u, "\\ ")}/**`
+
+/**
+ * On a non-cone sparse checkout (a hosted desk leaves media out), brings `dirs` (absolute, under `root`) wholly into the checkout, left-out files
+ * included, until `releaseFromCheckout` takes them out again: a tool that hashes, moves and stages a whole folder then sees what Git holds there. Git
+ * fetches a partial clone's missing blobs as it writes them. Returns the patterns it added: none on a full or cone-mode checkout, or when Git or the
+ * pattern file cannot be read, and then the tool runs as before. Never throws. The pattern file is read and rewritten in one synchronous step, so
+ * writers in other processes can only lose an added line in that instant; the cost is disk (a folder stays on disk until the gateway's next
+ * start sets the patterns again), never a commit.
+ */
+export function includeInCheckout(root, dirs, spawnGit) {
+  try {
+    const file = sparsePatternFile(root, spawnGit)
+    const top = file === null ? null : run(spawnGit, root, ["rev-parse", "--show-toplevel"])
+    if (top === null || top.status !== 0) return []
+    const physical = realpathSync(root)
+    const added = dirs.map((dir) => folderPattern(path.relative(String(top.stdout).trim(), path.join(physical, path.relative(root, dir)))))
+    writeFileSync(file, `${readFileSync(file, "utf8").replace(/\n?$/u, "\n")}${added.join("\n")}\n`)
+    run(spawnGit, root, ["sparse-checkout", "reapply"])
+    return added
+  } catch {
+    return []
+  }
+}
+
+/** Takes the patterns `includeInCheckout` added back out, so the folders' left-out files leave the disk again. A no-op with none; never throws. */
+export function releaseFromCheckout(root, added, spawnGit) {
+  try {
+    const file = added.length === 0 ? null : sparsePatternFile(root, spawnGit)
+    if (file === null) return
+    const lines = readFileSync(file, "utf8").split("\n")
+    for (const pattern of added) {
+      const at = lines.lastIndexOf(pattern)
+      if (at !== -1) lines.splice(at, 1)
+    }
+    writeFileSync(file, lines.join("\n"))
+    run(spawnGit, root, ["sparse-checkout", "reapply"])
+  } catch {
+    // The folders stay on disk until the patterns are next set; nothing else depends on this.
+  }
+}
+
+// The sparse-checkout pattern file of the checkout at `root` when non-cone sparse checkout is on, or null.
+function sparsePatternFile(root, spawnGit) {
+  if (String(run(spawnGit, root, ["config", "--get", "core.sparseCheckout"]).stdout).trim() !== "true") return null
+  // A cone-mode checkout takes folder patterns only; this one's own `/dir/**` lines would turn cone matching off.
+  if (String(run(spawnGit, root, ["config", "--get", "core.sparseCheckoutCone"]).stdout).trim() !== "false") return null
+  const file = String(run(spawnGit, root, ["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"]).stdout).trim()
+  return file !== "" && existsSync(file) ? file : null
 }
 
 /**

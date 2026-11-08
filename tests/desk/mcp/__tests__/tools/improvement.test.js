@@ -141,7 +141,7 @@ test("a card file left uncommitted is committed with the next write", async () =
   const held = await next(w)
   assert.equal(held.status, "claimed")
   assert.equal("commit" in held, false)
-  assert.deepEqual(dirty.calls.find((call) => call[0] === "add"), ["add", "--", `_meta/improvement/${name}`])
+  assert.deepEqual(dirty.calls.find((call) => call[0] === "add"), ["add", "--sparse", "--", `_meta/improvement/${name}`])
   assert.equal(dirty.commits().length, 1)
 })
 

@@ -27,7 +27,7 @@ import {
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
-import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths, includeInCheckout, releaseFromCheckout } from "../util/git-stage.js"
 import { commitFailure, commitRoute } from "../util/route-around.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
@@ -1530,6 +1530,10 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   }
   let moved = relocated
   let published = false
+  // A file a sparse checkout leaves out (a hosted desk leaves media out) has no bytes to hash or move, and Git will not stage its old path's
+  // deletion: bring the task's folder and its archive folder wholly into the checkout for the archive, and take them out again after. A retry of
+  // an archive left pending (relocated) needs the archive folder's staged files on disk too.
+  const included = includeInCheckout(effectiveRoot, [srcDir, archiveDir], spawnGit)
   try {
     if (!relocated && moveArchive === undefined)
       moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
@@ -1635,6 +1639,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   } finally {
     // Success and error paths already attempted close; also cover an early return.
     await closeSession()
+    releaseFromCheckout(effectiveRoot, included, spawnGit)
   }
 }
 

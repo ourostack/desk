@@ -256,6 +256,51 @@ test("task_archive stages and commits exactly the moved paths", async () => {
   )
 })
 
+test("task_archive archives a task whose screenshot a sparse checkout leaves out (a hosted desk), commits it at the archive path and leaves it out again", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
+  await fs.mkdir(path.join(root, "t", "book-flights", "evidence"))
+  await fs.writeFile(path.join(root, "t", "book-flights", "evidence", "shot.png"), "png")
+  const git = (...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  git("add", "--", "t/book-flights/evidence/shot.png")
+  git("commit", "-q", "-m", "evidence")
+  assert.equal(git("sparse-checkout", "set", "--no-cone", "/*", "!*.png").status, 0)
+  assert.equal(await exists(path.join(root, "t", "book-flights", "evidence", "shot.png")), false)
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, schedulePush: () => {} })
+
+  assert.equal(result.status, "archived")
+  assert.equal(result.commit, undefined)
+  assert.deepEqual(git("ls-tree", "-r", "--name-only", "HEAD").stdout.split("\n").filter((file) => file.endsWith(".png")), ["t/_archive/book-flights/evidence/shot.png"])
+  assert.equal(await exists(path.join(root, "t", "_archive", "book-flights", "evidence", "shot.png")), false, "the screenshot is left out again")
+  assert.equal(gitStatus(root), "")
+})
+
+test("task_archive finishes on retry an archive left pending on a sparse checkout, its left-out screenshot included", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "shot-task", title: "T", status: "cancelled" }, schedulePush: () => {} })
+  await fs.mkdir(path.join(root, "t", "shot-task", "evidence"))
+  await fs.writeFile(path.join(root, "t", "shot-task", "evidence", "shot.png"), "png")
+  const git = (...args) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  git("add", "-A")
+  git("commit", "-q", "-m", "seed")
+  git("sparse-checkout", "set", "--no-cone", "/*", "!*.png")
+  const hooks = path.join(root, ".git", "hooks")
+  await fs.mkdir(hooks, { recursive: true })
+  await fs.writeFile(path.join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+
+  const first = await task_archive({ deskRoot: root, input: { track: "t", slug: "shot-task" }, schedulePush: () => {} })
+  assert.equal(first.status, "archive_pending")
+  await fs.rename(path.join(hooks, "pre-commit"), path.join(hooks, "pre-commit.off"))
+  const retry = await task_archive({ deskRoot: root, input: { track: "t", slug: "shot-task" }, schedulePush: () => {} })
+
+  assert.equal(retry.status, "archived")
+  assert.deepEqual(git("ls-tree", "-r", "--name-only", "HEAD").stdout.split("\n").filter((file) => file.endsWith(".png")), ["t/_archive/shot-task/evidence/shot.png"])
+  assert.equal(git("sparse-checkout", "list").stdout, "/*\n!*.png\n", "the patterns are back as they were")
+})
+
 test("task_archive calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

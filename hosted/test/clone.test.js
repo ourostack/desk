@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { ensureClone, runGit } from "../src/clone.js";
+import { ensureClone, LEFT_OUT, runGit } from "../src/clone.js";
 import { serveTokens } from "../src/token-socket.js";
 
 const HELPER = fileURLToPath(new URL("../bin/git-credential-desk.js", import.meta.url));
@@ -65,7 +65,7 @@ test("the credential helper fails with a message when the socket is unreachable"
 
 // A local bare repository standing in for github.com/arimendelow/desk, and a
 // git runner that rewrites https://github.com/ to it.
-function fakeRemote(t) {
+function fakeRemote(t, files = {}) {
   const root = mkdtempSync(join(tmpdir(), "desk-clone-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const remotes = join(root, "remotes");
@@ -76,6 +76,10 @@ function fakeRemote(t) {
   const seed = join(root, "seed");
   execFileSync("git", ["init", "-q", "-b", "main", seed]);
   writeFileSync(join(seed, "AGENTS.md"), "# Desk\n");
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(join(seed, file, ".."), { recursive: true });
+    writeFileSync(join(seed, file), text);
+  }
   const id = ["-c", "user.name=Test", "-c", "user.email=test@example.com"];
   execFileSync("git", [...id, "-C", seed, "add", "."]);
   execFileSync("git", [...id, "-C", seed, "commit", "-q", "-m", "seed"]);
@@ -154,4 +158,54 @@ test("in the clone, Git takes GitHub credentials from the token socket and not f
   assert.equal(code, 0);
   assert.match(stdout, /^username=x-access-token$/m);
   assert.match(stdout, /^password=ghs_fromsocket$/m);
+});
+
+test("ensureClone leaves media out of the checkout but keeps it in Git, on a fresh clone and on an existing full one", async (t) => {
+  const files = { "work/job/task.md": "card\n", "work/job/evidence/shot.png": "png", "work/job/evidence/PHOTO.JPG": "jpg", "work/job/evidence/run.json": "{}\n" };
+  const { root, git } = fakeRemote(t, files);
+  const tracked = (dir) => execFileSync("git", ["-C", dir, "ls-files"], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
+  const onDisk = (dir) => Object.keys(files).filter((file) => existsSync(join(dir, file))).sort();
+  const kept = ["work/job/evidence/run.json", "work/job/task.md"];
+  const all = ["AGENTS.md", ...Object.keys(files)].sort();
+
+  const dir = join(root, "desk");
+  await ensureClone({ dir, repo: "arimendelow/desk", git });
+  assert.deepEqual(onDisk(dir), kept, "media is not checked out; text and JSON are");
+  assert.deepEqual(tracked(dir), all, "media is still in the index, so a commit never deletes it");
+  assert.equal(execFileSync("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" }), "", "and Git sees no change");
+  assert.ok(LEFT_OUT.includes("*.png") && LEFT_OUT.includes("*.JPG"));
+
+  const full = join(root, "full");
+  execFileSync("git", ["clone", "-q", join(root, "remotes", "arimendelow", "desk.git"), full]);
+  assert.equal(onDisk(full).length, Object.keys(files).length);
+  await ensureClone({ dir: full, repo: "arimendelow/desk", git });
+  assert.deepEqual(onDisk(full), kept, "an existing full clone drops its unchanged media too");
+  assert.deepEqual(tracked(full), all);
+});
+
+test("ensureClone empties a fresh clone whose first checkout fails, so the next start clones again, and keeps an existing clone", async (t) => {
+  const { root, git } = fakeRemote(t, { "work/job/evidence/shot.png": "png" });
+  const failing = (args, options) => (args.includes("checkout") ? Promise.reject(new Error("git checkout failed: network")) : git(args, options));
+  const dir = join(root, "mount");
+  mkdirSync(dir);
+  await assert.rejects(ensureClone({ dir, repo: "arimendelow/desk", git: failing }), /network/);
+  assert.deepEqual(readdirSync(dir), [], "the mount point stays, empty");
+  await ensureClone({ dir, repo: "arimendelow/desk", git });
+  assert.ok(existsSync(join(dir, "AGENTS.md")), "the next start clones and checks out");
+
+  const refusing = (args, options) => (args.includes("sparse-checkout") ? Promise.reject(new Error("git sparse-checkout failed")) : git(args, options));
+  await assert.rejects(ensureClone({ dir, repo: "arimendelow/desk", git: refusing }), /sparse-checkout failed/);
+  assert.ok(existsSync(join(dir, "AGENTS.md")), "an existing clone is never emptied");
+});
+
+test("ensureClone clones a repository with no commits yet", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "desk-clone-empty-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bare = join(root, "remotes", "arimendelow", "desk.git");
+  mkdirSync(bare, { recursive: true });
+  execFileSync("git", ["init", "--bare", "-q", "-b", "main", bare]);
+  const git = (args, options = {}) => runGit(args, { ...options, env: { ...process.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.file://${join(root, "remotes")}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/" } });
+  const dir = join(root, "desk");
+  await ensureClone({ dir, repo: "arimendelow/desk", git });
+  assert.ok(existsSync(join(dir, ".git")));
 });
