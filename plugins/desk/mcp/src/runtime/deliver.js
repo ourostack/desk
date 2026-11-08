@@ -205,14 +205,35 @@ function removeWorktree(git, paths) {
   git(["worktree", "prune"])
 }
 
-// Replays `commits` onto `onto` in the private worktree: `{ head, replayed, skipped }`, or `{ error }` when the worktree cannot be made.
+// A sparse-checkout pattern (gitignore syntax, non-cone) that matches exactly one path from the top of the tree.
+const exactPattern = (file) => `/${file.replace(/[\\*?[\]!#]/gu, "\\$&").replace(/ $/u, "\\ ")}`
+
+// Every path the commits add, change, delete or rename, from both sides of a rename. (`git log --no-walk` lists each
+// commit against its own parent; `git diff-tree` given exactly two commits would compare them with each other instead.)
+function touchedPaths(git, commits) {
+  const out = git(["log", "--no-walk=unsorted", "--format=", "--name-only", "-z", "--no-renames", ...commits]).stdout
+  return [...new Set(out.split("\0").filter((file) => file !== ""))]
+}
+
+// Replays `commits` onto `onto` in the private worktree: `{ head, replayed, skipped }`, or `{ error }` when the worktree
+// cannot be made. The worktree is sparse: it checks out only the files the commits touch, because a desk can be far
+// larger than the room its disk has for a second copy (#589). Cherry-picks and conflict resolution only ever write
+// those files; every other path stays in the index alone. The sparse settings are passed per command and the pattern
+// file lives in the worktree's own Git folder, so the shared checkout's configuration is never changed.
 function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   removeWorktree(git, paths)
   mkdirSync(paths.hooks, { recursive: true })
-  const added = git(["-c", `core.hooksPath=${paths.hooks}`, "worktree", "add", "--detach", "--force", paths.tree, onto], CHECKOUT_TIMEOUT_MS)
+  const added = git(["-c", `core.hooksPath=${paths.hooks}`, "worktree", "add", "--detach", "--force", "--no-checkout", paths.tree, onto], CHECKOUT_TIMEOUT_MS)
   if (added.status !== 0) return { error: added.stderr }
   const inTree = runner(spawnGit, paths.tree)
-  const wt = (args, timeout) => inTree(["-c", `core.hooksPath=${paths.hooks}`, ...args], timeout)
+  const wt = (args, timeout) => inTree(["-c", `core.hooksPath=${paths.hooks}`, "-c", "core.sparseCheckout=true", "-c", "core.sparseCheckoutCone=false", ...args], timeout)
+  const patternFile = wt(["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"]).stdout.trim()
+  if (patternFile === "") return { error: "could not locate the replay worktree's sparse-checkout file" }
+  mkdirSync(path.dirname(patternFile), { recursive: true })
+  // A pattern no file matches keeps the list from ever being empty, which some Git versions refuse.
+  writeFileSync(patternFile, [exactPattern(".desk-replay-nothing"), ...touchedPaths(git, commits).map(exactPattern)].join("\n") + "\n")
+  const populated = wt(["read-tree", "-mu", "HEAD"], CHECKOUT_TIMEOUT_MS)
+  if (populated.status !== 0) return { error: populated.stderr }
   const replayed = []
   const skipped = []
   for (const commit of commits) {

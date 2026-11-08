@@ -210,6 +210,39 @@ test("deliver stops at once when the push fails for an unreachable remote, and r
   assert.deepEqual(deliver({ root: desk, spawnGit: noWorktree }), { state: "failed", reason: "replay_failed", error: "fatal: no space left on device", delivered: [], skipped: [] })
 })
 
+// A desk can be far larger than the disk it is cloned on has room to copy (#589: a 7 GB desk on a host with 2 GB free).
+// The replay worktree holds only the files the replayed commits touch, never a second copy of the whole desk.
+test("the replay worktree checks out only the files the replayed commits touch", async () => {
+  const { origin, desk, elsewhere } = await mkDiverged({ deskFile: "tasks/mine.md" })
+  await commit(desk, "tasks/ship.md", card({ status: "doing", updated: "2026-10-29T14:00:00Z", progress: ["started", "desk progress"] }), "desk: card progress")
+  await commit(elsewhere, "tasks/ship.md", card({ status: "doing", updated: "2026-10-29T09:00:00Z", progress: ["started", "elsewhere progress"] }), "elsewhere: card progress")
+  git(elsewhere, ["push", "-q", "origin", "main"])
+  const seen = []
+  const watch = (cmd, args, opts) => {
+    if (args.includes("cherry-pick") && !args.includes("--abort")) {
+      const tree = args[args.indexOf("-C") + 1]
+      seen.push(Object.fromEntries(["notes/shared.md", "notes/remote.md", "tasks/mine.md", "tasks/ship.md"].map((name) => [name, existsSync(path.join(tree, name))])))
+    }
+    return spawnSync(cmd, args, opts)
+  }
+
+  const result = deliver({ root: desk, spawnGit: watch })
+
+  assert.equal(result.state, "delivered", JSON.stringify(result))
+  assert.equal(result.delivered.length, 2)
+  assert.ok(seen.length >= 2, "the replay ran in its own worktree")
+  for (const files of seen) {
+    assert.equal(files["notes/shared.md"], false, "a file no replayed commit touches is not checked out")
+    assert.equal(files["notes/remote.md"], false, "a file only the remote changed is not checked out")
+  }
+  assert.equal(bare(origin, ["show", "main:tasks/mine.md"]), "mine\n")
+  assert.equal(bare(origin, ["show", "main:notes/shared.md"]), "shared notes\n", "files outside the replay are unchanged on the remote")
+  assert.equal(bare(origin, ["show", "main:notes/remote.md"]), "remote\n")
+  const landed = bare(origin, ["show", "main:tasks/ship.md"])
+  assert.match(landed, /^- desk progress$/mu, "a conflict on a touched card still resolves")
+  assert.match(landed, /^- elsewhere progress$/mu)
+})
+
 test("a lone commit Desk cannot merge is left local, nothing is pushed, and the checkout stays where it is", async () => {
   const { origin, desk, elsewhere } = await mkShared()
   await commit(elsewhere, "state.json", "{\"b\":1}\n", "elsewhere state")
