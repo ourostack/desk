@@ -195,6 +195,8 @@ export function createDeskSession(deps) {
   let contextGeneration = 0
   let resolvedInputs = null
   let resolvedOwnershipKey = null
+  // Keep the branch binding through resolver failures; forgetting authority must not authorize branch drift.
+  const sessionBranches = new Map()
   // Admission may resolve in parallel, but never replaces a destination while
   // an operation is using its authority, search engine, or write branch.
   let operationTail = Promise.resolve()
@@ -423,6 +425,10 @@ export function createDeskSession(deps) {
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
     setPhase("inspecting_state_branch")
+    if (!isStateBranchName(activation.stateBranch) && !sessionBranches.has(deskRoot)) {
+      const branch = await inspectWriteBranch({ root: deskRoot, git })
+      if (branch.ok && branch.found) sessionBranches.set(deskRoot, branch.found)
+    }
     // Discover only the authoritative location before the first observation.
     // The branch inspection below must be enclosed by two certain samples,
     // including the first admission, not blessed by a later first baseline.
@@ -769,7 +775,7 @@ export function createDeskSession(deps) {
     }
   }
 
-  function runtimeCall(name, input, signal, search = context.search) {
+  function runtimeCall(name, input, signal, search = context.search, writeContext) {
     return context.runtimeServer.callTool({
       deskRoot: context.root.root,
       name,
@@ -777,6 +783,7 @@ export function createDeskSession(deps) {
       person: context.person ?? null,
       statusContext: statusContext(search),
       signal,
+      ...(writeContext ? { writeContext } : {}),
     })
   }
 
@@ -856,11 +863,31 @@ export function createDeskSession(deps) {
       return refusal(name, "write")
     }
     // With no state branch configured, the checkout still has to be on a branch Desk may write on: refuse before any tool touches a file.
-    const branch = await inspectWriteBranch({ root: context.root.root, branch: context.stateBranchName, git })
+    const deskRoot = context.root.root
+    const branch = await inspectWriteBranch({ root: deskRoot, branch: context.stateBranchName, sessionBranch: sessionBranches.get(deskRoot), git })
     if (!branch.ok) {
       return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
-    return runtimeCall(name, input, signal)
+    if (branch.found && !sessionBranches.has(deskRoot)) sessionBranches.set(deskRoot, branch.found)
+    if (name !== "desk_save") return runtimeCall(name, input, signal)
+    const generation = contextGeneration
+    const person = context.person ?? null
+    const stateBranch = context.stateBranchName ?? sessionBranches.get(deskRoot)
+    const validate = async () => {
+      if (disposed || generation !== contextGeneration || context.root?.root !== deskRoot || !requirementMet("write", context)) {
+        throw new Error("Desk write admission changed before file mutation")
+      }
+      context.authorityAdmitted = false
+      const denied = await admitAuthority(resolvedInputs.activation.readinessPolicy, resolvedInputs.member ?? null)
+      if (denied || disposed || generation !== contextGeneration || context.root?.root !== deskRoot ||
+          (context.person ?? null) !== person || !requirementMet("write", context)) {
+        throw new Error(denied?.summary ?? denied?.fix ?? "Desk write authority or destination changed before file mutation")
+      }
+      const current = await inspectStateBranch({ root: deskRoot, branch: context.stateBranchName, git })
+      const named = await inspectWriteBranch({ root: deskRoot, branch: context.stateBranchName, sessionBranch: sessionBranches.get(deskRoot), git })
+      if (!current.ok || !named.ok) throw new Error("Desk write branch changed before file mutation")
+    }
+    return runtimeCall(name, input, signal, context.search, { stateBranch, validate })
   }
 
   function refusal(name, requirement) {
