@@ -1,0 +1,5 @@
+{
+  "uncommittedCandidateReleaseProblems": [],
+  "method": "Actual exported checker with isolated temporary index; only HEAD...HEAD diff requests mapped to --cached HEAD; no commit/normal-index/ref change.",
+  "temporaryIndex": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-release-index"
+}

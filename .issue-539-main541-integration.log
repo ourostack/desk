@@ -1,0 +1,29 @@
+Updating 3fdb7524e..89a4d5e79
+Created autostash: 15b09c322
+Fast-forward
+ .claude-plugin/marketplace.json                    |   4 +-
+ plugins/crew/.claude-plugin/plugin.json            |   2 +-
+ plugins/crew/README.md                             |   2 +-
+ plugins/crew/plugin.json                           |   4 +-
+ .../crew/skills/shared-desk-conventions/SKILL.md   |  14 +-
+ plugins/desk/.claude-plugin/plugin.json            |   2 +-
+ plugins/desk/CHANGELOG.md                          |   6 +
+ .../activation/copilot-root.flattened-bundle.json  |   2 +-
+ plugins/desk/activation/desk.activation.json       |   6 +-
+ plugins/desk/agency.json                           |   2 +-
+ plugins/desk/docs/factory-local-capture.md         |   8 +
+ plugins/desk/mcp/README.md                         |   2 +
+ plugins/desk/mcp/scripts/factory.js                |  15 +-
+ plugins/desk/mcp/src/factory/context-run.js        | 104 +++++-
+ plugins/desk/mcp/src/factory/evaluator-step.js     |   5 +-
+ plugins/desk/mcp/src/factory/headless-ledger.js    |  27 +-
+ plugins/desk/mcp/src/factory/process-lock.js       |   1 +
+ plugins/desk/plugin.json                           |   2 +-
+ plugins/desk/skills/factory-work/SKILL.md          |   2 +
+ .../__tests__/activation/copilot_packaging.test.js |   2 +-
+ .../desk/mcp/__tests__/factory/context_run.test.js | 394 ++++++++++++++++++++-
+ .../desk/mcp/__tests__/factory/factory_cli.test.js |  37 ++
+ .../mcp/__tests__/factory/headless_ledger.test.js  |  65 ++++
+ .../mcp/__tests__/release/release_coupling.test.js |   4 +-
+ 24 files changed, 680 insertions(+), 32 deletions(-)
+Applied autostash.

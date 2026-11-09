@@ -1,0 +1,216 @@
+diff --git a/tests/desk/mcp/__tests__/crew/_fixtures.js b/tests/desk/mcp/__tests__/crew/_fixtures.js
+index 6c2fd7fd7..6ab792b93 100644
+--- a/tests/desk/mcp/__tests__/crew/_fixtures.js
++++ b/tests/desk/mcp/__tests__/crew/_fixtures.js
+@@ -22,6 +22,8 @@ export function git(cwd, args, env = {}) {
+   return result.stdout.trim()
+ }
+ 
++export const bareGit = (bare, args, env = {}) => git(bare, ["--git-dir", bare, ...args], env)
++
+ export const onMain = (bare, file) => {
+   const result = spawnSync("git", ["--git-dir", bare, "show", `main:${file}`], { encoding: "utf8" })
+   return result.status === 0 ? result.stdout : null
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_edges.test.js b/tests/desk/mcp/__tests__/crew/workspace_edges.test.js
+index dfe65b71e..304a4e0eb 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_edges.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_edges.test.js
+@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+ import { mkTempRoot } from "../_temp_roots.js"
+-import { CIT_SHAPED, branches, fakeGh, git, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
++import { CIT_SHAPED, bareGit, branches, fakeGh, git, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
+ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+ 
+@@ -47,7 +47,7 @@ test("with no wait given, the pause before asking again whether a queued pull re
+     },
+     view: () => {
+       views += 1
+-      const merged = { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } }
++      const merged = { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } }
+       return { code: 0, stdout: JSON.stringify(views === 1 ? { state: "OPEN", mergeStateStatus: "CLEAN" } : merged), stderr: "" }
+     },
+   })
+@@ -122,7 +122,7 @@ test("a merged pull request with no merge commit in GitHub's answer uses the fet
+   const { gh } = fakeGh(repo.bare, { view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED" } : { state: "OPEN" }) }) })
+   const result = await startWorkspace(adopt(repo, { apply: true, gh }))
+   assert.equal(result.state, "published", result.message)
+-  assert.equal(result.commit, git(repo.bare, ["rev-parse", "main"]))
++  assert.equal(result.commit, bareGit(repo.bare, ["rev-parse", "main"]))
+ })
+ 
+ test("a local branch already named like the change's branch: refused at the branch step, the clone untouched", async () => {
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_join.test.js b/tests/desk/mcp/__tests__/crew/workspace_join.test.js
+index d8996d0da..03a941601 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_join.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_join.test.js
+@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
+ import { appendFileSync, mkdirSync, promises as fs } from "node:fs"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
++import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
+ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+ 
+@@ -58,7 +58,7 @@ test("a new member joins: own desk pushed first, then the roster row merged; too
+   assert.deepEqual(readCrewRoster(repo.clone).map((row) => row.alias), ["test-founder", "newbie"])
+   assert.equal(onMain(repo.bare, "desks/newbie/AGENTS.md"), onMain(repo.bare, "desks/_template/AGENTS.md").replaceAll("{{alias}}", "newbie"))
+   // The desk commit is on main before the roster commit: the row never points at a missing desk.
+-  const log = git(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
++  const log = bareGit(repo.bare, ["log", "--format=%s", "-n", "2", "main"]).split("\n")
+   assert.deepEqual(log, ["Crew: add newbie to the roster (#12)", "Crew: add newbie's desk"])
+   // Only the roster row went through the pull request.
+   const created = calls.find((args) => args[0] === "pr" && args[1] === "create")
+@@ -226,6 +226,6 @@ test("a join whose own-desk push is refused stops before the roster", async () =
+   assert.equal(readCrewRoster(repo.clone).some((row) => row.alias === "newbie"), false)
+   // Nothing half-done is left: the clone is back where it started, and nothing reached main.
+   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
+-  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), git(repo.bare, ["rev-parse", "main"]))
++  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), bareGit(repo.bare, ["rev-parse", "main"]))
+   await assert.rejects(fs.access(path.join(repo.clone, "desks", "newbie")))
+ })
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js b/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js
+index cdca4cbb5..5873b7bcc 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js
+@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
+ import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+-import { CIT_SHAPED, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, teamRepo } from "./_fixtures.js"
++import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, teamRepo } from "./_fixtures.js"
+ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ 
+ const NOW = () => 1767225600000
+@@ -32,7 +32,7 @@ async function started() {
+   return repo
+ }
+ 
+-const headOf = (repo, branch) => git(repo.bare, ["rev-parse", `refs/heads/${branch}`])
++const headOf = (repo, branch) => bareGit(repo.bare, ["rev-parse", `refs/heads/${branch}`])
+ const creates = (fake) => fake.calls.filter((args) => args[0] === "pr" && args[1] === "create")
+ const merged = (fake) => fake.calls.filter((args) => args[0] === "pr" && args[1] === "merge").map((args) => args[2])
+ const rosterWith = (repo, alias, identity) => `${onMain(repo.bare, "_meta/desks.md")}| ${alias} | ${identity} | desks/${alias} | acme/team | crew | desks/${alias} |\n`
+@@ -172,7 +172,7 @@ test("success is reported only once the default branch holds the result, not bec
+       state.merged = true
+       return { code: 0, stdout: "", stderr: "" }
+     },
+-    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: git(team.bare, ["rev-parse", "main"]) } }) }),
++    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: bareGit(team.bare, ["rev-parse", "main"]) } }) }),
+   })
+   const gone = await joinWorkspace({ repo: memberClone(team, "eve").clone, spawnGit: team.spawnGit, gh: emptied.gh, identity: "eve_example", alias: "eve", wait: noWait, now: NOW, apply: true })
+   assert.equal(gone.stage, "verify")
+@@ -190,7 +190,7 @@ test("success is reported only once the default branch holds the result, not bec
+       state.merged = true
+       return { code: 0, stdout: "", stderr: "" }
+     },
+-    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: git(swapped.bare, ["rev-parse", "main"]) } }) }),
++    view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? "MERGED" : "OPEN", mergeCommit: { oid: bareGit(swapped.bare, ["rev-parse", "main"]) } }) }),
+   })
+   const changed = await startWorkspace({ repo: swapped.clone, spawnGit: swapped.spawnGit, gh: swap.gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
+   assert.equal(changed.stage, "verify")
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js b/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js
+index 4d1478ece..b59ed350e 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js
+@@ -7,7 +7,7 @@ import { test } from "node:test"
+ import { strict as assert } from "node:assert"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+-import { CIT_SHAPED, ORIGIN, fakeGh, git, mainFiles, noWait, onMain, teamRepo } from "./_fixtures.js"
++import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, teamRepo } from "./_fixtures.js"
+ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ 
+ const NOW = () => 1767225600000
+@@ -27,7 +27,7 @@ test("a first push GitHub took although its answer was lost: the rerun finds the
+   assert.ok(mainFiles(repo.bare).includes("_meta/crew.json"))
+   const again = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: LATER, apply: true })
+   assert.equal(again.state, "already_crew", again.message)
+-  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), git(repo.bare, ["rev-parse", "main"]))
++  assert.equal(git(repo.clone, ["rev-parse", "HEAD"]), bareGit(repo.bare, ["rev-parse", "main"]))
+   assert.equal((await crewStatus({ repo: repo.clone })).state, "crew")
+ })
+ 
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js b/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js
+index 1e9acae74..44fe8ee11 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js
+@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
+ import { appendFileSync, mkdirSync, promises as fs, writeFileSync } from "node:fs"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
++import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
+ import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+ 
+@@ -97,7 +97,7 @@ test("a start the clone holds but GitHub does not, such as a local start given a
+   assert.equal(offline.stage, "fetch")
+   const pushed = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })
+   assert.equal(pushed.state, "published", pushed.message)
+-  assert.equal(git(repo.bare, ["rev-parse", "main"]), local.commit)
++  assert.equal(bareGit(repo.bare, ["rev-parse", "main"]), local.commit)
+   // Once GitHub has it, a rerun has nothing to do.
+   assert.equal((await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, now: NOW, apply: true })).state, "already_crew")
+ })
+@@ -122,7 +122,7 @@ test("start run again after it left a pull request open reuses that pull request
+       state.merged = true
+       return { code: 0, stdout: "", stderr: "" }
+     },
+-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
++    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
+   })
+   const start = (now) => startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fake.gh, wait: noWait, now, apply: true, tooling: { repo: "acme/team-tooling" } })
+   const first = await start(NOW)
+@@ -147,7 +147,7 @@ test("a reused pull request that conflicts is rebuilt on its own branch", async
+       state.merged = true
+       return { code: 0, stdout: "", stderr: "" }
+     },
+-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : blocked ? { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } : { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) }),
++    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : blocked ? { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } : { state: "OPEN", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) }),
+   })
+   const start = (now) => startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fake.gh, wait: noWait, now, apply: true, tooling: { repo: "acme/team-tooling" } })
+   assert.equal((await start(NOW)).state, "pr_open")
+@@ -308,7 +308,7 @@ test("join run again after it left the roster row's pull request open reuses it;
+       state.merged = true
+       return { code: 0, stdout: "", stderr: "" }
+     },
+-    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
++    view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } } : { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }),
+   })
+   const first = await joinWorkspace(join(repo, { apply: true, gh: fake.gh }))
+   assert.equal(first.state, "pr_open")
+diff --git a/tests/desk/mcp/__tests__/crew/workspace_setup.test.js b/tests/desk/mcp/__tests__/crew/workspace_setup.test.js
+index 0a1e4b0ea..2074d09a1 100644
+--- a/tests/desk/mcp/__tests__/crew/workspace_setup.test.js
++++ b/tests/desk/mcp/__tests__/crew/workspace_setup.test.js
+@@ -9,7 +9,7 @@ import { promises as fs } from "node:fs"
+ import * as path from "node:path"
+ import { spawnSync } from "node:child_process"
+ import { mkTempRoot } from "../_temp_roots.js"
+-import { CIT_SHAPED, PR, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo, toBare } from "./_fixtures.js"
++import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo, toBare } from "./_fixtures.js"
+ import { crewStatus, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+ import { crewWorkspace, readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
+ 
+@@ -49,7 +49,7 @@ test("start a CIT-shaped repository as a dual-repo workspace: a merged pull requ
+   const result = await startWorkspace(startCit(repo, { apply: true, gh }))
+   assert.equal(result.state, "published", result.message)
+   assert.equal(result.pr, PR)
+-  assert.equal(result.commit, git(repo.bare, ["rev-parse", "main"]))
++  assert.equal(result.commit, bareGit(repo.bare, ["rev-parse", "main"]))
+   assert.match(result.message, /^Started: this repository is now a dual-repo Crew workspace\. The change merged in https:\/\/github\.com\/acme\/team\/pull\/12\./u)
+   // Nothing that was there moved or changed, except AGENTS.md, which only grew at its end.
+   for (const [file, content] of before) {
+@@ -236,7 +236,7 @@ test("a conflict rebuilds the branch on the new main and merges; GitHub still wo
+   const { gh, state } = fakeGh(repo.bare, {
+     view: (current) => {
+       views += 1
+-      if (current.merged) return { code: 0, stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: git(repo.bare, ["rev-parse", "main"]) } }) }
++      if (current.merged) return { code: 0, stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: bareGit(repo.bare, ["rev-parse", "main"]) } }) }
+       return { code: 0, stdout: JSON.stringify({ state: "OPEN", mergeable: views === 1 ? "UNKNOWN" : "CONFLICTING", mergeStateStatus: "DIRTY" }) }
+     },
+   })

@@ -1,0 +1,293 @@
+{
+  "fixtureRoot": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+  "process": {
+    "pid": 55935,
+    "mode": "synchronous; no children left running"
+  },
+  "guardBefore": {
+    "argv": [
+      "config",
+      "--show-origin",
+      "--get",
+      "safe.bareRepository"
+    ],
+    "status": 0,
+    "stdout": "command line:\texplicit",
+    "stderr": ""
+  },
+  "guardAfter": {
+    "argv": [
+      "config",
+      "--show-origin",
+      "--get",
+      "safe.bareRepository"
+    ],
+    "status": 0,
+    "stdout": "command line:\texplicit",
+    "stderr": ""
+  },
+  "checks": [
+    {
+      "implicit": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "main"
+        ],
+        "status": 128,
+        "stdout": "",
+        "stderr": "fatal: cannot use bare repository '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe' (safe.bareRepository is 'explicit')"
+      },
+      "explicit": {
+        "argv": [
+          "--git-dir=/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "main"
+        ],
+        "status": 0,
+        "stdout": "3d5765090c11bf7368911db03e2be4a0c7b4b4e8",
+        "stderr": ""
+      },
+      "proposedWrapper": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "--git-dir",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "main"
+        ],
+        "status": 0,
+        "stdout": "3d5765090c11bf7368911db03e2be4a0c7b4b4e8",
+        "stderr": ""
+      }
+    },
+    {
+      "implicit": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "log",
+          "--format=%s",
+          "-n",
+          "2",
+          "main"
+        ],
+        "status": 128,
+        "stdout": "",
+        "stderr": "fatal: cannot use bare repository '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe' (safe.bareRepository is 'explicit')"
+      },
+      "explicit": {
+        "argv": [
+          "--git-dir=/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "log",
+          "--format=%s",
+          "-n",
+          "2",
+          "main"
+        ],
+        "status": 0,
+        "stdout": "Synthetic fixture only",
+        "stderr": ""
+      },
+      "proposedWrapper": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "--git-dir",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "log",
+          "--format=%s",
+          "-n",
+          "2",
+          "main"
+        ],
+        "status": 0,
+        "stdout": "Synthetic fixture only",
+        "stderr": ""
+      }
+    },
+    {
+      "implicit": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "refs/heads/crew/join-example"
+        ],
+        "status": 128,
+        "stdout": "",
+        "stderr": "fatal: cannot use bare repository '/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe' (safe.bareRepository is 'explicit')"
+      },
+      "explicit": {
+        "argv": [
+          "--git-dir=/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "refs/heads/crew/join-example"
+        ],
+        "status": 0,
+        "stdout": "3d5765090c11bf7368911db03e2be4a0c7b4b4e8",
+        "stderr": ""
+      },
+      "proposedWrapper": {
+        "argv": [
+          "-C",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "--git-dir",
+          "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+          "rev-parse",
+          "refs/heads/crew/join-example"
+        ],
+        "status": 0,
+        "stdout": "3d5765090c11bf7368911db03e2be4a0c7b4b4e8",
+        "stderr": ""
+      }
+    }
+  ],
+  "fixturePaths": [
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/HEAD",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/config",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/description",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/applypatch-msg.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/commit-msg.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/fsmonitor-watchman.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/post-update.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-applypatch.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-commit.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-merge-commit.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-push.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-rebase.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/pre-receive.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/prepare-commit-msg.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/push-to-checkout.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/sendemail-validate.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/hooks/update.sample",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/info",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/info/exclude",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/3d",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/3d/5765090c11bf7368911db03e2be4a0c7b4b4e8",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/4b",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/4b/825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/info",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/objects/pack",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs/heads",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs/heads/crew",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs/heads/crew/join-example",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs/heads/main",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-bare-probe/refs/tags"
+  ],
+  "acceptedCandidateReceipt": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-resources.json",
+  "sourceChanges": "None; no production or harness files edited.",
+  "proposal": "Add an explicit bareGit(bare,args,env) fixture wrapper using git(bare,[\"--git-dir\",bare,...args],env), then replace14 bare-target expressions in6 Crew test files; do not auto-detect repos or change safe.bareRepository.",
+  "primaryGitDocumentation": "https://raw.githubusercontent.com/git/git/master/Documentation/config/safe.adoc",
+  "fixtureAbsent": true,
+  "acceptedProductHashesUnchanged": true,
+  "previouslyRecordedFixtureRootsAbsent": true,
+  "previouslyRecordedShallowFixturesAbsent": true,
+  "probeProcessAbsent": true,
+  "helperActors": {
+    "state": "All5 assigned child actors observed idle; no running child actor or new assignment. None has an ongoing source write set.",
+    "ids": [
+      "26064604-e40c-4c02-8d5c-d5b9a2419861",
+      "e568bece-7e9f-418e-8b1d-9cfd98aa78b3",
+      "c751239d-68d8-45b5-8239-4cdccf5123e2",
+      "4641a1ce-1033-4d89-8b0f-6cd4c6eb26cc",
+      "8de161c8-b637-4c93-b429-2163e742336c"
+    ]
+  },
+  "retainedFilingFixture": {
+    "root": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance",
+    "receipt": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/receipt.txt",
+    "state": "Retained evidence only; filing actor idle, no ongoing writer. Not deleted without parent evidence-consumption/release."
+  },
+  "bareTargetExpressions": [
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_edges.test.js",
+      "line": 50,
+      "source": "const merged = { state: \"MERGED\", mergeCommit: { oid: git(repo.bare, [\"rev-parse\", \"main\"]) } }"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_edges.test.js",
+      "line": 125,
+      "source": "assert.equal(result.commit, git(repo.bare, [\"rev-parse\", \"main\"]))"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_join.test.js",
+      "line": 61,
+      "source": "const log = git(repo.bare, [\"log\", \"--format=%s\", \"-n\", \"2\", \"main\"]).split(\"\\n\")"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_join.test.js",
+      "line": 229,
+      "source": "assert.equal(git(repo.clone, [\"rev-parse\", \"HEAD\"]), git(repo.bare, [\"rev-parse\", \"main\"]))"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+      "line": 35,
+      "source": "const headOf = (repo, branch) => git(repo.bare, [\"rev-parse\", `refs/heads/${branch}`])"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+      "line": 175,
+      "source": "view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? \"MERGED\" : \"OPEN\", mergeCommit: { oid: git(team.bare, [\"rev-parse\", \"main\"]) } }) }),"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_pull_requests.test.js",
+      "line": 193,
+      "source": "view: (state) => ({ code: 0, stdout: JSON.stringify({ state: state.merged ? \"MERGED\" : \"OPEN\", mergeCommit: { oid: git(swapped.bare, [\"rev-parse\", \"main\"]) } }) }),"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_recovery.test.js",
+      "line": 30,
+      "source": "assert.equal(git(repo.clone, [\"rev-parse\", \"HEAD\"]), git(repo.bare, [\"rev-parse\", \"main\"]))"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "line": 100,
+      "source": "assert.equal(git(repo.bare, [\"rev-parse\", \"main\"]), local.commit)"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "line": 125,
+      "source": "view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: \"MERGED\", mergeCommit: { oid: git(repo.bare, [\"rev-parse\", \"main\"]) } } : { state: \"OPEN\", mergeable: \"MERGEABLE\", mergeStateStatus: \"BLOCKED\" }) }),"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "line": 150,
+      "source": "view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: \"MERGED\", mergeCommit: { oid: git(repo.bare, [\"rev-parse\", \"main\"]) } } : blocked ? { state: \"OPEN\", mergeable: \"MERGEABLE\", mergeStateStatus: \"BLOCKED\" } : { state: \"OPEN\", mergeable: \"CONFLICTING\", mergeStateStatus: \"DIRTY\" }) }),"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_reruns.test.js",
+      "line": 311,
+      "source": "view: (state) => ({ code: 0, stdout: JSON.stringify(state.merged ? { state: \"MERGED\", mergeCommit: { oid: git(repo.bare, [\"rev-parse\", \"main\"]) } } : { state: \"OPEN\", mergeable: \"MERGEABLE\", mergeStateStatus: \"BLOCKED\" }) }),"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_setup.test.js",
+      "line": 52,
+      "source": "assert.equal(result.commit, git(repo.bare, [\"rev-parse\", \"main\"]))"
+    },
+    {
+      "file": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_setup.test.js",
+      "line": 239,
+      "source": "if (current.merged) return { code: 0, stdout: JSON.stringify({ state: \"MERGED\", mergeCommit: { oid: git(repo.bare, [\"rev-parse\", \"main\"]) } }) }"
+    }
+  ],
+  "rootCause": {
+    "helper": "tests/desk/mcp/__tests__/crew/_fixtures.js:19-23",
+    "invocation": "spawnSync(\"git\", [\"-C\", cwd, ...args], ...)",
+    "effect": "Bare-target caller paths are discovered by -C rather than explicitly selected; safe.bareRepository=explicit intentionally refuses them.",
+    "existingWorkingExamples": "onMain, mainFiles, branches and fakeGh.inBare already use --git-dir."
+  },
+  "proposedCorrection": {
+    "helper": "export const bareGit = (bare, args, env = {}) => git(bare, [\"--git-dir\", bare, ...args], env)",
+    "callerExpressions": 14,
+    "testFiles": 6,
+    "scope": "Harness only: add the explicitly named wrapper, update imports and14 bare-target expressions; keep worktree calls unchanged. No auto-detection, global or local Git-config edits, guard changes, production changes, or assertion weakening.",
+    "validation": "Add/execute a fixture regression showing implicit -C remains refused while the named explicit wrapper succeeds, then rerun the same whole Crew suite. The suite has not been rerun or claimed green under this unimplemented proposal."
+  }
+}

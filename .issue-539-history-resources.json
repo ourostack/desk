@@ -1,0 +1,1739 @@
+{
+  "repository": "https://github.com/ourostack/desk",
+  "checkout": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35",
+  "branch": "arimendelow-microsoft-crew-join-folder-adoption",
+  "base": "3fdb7524e8546191efa7f9ee4f6b0674372e4f40",
+  "head": "3fdb7524e8546191efa7f9ee4f6b0674372e4f40",
+  "fetchedMain": "396077a9596187dfd6e94ddac682ace782337769",
+  "productFiles": [
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.claude-plugin/marketplace.json",
+      "sha256": "47f4d14dfe1c9b423bfca556e66760c57eba805d46d21c5a33ae5704c1a32b43"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/plugin.json",
+      "sha256": "2ae824e4878faa91e72ac9532e1fd17c6e3ea18d1a400f6e67e01d2d27e2db8b"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/.claude-plugin/plugin.json",
+      "sha256": "2af04fb94a20c01a9c4c008e26676612d6d07b22a22c69fc8a1dbc003b05b3e6"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/crew/skills/join-crew/SKILL.md",
+      "sha256": "e77cc6bc6f8f9840cc7b1333156f632a28149ca5790d53e01c887b9e6ac754f6"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/mcp/src/crew/workspace.js",
+      "sha256": "3115e7128cc6568fa863405e319ad55ca16d5980ce0ff67be983d9c7b3863407"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/mcp/scripts/crew.js",
+      "sha256": "e316591cef09b2e47c68b01cf82f819778fd5dd17d069ebec17a679ea733697e"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/tests/desk/mcp/__tests__/crew/workspace_adoption.test.js",
+      "sha256": "044e88316bd300529e35fda3bae84515f51dbd0ab95e6944b1959368b596d4a7"
+    },
+    {
+      "path": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/plugins/desk/changelog.d/crew-join-folder-adoption.md",
+      "sha256": "472e23e7600ca2984054f598fe72bbfdf8d5e88237e3459c1e663afd8431ae38"
+    }
+  ],
+  "evidenceLogs": [
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-final-suite.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-final.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-green.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-final.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-green.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-red.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-release-check.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-suite.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-parent-review-final.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-parent-review-green.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-parent-review-red.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-parent-review-suite.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-races.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-red.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-release-green.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-release-red.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-reviewed.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-suite.log",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-verified.log"
+  ],
+  "historyRegression": {
+    "red": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-red.log",
+    "green": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-green.log",
+    "final": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-final.log",
+    "scenario": "Authenticated A adopts a trailer-free complete folder through an empty checkpoint; PR creation fails; an unrelated commit lands; depth-one B clone hides checkpoint. B adoption was reproduced as joined before the fix. With bounded authenticated complete-history recovery, B is refused and A can recover. A shallow trailer-free folder with no pending claim remains adoptable. Unavailable recovery and a genuinely shallow upstream fail at history without adoption writes. Preview fetches history but creates no checkpoint or row."
+  },
+  "focusedSuite": {
+    "tests": 33,
+    "pass": 33,
+    "fail": 0
+  },
+  "wholeCrewSuite": {
+    "tests": 134,
+    "pass": 119,
+    "fail": 15,
+    "failures": [
+      {
+        "test": "not ok 35 - with no wait given, the pause before asking again whether a queued pull request merged is real",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 41 - a merged pull request with no merge commit in GitHub's answer uses the fetched default branch",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 54 - a new member joins: own desk pushed first, then the roster row merged; tooling is pointed to",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 64 - a join whose own-desk push is refused stops before the roster",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 67 - a first join never merges a pull request someone else opened under its branch name and identity line",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 69 - an open pull request is reused only when this account opened it from this repository, to the default branch, for this exact join, changing only the roster",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 70 - a branch name someone already took is never pushed over: the run picks the next free one",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 72 - success is reported only once the default branch holds the result, not because GitHub said merged",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 78 - a first push GitHub took although its answer was lost: the rerun finds the workspace on GitHub and brings the clone up to date",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 85 - a start the clone holds but GitHub does not, such as a local start given an origin later, is pushed by a rerun",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 87 - start run again after it left a pull request open reuses that pull request and merges it",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 88 - a reused pull request that conflicts is rebuilt on its own branch",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 96 - join run again after it left the roster row's pull request open reuses it; another person's open join is not reused",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 106 - start a CIT-shaped repository as a dual-repo workspace: a merged pull request, every existing file byte-identical",
+        "bareRepositoryRestriction": true
+      },
+      {
+        "test": "not ok 117 - a conflict rebuilds the branch on the new main and merges; GitHub still working out mergeability is a wait",
+        "bareRepositoryRestriction": true
+      }
+    ]
+  },
+  "releaseCheck": {
+    "log": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-release-check.log",
+    "method": "Actual exported checker with isolated temporary index; only HEAD...HEAD diff requests mapped to --cached HEAD for uncommitted candidate; no commit/normal-index/ref change.",
+    "crewVersion": "0.2.11",
+    "deskVersion": "3.2.38 unchanged from checkout base; Desk fragment retained",
+    "temporaryIndexPath": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-history-release-index",
+    "temporaryIndexAbsent": true,
+    "normalIndexUnchanged": true
+  },
+  "recordedFixtureRoots": [
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-078NlP",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0IU2t4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0Xap9B",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0jNfrq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0mNhQt",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0mpG1U",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0zfTL2",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-12LFve",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-12yAWq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-1LgEhG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-1S27mQ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-1USMiE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-24rCST",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-27a5vS",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2Coaqn",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2ENUuW",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2INi2M",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2JRppV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2JXvtd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2KrqFJ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2MCNIj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2MXLoh",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2Q1gtb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2fJCr3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2oe4U1",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2txL0g",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2vQn1x",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2zODLZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-33TVN8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-36lozt",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3Bd77v",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3JgHbO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3MI6IG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3OslIM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3PhO3f",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-3pvHGr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4KUvqZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4Mx5Co",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4TTag0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4Ts5sc",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4UjFmH",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4ead4S",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4qLocm",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-4zrvw0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-59uROU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-5ji2oz",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-5ystqY",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6ZmDnw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6njNJO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6sT4mC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-6syBGd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-74F08J",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-79wNQi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-7HkwcZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-7TsTCc",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-7ate7l",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8IOjNj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8RaVo8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8dDy5Q",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8tVNJb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-9FML69",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-9OfrrM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-9sqEtM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-A2x3vG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-A6Bne9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-A6Dsgf",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-A7SwRT",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-AC2QY0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ARojR1",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Apu20L",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-B4ZrZl",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BAa9hy",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BCz8l5",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BL0UIt",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BSoiOV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BhbQus",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BsirKl",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Bu5egT",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Bzersk",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-C3VMI5",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-CD99xs",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-CZwl0r",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-CbGN3h",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-CcSrlX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Ch89vu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Cm6ojF",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Cnq4Ox",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DMqHfD",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DWDI8V",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DcicMB",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DhnHWD",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-E8Oots",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EAEcRQ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EBnjZT",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EGopje",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EH94Mr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EVotkI",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EWX9O8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EebZJf",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EgzcHZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-F7Mkzw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-FHh2FJ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-FeqjLl",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Fx1kmo",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-G3bquA",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-GAXyZh",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-GENGtU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-GT7fEz",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-GwsyYw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-H0cv3e",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-HBGC2F",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-HGXgi9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-HTchwi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-I0EuBJ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-I1uAR0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-I3XB06",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-I6a4RO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IGoTyX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IPmsqx",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IVVHJJ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-IbBAv7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JI81N6",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JNFlPu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JNwdLB",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JPJ40p",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JRItDd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JXuMw9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JlGb1H",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JzcOMY",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-KfPbIF",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-KfquX3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Kunart",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LC6Le9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LOF57Z",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LYlIix",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LgO4rx",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Los4Lp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-LxsZe9",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-MGP5ar",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-MP0u5c",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-MbC6aY",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-MmQp4w",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-MoDy7l",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NHNOgw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NIo2Xw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NMOll6",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Nj177i",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NqbsUj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NuTcko",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NvdU3m",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NveGbx",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-OAbUVu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-OC3xjV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-OR9UqA",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-OjpG5W",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-P0xyKp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-PDQeEX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-PSV6oB",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Ps9ZVs",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-PzoRfd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Q0EnYv",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-QF4xIL",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-QU4iWN",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-QbPok8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-RF7gp3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Rzk79p",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-S3f2va",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SHXQgv",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ShJky1",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SpxiME",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Sv4YUu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-SzyFsT",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TCfzwa",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-THxe2w",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TX8UJG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TXmcEr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TYJN2L",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TYLFJK",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Tmy4xE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-TxBrRf",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-U6Rdfu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-UNHQWp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-URbY5q",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-UW8yEN",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-V7Ywjc",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VC9yTU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VINEuf",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VJx2PX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VVtrSp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Vb92kI",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VcvBPp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VhI2sM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VpIAvg",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-W4vPqR",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-W66ZnU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-WLKsIV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-WdqykF",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-WeZkZT",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Wnr16A",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Wr8hFQ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-X4dFYa",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-XGyE38",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YBdcZM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YENuXX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YNPLnM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YaS4mg",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-YhzzA4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Z5IS0s",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ZYpBxy",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Zdit9K",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ZtS5xz",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-aWu46M",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-aifSvy",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-b298Qm",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bABmSa",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bHqPuc",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bOKqZZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-baAZDW",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bc8hFJ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bcU9FC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-bckyp2",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-buNs3e",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-c75mO6",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cZARDS",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cftzdH",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cofwXq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cv3YC3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-cwJCJI",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-d9IxT3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dQrf1D",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dRe1BE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dVaVVa",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-de2MF7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dmJlzb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dnJHPm",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dtSBJL",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dwh8d1",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-dz5sQ8",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eBfqHv",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eDNwxW",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eFmq87",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eHXDTQ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eMHpuR",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-egRIez",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-eiV41J",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ex8D0O",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-fMT9kn",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-faG50P",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-feUFfw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-fevGDf",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ftN3YW",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ftp1Oi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-fzDkTo",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-g4rTe0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gAqC4b",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gXWMb2",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gb0ZfR",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gdS1rU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gt6PoF",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-hC923D",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-hFgAuX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-haBMZo",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-hbrP23",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-iG3Mvr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-iIWcvb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-iIhk79",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-icyIif",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ihwqhH",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-imx4QZ",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ix3SRk",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ixC6fK",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jCCLjX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jEIzEt",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jjQ1R2",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-jqK3wM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-js3W4T",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-kF8yMj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-kel2Gp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-krz8xi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-kvzux3",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lFmOZa",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lQ7zAA",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lSNZ3C",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lTAQoK",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ldwRTU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lgPy1F",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lj1Kqr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lmBwNL",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lqZHJA",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-mLjImW",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-miurAU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-mnAvBC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-mvL2Dm",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-mysYCC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-nzZw05",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-oHfMXX",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-oV9vRl",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-oWIAEe",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-onntbO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ox8bjr",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-p0DSYS",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-p1z0Tc",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-pNLqZN",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-pOAsP7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-pSAIvb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-pbh8bD",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ppYI4f",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-q5r6G0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qERHx6",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qJgcwb",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qOIqDi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qOVVAz",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qRWV1G",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rI38Ox",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rNBzzz",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-raAj7g",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rtoSDx",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-rxRXhC",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-s1N9Vt",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-s52fow",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-s9g8Iq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-sQaaMO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-sWCncS",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-sbRtGo",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-svTV7J",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-t4yPiB",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-t6J0dH",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tB7Pc6",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tDd0tU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tH9Zel",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tU42Q4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tWtiPk",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-tYQ0v5",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-te32Cd",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-teS9fg",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-u0vaua",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-uICRb0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-uXDpLA",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-uriQoV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-usPzc4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-v14uwv",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-v15DTU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-v4RUL4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-vBLGYj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-vDL9Ma",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-vHA2tG",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-wITQAn",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-wRrEu0",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-wwX6Hw",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-wyT2NS",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-x48yAi",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xCoPV5",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xRvwBI",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xpTZTE",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-xxrKkM",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-y1pnMO",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-yIQZG7",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-yKCAfn",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-yVFrpu",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-ynWdfU",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-yv04RV",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-z3z489",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zJ9gPj",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zKpsOp",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zSWpcq",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zdkbF4",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-zvIzfJ",
+      "absent": true
+    }
+  ],
+  "recordedShallowFixtures": [
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-0jNfrq/shallow-unavailable",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2oe4U1/shallow-original-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-2oe4U1/shallow-other",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-8tVNJb/shallow-legacy-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BCz8l5/shallow-original-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-BCz8l5/shallow-other",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Bzersk/shallow-unavailable",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-C3VMI5/shallow-legacy-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Ch89vu/shallow-preview",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Cm6ojF/shallow-original-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Cm6ojF/shallow-other",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-DcicMB/shallow-unavailable",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-EAEcRQ/shallow-other",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JlGb1H/partial-origin.git",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-JlGb1H/shallow-partial-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo/partial-origin.git",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-NE0hmo/shallow-partial-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-Q0EnYv/shallow-preview",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-VVtrSp/shallow-legacy-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gXWMb2/partial-origin.git",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-gXWMb2/shallow-partial-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-lmBwNL/shallow-unavailable",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-pSAIvb/shallow-legacy-member",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qJgcwb/partial-origin.git",
+      "absent": true
+    },
+    {
+      "path": "/private/var/folders/nh/3z0zcc3j0xs16ys7lkh3x80c0000gp/T/crew-workspace-qJgcwb/shallow-partial-member",
+      "absent": true
+    }
+  ],
+  "retainedFilingFixture": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance",
+  "filingReceipt": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/receipt.txt",
+  "previousReceipts": [
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-resources.json",
+    "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-parent-review-resources.json"
+  ],
+  "resourceLimits": "Successful preexisting Crew/CLI fixture roots are not all printed; those roots were not independently enumerated. Existing registered fixture teardown ran. Every printed root and shallow-clone/upstream path was independently checked absent. Only owned synthetic Git repositories were cloned/unshallowed. No new background service, watcher, reviewer or implementation child was launched in this correction.",
+  "publication": "Uncommitted candidate only. No commit, push, PR/issue publication, account/permissions/trust change, global Git settings/guard change, shared-clone edit or live adoption.",
+  "openGates": [
+    "One parent affected re-review of complete-history verification/recovery",
+    "Whole Crew suite still fails on15 explicit-bare fixture calls; host guard unchanged",
+    "Normal committed-candidate release/CI and supported-host installed/live verification remain unperformed"
+  ]
+}

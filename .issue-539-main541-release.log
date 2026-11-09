@@ -1,0 +1,6 @@
+{
+  "base": "89a4d5e7958f474cbd8c4669ca78e17d90c5831a",
+  "uncommittedCandidateReleaseProblems": [],
+  "method": "Actual exported checker with isolated temporary index; only HEAD...HEAD diff requests mapped to --cached HEAD; no authored source commit/normal-index/ref change.",
+  "temporaryIndex": "/Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-main541-validation-index"
+}

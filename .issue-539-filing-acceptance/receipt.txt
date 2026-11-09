@@ -1,0 +1,122 @@
+Synthetic join filing acceptance receipt
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/receipt.txt
+Scope: invented local filesystem only; no Desk boot, live registry, network, account, permission, trust, git mutation, or join --apply.
+Read: plugins/crew/skills/join-crew/SKILL.md; plugins/desk/skills/directory-structure/SKILL.md; plugins/desk/skills/adopt-inflight-work/SKILL.md; plugins/crew/skills/shared-desk-conventions/SKILL.md; plugins/desk/skills/first-run-bootstrap/SKILL.md.
+Creation command: python3 heredoc using Path.cwd() / ".issue-539-filing-acceptance", assert absent, mkdir, receipt.open("x").
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/run-acceptance.py (created by apply_patch)
+COMMAND PYTHONDONTWRITEBYTECODE=1 python3 /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/run-acceptance.py
+PROCESS acceptance Python pid=85299 parent_shell_pid=83711; synchronous; no subprocesses or background services.
+Decision: synthetic Mira owns only desks/mira. Shared source, template, peer index, and Sol reservation are read-only after fixture creation. No live membership registry exists in this fixture.
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/AGENTS.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/track.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/task.md
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/proposal.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/_shared
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/_shared/landscape
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/_shared/landscape/harbor-source.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol/_meta
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol/_meta/index.md
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol/AGENTS.md
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol/_meta/reservation.txt
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/_template
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/_template/_meta
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/_template/_meta/friction.md
+CREATED DIRECTORY /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/rook
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/rook/_meta
+ORIGINAL (SHA-256 for files; directory type, mode, mtime_ns, inode):
+_shared ('directory', 16877, 1793227497532803315, 1298538318)
+_shared/landscape ('directory', 16877, 1793227497535596216, 1298538319)
+_shared/landscape/harbor-source.md ('6be9f05e04394b817e0fbe5b87f0d217e95bafa7cb1b1d88f647261883978b8e', 33188, 1793227497535692467, 1298538320)
+desks ('directory', 16877, 1793227497564750229, 1298538305)
+desks/_template ('directory', 16877, 1793227497558794425, 1298538326)
+desks/_template/_meta ('directory', 16877, 1793227497561856494, 1298538327)
+desks/_template/_meta/friction.md ('8da35591ab71bf416f4f9a07599eea163994699fb2b01bac99e0173b5208ea56', 33188, 1793227497561937578, 1298538328)
+desks/mira ('directory', 16877, 1793227497510195153, 1298538306)
+desks/mira/AGENTS.md ('6e04110b603ea34bdafb23b2b5dd3cff039686c6b085c40aeec152b005dd1184', 33188, 1793227497467320017, 1298538307)
+desks/mira/harbor-delivery ('directory', 16877, 1793227497500830402, 1298538309)
+desks/mira/harbor-delivery/publish-harbor-guide ('directory', 16877, 1793227497515675744, 1298538311)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations ('directory', 16877, 1793227497519695281, 1298538314)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl ('directory', 16877, 1793227497522486222, 1298538315)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts ('directory', 16877, 1793227497526272257, 1298538316)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal.md ('60fcb4a6ab6724d4b7a338ca77f964ca1635919638527c67b0d03211bfea4763', 33188, 1793227497526369299, 1298538317)
+desks/mira/harbor-delivery/publish-harbor-guide/task.md ('bdfcbe5c245536b6c034de9540a35735279762f55fed6f30adcb51e5ef463ca6', 33188, 1793227497505233900, 1298538312)
+desks/mira/harbor-delivery/track.md ('00c420e96f785fb30de8c5c6a49117dc480e544e699998be9cb6b8297613ed62', 33188, 1793227497493986340, 1298538310)
+desks/mira/proposal.md ('03554689bdf0f68a0f5091d9322fb420ee37c53f263a95026e35ec303af21ff9', 33188, 1793227497510309696, 1298538313)
+desks/rook ('directory', 16877, 1793227497567193459, 1298538329)
+desks/rook/_meta ('8862cb82850a1791befc7e3df36d06dc87a34cfa6a53067b68b1eb05a368f289', 33188, 1793227497567277001, 1298538330)
+desks/sol ('directory', 16877, 1793227497546444730, 1298538321)
+desks/sol/AGENTS.md ('48137d49b16448154b7263dcd43b2dfc02ac11ceffa607e80cb1d0b2798dea50', 33188, 1793227497546522564, 1298538324)
+desks/sol/_meta ('directory', 16877, 1793227497552244366, 1298538322)
+desks/sol/_meta/index.md ('680a663c45194f6872f13486293becdb864359f26235cb1a66288b811667f7b4', 33188, 1793227497543969416, 1298538323)
+desks/sol/_meta/reservation.txt ('d8f719bab185252463d9d6849832f2005cfbde4b62906cfa8d16d86959bb3b1c', 33188, 1793227497552342117, 1298538325)
+run-acceptance.py ('c125878f618a51739eb1bea14e6b728ced912067359befb93b6db64075550f31', 33188, 1793227490686311099, 1298536952)
+Decision: content and task card both name publish-harbor-guide; reuse its existing no-repository iteration artifact scope. Destination proposal.md is distinct Sol-authored content; preserve it byte-for-byte and file Mira's artifact as proposal-mira.md. Preserve the peer index through an owned Markdown compatibility pointer, not a symlink.
+CREATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal-mira.md
+UPDATED FILE /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/proposal.md (owned compatibility pointer)
+PASS First filing executes actual filesystem writes
+PASS Misplaced proposal now exists in the existing canonical task scope
+PASS Existing same-name collision document is byte-identical
+PASS Mira's entire original document survives, with only its source URL rebased
+PROVENANCE original Mira SHA-256=03554689bdf0f68a0f5091d9322fb420ee37c53f263a95026e35ec303af21ff9; canonical Mira SHA-256=91940c4e10c93735f964a51b331ebfb5e5796150c206e2f7e881bdb466924c2b; retained collision SHA-256=60fcb4a6ab6724d4b7a338ca77f964ca1635919638527c67b0d03211bfea4763
+LINK /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal-mira.md -> ../../../../../../../_shared/landscape/harbor-source.md -> /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/_shared/landscape/harbor-source.md; SHA-256=6be9f05e04394b817e0fbe5b87f0d217e95bafa7cb1b1d88f647261883978b8e
+PASS Rebased outgoing source reference resolves to the same synthetic source bytes
+LINK /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/sol/_meta/index.md -> ../../mira/proposal.md -> /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/proposal.md; SHA-256=fce6e1611904b733b8a60da2afdf0c3694ec6438980e473d0802e60686e0afd0
+LINK /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/proposal.md -> harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal-mira.md -> /Users/microsoft/code/copilot-worktrees/desk/arimendelow-microsoft-issue-539-crew-join-folder-adoption-953e35/.issue-539-filing-acceptance/desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal-mira.md; SHA-256=91940c4e10c93735f964a51b331ebfb5e5796150c206e2f7e881bdb466924c2b
+PASS Unchanged peer incoming reference resolves through the owned compatibility pointer
+PASS Peer index, content, and reservation retain bytes, modes, mtimes, and inodes
+PASS All preexisting fixture entries outside the owned desk remain unchanged
+PASS Second filing recognizes the compatibility pointer and existing destination
+PASS Second filing leaves every fixture file and directory unchanged (receipt excluded)
+PASS No duplicate task cards
+PASS Exactly two distinct canonical proposal documents; no repeat copy or move
+Decision: blocked setup preview only. Compare template path types before any setup write; refuse the file/directory collision. Do not invoke crew.js or registration.
+PASS REFUSED unsafe setup: template _meta directory conflicts with existing _meta file
+PASS Unsafe setup refusal causes no mutation anywhere in the fixture (receipt excluded)
+Decision: Sol's reserved folder is another member's content. No authority to adopt or organize it; refuse before any mutation.
+PASS REFUSED other-member reserved folder: Mira is not its owner
+PASS Other-member refusal causes no mutation anywhere in the fixture (receipt excluded)
+FINAL (SHA-256 for files; directory type, mode, mtime_ns, inode):
+_shared ('directory', 16877, 1793227497532803315, 1298538318)
+_shared/landscape ('directory', 16877, 1793227497535596216, 1298538319)
+_shared/landscape/harbor-source.md ('6be9f05e04394b817e0fbe5b87f0d217e95bafa7cb1b1d88f647261883978b8e', 33188, 1793227497535692467, 1298538320)
+desks ('directory', 16877, 1793227497564750229, 1298538305)
+desks/_template ('directory', 16877, 1793227497558794425, 1298538326)
+desks/_template/_meta ('directory', 16877, 1793227497561856494, 1298538327)
+desks/_template/_meta/friction.md ('8da35591ab71bf416f4f9a07599eea163994699fb2b01bac99e0173b5208ea56', 33188, 1793227497561937578, 1298538328)
+desks/mira ('directory', 16877, 1793227497510195153, 1298538306)
+desks/mira/AGENTS.md ('6e04110b603ea34bdafb23b2b5dd3cff039686c6b085c40aeec152b005dd1184', 33188, 1793227497467320017, 1298538307)
+desks/mira/harbor-delivery ('directory', 16877, 1793227497500830402, 1298538309)
+desks/mira/harbor-delivery/publish-harbor-guide ('directory', 16877, 1793227497515675744, 1298538311)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations ('directory', 16877, 1793227497519695281, 1298538314)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl ('directory', 16877, 1793227497522486222, 1298538315)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts ('directory', 16877, 1793227497591542137, 1298538316)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal-mira.md ('91940c4e10c93735f964a51b331ebfb5e5796150c206e2f7e881bdb466924c2b', 33188, 1793227497591865557, 1298538331)
+desks/mira/harbor-delivery/publish-harbor-guide/_iterations/2026-10-28-initial-impl/artifacts/proposal.md ('60fcb4a6ab6724d4b7a338ca77f964ca1635919638527c67b0d03211bfea4763', 33188, 1793227497526369299, 1298538317)
+desks/mira/harbor-delivery/publish-harbor-guide/task.md ('bdfcbe5c245536b6c034de9540a35735279762f55fed6f30adcb51e5ef463ca6', 33188, 1793227497505233900, 1298538312)
+desks/mira/harbor-delivery/track.md ('00c420e96f785fb30de8c5c6a49117dc480e544e699998be9cb6b8297613ed62', 33188, 1793227497493986340, 1298538310)
+desks/mira/proposal.md ('fce6e1611904b733b8a60da2afdf0c3694ec6438980e473d0802e60686e0afd0', 33188, 1793227497594386121, 1298538313)
+desks/rook ('directory', 16877, 1793227497567193459, 1298538329)
+desks/rook/_meta ('8862cb82850a1791befc7e3df36d06dc87a34cfa6a53067b68b1eb05a368f289', 33188, 1793227497567277001, 1298538330)
+desks/sol ('directory', 16877, 1793227497546444730, 1298538321)
+desks/sol/AGENTS.md ('48137d49b16448154b7263dcd43b2dfc02ac11ceffa607e80cb1d0b2798dea50', 33188, 1793227497546522564, 1298538324)
+desks/sol/_meta ('directory', 16877, 1793227497552244366, 1298538322)
+desks/sol/_meta/index.md ('680a663c45194f6872f13486293becdb864359f26235cb1a66288b811667f7b4', 33188, 1793227497543969416, 1298538323)
+desks/sol/_meta/reservation.txt ('d8f719bab185252463d9d6849832f2005cfbde4b62906cfa8d16d86959bb3b1c', 33188, 1793227497552342117, 1298538325)
+run-acceptance.py ('c125878f618a51739eb1bea14e6b728ced912067359befb93b6db64075550f31', 33188, 1793227490686311099, 1298536952)
+Coverage: happy path, collision edge, state/idempotence, authorization boundary, refusal/no mutation exercised. Null/empty, cache, live exceptions: not applicable to this fixed local filing scenario; not engine coverage.
+RESULT PASS: all five behavioral acceptance outcomes verified from actual filesystem bytes and Markdown reference targets. Fixture retained. No claim about live onboarding, installation, release, or crew.js engine verification.
+Execution completion: acceptance command exited 0 (tool shellId 46); all assertions passed.
+All command sessions were synchronous and exited 0: shellId 43 read updated join skill and located references; shellId 44 read guidance (output exceeded tool display limit; guidance was then read directly with view); shellId 45 created root/receipt; shellId 46 executed the fixture. Tool-managed shells only; no background process, subprocess, server, watcher, or live engine was started by the fixture.
+Read commands: cat plugins/crew/skills/join-crew/SKILL.md; rg --files plugins | rg "/(shared-desk-conventions|directory-structure|first-run-bootstrap)/SKILL.md$"; cat plugins/desk/skills/directory-structure/SKILL.md plugins/desk/skills/adopt-inflight-work/SKILL.md plugins/crew/skills/shared-desk-conventions/SKILL.md plugins/desk/skills/first-run-bootstrap/SKILL.md. Full canonical/adoption/ownership guidance and bootstrap lines 1-95 were also read with view.
+Final receipt append: synchronous python3 heredoc, pid=86110, parent_shell_pid=86109; writes only this receipt.
+Retained resources: every created file and directory is listed above at creation; original/final hashes and actual link target checks are above. No files deleted. Test stopped after this receipt append.
