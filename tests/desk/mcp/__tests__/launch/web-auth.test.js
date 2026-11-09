@@ -613,10 +613,22 @@ test("an action disposes its element handle and binds the path of the ref it nam
     assert.match(waits[0][1], /^css=.*input:nth-of-type\(1\)$/u)
     assert.deepEqual(waits[0][2], { state: "attached", strict: true, timeout: 2000 })
     assert.ok(native.calls.some((call) => call[0] === "dispose" && call[1] === 104))
+    const wait = native.page.mainFrame().waitForSelector
     native.page.mainFrame().waitForSelector = async () => { throw new Error(PASSWORD) }
     const next = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
     await assert.rejects(adapter.call(["fill", next.ref, "literal"]), error =>
       /AUTH_TARGET_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
+    native.page.mainFrame().waitForSelector = wait
+    const failing = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
+    const handle = native.handles.get(104)
+    const { click, dispose } = handle
+    handle.click = async () => { throw new Error(PASSWORD) }
+    handle.dispose = async () => { throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["click", failing.ref]), error =>
+      /AUTH_ACTION_FAILED/u.test(error.message) && !/AUTH_HANDLE_CLEANUP_FAILED/u.test(error.message) && !error.message.includes(PASSWORD),
+      "the action's own failure is the primary report")
+    await assert.rejects(adapter.close(), /AUTH_HANDLE_CLEANUP_FAILED/u, "the failed disposal stays owned")
+    Object.assign(handle, { click, dispose })
   } finally { await adapter.close() }
 })
 
