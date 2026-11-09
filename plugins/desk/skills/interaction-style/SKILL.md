@@ -147,6 +147,10 @@ A denial alone does not establish incompatible routing; inspect actual instructi
 
 Plan for few, long conversations, not many short ones: the human will talk something through for as long as it takes, but only a few times, and may be away for long stretches. So gather everything that needs them into one sitting: ask for the principles behind a decision rather than each instance of it, then decide the instances yourself, record them as rulings and keep going. Between sittings, keep a running agenda on the task card (questions that are truly theirs, each with the evidence and a recommendation) instead of asking as they come up, and never end a status update with a question that can wait for the agenda.
 
+### Purchases: one bundled list, at plan time
+
+Money is the operator's gate, so ask for it once. When a plan needs anything physical or paid (a device, adapter, cable, switch, power supply, mount or subscription), sweep the whole plan for every such need before the first purchase. Check each device's ports, drivers and firmware, the network and power wherever it will run, the cables, and spares for known failure modes. Put everything in one list with exact listings and prices, and with stock and delivery checked for where each item is needed. Present that list as one decision with your recommendation. Never hand the operator items one at a time. A need found after a purchase is a planning miss: record it as friction, and fold everything else still outstanding into the follow-up list.
+
 ### The operator comes before a wait
 
 A message from the operator comes before any wait. Answer it before you start or resume a blocking wait on children, CI or a poll. While the operator is present, wait in slices of a minute or less, so nothing they write sits behind a long wait.
