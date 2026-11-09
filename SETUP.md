@@ -101,6 +101,12 @@ The browser is part of the default install, so check it here, but never let it b
 
 For a signed-in page, open `browser: "mine"`, which uses a private copy of the operator's own Edge or Chrome profile and deletes it on close.
 
+If `mine` fails, do not use computer control, attach to the operator's running browser, open an interactive sign-in, extract profile data manually, or switch identity or transport to evade the refusal. Continue independent API or remote work. `fresh` has no inherited sign-in; it is not a replacement for authenticated access.
+
+`COPY_SOURCE_PERMISSION` means a source filesystem operation returned `EPERM` or `EACCES`, including profile discovery, metadata checks, listing or reading. It does not prove which permission, privacy rule or managed policy caused the refusal. On macOS, the operator or administrator can review the app hosting the agent in System Settings > Privacy & Security. Apple's [file-access policy documentation](https://support.apple.com/guide/security/controlling-app-access-to-files-secddd1d86a6/web) describes user-controlled file access and Full Disk Access; neither the error nor Desk can establish or grant the required setting automatically. Full Disk Access may be relevant, but is not a guaranteed fix. Retry only after an authorized repair (and restart the host app if the OS requests it). On other platforms, have the operator or administrator review the host process's profile-folder access and system policy. Do not change permissions or weaken source checks as an agent workaround.
+
+`COPY_SOURCE_POLICY` means required source identity, single-link ownership or readable/stable bytes could not be qualified. It is not a request for broader OS access. Both failures refuse the authenticated open; its owner cleans up any partial private copy, or explicitly reports retained cleanup uncertainty. A diagnostic improvement is not an OS permission fix or proof that `mine` works on a particular machine.
+
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 
 ### Updating

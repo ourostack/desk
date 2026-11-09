@@ -340,7 +340,7 @@ test("copyProfile names an operating-system read block instead of a profile poli
   } finally { fs.readdirSync = originalList }
 })
 
-test("copyProfile names Full Disk Access on macOS and folder permission elsewhere", async () => {
+test("copyProfile suggests permission review without claiming a cause or granting OS access", async () => {
   const { root } = await setup()
   const platform = Object.getOwnPropertyDescriptor(process, "platform")
   const original = fs.openSync
@@ -349,11 +349,17 @@ test("copyProfile names Full Disk Access on macOS and folder permission elsewher
     return original(file, ...args)
   }
   try {
-    for (const [os, fix] of [["darwin", /\(macOS privacy protection\)\. Give the app running this agent Full Disk Access/u], ["linux", /profile\. Give the app running this agent permission to read that profile folder/u]]) {
+    for (const [os, fix] of [["darwin", /Full Disk Access may be relevant, but is not a guaranteed fix/u], ["linux", /review the host process's profile-folder access and system policy/u]]) {
       Object.defineProperty(process, "platform", { ...platform, value: os })
       const source = path.join(root, `os-${os}`)
       makeProfile(source)
-      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge"), fix)
+      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge"), (error) => {
+        assert.match(error.message, fix)
+        assert.match(error.message, /does not identify the exact permission or policy/u)
+        assert.match(error.message, /Desk cannot grant OS access/u)
+        assert.match(error.message, /do not switch identity or transport, or control the person's browser or desktop as a fallback/u)
+        return true
+      })
     }
   } finally {
     Object.defineProperty(process, "platform", platform)
@@ -1037,6 +1043,130 @@ test("mine passes an operating-system read block through as COPY_SOURCE_PERMISSI
     assert.deepEqual(fs.readdirSync(tmp), [])
     await controller.closeAll()
   } finally { fs.openSync = original }
+})
+
+test("mine reports source access refusals without identity fallback, data leakage or partial contexts", async () => {
+  const cases = [
+    ["statSync", "Local State", "EPERM"],
+    ["lstatSync", "Local State", "EACCES"],
+    ["lstatSync", "Profile 1", "EPERM"],
+    ["lstatSync", "Profile 1/Network", "EACCES"],
+    ["readdirSync", "Profile 1/Network", "EPERM"],
+    ["openSync", "Profile 1/Network/Cookies", "EACCES"],
+  ]
+  for (const [method, relative, code] of cases) {
+    const { options, profiles, tmp, calls } = await setup()
+    const source = path.join(profiles, "edge")
+    makeProfile(source)
+    makeProfile(path.join(profiles, "chrome"))
+    const target = path.join(source, relative)
+    const native = fakeDriver()
+    const controller = web.createController({
+      ...options, authDriver: native.driver,
+      exists: file => onlyEdge(file) || /(?:chrome(?:\.exe)?|Google Chrome)$/u.test(file),
+    })
+    const original = fs[method]
+    fs[method] = (file, ...args) => {
+      if (String(file) === target) throw Object.assign(new Error(`${code}: ${target} ${PASSWORD}`), { code })
+      return original(file, ...args)
+    }
+    try {
+      const refused = await controller.call("browser_context", { action: "open", browser: "mine" })
+      assert.equal(refused.isError, true, `${method}: ${relative}`)
+      assert.match(text(refused), /^COPY_SOURCE_PERMISSION:/u)
+      assert.doesNotMatch(text(refused), /AUTH_OPEN_FAILED|COPY_SOURCE_POLICY/u)
+      assert.equal(text(refused).includes(source), false)
+      assert.equal(text(refused).includes(PASSWORD), false)
+      assert.deepEqual(native.calls, [], "no native browser launched")
+      assert.deepEqual(calls(), [], "no CLI fallback")
+      assert.deepEqual(fs.readdirSync(tmp), [], "partial copy removed")
+      assert.deepEqual(Object.keys(controller.settings.contexts), [], "no retained context")
+    } finally {
+      fs[method] = original
+      await controller.closeAll()
+    }
+  }
+})
+
+test("mine skips a profile whose Local State is not a file, rather than treating it as denied access", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  makeProfile(path.join(profiles, "chrome"))
+  const state = path.join(profiles, "edge", "Local State")
+  fs.unlinkSync(state)
+  fs.mkdirSync(state)
+  const controller = web.createController({
+    ...options,
+    exists: file => onlyEdge(file) || /(?:chrome(?:\.exe)?|Google Chrome)$/u.test(file),
+  })
+  try {
+    const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    assert.equal(json(opened).app, "Google Chrome")
+    assert.equal(fs.statSync(state).isDirectory(), true, "source left untouched")
+  } finally { await controller.closeAll() }
+  assert.deepEqual(fs.readdirSync(tmp), [])
+})
+
+test("source descriptor access refusals close the descriptor and erase bytes read before refusal", async () => {
+  for (const method of ["readFileSync", "fstatSync", "lstatSync"]) {
+    const { root } = await setup()
+    const source = path.join(root, "source")
+    makeProfile(source)
+    const original = fs[method]
+    const originalRead = fs.readFileSync
+    const originalOpen = fs.openSync
+    let fd
+    let bytes
+    let checks = 0
+    fs.openSync = (...args) => { fd = originalOpen(...args); return fd }
+    fs.readFileSync = (...args) => { bytes = originalRead(...args); return bytes }
+    const read = fs.readFileSync
+    fs[method] = (...args) => {
+      checks++
+      if (checks === (method === "readFileSync" ? 1 : 2)) {
+        throw Object.assign(new Error(`${source} ${PASSWORD}`), { code: "EACCES" })
+      }
+      return method === "readFileSync" ? read(...args) : original(...args)
+    }
+    try {
+      const dest = path.join(root, "dest")
+      assert.throws(() => web.copyProfile(source, dest), /^Error: COPY_SOURCE_PERMISSION:/u)
+      assert.equal(fs.existsSync(dest), false)
+      if (bytes) assert.ok(bytes.every(value => value === 0), "admitted bytes erased")
+      assert.throws(() => fs.fstatSync(fd), { code: "EBADF" })
+    } finally {
+      fs[method] = original
+      fs.openSync = originalOpen
+      fs.readFileSync = originalRead
+    }
+  }
+})
+
+test("permission refusal retains ownership and a safe primary error when partial-copy cleanup fails", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const controller = web.createController(options)
+  const originalOpen = fs.openSync
+  const originalRemove = fs.rmSync
+  fs.openSync = (file, ...args) => {
+    if (String(file).endsWith("Cookies")) throw Object.assign(new Error(PASSWORD), { code: "EPERM" })
+    return originalOpen(file, ...args)
+  }
+  fs.rmSync = () => { throw new Error(PASSWORD) }
+  try {
+    const refused = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.match(text(refused), /^COPY_SOURCE_PERMISSION:/u)
+    assert.match(text(refused), /AUTH_CLEANUP_FAILED/u)
+    assert.equal(text(refused).includes(PASSWORD), false)
+    assert.equal(Object.keys(controller.settings.contexts).length, 1)
+    assert.equal(fs.readdirSync(tmp).length, 1)
+  } finally {
+    fs.openSync = originalOpen
+    fs.rmSync = originalRemove
+    await controller.closeAll()
+  }
+  assert.deepEqual(fs.readdirSync(tmp), [])
 })
 
 test("mine gives a plain message when there is no profile, or it cannot be copied", async () => {

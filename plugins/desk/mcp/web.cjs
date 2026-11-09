@@ -134,32 +134,40 @@ function settings(o) {
 
 // The installed browser to drive: Edge first, then Chrome. For mine, only one whose profile folder exists.
 function chooseBrowser(s, mine) {
-  var found = ["msedge", "chrome"].map(function (channel) {
+  var channels = ["msedge", "chrome"];
+  for (var i = 0; i < channels.length; i++) {
+    var channel = channels[i];
     var selected = browserDiscovery.channelBrowserSelection(channel, s.platform, s.env, s.fileExists);
+    if (!selected.executablePath) continue;
     var root = s.profileRoots[channel] || profileRoot(channel, s.platform, s.env, s.homeDir);
+    if (mine) {
+      try {
+        if (!fs.statSync(path.join(root, "Local State")).isFile()) continue;
+      } catch (error) {
+        if (permissionDenied(error)) throw copyPermissionError(BROWSERS[channel].name);
+        continue;
+      }
+    }
     return { channel: channel, executablePath: selected.executablePath, profileRoot: root };
-  }).filter(function (browser) {
-    return browser.executablePath && (!mine || exists(path.join(browser.profileRoot, "Local State")));
-  });
-  if (found.length) return found[0];
+  }
   if (mine) throw plain("Desk could not find your own Edge or Chrome profile on this computer. Use a fresh browser instead (browser: \"fresh\").");
   throw plain("Desk needs Microsoft Edge or Google Chrome to open a browser, and found neither. Install one, then try again.");
 }
 
 function copyPolicyError() {
-  return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. No authenticated copy was opened.");
+  return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. Do not bypass this refusal or control the person's browser or desktop as a fallback. No authenticated copy was opened.");
 }
 
-// macOS privacy protection (App Data / Full Disk Access) lets lstat succeed but refuses open
-// and readdir with EPERM. Naming that case gives whoever sets up the machine the one fix that works.
 function permissionDenied(error) {
   return !!error && (error.code === "EPERM" || error.code === "EACCES");
 }
 
 function copyPermissionError(app) {
   return plain("COPY_SOURCE_PERMISSION: The operating system blocked reading your " + (app || "browser") + " profile" +
-    (process.platform === "darwin" ? " (macOS privacy protection). Give the app running this agent Full Disk Access in System Settings > Privacy & Security > Full Disk Access, restart it, then retry." :
-      ". Give the app running this agent permission to read that profile folder, then retry.") +
+    ". The access refusal does not identify the exact permission or policy responsible." +
+    (process.platform === "darwin" ? " The operator or administrator can review the host app's file-access settings in System Settings > Privacy & Security; Full Disk Access may be relevant, but is not a guaranteed fix." :
+      " The operator or administrator can review the host process's profile-folder access and system policy.") +
+    " Desk cannot grant OS access. Retry only after an authorized repair; do not switch identity or transport, or control the person's browser or desktop as a fallback." +
     " No authenticated copy was opened.");
 }
 
@@ -224,7 +232,12 @@ function copyProfile(source, dest, app) {
   } finally { state.fill(0); }
   var skipped = [];
   function copy(from, to, relative) {
-    if (!fs.lstatSync(from).isDirectory()) throw copyPolicyError();
+    try {
+      if (!fs.lstatSync(from).isDirectory()) throw copyPolicyError();
+    } catch (error) {
+      if (permissionDenied(error)) throw copyPermissionError(app);
+      throw error;
+    }
     fs.mkdirSync(to);
     var entries;
     try { entries = fs.readdirSync(from, { withFileTypes: true }); } catch (error) {
