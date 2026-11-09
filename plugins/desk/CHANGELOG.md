@@ -1,5 +1,34 @@
 # desk plugin — changelog
 
+## 3.2.76 — 2026-11-09
+
+Work orchestration now has the fleet steward save an abandoned session's unsaved work (a pushed `wip/` branch, verified on the remote, or its desk) and record where it went before archiving it, and keep each host's session list to homes and workspaces that hold live work, hiding the rest without removing the clone. See [work orchestration](skills/work-orchestration/SKILL.md).
+
+Work orchestration now says where agents live. Every session starts in its home (its desk, or a shared workspace for a shared agent), never homed in a repository it works on. Always-on work such as issue drains and watchers lives on the always-on host, where the person can find it first. A long-running agent changes hands by starting and proving its successor before the old one stops, so it misses no beat. See [work orchestration](skills/work-orchestration/SKILL.md).
+
+Work orchestration adds that a home's name says it is a home: a desk or shared workspace is named for what it is, and a repository by its owner and name, so a person never mistakes one for the other in a session list. See [work orchestration](skills/work-orchestration/SKILL.md).
+
+[Work orchestration](skills/work-orchestration/SKILL.md) now says machine work a task needs (privacy grants, settings, system prompts, app restarts, sign-ins on hosts the agents run) is agents' work, never "the one thing only you can do". An agent host is restarted and its working sessions resumed, never held for an idle moment that a busy machine never has. Keystrokes sent to a screen wait for a read of the machine's keyboard focus, re-read between chunks; a secret goes only into a focused password field, and a person on a call is using the machine even while its input is idle.
+
+Every agent that loads Desk now aims its work at what the human will feel, by default. Fresh agents carrying the old foundation reported "on track" for a ship date while the app still felt broken. They handed the human a diagnostic to run on their own account and asked them to approve a hosting sign-in. They proposed deleting the human's own files to free disk space, took side quests themselves instead of giving them a lane, and relayed lanes' unmeasured dates as the plan. The foundation ([`using-desk`](skills/using-desk/SKILL.md)) gains a second paragraph in "Human and agent" on aiming at what the human feels, with matching clauses in "Authority" and "Waste judgment". The gates the foundation lists (a send in their voice, money, an irreversible act, their decisions) still reach the human, as decisions. The owning skills carry the detail:
+
+- [`interaction-style`](skills/interaction-style/SKILL.md): status leads with what the operator would feel, broken first with numbers; the operator is never handed a step, sign-in or deploy, and only a password, MFA or new-consent screen actually reached goes to them.
+- [`work-orchestration`](skills/work-orchestration/SKILL.md): lanes aim at felt numbers; profile before choosing a fix; a 90-minute timebox on flat numbers; side quests get their own lanes when delegation is available; fit the fleet to the machine; propose only from evidence; child briefs forbid real-account testing and chores for the person.
+- [`evidence-discipline`](skills/evidence-discipline/SKILL.md): offline evals on synthetic data shaped like the human's, online evals from counts-only telemetry, never their real data or account, unless the human themselves directs one specific check; a repository gate that demands a real-account check is raised with its owner, never run or bypassed.
+- [`fast-honest-ci`](skills/fast-honest-ci/SKILL.md): CI is the merge gate, not the workbench; it also now holds the grant to download CI output without asking.
+- [`task-lifecycle`](skills/task-lifecycle/SKILL.md): agent storage has retention the agent sets and runs; never propose deleting the human's files.
+- [`git-hygiene`](skills/git-hygiene/SKILL.md): verify the real artifact with synthetic data or a test account, never the operator's own.
+- [`runtime-symptom-investigation`](skills/runtime-symptom-investigation/SKILL.md): ask the operator what they saw in their own session, never to run or reproduce something there.
+- Crew's `join-crew` and `start-crew`: the agent runs the gh sign-in itself instead of telling the person to.
+
+To fit the SessionStart budget, the foundation dropped sentences its owning skills already carry: the peer-handoff rule and model choice (`work-orchestration`), a duplicate of the child sign-off rule, "no second lifecycle policy" and "folds returned evidence into the same task" (`task-lifecycle`, `work-orchestration`). The pressure scenarios are kept as the [`human-experience-defaults`](../../evals/human-experience-defaults.json) eval contract.
+
+A person's own `AGENTS.md` in a shared workspace now always gets at least 8 KB of what session start prints, however large the team's root `AGENTS.md` is, and `lesson_add` judges where a personal lesson lands by the same floor. When the whole session-start output runs long, the team file is now cut before the person's file drops below that floor. Before, a root file of 16 KB or more left the person's file nothing, so their preferences and new lessons never reached a session ([#659](https://github.com/ourostack/desk/issues/659)).
+
+`session-resumption` now says never to write instructions, lessons, preferences or context into a harness home folder such as `~/.copilot`: it belongs to one machine, unsynced and unshared, so a rule that does not load is fixed where it loads from.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.75 — 2026-11-09
 
 Desk now reports `COPY_SOURCE_PERMISSION` when the operating system refuses profile-discovery or source-directory metadata access, as well as file reads and directory listings. It no longer mistakes a discovery refusal for a missing profile or moves on to another browser identity. Identity, link, race, output-protection and failed-open cleanup checks remain in place.
