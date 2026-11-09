@@ -47,6 +47,14 @@ Desk owns task and iteration state and archive transitions. The agreed endpoint 
 
 Invoke `superpowers:requesting-code-review` once at the diff boundary with the candidate branch and the relevant evidence, and record the head it reviewed as evidence. Record every finding disposition, keep one Superpowers implementation owner, run one bounded correction wave, and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
 
+## Hosts and machines are agents' work
+
+Machine work a task needs (an operating-system privacy grant, a setting, a system prompt, an app restart, a sign-in on a host the agents run) is agents' work. Do it, or hand it to the agent that owns that machine. Never tell the person it is "the one thing only you can do"; only a blocker `using-desk` names goes back to them.
+
+Never wait for an idle moment to restart an agent host (an app, CLI or runtime that runs sessions): on a busy machine some session is always working, so the wait never ends. Restart and resume so no agent misses a beat. First snapshot every session the host runs: working or idle, mid-turn, queued input, and running shells or subagents where readable. Restart the host. Send each session that was working one message saying the host restarted at what time, to continue exactly where it left off, and to re-check anything that was in flight. Confirm each shows new activity after the restart; message one that does not once more, then report it by name. Idle sessions only need to come back.
+
+Keystrokes sent to a screen (a KVM, remote input, computer use) land wherever the machine's keyboard focus is, which no screenshot shows. Before the first key, read the machine's system-wide focused element and require the expected app and field; re-read between chunks and stop if it moves. A secret goes only into a focused password field. A click meant to focus a field proves nothing until that read confirms it. A person on a call is using the machine even while its input is idle.
+
 ## Ready-set scheduling and continuous peer review
 
 This section consumes the cross-repository plan's Markdown DAG, whose table contract is the card's `## Steps` table (`Step | Depends on | Repo | State | Evidence`, defined in `task-card-format`), its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
