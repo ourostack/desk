@@ -318,6 +318,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   }),
   desk_doctor: schema({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
+    storage: { type: "string", enum: ["inspect"], description: "Explicit read-only local binary-storage observations in an owned worker. Does not establish remote or installed readiness. Preview ignores this field without inspecting." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },
   }),
   improvement_open: schema({
