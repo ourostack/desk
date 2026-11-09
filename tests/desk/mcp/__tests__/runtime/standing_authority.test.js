@@ -2,6 +2,8 @@
 // or above, capped, and read from the person's own Crew desk only.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { standingAuthorityLine, standingAuthoritySection } from "../../../../../plugins/desk/mcp/src/runtime/standing-authority.js"
@@ -39,4 +41,15 @@ test("in a Crew workspace only the person's own desk grants: the team's root fil
   assert.ok(line.includes(`From ${path.join("/w", "desks/ari", "AGENTS.md")}:\n- ari's grant`))
   assert.doesNotMatch(line, /team grant/u)
   assert.equal(standingAuthorityLine({ root: "/w", crew: true, read }), "")
+})
+
+test("the default reader takes the file from disk, and a missing file is no section", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "standing-authority-"))
+  try {
+    writeFileSync(path.join(root, "AGENTS.md"), "# Desk\n\n## Standing authority\n\n- grant on disk\n")
+    assert.match(standingAuthorityLine({ root }), /- grant on disk/u)
+    assert.equal(standingAuthorityLine({ root: path.join(root, "missing") }), "")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
