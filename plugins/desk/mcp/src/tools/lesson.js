@@ -98,8 +98,8 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   const where = deskRelativePath(deskRoot, file)
   const shelfWhere = deskRelativePath(deskRoot, shelfFile)
   const prefix = deskRelativePath(deskRoot, path.dirname(file))
-  // Session start prints the desk's AGENTS.md and then the person's, from one shared budget; the lesson must be in the
-  // part it prints, judged by the same cut session start makes, or on the shelf beside it.
+  // Session start prints the desk's AGENTS.md and then the person's, from one shared budget with a floor for the
+  // person's; the lesson must be in the part it prints, judged by the same cut session start makes, or on the shelf.
   const cap = prefix === "" ? AGENTS_MD_CAP_BYTES : personAgentsCap(readAgentsMd(deskRoot))
   // The lock lives beside the file, so its folder must exist first.
   await fs.mkdir(path.dirname(file), { recursive: true })

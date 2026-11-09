@@ -130,8 +130,8 @@ test("lesson_add personal asks session start's own lookup, with the call's envir
 })
 
 // The case from ourostack/desk#554: a Crew workspace whose team AGENTS.md is 12,215 bytes leaves 4 KB of the shared 16 KB for
-// a person's 10,171-byte AGENTS.md. A new lesson used to be refused; now the oldest lessons move to the shelf, and every
-// one of them still loads.
+// a person's 10,171-byte AGENTS.md (ourostack/desk#659 raised that to the person's 8 KB floor). A new lesson used to be
+// refused; now the oldest lessons move to the shelf, and every one of them still loads.
 test("lesson_add personal past the shared budget keeps the new lesson in what session start prints, shelves the oldest, and drops none", async () => {
   const root = await crewRoot()
   await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"Team rule line that binds every session here.\n".repeat(270)}`.padEnd(12_215, "t"), "utf8")
@@ -152,7 +152,7 @@ test("lesson_add personal past the shared budget keeps the new lesson in what se
   const shelved = lessonEntries(shelf).map((entry) => entry.topic)
   assert.ok(shelved.length > 0)
   assert.deepEqual(result.shelved, { path: "desks/ari/LESSONS.md", topics: shelved })
-  assert.match(result.message, new RegExp(`^In effect: the lesson is in desks/ari/AGENTS\\.md, which session start prints for you on this desk\\. To make room, ${shelved.length} older lessons moved to desks/ari/LESSONS\\.md, where session start lists their topics and task_focus returns them: Lesson 19; Lesson 20; .*; Lesson 60; Lesson 1; Lesson 2\\.$`, "u"), "lessons already past the cut move first")
+  assert.match(result.message, new RegExp(`^In effect: the lesson is in desks/ari/AGENTS\\.md, which session start prints for you on this desk\\. To make room, ${shelved.length} older lessons moved to desks/ari/LESSONS\\.md, where session start lists their topics and task_focus returns them: (?:Lesson \\d+; )+Lesson 60; Lesson 1; Lesson 2\\.$`, "u"), "lessons already past the cut move first")
   assert.deepEqual(shelved.slice(-2), ["Lesson 1", "Lesson 2"], "then the oldest, until the new one fits")
   // Session start lists every shelved topic, and focusing a task returns the shelved lessons, those closest to it first.
   assert.deepEqual(shelfIndex(path.join(root, "desks", "ari")).topics, shelved)
@@ -181,7 +181,7 @@ test("lesson_add personal puts the lesson on the shelf when the rest of AGENTS.m
 test("lesson_add personal moves lessons already past the cut to the shelf, since nothing loads them where they are", async () => {
   const root = await crewRoot()
   await fs.writeFile(path.join(root, "AGENTS.md"), `# Crew\n\n${"x".repeat(AGENTS_MD_CAP_BYTES - 40)}\n`, "utf8")
-  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), "## Lessons\n\n- **Hidden.** Past the cut. (2026-01-01)\n", "utf8")
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `# Ari\n\n${"Preference prose.\n".repeat(500)}\n## Lessons\n\n- **Hidden.** Past the cut. (2026-01-01)\n`, "utf8")
   const result = await lesson_add({ deskRoot: root, person: "ari", input: personal("Rule", "Do it.") })
   assert.deepEqual([result.tier, result.path, result.shelved.topics], ["shelf", "desks/ari/LESSONS.md", ["Hidden"]])
   assert.equal((await fs.readFile(path.join(root, "desks", "ari", "AGENTS.md"), "utf8")).includes("Hidden"), false)

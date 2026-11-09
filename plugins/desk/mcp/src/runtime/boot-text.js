@@ -7,7 +7,7 @@
 // to be told to go and read it) and when the local desk was last in sync with its remote.
 
 import * as path from "node:path"
-import { AGENTS_MD_CAP_BYTES } from "./agents-md.js"
+import { AGENTS_MD_CAP_BYTES, PERSON_AGENTS_MIN_BYTES } from "./agents-md.js"
 import { topicList } from "./lessons-shelf.js"
 import { ELSEWHERE_NOTE, saysElsewhere } from "./elsewhere-note.js"
 import { readSyncStatus } from "./sync-worker.js"
@@ -477,11 +477,15 @@ export function formatBootText(result) {
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
   let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
   const cuts = []
+  // The person's own file keeps its floor here too, so when both files do not fit the desk's file is cut first.
+  const personText = result.agents_md && result.person_agents_md ? result.person_agents_md.text.replace(/\n+$/u, "") : ""
+  const reserve = Math.min(personText.length, PERSON_AGENTS_MIN_BYTES)
   for (const [md, name] of files) {
     let text = md.text.replace(/\n+$/u, "")
     let { truncated } = md
-    if (text.length > Math.max(left, 0)) {
-      const end = text.lastIndexOf("\n", Math.max(left, 0))
+    const room = Math.max(left - (md === result.agents_md ? reserve : 0), 0)
+    if (text.length > room) {
+      const end = text.lastIndexOf("\n", room)
       text = text.slice(0, Math.max(end, 0))
       truncated = true
     }

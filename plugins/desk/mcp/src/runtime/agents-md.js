@@ -49,7 +49,14 @@ export function readAgentsMd(root, { cap = AGENTS_MD_CAP_BYTES } = {}) {
   }
 }
 
-/** How much of the person's AGENTS.md session start prints after the desk's (`desk` as `readAgentsMd` returned it). */
+/** The part of the budget a person's own AGENTS.md always gets, however much of it the desk's file fills. */
+export const PERSON_AGENTS_MIN_BYTES = 8 * 1024
+
+/**
+ * How much of the person's AGENTS.md session start prints after the desk's (`desk` as `readAgentsMd` returned it): what
+ * the desk's file leaves of the budget, and never less than `PERSON_AGENTS_MIN_BYTES`, so a large team file cannot hide
+ * the person's own rules.
+ */
 export function personAgentsCap(desk) {
-  return AGENTS_MD_CAP_BYTES - (desk?.shownBytes ?? 0)
+  return Math.max(AGENTS_MD_CAP_BYTES - (desk?.shownBytes ?? 0), PERSON_AGENTS_MIN_BYTES)
 }
