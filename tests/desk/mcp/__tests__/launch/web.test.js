@@ -1088,6 +1088,26 @@ test("mine reports source access refusals without identity fallback, data leakag
   }
 })
 
+test("mine skips a profile whose Local State is not a file, rather than treating it as denied access", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  makeProfile(path.join(profiles, "chrome"))
+  const state = path.join(profiles, "edge", "Local State")
+  fs.unlinkSync(state)
+  fs.mkdirSync(state)
+  const controller = web.createController({
+    ...options,
+    exists: file => onlyEdge(file) || /(?:chrome(?:\.exe)?|Google Chrome)$/u.test(file),
+  })
+  try {
+    const opened = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(opened.isError, false, text(opened))
+    assert.equal(json(opened).app, "Google Chrome")
+    assert.equal(fs.statSync(state).isDirectory(), true, "source left untouched")
+  } finally { await controller.closeAll() }
+  assert.deepEqual(fs.readdirSync(tmp), [])
+})
+
 test("source descriptor access refusals close the descriptor and erase bytes read before refusal", async () => {
   for (const method of ["readFileSync", "fstatSync", "lstatSync"]) {
     const { root } = await setup()
