@@ -1,0 +1,1 @@
+Work orchestration now scopes a missing human answer to the work that depends on it, keeping already-authorized independent work moving. Outcome-based implementation briefs and explicit reconciliation of research returns prevent a research milestone from silently replacing delivery, without weakening freezes, authority, review or correctness gates.
