@@ -6,6 +6,10 @@ var crypto = require("crypto");
 var failures = new WeakMap();
 
 var STYLES = ["display", "visibility", "-webkit-user-modify"];
+var TARGET_WAIT_MS = 2000;
+var SNAPSHOT_ATTEMPTS = 5;
+var SNAPSHOT_SETTLE_MS = 250;
+var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
 var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "NOSCRIPT"]);
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
@@ -103,15 +107,25 @@ function inspect(root) {
       walk(child, entry.id, childPath, shadow);
     });
     (node.shadowRoots || []).forEach(function (shadowRoot) {
+      // Browser-internal trees (form controls, media controls, details, SVG use) are absent from
+      // DOMSnapshot, so they are never rendered; control values come from the native value fields.
       if (shadowRoot.shadowRootType === "user-agent") {
-        requireTrue(["INPUT", "TEXTAREA", "SELECT"].indexOf(entry.name) !== -1, "AUTH_SHADOW_COVERAGE_REFUSED");
+        signature.push([entry.id, "user-agent"]);
         return;
       }
       requireTrue(shadowRoot.shadowRootType === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
+      entry.host = true;
       signature.push([entry.id, shadowRoot.backendNodeId, "open"]);
       walk(shadowRoot, entry.id, undefined, true);
     });
-    if (node.templateContent) walk(node.templateContent, entry.id, undefined, shadow);
+    // Template content is inert, excluded from rendering and absent from DOMSnapshot; only its fragment is recorded.
+    if (node.templateContent) inert(node.templateContent, entry.id);
+  }
+  function inert(fragment, parent) {
+    requireTrue(fragment && integer(fragment.backendNodeId, 1, Number.MAX_SAFE_INTEGER) && !nodes.has(fragment.backendNodeId));
+    requireTrue(fragment.nodeType === 11);
+    nodes.set(fragment.backendNodeId, { id: fragment.backendNodeId, type: 11, name: fragment.nodeName, parent: parent, shadow: false });
+    signature.push([fragment.backendNodeId, 11, "template", parent]);
   }
   requireTrue(root && root.nodeType === 9, "AUTH_DOCUMENT_REFUSED");
   walk(root, 0, "", false);
@@ -158,10 +172,13 @@ function prepare(packet, scope, frameId, nextRef) {
     layout.nodeIndex.length === layout.styles.length);
   var style = new Map();
   layout.nodeIndex.forEach(function (index, offset) {
-    requireTrue(integer(index, 0, count - 1) && !style.has(index));
+    requireTrue(integer(index, 0, count - 1));
     var row = layout.styles[offset];
     requireTrue(Array.isArray(row) && (row.length === 0 || row.length === STYLES.length));
-    style.set(index, row.map(function (value) { return text(value); }));
+    var values = row.map(function (value) { return text(value); });
+    // One node can own several layout objects (inline continuations, anonymous wrappers); their styles must agree.
+    if (style.has(index)) requireTrue(JSON.stringify(style.get(index)) === JSON.stringify(values));
+    else style.set(index, values);
   });
   var ids = new Set();
   var controls = new Set();
@@ -201,14 +218,29 @@ function prepare(packet, scope, frameId, nextRef) {
   requireTrue(rows[0].type === 9 && rows[0].id === scope.root, "AUTH_DOCUMENT_REFUSED");
   requireTrue(controls.size === scope.controls.size &&
     Array.from(controls).every(function (id) { return scope.controls.has(id); }), "AUTH_CONTROL_COVERAGE_REFUSED");
+  // A shadow host's unslotted light children are outside the flat tree DOMSnapshot captures and are never rendered.
+  var unslotted = new Set();
   scope.nodes.forEach(function (node) {
-    requireTrue(ids.has(node.id) || node.type === 11, "AUTH_CONTROL_COVERAGE_REFUSED");
+    var parent = scope.nodes.get(node.parent);
+    var hidden = !ids.has(node.id) && node.type !== 11 && !scope.controls.has(node.id) && Boolean(parent) &&
+      ((parent.host && parent.type !== 11) || unslotted.has(parent.id));
+    // A shadow root inside unslotted content is outside the flat tree too.
+    if (hidden || (node.type === 11 && parent && unslotted.has(parent.id))) unslotted.add(node.id);
+    requireTrue(ids.has(node.id) || node.type === 11 || hidden, "AUTH_CONTROL_COVERAGE_REFUSED");
   });
   var secrets = new Set();
   // Complete the native value pass before any label or text is rendered.
-  input.forEach(function (value) { if (value) secrets.add(value); });
-  textarea.forEach(function (value) { if (value) secrets.add(value); });
-  rows.forEach(function (row) { if (row.opaque && row.value && !row.excluded) secrets.add(row.value); });
+  // Whitespace alone protects nothing and would blank every space in the page.
+  function secret(value) { if (value && /\S/u.test(value)) secrets.add(value); }
+  input.forEach(function (value, index) {
+    var attrs = rows[index].attrs;
+    var type = (attrs.get("type") || "").toLowerCase();
+    // A checkbox or radio value is page markup nobody types ("on" when unset).
+    if ((type === "checkbox" || type === "radio") && value === (attrs.has("value") ? attrs.get("value") : "on")) return;
+    secret(value);
+  });
+  textarea.forEach(secret);
+  rows.forEach(function (row) { if (row.opaque && !row.excluded) secret(row.value); });
   function scrub(value) {
     var matches = [];
     secrets.forEach(function (secret) {
@@ -306,8 +338,9 @@ function checkArgs(args) {
   }
 }
 
-function create(context, outputDir, timeoutMs, runtimePolicy) {
+function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   requireTrue(typeof runtimePolicy === "function", "AUTH_RUNTIME_POLICY_MISSING");
+  var attempts = options && integer(options.snapshotAttempts, 1, SNAPSHOT_ATTEMPTS) ? options.snapshotAttempts : SNAPSHOT_ATTEMPTS;
   var closed = false;
   var readers = new Map();
   var refs = new Map();
@@ -354,9 +387,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     if (results.some(function (result) { return result.status === "rejected"; })) throw fail("AUTH_HANDLE_CLEANUP_FAILED");
   }
   function dropRefs() {
-    var previous = Array.from(refs.values());
     refs.clear();
-    return disposeRecords(previous);
   }
   async function readerFor(page) {
     checkRuntime();
@@ -428,7 +459,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     var staged;
     var stageIdentity;
     var stageCloseFailed = false;
-    var committed = false;
     var primary;
     try {
       var epoch = reader.epoch;
@@ -436,16 +466,17 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
       requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
       var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
       var prepared;
-      try { prepared = prepare(packet, before.scope, before.frameId, function () { return ++next; }); } finally { packet = null; }
-      for (var target of prepared.targets) {
-        checkRuntime();
-        var handle = await reader.page.mainFrame().waitForSelector("css=" + target.path, { state: "attached", strict: true, timeout: timeoutMs });
-        requireTrue(handle, "AUTH_TARGET_REFUSED");
-        var record = { ref: target.ref, handle: handle, reader: reader, epoch: epoch, stamp: before };
-        provisional.push(record);
-        cleanupRecords.add(record);
-        checkRuntime();
-      }
+      try { prepared = prepare(packet, before.scope, before.frameId, function () { return ++next; }); }
+      catch (error) {
+        // A document that changed between the two native reads is a stale pair, not a coverage verdict.
+        requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
+        throw error;
+      } finally { packet = null; }
+      // Refs bind lazily: an action re-qualifies the unchanged document before resolving its path,
+      // so a page with thousands of elements does not wait on one selector round trip per element.
+      prepared.targets.forEach(function (target) {
+        provisional.push({ ref: target.ref, path: target.path, reader: reader, epoch: epoch, stamp: before });
+      });
       var qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
       await verifyProtection(reader, qualified, prepared, epoch);
@@ -477,7 +508,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
           }
         }
       }
-      await dropRefs();
+      dropRefs();
       qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
       await verifyProtection(reader, qualified, prepared, epoch);
@@ -489,7 +520,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
         fs.renameSync(staged, final); staged = undefined; result.artifact = final;
       }
       provisional.forEach(function (record) { refs.set(record.ref, record); });
-      committed = true;
       return result;
     } catch (error) {
       primary = knownFailure(error) ? safeFailure(error).code : "AUTH_SNAPSHOT_FAILED";
@@ -497,9 +527,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     } finally {
       var cleanup = [];
       if (stageCloseFailed) cleanup.push("AUTH_STAGE_CLOSE_FAILED");
-      if (!committed) {
-        try { await disposeRecords(provisional); } catch (error) { cleanup.push("AUTH_HANDLE_CLEANUP_FAILED"); }
-      }
       if (staged) {
         try {
           var current = await fs.promises.lstat(staged, { bigint: true });
@@ -510,6 +537,18 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
         }
       }
       if (cleanup.length) throw fail((primary || "AUTH_OPERATION_FAILED") + "; retained cleanup uncertainty: " + cleanup.join(", "), applied);
+    }
+  }
+  // Live pages (clocks, relative times, loading) change between reads; take a fresh, fully re-qualified snapshot.
+  async function settled(reader, save, applied) {
+    for (var attempt = 1; ; attempt++) {
+      try { return await snapshot(reader, save, applied); }
+      catch (error) {
+        // snapshot() only throws branded failures.
+        if (closed || attempt >= attempts || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
+        await new Promise(function (resolve) { setTimeout(resolve, SNAPSHOT_SETTLE_MS * attempt); });
+        checkRuntime();
+      }
     }
   }
   async function execute(args) {
@@ -529,7 +568,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
       try {
         requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TARGET_REFUSED");
         checkRuntime(); await page.close(); checkRuntime(); selected = context.pages()[0];
-        await dropRefs(); checkRuntime(); return { closed: true };
+        dropRefs(); checkRuntime(); return { closed: true };
       }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
@@ -538,7 +577,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
     catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_READER_SETUP_FAILED", command === "tab-new");
     }
-    if (command === "snapshot" || command === "tab-select" || command === "tab-new") return snapshot(reader, args[1] === "--save", command === "tab-new");
+    if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
     var applied = false;
     try {
       if (["goto", "go-back", "go-forward", "reload", "resize", "mousewheel"].indexOf(command) !== -1) {
@@ -557,13 +596,32 @@ function create(context, outputDir, timeoutMs, runtimePolicy) {
         requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
         same(record.stamp, await qualify(reader), reader, record.epoch);
         checkRuntime();
-        applied = true;
-        var method = command === "select" ? "selectOption" : command;
-        if (args.length === 3) await record.handle[method](args[2], { timeout: timeoutMs });
-        else await record.handle[method]({ timeout: timeoutMs });
-        checkRuntime();
+        var bound;
+        try {
+          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + record.path,
+            { state: "attached", strict: true, timeout: Math.min(timeoutMs, TARGET_WAIT_MS) }) };
+        } catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
+        requireTrue(bound.handle, "AUTH_TARGET_REFUSED");
+        cleanupRecords.add(bound);
+        var actionError;
+        try {
+          // The document is still the one the ref was read from, so its path names the same element.
+          same(record.stamp, record.stamp, reader, record.epoch);
+          checkRuntime();
+          applied = true;
+          var method = command === "select" ? "selectOption" : command;
+          if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
+          else await bound.handle[method]({ timeout: timeoutMs });
+          checkRuntime();
+        } catch (error) {
+          actionError = error;
+          throw error;
+        } finally {
+          // A failed disposal stays owned for close; the action's own refusal is the primary report.
+          try { await disposeRecords([bound]); } catch (cleanupError) { if (!actionError) throw cleanupError; }
+        }
       }
-      return await snapshot(reader, false, applied);
+      return await settled(reader, false, applied);
     } catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_ACTION_FAILED", applied);
     }
