@@ -55,6 +55,8 @@ Never wait for an idle moment to restart an agent host (an app, CLI or runtime t
 
 Keystrokes sent to a screen (a KVM, remote input, computer use) land wherever the machine's keyboard focus is, which no screenshot shows. Before the first key, read the machine's system-wide focused element and require the expected app and field; re-read between chunks and stop if it moves. A secret goes only into a focused password field. A click meant to focus a field proves nothing until that read confirms it. A person on a call is using the machine even while its input is idle.
 
+Never read or write the system clipboard on a machine a person uses: no `pbpaste` or `pbcopy`, no copy or paste keys or menu items, no general-pasteboard API in a helper, a script or computer use. The clipboard is the person's. It also spans their devices (Apple's Universal Clipboard), so a read can fetch another machine's clipboard and leave a "Pasting from…" box stuck on their screen, and endpoint data-loss-prevention agents read every change, so whatever an agent puts there leaves the machine. Move text between steps in files or a private named pasteboard, type it with key events, and read it back from the accessibility tree.
+
 ## Ready-set scheduling and continuous peer review
 
 This section consumes the cross-repository plan's Markdown DAG, whose table contract is the card's `## Steps` table (`Step | Depends on | Repo | State | Evidence`, defined in `task-card-format`), its node states and the T01 adapter's mapped context; it produces ordered dispatch/acceptance events linked to native call IDs, resource ownership and commit-review receipts. It defines no task schema or frontmatter, no universal graph parser, service or database, and it never touches a Superpowers payload.
