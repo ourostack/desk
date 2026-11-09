@@ -1,0 +1,1 @@
+Work orchestration adds that a home's name says it is a home: a desk or shared workspace is named for what it is, and a repository by its owner and name, so a person never mistakes one for the other in a session list. See [work orchestration](skills/work-orchestration/SKILL.md).
