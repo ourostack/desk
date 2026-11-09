@@ -14,7 +14,12 @@ import { indexedThread } from "../tools/thread.js"
 import { loadEmbedder, MODEL } from "./embedder.js"
 import { openVectorStore } from "./vectors.js"
 import { removeOldIndex } from "./old-index.js"
+import { directLexicalSearch } from "./direct-lexical.js"
 import { Worker } from "node:worker_threads"
+
+function recoverableIndexFailure(error) {
+  return /^(?:SQLITE_(?:BUSY|LOCKED|IOERR|CORRUPT)(?:_[A-Z0-9]+)*|SQLITE_NOTADB)$/u.test(error?.code ?? "")
+}
 
 const TIDY_SOURCE = `
   const { workerData } = require("node:worker_threads")
@@ -117,6 +122,8 @@ export function createSearchEngine(options) {
   let modelFailedAt = 0
   let modelLoading = null
   let closed = false
+  let indexFailure = null
+  let directFiles = false
   // Without a watcher every search reads the desk again first.
   let watcherFailed = false
   const watcher = startWatcher()
@@ -170,6 +177,7 @@ export function createSearchEngine(options) {
 
   function refresh() {
     refreshing ??= (async () => {
+      directFiles = false
       dirty = false
       const files = changedFiles
       const others = otherPaths
@@ -183,9 +191,12 @@ export function createSearchEngine(options) {
         useForNextDiscover(null)
         await run
         built = true
+        indexFailure = null
+        directFiles = false
       } catch (error) {
         dirty = true
         fullScan = true
+        if (recoverableIndexFailure(error)) indexFailure = error.code
         throw error
       } finally {
         refreshing = null
@@ -260,10 +271,21 @@ export function createSearchEngine(options) {
   }
 
   async function lexical(request) {
-    await current()
-    if (request.kind === "thread") return indexedThread({ deskRoot, db, input: request })
-    const backend = request.kind === "timeline" ? indexedTimeline : indexedSearch
-    return backend({ deskRoot, db, input: request, opts: { now: request.now } })
+    try {
+      await current()
+      if (request.kind === "thread") return await indexedThread({ deskRoot, db, input: request })
+      const backend = request.kind === "timeline" ? indexedTimeline : indexedSearch
+      return await backend({ deskRoot, db, input: request, opts: { now: request.now } })
+    } catch (error) {
+      if (![undefined, "lexical", "timeline"].includes(request.kind) || !recoverableIndexFailure(error)) throw error
+      indexFailure = error.code
+      directFiles = false
+      dirty = true
+      fullScan = true
+      const result = await directLexicalSearch({ ...request, deskRoot }, { strict: true })
+      directFiles = true
+      return result
+    }
   }
 
   function sections() {
@@ -336,6 +358,13 @@ export function createSearchEngine(options) {
   }
 
   function searchStatus() {
+    if (indexFailure !== null) {
+      return {
+        state: "index_unavailable", lexical_backend: directFiles ? "files" : "unavailable", index_error: indexFailure,
+        message: directFiles ? "The search index is unavailable; exact-word searches read current files."
+          : "The search index is unavailable; file-based recovery has not succeeded.",
+      }
+    }
     const counts = built ? sectionCounts() : { total: 0, ready: 0, pending: 0 }
     const removed = oldIndex.removed ? { old_index_removed: SEARCH_WORDING.oldIndexRemoved(oldIndex.bytes) } : {}
     if (store === null) return { state: "exact_words_only", message: "Meaning-based search is off for this desk; exact-word search is ready.", ...removed }

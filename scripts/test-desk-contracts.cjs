@@ -1501,9 +1501,13 @@ requires(
   "archive-workflow keeps the sign-off lines when the archive is the last tool call",
   /`task_archive` preserves an unsigned, evidenced delivery's three sign-off lines[^\n]+carry those literal lines as a required next action through any compaction or handoff; never make them optional/u,
 );
-contract("the question-form rule names each host's tool where the skills own it, and session start asks in a sentence", () => {
-  assert.match(subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms"), /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI[^\n]+write the question as a sentence in your reply, including the resume-or-start question at session start/u);
-  assert.match(text("plugins/desk/skills/session-start/SKILL.md"), /the one question \(resume which, or start new\), written as a sentence in the reply and never put through the host's question form/u);
+contract("question blocking preserves conversation policy, host precedence and genuine human gates", () => {
+  const questions = subsection("plugins/desk/skills/interaction-style/SKILL.md", "Questions and blocked prompts");
+  assert.match(questions, /intentionally avoids structured-question forms/u);
+  assert.match(questions, /no question reached them/u);
+  assert.match(questions, /keep any genuine human gate closed/u);
+  assert.match(questions, /does not override higher-priority host rules/u);
+  assert.match(text("plugins/desk/skills/session-start/SKILL.md"), /the one question \(resume which, or start new\), in ordinary conversation where permitted/u);
 });
 contract("interaction-style opens the reply to a human who is leaving with what it needs, or that it needs nothing", () => {
   assert.match(subsection("plugins/desk/skills/interaction-style/SKILL.md", "Frontload what you need from the human"), /The reply to "I'm stepping away" opens with that list, before any tool call, status or other work\. When you need nothing, the reply opens with one line that says so/u);
@@ -1580,7 +1584,7 @@ contract("the changelog text for the loop has no heading and says what changed f
 contract("every general operator rule is stated in the skill that owns its topic", () => {
   const skill = (name) => `plugins/desk/skills/${name}/SKILL.md`;
   const rules = [
-    ["interaction-style", /form-style question interfaces/u],
+    ["interaction-style", /intentionally avoids structured-question forms/u],
     ["interaction-style", /Converse in normal chat, one decision group at a time, and ask only when genuinely blocked/u],
     ["interaction-style", /Plan for few, long conversations, not many short ones/u],
     ["interaction-style", /ask for the principles behind a decision rather than each instance of it, then decide the instances yourself, record them as rulings and keep going/u],

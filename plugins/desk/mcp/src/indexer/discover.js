@@ -105,15 +105,16 @@ export function useForNextDiscover(deskRoot, cache, changed) {
   handOver = deskRoot === null ? null : { deskRoot, cache, changed }
 }
 
-export async function discover(deskRoot, { signal, cache = null } = {}) {
+// Recovery needs a complete fresh corpus: strict reads reject omissions instead of reusing cache or skipping failures.
+export async function discover(deskRoot, { signal, cache = null, strict = false } = {}) {
   const handed = handOver?.deskRoot === deskRoot ? handOver : null
   if (handed) handOver = null
-  if (handed?.changed) return rediscover(deskRoot, { cache: handed.cache, changed: handed.changed, signal })
-  cache = handed?.cache ?? cache
+  if (handed?.changed && !strict) return rediscover(deskRoot, { cache: handed.cache, changed: handed.changed, signal })
+  cache = strict ? null : handed?.cache ?? cache
   throwIfAborted(signal)
   const results = []
   const exclusionRules = await loadExclusionRules({ deskRoot })
-  await walk(deskRoot, deskRoot, results, signal, exclusionRules, cache?.docs ?? null)
+  await walk(deskRoot, deskRoot, results, signal, exclusionRules, cache?.docs ?? null, strict)
   throwIfAborted(signal)
   if (cache) {
     cache.rules = exclusionRules
@@ -125,13 +126,13 @@ export async function discover(deskRoot, { signal, cache = null } = {}) {
   return results
 }
 
-async function walk(deskRoot, dir, out, signal, exclusionRules, cache) {
+async function walk(deskRoot, dir, out, signal, exclusionRules, cache, strict) {
   throwIfAborted(signal)
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch (err) {
-    if (err.code === "ENOENT") return
+    if (err.code === "ENOENT" && !strict) return
     throw err
   }
   throwIfAborted(signal)
@@ -146,7 +147,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules, cache) {
       const sub = path.join(dir, name)
       const relDir = toDeskPath(path.relative(deskRoot, sub))
       if (shouldSkipDirectory(relDir, exclusionRules)) continue
-      await walk(deskRoot, sub, out, signal, exclusionRules, cache)
+      await walk(deskRoot, sub, out, signal, exclusionRules, cache, strict)
       continue
     }
     if (!ent.isFile()) continue
@@ -158,7 +159,7 @@ async function walk(deskRoot, dir, out, signal, exclusionRules, cache) {
     if (isExcluded(rel, exclusionRules)) continue
     if (!isIndexable(rel)) continue
 
-    const desc = cache ? await describeCached(deskRoot, abs, rel, signal, cache) : await describeDoc(deskRoot, abs, rel, signal)
+    const desc = cache ? await describeCached(deskRoot, abs, rel, signal, cache) : await describeDoc(deskRoot, abs, rel, signal, strict)
     if (desc) out.push(desc)
   }
 }
@@ -349,7 +350,7 @@ export function classify(relPath) {
 // `<track>/<folder>/…/<file>`: below a track's own folder, outside the desk's reserved `_` and `.` folders.
 const inTrack = (segments) => segments.length >= 3 && !/^[_.]/u.test(segments[0])
 
-async function describeDoc(deskRoot, abs, rel, signal) {
+async function describeDoc(deskRoot, abs, rel, signal, strict = false) {
   throwIfAborted(signal)
   let raw
   let stat
@@ -358,7 +359,7 @@ async function describeDoc(deskRoot, abs, rel, signal) {
     throwIfAborted(signal)
     stat = await fs.stat(abs)
   } catch (err) {
-    if (err.name === "AbortError") throw err
+    if (strict || err.name === "AbortError") throw err
     // File vanished or unreadable mid-walk; skip silently.
     return null
   }
