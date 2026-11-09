@@ -151,7 +151,7 @@ function copyPolicyError() {
 }
 
 // macOS privacy protection (App Data / Full Disk Access) lets lstat succeed but refuses open
-// and readdir with EPERM. Naming that case tells the person the one fix that works.
+// and readdir with EPERM. Naming that case gives whoever sets up the machine the one fix that works.
 function permissionDenied(error) {
   return !!error && (error.code === "EPERM" || error.code === "EACCES");
 }

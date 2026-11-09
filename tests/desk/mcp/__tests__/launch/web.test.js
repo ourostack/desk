@@ -340,6 +340,27 @@ test("copyProfile names an operating-system read block instead of a profile poli
   } finally { fs.readdirSync = originalList }
 })
 
+test("copyProfile names Full Disk Access on macOS and folder permission elsewhere", async () => {
+  const { root } = await setup()
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  const original = fs.openSync
+  fs.openSync = (file, ...args) => {
+    if (/Local State$/u.test(String(file))) throw Object.assign(new Error("EPERM"), { code: "EPERM" })
+    return original(file, ...args)
+  }
+  try {
+    for (const [os, fix] of [["darwin", /\(macOS privacy protection\)\. Give the app running this agent Full Disk Access/u], ["linux", /profile\. Give the app running this agent permission to read that profile folder/u]]) {
+      Object.defineProperty(process, "platform", { ...platform, value: os })
+      const source = path.join(root, `os-${os}`)
+      makeProfile(source)
+      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge"), fix)
+    }
+  } finally {
+    Object.defineProperty(process, "platform", platform)
+    fs.openSync = original
+  }
+})
+
 test("copyProfile still omits a nonessential file the operating system blocks", async () => {
   const { root } = await setup()
   const source = path.join(root, "src")
