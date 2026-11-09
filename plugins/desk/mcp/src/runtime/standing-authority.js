@@ -8,7 +8,7 @@ import { closeSync, openSync, readSync } from "node:fs"
 import * as path from "node:path"
 
 /** How much of each file's section session start shows; the rest stays in the file, named by its path. */
-export const STANDING_AUTHORITY_CAP_BYTES = 4 * 1024
+const STANDING_AUTHORITY_CAP_BYTES = 4 * 1024
 // A grant section sits near the top of a desk's AGENTS.md; reading past this never finds one boot would show.
 const READ_BYTES = 64 * 1024
 
