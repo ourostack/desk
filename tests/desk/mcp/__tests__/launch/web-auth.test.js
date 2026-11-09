@@ -1078,4 +1078,10 @@ test("a coverage refusal from a document that changed between the two native rea
   try {
     await assert.rejects(stale.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u)
   } finally { await stale.close() }
+  const steady = nativeSnapshot()
+  steady.documents[0].nodes.inputValue = { index: [], value: [] }
+  const unchanged = adapterFor(fakeDriver({ packet: steady }), root)
+  try {
+    await assert.rejects(unchanged.call(["snapshot"]), /AUTH_NATIVE_DATA_INVALID/u, "an unchanged document keeps its coverage verdict")
+  } finally { await unchanged.close() }
 })
