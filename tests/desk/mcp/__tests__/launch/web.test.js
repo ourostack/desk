@@ -326,6 +326,18 @@ test("copyProfile names an operating-system read block instead of a profile poli
   }
   try { assert.throws(() => web.copyProfile(listed, path.join(root, "perm-list-copy")), /COPY_SOURCE_PERMISSION: .*your browser profile/u) }
   finally { fs.readdirSync = originalList }
+  const other = path.join(root, "other-list")
+  makeProfile(other)
+  fs.readdirSync = (dir, ...args) => {
+    if (String(dir).startsWith(other)) throw blocked("EIO")
+    return originalList(dir, ...args)
+  }
+  try {
+    assert.throws(() => web.copyProfile(other, path.join(root, "other-list-copy")), (error) => {
+      assert.equal(error.code, "EIO")
+      return true
+    })
+  } finally { fs.readdirSync = originalList }
 })
 
 test("copyProfile still omits a nonessential file the operating system blocks", async () => {
