@@ -1,0 +1,1 @@
+Work orchestration now has the fleet steward save an abandoned session's unsaved work (a pushed `wip/` branch, verified on the remote, or its desk) and record where it went before archiving it, and keep each host's session list to homes and workspaces that hold live work, hiding the rest without removing the clone. See [work orchestration](skills/work-orchestration/SKILL.md).
