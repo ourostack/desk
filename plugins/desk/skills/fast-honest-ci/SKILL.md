@@ -9,6 +9,8 @@ CI should cost as little wall clock and money as it can while proving the same t
 
 ## 1. Measure before changing anything
 
+- Download CI output from the operator's own repositories without asking.
+- CI is the merge gate, not the workbench. When the product itself is slow or janky, profile it locally on synthetic data shaped like the human's, find where the time goes, and fix that cause; never iterate on a theory by pushing and rerunning CI to see whether it turns green. Prove a fix locally first, then let CI confirm it once.
 - Pull the run's jobs and steps from the Actions API and find the critical path: the job that finishes last, and why. Count queue time separately from work time. Change nothing on a guess.
 - Once jobs are fast, waiting for a runner usually costs more than the work. Every plan caps concurrent jobs per account: standard runners allow 20 on Free, 60 on Team and 500 on Enterprise, and macOS only 5, 5 and 50, a macOS cap that larger runners share ([Actions limits](https://docs.github.com/en/actions/reference/limits)). Every repository in the organization, or the enterprise, draws on the same pool.
 - Know what a minute costs. Standard runners are free in public repositories, but larger runners are billed even there; in private repositories a macOS minute costs about ten times a Linux one ($0.062 against $0.006), and a failed run plus its re-run pays for both ([Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)).

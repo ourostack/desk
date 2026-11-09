@@ -163,6 +163,10 @@ Every child return includes a **Resources** inventory: every created worktree's 
 
 The selected Superpowers controller consumes the inventory through the [Desk adapter](../using-superpowers-with-desk/SKILL.md#mapped-controller-close-out). It removes each completed task's worktree after acceptance and writer release, before dropping that task's reservation; it does not wait for the whole plan to finish or remove resources held for an authorized PR-only endpoint.
 
+### Agent storage stays bounded
+
+Everything agents create on a machine (session state, transcripts and logs, worktrees, build output and caches inside them, downloads and scratch) has a retention rule that runs on a schedule with a ceiling, so it never grows without limit. Setting and running that retention is agent work, not a question for the human: keep anything tied to open work (a running session, an open pull request, unpushed or uncommitted changes, a resource row not yet disposed) and remove the rest past its age, by exact path under `git-hygiene`'s exact-owned cleanup, because the desk already holds the durable record. When a disk runs short, reclaim agent storage first and measure free space before and after rather than trusting a command's exit. Never propose deleting, moving or uninstalling the human's own files or apps (photos, messages, documents, installed software) to make room; if agent storage cannot free enough, report the measured gap.
+
 ## Delivery and resource accounting
 
 The mapped progress record (`progressPath`) is the single canonical home for delivery and resource accounting. If `progressPath` resolves to `task.md`, keep the tables there, not in a second record. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep secrets and raw private evidence outside Git, cited by pointer; everything else goes in the task's folder. No delivery daemon or schema is introduced.
