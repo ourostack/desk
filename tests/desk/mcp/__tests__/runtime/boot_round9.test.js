@@ -11,6 +11,7 @@ import { osEnv } from "../_os_env.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { BOOT_TEXT_MAX_CHARS, TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { PERSON_AGENTS_MIN_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { DEFERRED_TOOLS_HINT, DEFERRED_TOOLS_LOAD_HINT, deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 
@@ -116,7 +117,7 @@ test("boot carries the shelf of lessons beside the person's AGENTS.md, or the de
   assert.equal((await boot(root)).lessons_shelf, null)
 })
 
-test("boot gives the desk's and the person's AGENTS.md one shared size budget, the desk's file first", async () => {
+test("boot gives the desk's and the person's AGENTS.md one shared size budget, the desk's file first, with a floor for the person's", async () => {
   const root = await desk()
   await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
   await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `${"m".repeat(999)}\n`)
@@ -124,11 +125,18 @@ test("boot gives the desk's and the person's AGENTS.md one shared size budget, t
   assert.equal(alone.agents_md, null)
   assert.equal(alone.person_agents_md.truncated, false)
   await fs.writeFile(path.join(root, "AGENTS.md"), `${"t".repeat(15_999)}\n`)
-  const shared = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
-  assert.equal(shared.agents_md.shownBytes, 16_000)
-  assert.equal(shared.person_agents_md.truncated, true)
-  assert.equal(shared.person_agents_md.bytes, 1000)
-  assert.ok(shared.person_agents_md.shownBytes <= AGENTS_MD_CAP_BYTES - 16_000)
+  const crowded = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(crowded.agents_md.shownBytes, 16_000)
+  assert.equal(crowded.person_agents_md.truncated, false, "a full team file no longer hides the person's rules")
+  assert.equal(crowded.person_agents_md.shownBytes, 1000)
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `${"m\n".repeat(PERSON_AGENTS_MIN_BYTES)}`)
+  const long = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(long.person_agents_md.truncated, true)
+  assert.ok(long.person_agents_md.shownBytes <= PERSON_AGENTS_MIN_BYTES && long.person_agents_md.shownBytes > PERSON_AGENTS_MIN_BYTES - 2)
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), `${"m\n".repeat(6000)}`)
+  await fs.writeFile(path.join(root, "AGENTS.md"), "# Small\n")
+  const roomy = await boot(root, { env: { DESK: root, DESK_PERSON: "ari" } })
+  assert.equal(roomy.person_agents_md.truncated, false, "a small team file leaves the person the rest of the budget")
 })
 
 const CALL_IT = " Once a lookup returns a Desk tool it is loaded: call it directly as a tool, never through Bash, Node or file edits. If the card cannot be updated, say so in your reply and give the task's real status."

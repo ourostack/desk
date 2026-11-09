@@ -1491,7 +1491,8 @@ export async function bootOnce({
     whoError = error
   }
   // In a shared workspace the root AGENTS.md is the team's; the person's own lessons and preferences are in theirs. The
-  // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole.
+  // two share one size budget, the desk's file first, so session start stays short enough for every host to show whole;
+  // the person's file keeps a floor of that budget however large the team's file grows.
   let personAgentsMd = null
   try {
     if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: personAgentsCap(agentsMd) })
