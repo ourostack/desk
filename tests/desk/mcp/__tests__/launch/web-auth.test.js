@@ -1006,6 +1006,17 @@ test("unslotted light children of a shadow host may be absent from the capture; 
   table.attributes.push([])
   let next = 0
   noPassword(auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next).tree)
+  host.children.push({ nodeType: 1, nodeName: "INNER-EL", backendNodeId: 134, childNodeCount: 0, children: [],
+    shadowRoots: [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 135, shadowRootType: "open",
+      children: [{ nodeType: 3, nodeName: "#text", backendNodeId: 136, nodeValue: "nested" }] }] })
+  host.childNodeCount = 2
+  noPassword(auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next).tree)
+  host.children[1].children = [{ nodeType: 1, nodeName: "INPUT", backendNodeId: 137, children: [] }]
+  host.children[1].childNodeCount = 1
+  assert.throws(() => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next), /AUTH_CONTROL_COVERAGE_REFUSED/u,
+    "an uncaptured control refuses wherever it is")
+  host.children.pop()
+  host.childNodeCount = 1
   host.shadowRoots = []
   assert.throws(() => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next), /AUTH_CONTROL_COVERAGE_REFUSED/u)
   host.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 132, shadowRootType: "open",

@@ -224,7 +224,8 @@ function prepare(packet, scope, frameId, nextRef) {
     var parent = scope.nodes.get(node.parent);
     var hidden = !ids.has(node.id) && node.type !== 11 && !scope.controls.has(node.id) && Boolean(parent) &&
       ((parent.host && parent.type !== 11) || unslotted.has(parent.id));
-    if (hidden) unslotted.add(node.id);
+    // A shadow root inside unslotted content is outside the flat tree too.
+    if (hidden || (node.type === 11 && parent && unslotted.has(parent.id))) unslotted.add(node.id);
     requireTrue(ids.has(node.id) || node.type === 11 || hidden, "AUTH_CONTROL_COVERAGE_REFUSED");
   });
   var secrets = new Set();
