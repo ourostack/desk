@@ -53,3 +53,11 @@ test("the default reader takes the file from disk, and a missing file is no sect
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("a long section with no line break is cut on a character boundary, never inside one", () => {
+  const read = () => `## Standing authority\n- ${"é".repeat(200)}`
+  const line = standingAuthorityLine({ root: "/d", cap: 101, read })
+  const shown = line.split(":\n")[1].split("\n(The section continues")[0]
+  assert.equal(shown, `- ${"é".repeat(49)}`)
+  assert.doesNotMatch(line, /\uFFFD/u)
+})
