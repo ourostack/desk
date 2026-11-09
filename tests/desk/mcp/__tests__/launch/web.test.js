@@ -296,6 +296,86 @@ test("copyProfile refuses an essential cookie symlink rather than silently omitt
   assert.throws(() => web.copyProfile(source, path.join(root, "dest")), /COPY_SOURCE_POLICY/u)
 })
 
+test("copyProfile names an operating-system read block instead of a profile policy failure", async () => {
+  const { root } = await setup()
+  const blocked = (code) => Object.assign(new Error(`${code}: operation not permitted`), { code })
+  for (const [index, [code, target]] of [["EPERM", /Local State$/u], ["EACCES", /Local State$/u], ["EPERM", /Cookies$/u]].entries()) {
+    const source = path.join(root, `perm${index}`)
+    makeProfile(source)
+    const original = fs.openSync
+    fs.openSync = (file, ...args) => {
+      if (target.test(String(file))) throw blocked(code)
+      return original(file, ...args)
+    }
+    try {
+      const dest = path.join(root, `perm${index}-copy`)
+      assert.throws(() => web.copyProfile(source, dest, "Microsoft Edge"), (error) => {
+        assert.match(error.message, /^COPY_SOURCE_PERMISSION: The operating system blocked reading your Microsoft Edge profile/u)
+        assert.match(error.message, /No authenticated copy was opened\.$/u)
+        return true
+      })
+      if (index < 2) assert.equal(fs.existsSync(path.join(dest, "Local State")), false)
+    } finally { fs.openSync = original }
+  }
+  const listed = path.join(root, "perm-list")
+  makeProfile(listed)
+  const originalList = fs.readdirSync
+  fs.readdirSync = (dir, ...args) => {
+    if (String(dir).startsWith(listed)) throw blocked("EPERM")
+    return originalList(dir, ...args)
+  }
+  try { assert.throws(() => web.copyProfile(listed, path.join(root, "perm-list-copy")), /COPY_SOURCE_PERMISSION: .*your browser profile/u) }
+  finally { fs.readdirSync = originalList }
+  const other = path.join(root, "other-list")
+  makeProfile(other)
+  fs.readdirSync = (dir, ...args) => {
+    if (String(dir).startsWith(other)) throw blocked("EIO")
+    return originalList(dir, ...args)
+  }
+  try {
+    assert.throws(() => web.copyProfile(other, path.join(root, "other-list-copy")), (error) => {
+      assert.equal(error.code, "EIO")
+      return true
+    })
+  } finally { fs.readdirSync = originalList }
+})
+
+test("copyProfile names Full Disk Access on macOS and folder permission elsewhere", async () => {
+  const { root } = await setup()
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  const original = fs.openSync
+  fs.openSync = (file, ...args) => {
+    if (/Local State$/u.test(String(file))) throw Object.assign(new Error("EPERM"), { code: "EPERM" })
+    return original(file, ...args)
+  }
+  try {
+    for (const [os, fix] of [["darwin", /\(macOS privacy protection\)\. Give the app running this agent Full Disk Access/u], ["linux", /profile\. Give the app running this agent permission to read that profile folder/u]]) {
+      Object.defineProperty(process, "platform", { ...platform, value: os })
+      const source = path.join(root, `os-${os}`)
+      makeProfile(source)
+      assert.throws(() => web.copyProfile(source, path.join(root, `os-${os}-copy`), "Microsoft Edge"), fix)
+    }
+  } finally {
+    Object.defineProperty(process, "platform", platform)
+    fs.openSync = original
+  }
+})
+
+test("copyProfile still omits a nonessential file the operating system blocks", async () => {
+  const { root } = await setup()
+  const source = path.join(root, "src")
+  makeProfile(source)
+  const original = fs.openSync
+  fs.openSync = (file, ...args) => {
+    if (/Preferences$/u.test(String(file))) throw Object.assign(new Error("EPERM"), { code: "EPERM" })
+    return original(file, ...args)
+  }
+  try {
+    const copied = web.copyProfile(source, path.join(root, "dest"))
+    assert.ok(copied.skipped.includes("Preferences"))
+  } finally { fs.openSync = original }
+})
+
 test("copyProfile rejects unknown identity and link changes after a read without writing metadata", async () => {
   const { root } = await setup()
   for (const mode of ["unknown", "changed-after-read"]) {
@@ -937,6 +1017,26 @@ test("mine refuses unreadable essential cookies and may omit a nonessential lock
     fs.openSync = original
   }
   for (const name of fs.readdirSync(tmp)) fs.rmSync(path.join(tmp, name), { recursive: true, force: true })
+})
+
+test("mine passes an operating-system read block through as COPY_SOURCE_PERMISSION", async () => {
+  const { options, profiles, tmp } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  makeProfile(path.join(profiles, "chrome"))
+  const original = fs.openSync
+  fs.openSync = (file, ...args) => {
+    if (/Local State$/u.test(String(file))) throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
+    return original(file, ...args)
+  }
+  try {
+    const controller = web.createController(options)
+    const refused = await controller.call("browser_context", { action: "open", browser: "mine" })
+    assert.equal(refused.isError, true)
+    assert.match(text(refused), /COPY_SOURCE_PERMISSION: The operating system blocked reading your (?:Microsoft Edge|Google Chrome) profile/u)
+    assert.doesNotMatch(text(refused), /AUTH_OPEN_FAILED|COPY_SOURCE_POLICY/u)
+    assert.deepEqual(fs.readdirSync(tmp), [])
+    await controller.closeAll()
+  } finally { fs.openSync = original }
 })
 
 test("mine gives a plain message when there is no profile, or it cannot be copied", async () => {

@@ -150,6 +150,19 @@ function copyPolicyError() {
   return plain("COPY_SOURCE_POLICY: Desk could not qualify a required profile file's identity, single-link ownership or readable bytes. No authenticated copy was opened.");
 }
 
+// macOS privacy protection (App Data / Full Disk Access) lets lstat succeed but refuses open
+// and readdir with EPERM. Naming that case gives whoever sets up the machine the one fix that works.
+function permissionDenied(error) {
+  return !!error && (error.code === "EPERM" || error.code === "EACCES");
+}
+
+function copyPermissionError(app) {
+  return plain("COPY_SOURCE_PERMISSION: The operating system blocked reading your " + (app || "browser") + " profile" +
+    (process.platform === "darwin" ? " (macOS privacy protection). Give the app running this agent Full Disk Access in System Settings > Privacy & Security > Full Disk Access, restart it, then retry." :
+      ". Give the app running this agent permission to read that profile folder, then retry.") +
+    " No authenticated copy was opened.");
+}
+
 function copyDestinationError() {
   return plain("COPY_DESTINATION_FAILED: The private profile destination could not be written completely. No authenticated copy was opened.");
 }
@@ -179,6 +192,7 @@ function readProfileFile(file) {
     return bytes;
   } catch (error) {
     if (bytes) bytes.fill(0);
+    if (permissionDenied(error)) throw Object.assign(copyPolicyError(), { permissionDenied: true });
     throw copyPolicyError();
   } finally {
     if (fd !== undefined) {
@@ -189,8 +203,12 @@ function readProfileFile(file) {
 
 // Admission precedes both parsing and copying. The opened descriptor supplies the bytes;
 // a later pathname copy would undo identity/link qualification.
-function copyProfile(source, dest) {
-  var state = readProfileFile(path.join(source, "Local State"));
+function copyProfile(source, dest, app) {
+  var state;
+  try { state = readProfileFile(path.join(source, "Local State")); } catch (error) {
+    if (error && error.permissionDenied) throw copyPermissionError(app);
+    throw error;
+  }
   var name = "Default";
   try {
     var last = JSON.parse(state.toString("utf8")).profile.last_used;
@@ -208,7 +226,12 @@ function copyProfile(source, dest) {
   function copy(from, to, relative) {
     if (!fs.lstatSync(from).isDirectory()) throw copyPolicyError();
     fs.mkdirSync(to);
-    fs.readdirSync(from, { withFileTypes: true }).forEach(function (entry) {
+    var entries;
+    try { entries = fs.readdirSync(from, { withFileTypes: true }); } catch (error) {
+      if (permissionDenied(error)) throw copyPermissionError(app);
+      throw error;
+    }
+    entries.forEach(function (entry) {
       if (SKIP.indexOf(entry.name) !== -1 || PASSWORD_STORE.test(entry.name)) return;
       var inner = relative ? relative + "/" + entry.name : entry.name;
       if (entry.isDirectory()) return copy(path.join(from, entry.name), path.join(to, entry.name), inner);
@@ -220,7 +243,7 @@ function copyProfile(source, dest) {
       }
       var bytes;
       try { bytes = readProfileFile(path.join(from, entry.name)); } catch (error) {
-        if (/^(?:Network\/)?Cookies(?:$|[-.])/.test(inner)) throw copyPolicyError();
+        if (/^(?:Network\/)?Cookies(?:$|[-.])/.test(inner)) throw error && error.permissionDenied ? copyPermissionError(app) : copyPolicyError();
         skipped.push(inner);
         return;
       }
@@ -360,7 +383,7 @@ async function openAuth(s) {
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: "mine", profilePolicy: AUTH_PROFILE_POLICY, transport: "auth-api" }) + "\n");
     fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
-    var copied = copyProfile(browser.profileRoot, profileDir);
+    var copied = copyProfile(browser.profileRoot, profileDir, BROWSERS[browser.channel].name);
     var config = launchConfig("mine", browser, profileDir, copied.name, outputDir);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
     var launch = Object.assign({}, config.browser.launchOptions, {
@@ -380,7 +403,7 @@ async function openAuth(s) {
     return opened;
   } catch (error) {
     var safe = safeErrorData(error);
-    var primary = safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_DESTINATION_FAILED)/.test(safe.message) ? error :
+    var primary = safe && /^(?:AUTH_|COPY_SOURCE_POLICY|COPY_SOURCE_PERMISSION|COPY_DESTINATION_FAILED)/.test(safe.message) ? error :
       plain("AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.");
     if (s.contexts[id]) {
       try { await close(s, id); } catch (cleanupError) {
