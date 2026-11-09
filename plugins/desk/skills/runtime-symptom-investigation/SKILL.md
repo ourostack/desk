@@ -48,12 +48,12 @@ Record every temporary diagnostic change before use. Before handback, reverse on
 
 The operator has:
 
-- An authenticated session worker can't replicate.
+- What they already saw in their own session, which worker can't replicate. Ask what they saw; never ask them to run or reproduce something there, and never test on their account yourself (`evidence-discipline`, "Offline evals on synthetic data, online evals from counts").
 - Knowledge of recent operational issues ("deploys are stuck," "X service is degraded today").
 - Knowledge of what they've already tried.
 - Knowledge of which environments are healthy.
 
-A one-sentence question drawing on any of those is the cheapest move available. Treat "ask the operator a discriminating question" as a first-class action, not a fallback. If the operator volunteers a hint mid-investigation ("the old path still works, by the way"), treat it as a high-priority observation, not a side note.
+A one-sentence question about what they already know or saw is the cheapest move available. Treat "ask the operator a discriminating question" as a first-class action, not a fallback. If the operator volunteers a hint mid-investigation ("the old path still works, by the way"), treat it as a high-priority observation, not a side note.
 
 ## Don't dismiss hypotheses without evidence
 

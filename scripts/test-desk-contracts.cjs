@@ -1169,7 +1169,7 @@ contract("each new sign-off paragraph in the other skills is pinned", () => {
   assert.match(read("session-start/details.md"), /`Delivered, awaiting sign-off:`[^\n]+In a noninteractive session, raise nothing/u);
   assert.match(read("using-superpowers-with-desk/SKILL.md"), /`Never call task_signoff\.`[^\n]+always there[^\n]+a child never calls `task_signoff`/u);
   assert.match(read("using-desk/SKILL.md"), /re-dispatch it or finish in the root/u);
-  assert.match(read("using-desk/SKILL.md"), /A child's report omits the sign-off ask\./u);
+  assert.match(read("using-desk/SKILL.md"), /A child agent never asks for acceptance or calls task_signoff\./u);
 });
 contract("the store playbook states the outcome report keys as fact", () => {
   const playbook = text("plugins/desk/docs/factory-store-playbook.md");
@@ -1605,12 +1605,22 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-superpowers-with-desk", /treat it as a runtime or tooling fault and use another valid execution path/u],
     ["using-desk", /Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship/u],
     ["using-desk", /money, user-only credentials or accounts, irreversible acts/u],
-    ["using-desk", /Download CI output from the operator's own repositories without asking/u],
+    ["fast-honest-ci", /Download CI output from the operator's own repositories without asking/u],
     ["using-desk", /run sign-in flows yourself; never type a password or paste a secret/u],
     ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
-    ["using-desk", /Choose each child's model deliberately/u],
-    ["using-desk", /A child brief bounds the work and leaves the method to the child\. A handoff to a peer that owns its task is not a brief: say what you changed and intend to touch, what was decided, the edges and how to reach you; never tell it how to work or presume its state/u],
     ["using-desk", /bounded known repairs or approved source work, not unsolicited repair children or PRs/u],
+    ["interaction-style", /### Status leads with what the operator would feel\n\nA status or progress answer opens with how the work would feel to the operator if they used it today: what is broken first, each with its measured number against its bar[\s\S]+"On track" means they will enjoy it[\s\S]+Activity \(pull requests merged, CI runs, lanes busy\) is not progress unless a felt number moved[\s\S]+ask it first, plainly, one at a time/u],
+    ["interaction-style", /The operator supplies judgment, not hands: never hand them a step, chore, install, sign-in, deploy or check to run, not even one click to approve[\s\S]+A child that cannot finish a step names the exact blocking screen or error to its coordinator, never to the person[\s\S]+never in advance on the guess that one will appear/u],
+    ["work-orchestration", /\*\*Profile before choosing a fix\.\*\*[\s\S]+CI is the merge gate, not the workbench/u],
+    ["work-orchestration", /\*\*Timebox: watch the number, not the activity\.\*\* About every 90 minutes[\s\S]+change the approach that hour[\s\S]+and say so/u],
+    ["work-orchestration", /\*\*Side quests get their own lanes\.\*\*[\s\S]+it does not relay messages between lanes and the human, and it does not take a lane's work itself/u],
+    ["work-orchestration", /\*\*Fit the fleet to the machine\.\*\*/u],
+    ["work-orchestration", /\*\*Propose from evidence\.\*\*[\s\S]+relay neither; get the measurement first and say when you will have it/u],
+    ["work-orchestration", /Every child brief carries three prohibitions[\s\S]+name the exact blocking screen or error in the return, never ask the person to do it\. Never test on the person's real data or account/u],
+    ["evidence-discipline", /## Offline evals on synthetic data, online evals from counts\n\nNever test, reproduce or measure on the human's real data or account: not read-only[\s\S]+not by asking their permission and not through a script you hand them to run[\s\S]+add that shape to the generator, reproduce it offline, then fix it[\s\S]+counts-only telemetry[\s\S]+ships with the telemetry that will show whether it did/u],
+    ["fast-honest-ci", /CI is the merge gate, not the workbench\. When the product itself is slow or janky, profile it locally/u],
+    ["task-lifecycle", /### Agent storage stays bounded\n\nEverything agents create on a machine[\s\S]+Setting and running that retention is agent work, not a question for the human[\s\S]+Never propose deleting, moving or uninstalling the human's own files or apps/u],
+    ["git-hygiene", /Exercise that real artifact with synthetic data or a test account, never the operator's own data or account/u],
     ["using-desk", /AX \(agent experience\): do deterministic work deterministically; make tools easy to understand and use/u],
     ["using-desk", /HX \(human experience\): protect attention, understanding, control and trust\. Both are UX\./u],
     ["using-desk", /Never improve one by shifting avoidable work onto the other/u],

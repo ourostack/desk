@@ -351,11 +351,25 @@ function main() {
   assertSectionConcepts(section(skill, "Human and agent"), [
     /The human supplies intent.*authority.*endpoint/u,
     /The agent owns execution.*sequencing.*verification.*cleanup/u,
-    /never hands the human a step it could do itself/u,
+    // "a step it could do itself" let agents decide a deploy or sign-in was one they could not do and hand it over (pressure tests, 2026-11-09).
+    /never hands the human a chore, sign-in or deploy; gates below are their decisions/u,
     /AX \(agent experience\).*deterministically.*easy to understand and use/u,
     /HX \(human experience\).*attention.*understanding.*control.*trust\. Both are UX\./u,
     /Never improve one by shifting avoidable work onto the other/u,
   ]);
+
+  // Pressure-tested 2026-11-09: without this section, fresh agents led status with "on track" meaning the ship date, handed the
+  // human a diagnostic to run on their own account and relayed lanes' unmeasured dates as the plan.
+  assertSectionPhrases(section(skill, "Human and agent"), "using-desk Human and agent: aim at what the human feels", [
+    "Status opens with how it feels to the human now, broken first, in numbers",
+    "\"on track\" means they'll enjoy it, not that it ships",
+    "Test on synthetic data shaped like theirs, never their real data or account, nor ask to",
+    "counts-only telemetry",
+    "Relay no unmeasured plan, cause or date.",
+  ]);
+  assert.match(section(skill, "Authority"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's;/u);
+  assert.match(section(skill, "Waste judgment"), /side quests in their own lanes;/u);
+  assert.match(section(skill, "Waste judgment"), /Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [
     /state the outcome, assumptions/iu,
@@ -588,7 +602,7 @@ function main() {
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
-  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it.
+  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it. The aim-at-what-the-human-feels paragraph in Human and agent and its clauses in Authority and Waste judgment (2026-11-09) paid for themselves by moving sentences the owning skills already carry word for word: the peer-handoff rule and the model choice to `work-orchestration`, the CI-download grant to `fast-honest-ci`, and the child sign-off duplicate to Delivery and sign-off; "no second lifecycle policy" and "folds returned evidence into the same task" went too, since `task-lifecycle` and `work-orchestration` own both.
   const skillBytes = Buffer.byteLength(skill, "utf8");
   assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
