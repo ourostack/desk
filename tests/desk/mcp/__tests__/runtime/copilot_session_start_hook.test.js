@@ -115,3 +115,24 @@ test("the first prompt of a session gets the boot direction as context, in eithe
   assert.equal(session.status, 0, session.stderr)
   assert.deepEqual(prompt("sess-prompt-first"), {}, "sessionStart after the claim does not re-arm the pointer")
 })
+
+test("the desk's Standing authority section follows the startup line, so a session has the operator's grants before any host default", () => {
+  const desk = path.join(ROOT, "granting-desk")
+  mkdirSync(path.join(desk, "_meta"), { recursive: true })
+  mkdirSync(path.join(desk, "_archive"), { recursive: true })
+  writeFileSync(path.join(desk, "AGENTS.md"), "# Desk\n\n## Standing authority\n\n- **Commit, push and open pull requests without asking.** Source: the operator, 2026-11-09.\n\n## Other\n\n- not a grant\n")
+  const { context } = start({ sessionId: "sess-grant", cwd: desk, source: "new" }, "grant")
+  const line = context.indexOf("Desk standing authority:")
+  assert.ok(line > context.indexOf("Desk startup:") && line < context.indexOf("Unless started with"), "the grants sit right after the startup line")
+  assert.match(context, /Commit, push and open pull requests without asking\./u)
+  assert.doesNotMatch(context, /not a grant/u)
+})
+
+test("a desk with no Standing authority section adds no grant line", () => {
+  const desk = path.join(ROOT, "plain-desk")
+  mkdirSync(path.join(desk, "_meta"), { recursive: true })
+  mkdirSync(path.join(desk, "_archive"), { recursive: true })
+  writeFileSync(path.join(desk, "AGENTS.md"), "# Desk\n\n- a rule\n")
+  const { context } = start({ sessionId: "sess-plain", cwd: desk, source: "new" }, "plain")
+  assert.doesNotMatch(context, /Desk standing authority:/u)
+})

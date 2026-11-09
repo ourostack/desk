@@ -95,6 +95,38 @@ async function nativeMemoryLine() {
   }
 }
 
+// The standing-authority line for the desk this session binds (mcp/src/runtime/standing-authority.js): `deskOnly` from a
+// solo desk's AGENTS.md, and `withPerson()`, which in a Crew workspace reads the person's own desk, resolved without a
+// network call. Never throws.
+async function standingAuthorityLines(sessionFolder) {
+  const none = { deskOnly: "", withPerson: async () => "" };
+  try {
+    const { resolveStartupRoot } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js")).href);
+    const { resolveActivationConfigPath } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "paths.js")).href);
+    const { standingAuthorityLine } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "standing-authority.js")).href);
+    const bound = resolveStartupRoot({ activationConfigPath: resolveActivationConfigPath({ env: process.env }), env: process.env, hostProjectRoot: sessionFolder });
+    if (!bound.root || bound.unavailable || bound.error) return none;
+    const root = bound.root;
+    // A Crew workspace's root AGENTS.md is the team's and grants nothing: there only the person's own desk counts.
+    const { crewWorkspace } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "desk", "crew-roster.js")).href);
+    const crew = crewWorkspace(root).crew === true;
+    const deskOnly = crew ? "" : standingAuthorityLine({ root });
+    const withPerson = async () => {
+      if (!crew) return deskOnly;
+      try {
+        const { improvementPerson } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "desk", "improvement-person.js")).href);
+        const who = await improvementPerson({ deskRoot: root, env: process.env });
+        return who?.status === "ok" && who.personPrefix ? standingAuthorityLine({ root, personPrefix: who.personPrefix, crew }) : "";
+      } catch {
+        return "";
+      }
+    };
+    return { deskOnly, withPerson };
+  } catch {
+    return none;
+  }
+}
+
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
 // project folder, so the line never names a root the server will not use.
 async function startupDirection() {
@@ -114,12 +146,20 @@ async function startupDirection() {
       migrationLine({ host: "copilot", env: process.env, sessionFolder }),
       hostSettingLines(),
     ]);
+    // The awaits below must not leave a rejection here unhandled (it would end the hook with no output); the race still
+    // rejects into this function's catch, as before.
+    optional.catch(() => {});
+    // The operator's standing grants follow the startup line, so the session has them before any host default
+    // (interaction-style, "Standing authority"). Read after the checks start, so it never delays them; a Crew member's
+    // own section is raced on its own, and past the deadline the desk's own section stands alone.
+    const standing = await standingAuthorityLines(sessionFolder);
+    const personLine = standing.withPerson();
     let timer;
     const late = new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()), null); });
-    const lines = await Promise.race([optional, late]);
+    const [lines, standingLine] = await Promise.all([Promise.race([optional, late]), Promise.race([personLine, late])]);
     clearTimeout(timer);
     if (lines === null) optionalLinesTimedOut = true;
-    return [direction, ...(lines ?? [])].filter(Boolean).join("\n\n");
+    return [direction, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
     return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
   }
