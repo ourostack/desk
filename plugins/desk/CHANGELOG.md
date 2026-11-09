@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.75 — 2026-11-09
+
+Desk now reports `COPY_SOURCE_PERMISSION` when the operating system refuses profile-discovery or source-directory metadata access, as well as file reads and directory listings. It no longer mistakes a discovery refusal for a missing profile or moves on to another browser identity. Identity, link, race, output-protection and failed-open cleanup checks remain in place.
+
+The browser tool guidance and setup instructions make the non-disruptive boundary explicit: a failed `mine` open never authorizes computer control, attaching to the person's browser, interactive sign-in or another identity/transport to evade a refusal. Permission guidance no longer diagnoses macOS privacy protection or promises Full Disk Access will fix an arbitrary `EPERM`/`EACCES`; an authorized operator or administrator must establish and repair the actual OS boundary. Desk cannot grant that access itself.
+
+Opening your own browser (`browser: "mine"`) now says when the operating system blocked reading the Edge or Chrome profile. On macOS, privacy protection lets Desk see `Local State` but refuses to open it, and Desk used to report that as `COPY_SOURCE_POLICY`, which sent agents hunting for a profile problem or another way to reach the service. It now returns `COPY_SOURCE_PERMISSION` with the fix: give the app running the agent Full Disk Access in System Settings > Privacy & Security > Full Disk Access, restart it, then retry. Every other profile check in [`mcp/web.cjs`](mcp/web.cjs) is unchanged, and a blocked nonessential file is still omitted.
+
+The `using-desk` foundation and the `work-orchestration` child brief now say never to open a window, tab or interactive sign-in as a side route (such as `az`, MSAL or MCP auth, or `open <url>`), and to close every tab, window, browser context and process an agent or its children opened before returning control.
+
+Work orchestration now scopes a missing human answer to the work that depends on it, keeping already-authorized independent work moving. Outcome-based implementation briefs and explicit reconciliation of research returns prevent a research milestone from silently replacing delivery, without weakening freezes, authority, review or correctness gates.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.74 — 2026-11-08
 
 Hosted Desk no longer fills its disk with a desk's screenshots and videos. Its copy of the desk leaves out images, video, audio, PDFs, archives and Office files, which stay in Git. Desk's task moves and staging keep those files when a task moves or is archived, and the instructions a hosted agent receives name what is left out, so the agent never reports a screenshot as lost. Fixes the recurring "disk full" push failures behind #589.
