@@ -9,9 +9,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
-import * as os from "node:os"
+import { unlinkSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
+import { mkTempRoot } from "../_temp_roots.js"
 import {
   isGitRepository,
   hasUnstagedWork,
@@ -20,10 +21,12 @@ import {
   commitBranchRefusal,
   commitIndexPaths,
   indexEntries,
+  repositoryState,
+  stagedChanges,
 } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 
 async function mkTempRepo() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-git-stage-test-"))
+  const root = await mkTempRoot("desk-git-stage-test-")
   git(root, ["init", "-q"])
   git(root, ["config", "user.email", "test@example.com"])
   git(root, ["config", "user.name", "Test"])
@@ -55,14 +58,24 @@ test("isGitRepository is true inside a Git work tree and false otherwise", async
   const root = await mkTempRepo()
   assert.equal(isGitRepository(root, spawnSync), true)
 
-  const plain = await fs.mkdtemp(path.join(os.tmpdir(), "desk-git-stage-test-plain-"))
+  const plain = await mkTempRoot("desk-git-stage-test-plain-")
   assert.equal(isGitRepository(plain, spawnSync), false)
 })
 
-test("isGitRepository fails safe to false when the spawned command throws", async () => {
+test("isGitRepository reports failed inspection when the spawned command throws", async () => {
   const root = await mkTempRepo()
   const throwing = () => { throw new Error("spawn ENOENT") }
-  assert.equal(isGitRepository(root, throwing), false)
+  assert.throws(() => isGitRepository(root, throwing), /could not inspect.*spawn ENOENT/u)
+})
+
+test("partial stdout with a subprocess error cannot confirm repository or index state", () => {
+  const failed = stdout => () => ({
+    status: 0, stdout, stderr: "",
+    error: Object.assign(new Error("lost subprocess result"), { code: "ETIMEDOUT" }),
+  })
+  assert.equal(repositoryState("/owned", failed("false\n")).status, "failed")
+  assert.equal(stagedChanges("/owned", [], failed("")), null)
+  assert.equal(indexEntries("/owned", [], failed("")), null)
 })
 
 test("hasUnstagedWork is true for an untracked file and for an unstaged edit, false once committed", async () => {
@@ -162,13 +175,19 @@ test("every git call is bounded by a ~10s timeout so a hung hook or lock can nev
 test("stagePaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
   const root = await mkTempRepo()
   const result = stagePaths(root, ["a.txt"], etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+  assert.equal(result.ok, false)
+  assert.equal(result.stderr, "timeout")
+  assert.equal(result.effects.status, "unknown")
+  assert.equal(result.effects.readback_required, true)
 })
 
 test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
   const root = await mkTempRepo()
   const result = commitPaths(root, ["a.txt"], "message", etimedoutResult)
-  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+  assert.equal(result.ok, false)
+  assert.equal(result.stderr, "timeout")
+  assert.equal(result.effects.status, "unknown")
+  assert.deepEqual(result.effects.readback, { head_before: null, head_after: null, attribution: "unverified" })
 })
 
 // Desk stages and commits only where it is meant to. A detached HEAD is always refused. With a configured state branch the checkout must be on it; with none configured it must be on the branch origin/HEAD names when the remote has one, and any named branch will do otherwise. A caller that was not told (undefined) gets only the detached-HEAD rule.
@@ -253,4 +272,76 @@ test("a Git that cannot answer the branch question, or answers with no output, i
   assert.equal(commitBranchRefusal(root, () => null, null), null)
   assert.equal(commitBranchRefusal(root, () => ({ status: 128, stdout: "", stderr: "fatal" }), null), null)
   assert.match(commitBranchRefusal(root, () => ({ status: 0, stdout: null }), null), /detached HEAD/u)
+})
+
+test("a failed HEAD observation cannot seed an empty temporary index or commit", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  git(root, ["commit", "-qm", "seed"])
+  const before = git(root, ["rev-parse", "HEAD"])
+  const index = git(root, ["ls-files", "-s"])
+  const entries = indexEntries(root, ["a.txt"], spawnSync)
+  const mutations = []
+  const result = commitIndexPaths(root, ["a.txt"], entries, "save", (command, args, options) => {
+    if (args[2] === "rev-parse" && args.includes("--verify")) return { status: 128, stdout: "", stderr: "owned HEAD read failure" }
+    if (["read-tree", "update-index", "commit"].includes(args[2])) mutations.push(args[2])
+    return spawnSync(command, args, options)
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.stderr, /HEAD/u)
+  assert.deepEqual(mutations, [])
+  assert.equal(git(root, ["rev-parse", "HEAD"]), before)
+  assert.equal(git(root, ["ls-files", "-s"]), index)
+})
+
+test("a commit response with a lock-shaped failure is not blindly dispatched twice", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  git(root, ["add", "a.txt"])
+  let dispatches = 0
+  const result = commitPaths(root, ["a.txt"], "save", (command, args, options) => {
+    if (args[2] !== "commit") return spawnSync(command, args, options)
+    dispatches++
+    const applied = spawnSync(command, args, options)
+    assert.equal(applied.status, 0, applied.stderr)
+    return { status: 1, stdout: "", stderr: "cannot lock ref after hook" }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(dispatches, 1)
+  assert.equal(result.effects.readback.head_after, git(root, ["rev-parse", "HEAD"]).trim())
+  assert.equal(commitCount(root), 1)
+})
+
+test("a stage response with a lock-shaped failure is not blindly dispatched twice", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  let dispatches = 0
+  const result = stagePaths(root, ["a.txt"], (command, args, options) => {
+    const actual = spawnSync(command, args, options)
+    if (args[2] !== "add" || ++dispatches > 1) return actual
+    assert.equal(actual.status, 0, actual.stderr)
+    return { status: 128, stdout: "", stderr: "fatal: Unable to create 'owned.lock': File exists" }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.effects.status, "unknown")
+  assert.equal(dispatches, 1)
+  assert.equal(git(root, ["show", ":a.txt"]), "one\n")
+})
+
+test("staging waits for an observed index lock before its single mutation dispatch", async () => {
+  const root = await mkTempRepo()
+  await fs.writeFile(path.join(root, "a.txt"), "one\n")
+  const lock = path.join(root, ".git", "index.lock")
+  await fs.writeFile(lock, "")
+  let probes = 0, stages = 0
+  const result = stagePaths(root, ["a.txt"], (command, args, options) => {
+    if (args.includes("--git-path") && ++probes === 3) unlinkSync(lock)
+    if (args[2] === "add") stages++
+    return spawnSync(command, args, options)
+  })
+  assert.equal(result.ok, true)
+  assert.equal(probes, 3)
+  assert.equal(stages, 1)
+  assert.equal(git(root, ["show", ":a.txt"]), "one\n")
 })

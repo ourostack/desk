@@ -18,6 +18,17 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
   annotations: TOOL_ANNOTATIONS[name],
 })))
 
+/** An exception after dispatch never establishes that a mutation had no effect. */
+export function toolExceptionOutcome(name, error) {
+  if (TOOL_ANNOTATIONS[name]?.readOnlyHint === true) {
+    return { fix: "The tool failed unexpectedly and Desk is still serving. Retry the call; if it fails the same way, call desk_doctor and report the message." }
+  }
+  return {
+    effects: error?.mutation ?? { status: "unknown", readback_required: true },
+    fix: "The tool failed unexpectedly and Desk is still serving. Read back the affected files, Git status, HEAD and last commit paths in the confirmed desk before another mutation. Do not resend an uncertain mutation or bypass an admission, authority or permission refusal.",
+  }
+}
+
 /**
  * Serve MCP on `input`/`output`. `callTool({ name, input, signal })` returns an MCP tool result (or a promise of one).
  * `onHandshake` fires once, after the first tools/list reply is written: hosts send tools/list after notifications/initialized, often as a separate write, and admission must not start before that list is answered.
@@ -64,7 +75,7 @@ export function startFrontDoor({
           code: "tool_exception",
           tool: name ?? null,
           message,
-          fix: "The tool failed unexpectedly and Desk is still serving. Retry the call; if it fails the same way, call desk_doctor and report the message.",
+          ...toolExceptionOutcome(name, error),
         }),
       }],
       isError: true,
