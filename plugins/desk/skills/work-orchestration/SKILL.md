@@ -78,7 +78,7 @@ This is the default for all work, not only multi-step plans. `superpowers:dispat
 
 - **Run independent streams at the same time.** Never hold a stream for one it doesn't depend on.
 - **Fast-follow downstream.** When an upstream artifact changes, update what depends on it right away, not in a final sweep.
-- **Keep the root for coordination.** When a subagent tool is available and the human has not chosen inline execution, the root agent coordinates and talks with the human; it hands doable work (builds, research, site updates, status reconciliation) to children rather than doing it inline, so the conversation never waits on the work.
+- **Keep the root for coordination.** When delegation is authorized, a subagent tool is available and the human has not chosen inline execution, hand work whose scope warrants a separate context to bounded children so the conversation does not wait on it. Do small, clear work directly when a worker adds no value.
 - **Ship usable milestones early and often.** Push each one where the people waiting look, so they always find the latest instead of waiting for one big drop.
 - **Work smart, not hard.** Ambitious quality work needs no justification, but do it smartly: don't loop on reruns or rounds of rewording, don't duplicate another lane's work, and stop work whose goal has been superseded.
 
@@ -86,7 +86,7 @@ This is the default for all work, not only multi-step plans. `superpowers:dispat
 
 When several outcomes are already authorized, a missing answer pauses only the work that depends on it. Start or continue independent, executable work immediately while clarifying the blocked stream; a conversation about one outcome is not a global stop. Respect an explicit stop or pause at its stated scope. Ask only for unresolved system requirements or irreducible human decisions that change the next action; leave service-specific intake to the agent doing that work rather than interviewing the human again on its behalf.
 
-When an independent outcome warrants a separate context and delegation is authorized, dispatch a bounded implementation worker with the requested outcome, existing authority, dependencies and completion evidence, not an artificial research-only stop. Do small, clear work directly when a worker adds no value. A genuinely research-only request remains read-only. Reconcile every research return into the authorized next action: continue in the root or with the implementation owner, or record the concrete missing design decision, access, consent or other genuine boundary and what will unblock it. Research completion is not execution completion.
+When an independent outcome warrants a separate context, delegation is authorized and the human has not chosen inline execution, dispatch a bounded implementation worker with the requested outcome, existing authority, dependencies and completion evidence, not an artificial research-only stop. A genuinely research-only request remains read-only. Reconcile every research return into the authorized next action: continue in the root or with the implementation owner, or record the concrete missing design decision, access, consent or other genuine boundary and what will unblock it. Research completion is not execution completion.
 
 Existing go is not a repeated permission or design gate. Preserve actual design uncertainty, security, access and consent boundaries, conflict reservations, review and correctness gates. Urgency changes sequencing, not authority or proof; it does not authorize an unbounded fleet.
 

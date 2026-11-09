@@ -246,7 +246,6 @@ test("work-orchestration scopes human waits to dependent work without repeating 
 
 test("work-orchestration carries authorized research into execution without manufacturing a gate", () => {
   assert.match(humanWaits, /delegation is authorized.*bounded implementation worker.*requested outcome/u)
-  assert.match(humanWaits, /Do small, clear work directly when a worker adds no value/u)
   assert.match(humanWaits, /research-only request remains read-only/u)
   assert.match(humanWaits, /Reconcile every research return into the authorized next action/u)
   assert.match(humanWaits, /record the concrete missing design decision, access, consent or other genuine boundary and what will unblock it/u)
@@ -254,6 +253,14 @@ test("work-orchestration carries authorized research into execution without manu
   assert.match(humanWaits, /Existing go is not a repeated permission or design gate/u)
   assert.match(humanWaits, /Preserve actual design uncertainty, security, access and consent boundaries, conflict reservations, review and correctness gates/u)
   assert.match(humanWaits, /Urgency changes sequencing, not authority or proof; it does not authorize an unbounded fleet/u)
+})
+
+test("work-orchestration keeps delegation context-bounded while permitting small inline work", () => {
+  const rootCoordination = orchestration.match(/^- \*\*Keep the root for coordination\.\*\* (.+)$/mu)?.[1] ?? ""
+  assert.match(rootCoordination, /delegation is authorized.*subagent tool is available.*human has not chosen inline execution/u)
+  assert.match(rootCoordination, /work whose scope warrants a separate context to bounded children/u)
+  assert.match(rootCoordination, /Do small, clear work directly when a worker adds no value/u)
+  assert.match(humanWaits, /human has not chosen inline execution.*bounded implementation worker/u)
 })
 
 test("work-orchestration's source contract names every required ready-set and review rule", () => {
