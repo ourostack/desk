@@ -424,17 +424,35 @@ test("formatBootText keeps the whole output under what a host shows in full, cut
   const text = formatBootText(sampleResult({ agents_md: big("AGENTS.md", "t"), person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
   const notice = text.split("\n")[1]
-  assert.match(notice, /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/desks\/ari\/AGENTS\.md \(\d+ of 16000 bytes shown\), to stay.* Read the rest of each file before relying on its rules\.$/u, "the desk's file came first and fit")
+  assert.match(notice, /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/desks\/ari\/AGENTS\.md \((\d+) of 16000 bytes shown\), to stay.* Read the rest of each file before relying on its rules\.$/u, "the desk's file came first and fit")
+  assert.ok(Number(/ari\/AGENTS\.md \((\d+) of/u.exec(notice)[1]) >= PERSON_AGENTS_MIN_BYTES - 100, "the person's file keeps its floor")
   assert.match(text, /\n(m{99}\n)+\n\[Cut after \d+ of 16000 bytes: read the rest at \/work\/desk\/desks\/ari\/AGENTS\.md\]/u, "cut at a line end")
   const both = formatBootText(sampleResult({ agents_md: { ...big("AGENTS.md", "t"), text: "t\n".repeat(15_000) }, person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.ok(both.length <= BOOT_TEXT_MAX_CHARS)
-  assert.match(both.split("\n")[1], /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/AGENTS\.md \(\d+ of 16000 bytes shown\) and \/work\/desk\/desks\/ari\/AGENTS\.md \(0 of 16000 bytes shown\)/u)
+  const bothNotice = both.split("\n")[1]
+  assert.match(bothNotice, /^Session start shortened the task list \(\d+ lines not shown\) and cut \/work\/desk\/AGENTS\.md \(\d+ of 16000 bytes shown\) and \/work\/desk\/desks\/ari\/AGENTS\.md \((\d+) of 16000 bytes shown\)/u)
+  assert.ok(Number(/ari\/AGENTS\.md \((\d+) of/u.exec(bothNotice)[1]) >= PERSON_AGENTS_MIN_BYTES - 100, "the desk's file is cut first, so the person's keeps its floor")
   // Output already at the limit before any AGENTS.md: the files show nothing, and say so.
   const crowded = formatBootText(sampleResult({ text_instructions: ["x".repeat(BOOT_TEXT_MAX_CHARS)], person_agents_md: big("desks/ari/AGENTS.md", "m") }))
   assert.match(crowded, /## Your own AGENTS\.md \(\/work\/desk\/desks\/ari\/AGENTS\.md\); its rules bind this session\n\n\n\n\[Cut after 0 of 16000 bytes/u)
   // A file with no line break inside the room is cut to nothing rather than mid-line.
   const oneLine = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "x".repeat(40_000), truncated: false, bytes: 40_000, shownBytes: 40_000 } }))
   assert.match(oneLine, /\[Cut after 0 of 40000 bytes/u)
+})
+
+test("formatBootText cuts the desk's AGENTS.md before the person's own reaches its floor, so the newest lesson still prints", () => {
+  const team = `${"Team rule line that binds every session here.\n".repeat(355)}`
+  const mine = `${"Preference prose for this person.\n".repeat(230)}## Lessons\n\n- **Newest.** The lesson added last. (2026-11-09)\n`
+  assert.ok(mine.length < PERSON_AGENTS_MIN_BYTES)
+  const text = formatBootText(sampleResult({
+    text_instructions: ["Read the desk first. ".repeat(200)],
+    agents_md: { path: "/work/desk/AGENTS.md", text: team, truncated: false, bytes: team.length, shownBytes: team.length },
+    person_agents_md: { path: "/work/desk/desks/ari/AGENTS.md", text: mine, truncated: false, bytes: mine.length, shownBytes: mine.length },
+  }))
+  assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
+  assert.match(text, /\*\*Newest\.\*\* The lesson added last\./u)
+  assert.match(text, /\[Cut after \d+ of \d+ bytes: read the rest at \/work\/desk\/AGENTS\.md\]/u)
+  assert.equal(text.includes("read the rest at /work/desk/desks/ari/AGENTS.md"), false)
 })
 
 test("formatBootText shows the named task, an ambiguous name and a name that matches nothing", () => {
