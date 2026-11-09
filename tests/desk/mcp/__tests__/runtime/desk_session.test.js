@@ -2449,7 +2449,7 @@ test("task_focus refuses with the existing message when admission does not finis
   assert.ok(Date.now() - started < 2000)
 })
 
-// With no state branch configured, a write is still refused before any tool runs when HEAD is detached or off the branch the remote names as its default. Any named branch is fine when the remote names none.
+// An unconfigured session keeps its admitted branch, independently of origin/HEAD.
 function branchGit(state) {
   return ({ args }) => {
     const key = args.join(" ")
@@ -2460,8 +2460,8 @@ function branchGit(state) {
   }
 }
 
-test("with no state branch configured, a write is refused before any tool runs on a detached HEAD or off the remote's default branch", async (t) => {
-  const state = { branch: "main", remoteDefault: "main" }
+test("an intentional session branch allows writes but refuses later drift and detachment", async (t) => {
+  const state = { branch: "session/worktree", remoteDefault: "main" }
   const { session, runtime } = await makeSession(t, { git: branchGit(state), watch: quietWatch })
   assert.equal((await session.admission.refresh()).state, "ready")
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
@@ -2471,7 +2471,7 @@ test("with no state branch configured, a write is refused before any tool runs o
   const off = await session.callTool({ name: "task_create" })
   assert.equal(off.isError, true)
   assert.equal(payload(off).code, "write_branch_mismatch")
-  assert.match(payload(off).fix, /on branch feature.*default branch is main.*wrote nothing/u)
+  assert.match(payload(off).fix, /on branch feature.*session.*session\/worktree.*wrote nothing/u)
 
   state.branch = null
   const detached = await session.callTool({ name: "task_create" })
@@ -2480,8 +2480,67 @@ test("with no state branch configured, a write is refused before any tool runs o
 
   state.branch = "master"
   state.remoteDefault = null
-  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create", "no remote default: any named branch is allowed")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).code, "write_branch_mismatch", "removing origin/HEAD does not authorize drift")
+  state.branch = "session/worktree"
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
   assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")
+})
+
+test("the session branch is bound before its first write, not chosen by the write", async (t) => {
+  const state = { branch: "session/worktree", remoteDefault: "main" }
+  const { session, runtime } = await makeSession(t, { git: branchGit(state), watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  state.branch = "main"
+  assert.equal(payload(await session.callTool({ name: "task_create" })).code, "write_branch_mismatch")
+  assert.equal(runtime.calls.length, 0)
+})
+
+test("a resolver failure cannot replace the admitted branch with a drifted branch", async (t) => {
+  const state = { branch: "session/worktree", remoteDefault: "main" }
+  let unavailable = false
+  let root
+  const { session, runtime, root: selected } = await makeSession(t, {
+    git: branchGit(state), watch: quietWatch,
+    resolveInputs: async () => {
+      if (unavailable) throw new Error("fixture resolver unavailable")
+      return inputs({ root })
+    },
+  })
+  root = selected
+  assert.equal((await session.admission.refresh()).state, "ready")
+  unavailable = true
+  assert.equal((await session.callTool({ name: "task_create" })).isError, true)
+  state.branch = "main"
+  unavailable = false
+  assert.equal(payload(await session.callTool({ name: "task_create" })).code, "write_branch_mismatch")
+  assert.equal(runtime.calls.length, 0)
+})
+
+test("a session first admitted detached binds its first named branch before allowing later writes", async (t) => {
+  const state = { branch: null, remoteDefault: "main" }
+  const { session, runtime } = await makeSession(t, { git: branchGit(state), watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).code, "write_branch_detached")
+  state.branch = "session/worktree"
+  assert.equal((await session.callTool({ name: "task_create" })).isError, undefined)
+  state.branch = "main"
+  assert.equal(payload(await session.callTool({ name: "task_create" })).code, "write_branch_mismatch")
+  assert.equal(runtime.calls.length, 1)
+})
+
+test("a failed Git lookup cannot waive an established session branch binding", async (t) => {
+  const state = { branch: "session/worktree", remoteDefault: "main" }
+  const lookup = branchGit(state)
+  let unavailable = false
+  const { session, runtime } = await makeSession(t, {
+    git: (options) => unavailable ? { ok: false, stdout: "", stderr: "fixture Git unavailable" } : lookup(options),
+    watch: quietWatch,
+  })
+  assert.equal((await session.admission.refresh()).state, "ready")
+  unavailable = true
+  const refused = await session.callTool({ name: "task_create" })
+  assert.equal(payload(refused).code, "write_branch_unverified")
+  assert.equal(runtime.calls.length, 0)
 })
 
 test("a checkout outside Git is not refused by the branch rule", async (t) => {

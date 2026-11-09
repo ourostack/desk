@@ -195,6 +195,8 @@ export function createDeskSession(deps) {
   let contextGeneration = 0
   let resolvedInputs = null
   let resolvedOwnershipKey = null
+  // Keep the branch binding through resolver failures; forgetting authority must not authorize branch drift.
+  const sessionBranches = new Map()
   // Admission may resolve in parallel, but never replaces a destination while
   // an operation is using its authority, search engine, or write branch.
   let operationTail = Promise.resolve()
@@ -409,7 +411,6 @@ export function createDeskSession(deps) {
     resolvedInputs = inputs
     resolvedOwnershipKey = key
     const policy = activation.readinessPolicy
-
     if (!context.runtimeServer) {
       setPhase("loading_runtime")
       const loaded = await deps.loadRuntime(activation, { onPhase: setPhase })
@@ -423,6 +424,10 @@ export function createDeskSession(deps) {
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
     setPhase("inspecting_state_branch")
+    if (!isStateBranchName(activation.stateBranch) && !sessionBranches.has(deskRoot)) {
+      const branch = await inspectWriteBranch({ root: deskRoot, git })
+      if (branch.ok && branch.found) sessionBranches.set(deskRoot, branch.found)
+    }
     // Discover only the authoritative location before the first observation.
     // The branch inspection below must be enclosed by two certain samples,
     // including the first admission, not blessed by a later first baseline.
@@ -856,10 +861,12 @@ export function createDeskSession(deps) {
       return refusal(name, "write")
     }
     // With no state branch configured, the checkout still has to be on a branch Desk may write on: refuse before any tool touches a file.
-    const branch = await inspectWriteBranch({ root: context.root.root, branch: context.stateBranchName, git })
+    const deskRoot = context.root.root
+    const branch = await inspectWriteBranch({ root: deskRoot, branch: context.stateBranchName, sessionBranch: sessionBranches.get(deskRoot), git })
     if (!branch.ok) {
       return degradedResult(name, { ...admission.snapshot().diagnostic, state: admission.snapshot().state, ...writeBranchProblem(branch) }, REQUIREMENT_TEXT.write)
     }
+    if (branch.found && !sessionBranches.has(deskRoot)) sessionBranches.set(deskRoot, branch.found)
     return runtimeCall(name, input, signal)
   }
 
