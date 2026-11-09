@@ -90,6 +90,12 @@ When an independent outcome warrants a separate context, delegation is authorize
 
 Existing go is not a repeated permission or design gate. Preserve actual design uncertainty, security, access and consent boundaries, conflict reservations, review and correctness gates. Urgency changes sequencing, not authority or proof; it does not authorize an unbounded fleet.
 
+## Where agents live
+
+- **Every agent has a home, and starts there.** A session starts in the workspace that holds its task and context: its desk, or for an agent that several people or agents share, their shared workspace. It never starts homed in a repository it works on. To change code, it makes a worktree of that repository from its home, and the session stays in the desk. When you launch, dispatch or hand off a session, give it its home as the working directory; if all you have is a repository path, find the desk that owns the work.
+- **Always-on work lives on the always-on host.** Work meant to run continuously, such as issue drains, watchers and schedulers, lives on a host that stays up and is not carried around. Create it there, in that host's own session list, and make it easy to find there: pinned or named so the person sees it first. A laptop that sleeps or travels hosts no always-on work, and a leftover copy on another host is retired once the always-on one is verified.
+- **A long-running agent changes hands without missing a beat.** To move or restart one, never wait for it to go idle, and never leave a gap. Start the successor first, with the same brief, state and claims, and prove it does the work (one full cycle, such as a poll). Only then stop the old one, then retire it. The old agent keeps working until the new one has proved itself, and a shared claim or lock keeps the two from doing the same item twice.
+
 ## Choosing and briefing agents
 
 Choose each subagent's model deliberately, by the work's need for capability. Pick from whatever model family the host offers rather than inheriting the default, and reserve the most capable, most expensive tier for work that needs it, usually the root agent's own synthesis and judgment. Use the smallest, fastest tier for mechanical retrieval or lookup work and a mid tier for real engineering, analysis, drafting or review. A launch mode that copies the parent's context and model (for example, a fork) is fine when inheriting the full context is genuinely worth the top-tier cost; make that a conscious choice, not a default.
