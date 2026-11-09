@@ -8,11 +8,17 @@
 // `degraded` lines are plain sentences, one per problem. The word is `degraded` when any line exists and `ready`
 // when none does.
 
+/** No-work evidence does not establish incoming resolution. */
+export function verifiedIncomingResolution(operation) {
+  return operation?.state === "synced" && operation?.incoming?.state === "verified"
+}
+
 /**
  * The degraded line for the outcome of a desk sync (`{ state, reason, cause }` as `syncWorkspace` returns it, or
  * the `last_pull` record `desk_status` reads back), or null when the sync did not fail.
  */
 export function syncDegradation(sync) {
+  if (!verifiedIncomingResolution(sync?.operation) && sync?.operation?.priorFailure) return syncDegradation(sync.operation.priorFailure)
   // Local commits a push could not deliver are degraded even when the pull worked: work the operator thinks is shared is not.
   const stuck = sync?.unpushed?.count > 0 && (typeof sync.unpushed.reason === "string" || sync.unpushed.delivering === false)
   const push = stuck ? `push: ${sync.unpushed.count} local commit(s) not on the remote (${sync.unpushed.reason ?? "not delivered"})` : null
@@ -26,25 +32,9 @@ export function healthWord(degraded) {
   return degraded.length > 0 ? "degraded" : "ready"
 }
 
-const REACHABILITY_CAUSES = new Set(["unreachable", "auth_failed", "deadline"])
-const LAST_PULL_TTL_MS = 24 * 60 * 60 * 1000
-
 /**
- * Whether a recorded failed pull still counts. It stops counting once something proves the remote reachable again
- * (a push, or Desk's own fetch, that finished after the failure; both are recorded by Desk, never read from Git's `FETCH_HEAD`, which a failed fetch rewrites too) and in any case after 24 hours, because `desk_status` does not
- * re-run the pull: the record is a note from the last boot, not a live probe. `lastPull.at` is when it failed;
- * `lastPushAt` and `fetchedAt` are ISO text or epoch milliseconds, either may be null.
+ * Incoming failure remains until its own operation settles. Age and unrelated outgoing or graph evidence cannot clear it.
  */
-export function pullStillFailing({ lastPull, lastPushAt = null, fetchedAt = null, now = Date.now() }) {
-  if (lastPull?.state !== "unresolved") return false
-  const failedAt = Date.parse(lastPull.at)
-  if (Number.isNaN(failedAt) || now - failedAt > LAST_PULL_TTL_MS) return false
-  // A fetch proves reachability only, so it clears only a failure caused by reachability; a conflict, a divergence or an
-  // unknown failure stays until a pull succeeds (or a push, or 24 hours).
-  const fetchCounts = REACHABILITY_CAUSES.has(lastPull.cause)
-  const after = (when) => {
-    const at = typeof when === "number" ? when : Date.parse(when)
-    return !Number.isNaN(at) && at >= failedAt
-  }
-  return !(after(lastPushAt) || (fetchCounts && after(fetchedAt)))
+export function pullStillFailing({ lastPull }) {
+  return lastPull?.state === "unresolved"
 }

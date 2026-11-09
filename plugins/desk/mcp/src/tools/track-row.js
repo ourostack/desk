@@ -9,6 +9,8 @@
 // (backticks optional), and only the `State` cell is rewritten, byte for byte elsewhere, line endings kept. A card with
 // no such table, or no such row, is left alone: the edit never invents a table, a row or a column.
 
+import markdown from "../util/markdown-links.cjs"
+
 function cells(line) {
   const trimmed = line.trim()
   if (!trimmed.startsWith("|")) return null
@@ -73,14 +75,20 @@ export function setTaskArchiveLinks(trackText, slug) {
     }
     if (slugColumn === -1 || row.length <= slugColumn ||
         row[slugColumn].trim().replace(/^`+|`+$/gu, "") !== slug) continue
-    const next = line.replace(/(\[[^\]]*\]\()(<[^>\r\n]+>|[^\s)]+)([^)]*\))/gu, (whole, open, href, close) => {
-      const angled = href.startsWith("<")
-      const raw = angled ? href.slice(1,-1) : href
+    const { links, diagnostics } = markdown.extractMarkdownLinks(line)
+    const incomplete = diagnostics.find(diagnostic => diagnostic.code === "parse_budget_exceeded")
+    if (incomplete) throw new Error(`Track-row link extraction incomplete: ${incomplete.code}`)
+    let next = ""
+    let cursor = 0
+    for (const node of links) {
+      const raw = node.raw
       const dot = raw.startsWith("./") ? "./" : ""
       const target = raw.slice(dot.length)
-      return target.startsWith(`${slug}/`)
-        ? `${open}${angled ? "<" : ""}${dot}_archive/${target}${angled ? ">" : ""}${close}` : whole
-    })
+      if (!target.startsWith(`${slug}/`)) continue
+      next += line.slice(cursor, node.start) + `${dot}_archive/${target}`
+      cursor = node.end
+    }
+    next += line.slice(cursor)
     if (next === line) return null
     lines[index] = next
     return lines.join("")

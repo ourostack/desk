@@ -7,8 +7,7 @@
 // moves `state`: a degraded index only means search reads the files directly. Boot does not check the index at all
 // (slow, network-bound), so "boot ready, desk_status ready, search degraded" is one consistent picture, not a contradiction.
 
-import { shellQuote } from "../util/shell-quote.js"
-import { healthWord, syncDegradation } from "./health.js"
+import { healthWord, syncDegradation, verifiedIncomingResolution } from "./health.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
 
 const DETAIL_POINTER =
@@ -72,11 +71,19 @@ function whyNotReady(payload, syncProblem, ready) {
   return reasons
 }
 
+function incomingFailure(sync) {
+  return sync?.last_pull ?? (verifiedIncomingResolution(sync?.recovery) ? null : sync?.recovery?.priorFailure)
+}
+
 function syncLine(sync) {
   if (typeof sync === "string") return sync
   if (sync === null || typeof sync !== "object") return null
   if (sync.blocked === true) return `push blocked${sync.reason ? ` (${sync.reason})` : ""}${sync.unpushed > 0 ? `: ${sync.unpushed} local commit(s) not on the remote` : ""}`
-  if (syncDegradation(sync.last_pull) !== null) return `last pull failed${sync.last_pull.cause ? ` (${sync.last_pull.cause})` : ""}: not known to be in sync`
+  const failure = incomingFailure(sync)
+  if (syncDegradation(failure) !== null) return `last pull failed${failure.cause ? ` (${failure.cause})` : ""}: not known to be in sync`
+  if (["starting", "accepted", "running"].includes(sync.recovery?.state ?? sync.last_pull?.operation?.state)) return "sync pending in the background"
+  if (sync.recovery && ["blocked", "unknown"].includes(sync.recovery.state)) return `sync unresolved (${sync.recovery.reason ?? sync.recovery.state})`
+  if (sync.configured === false) return "no remote configured"
   if (sync.behind > 0) return `${sync.behind} commit(s) behind origin`
   if (sync.ahead > 0) return `${sync.ahead} commit(s) ahead of origin, not pushed yet`
   return "in sync"
@@ -112,7 +119,16 @@ const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime det
 
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
-  const syncProblem = syncDegradation(payload.sync?.last_pull)
+  const recovery = payload.sync?.recovery
+  const incomingProblem = syncDegradation(incomingFailure(payload.sync))
+  const recoveryProblem = recovery && ["blocked", "unknown"].includes(recovery.state) ? `sync recovery: ${recovery.reason ?? recovery.state}` : null
+  const priorChecks = recovery?.checks?.state === "ready" ||
+    (recovery?.checks?.migration === "current" && recovery?.priorChecks?.reason?.startsWith("migration_"))
+    ? null : recovery?.priorChecks
+  const checksProblem = [...new Set([recovery?.checks, priorChecks]
+    .filter((check) => check && !["ready", "pending", "running"].includes(check.state))
+    .map((check) => `background checks: ${check.reason ?? check.state}`))].join("; ") || null
+  const syncProblem = [incomingProblem ?? recoveryProblem, checksProblem].filter(Boolean).join("; ") || null
   const base = stateWord(payload)
   // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
   const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
@@ -128,10 +144,10 @@ export function compactStatus(payload) {
   const readySummary = detailPending ? (payload.root?.path ? DETAIL_PENDING_ROOTED_SUMMARY : DETAIL_PENDING_SUMMARY) : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
   const compact = {
     state,
-    summary: state === "ready" ? readySummary : starting ? startingSummary(payload.admission) : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
+    summary: state === "ready" ? readySummary : starting ? startingSummary(payload.admission) : (base === "ready" ? (checksProblem && !incomingProblem && !recoveryProblem ? "Desk works, but background checks need attention." : "Desk works, but the last sync failed.") : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
+    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: "Inspect the recorded recovery operation and actual effects with desk_status. Preserve pending files and the index; do not rebase or resend an unknown operation. Continue independent authorized work." } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
@@ -147,6 +163,7 @@ export function compactStatus(payload) {
       ...(typeof payload.write_scope?.source === "string" ? { source: payload.write_scope.source } : {}),
     },
     sync: syncLine(payload.sync),
+    ...(recovery ? { recovery } : {}),
     plugin_version: payload.runtime?.plugin?.version ?? null,
     ...(payload.status_detail === undefined ? {} : { status_detail: payload.status_detail }),
     detail: DETAIL_POINTER,

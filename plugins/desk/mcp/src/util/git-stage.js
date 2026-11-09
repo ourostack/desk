@@ -47,8 +47,7 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
 }
 
 // Another Git process (often Desk's own background loop committing an improvement card) can hold the desk's index or a ref lock
-// for a moment. A person's write then waits for it, retrying for up to LOCK_WAIT_MS, instead of failing. Desk's background
-// writers run with DESK_GIT_YIELD=1 (hooks/loop-start.cjs) and never wait: they give way, and their card is committed by a later write.
+// for a moment. Staging observes that lock before dispatch and waits up to LOCK_WAIT_MS. Mutation failures are never redispatched: hooks or filters may already have taken effect. Desk's background writers run with DESK_GIT_YIELD=1 and never wait.
 const LOCK_WAIT_MS = 3000
 const LOCK_RETRY_MS = 50
 const LOCK_HELD = /Unable to create '[^']*\.lock'|\.lock': File exists|cannot lock ref/u
@@ -70,7 +69,7 @@ function sleepSync(ms) {
 function run(spawnGit, root, args, extra = {}) {
   const once = () => spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
   let result = once()
-  if (yieldsGitLock()) return result
+  if (!["symbolic-ref", "rev-parse", "diff", "ls-files"].includes(args[0]) || result?.error || yieldsGitLock()) return result
   const deadline = Date.now() + LOCK_WAIT_MS
   while (lockHeld(result) && Date.now() < deadline) {
     sleepSync(LOCK_RETRY_MS)
@@ -90,15 +89,51 @@ function timedOut(result) {
   return Boolean(result.error) && result.error.code === "ETIMEDOUT"
 }
 
-/** True when `root` is inside a Git work tree. A failing or missing `git` means no. */
-export function isGitRepository(root, spawnGit) {
+function observedHead(root, spawnGit) {
+  try {
+    const result = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+    if (result?.status === 0 && !result.error && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(result.stdout?.trim() ?? ""))
+      return result.stdout.trim()
+  } catch {
+    // Failed readback is retained as unknown, never as an absent commit.
+  }
+  return null
+}
+
+function mutationResult(result, effects) {
+  if (result.status === 0 && !result.error) return { ok: true, stderr: result.stderr }
+  return {
+    ok: false,
+    stderr: timedOut(result) ? "timeout" : result.stderr || result.error?.code || "Git mutation failed",
+    effects: { status: "unknown", readback_required: true, ...effects },
+  }
+}
+
+/** Failure fields shared by callers; successful tool responses remain unchanged. */
+export function gitFailure(result) {
+  return { status: "failed", reason: result.stderr, ...(result.effects ? { effects: result.effects } : {}) }
+}
+
+/** Distinguishes a confirmed plain directory from a failed repository observation. */
+export function repositoryState(root, spawnGit) {
   let result
   try {
     result = run(spawnGit, root, ["rev-parse", "--is-inside-work-tree"])
-  } catch {
-    return false
+  } catch (error) {
+    return { status: "failed", reason: error?.message ?? String(error) }
   }
-  return result.status === 0 && result.stdout.trim() === "true"
+  if (!result?.error && result?.status === 0 && result.stdout?.trim() === "true") return { status: "git" }
+  if (!result?.error && result?.status === 0 && result.stdout?.trim() === "false") return { status: "not_git" }
+  if (!result?.error && result?.status === 128 && /fatal: not a git repository(?: \(or any of the parent directories\))?:/iu.test(result.stderr ?? ""))
+    return { status: "not_git" }
+  return { status: "failed", reason: result?.stderr || result?.error?.code || "Git repository inspection failed" }
+}
+
+/** True inside a work tree, false for a confirmed non-Git directory; failed inspection throws. */
+export function isGitRepository(root, spawnGit) {
+  const state = repositoryState(root, spawnGit)
+  if (state.status === "failed") throw new Error(`Desk could not inspect the Git repository: ${state.reason}`)
+  return state.status === "git"
 }
 
 /**
@@ -108,14 +143,21 @@ export function isGitRepository(root, spawnGit) {
  * as unstaged work, so a caller refusing on it fails safe.
  */
 export function hasUnstagedWork(root, relPaths, spawnGit) {
+  return unstagedWorkState(root, relPaths, spawnGit).status !== "unchanged"
+}
+
+/** A failed observation is not permission to stage a path. */
+export function unstagedWorkState(root, relPaths, spawnGit) {
   for (const args of [
     ["diff", "--name-only", "--", ...relPaths],
     ["ls-files", "--others", "--exclude-standard", "--", ...relPaths],
   ]) {
     const result = run(spawnGit, root, args)
-    if (result.status !== 0 || result.stdout.trim() !== "") return true
+    if (result.status !== 0 || result.error)
+      return { status: "failed", reason: result.stderr || result.error?.code || "Git unstaged inspection failed" }
+    if (result.stdout.trim() !== "") return { status: "changed" }
   }
-  return false
+  return { status: "unchanged" }
 }
 
 /**
@@ -133,7 +175,7 @@ export function hasUnmergedPath(root, relPaths, spawnGit) {
  */
 export function stagedChanges(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["diff", "--cached", "-M", "--name-status", "-z", "--", ...relPaths])
-  if (result.status !== 0) return null
+  if (result.status !== 0 || result.error) return null
   const fields = result.stdout.split("\0")
   const changes = []
   for (let i = 0; i < fields.length && fields[i] !== ""; ) {
@@ -148,7 +190,7 @@ export function stagedChanges(root, relPaths, spawnGit) {
 /** The index entries at exactly `relPaths`: `[{ mode, sha, stage, path }]`, or `null` when Git fails. A path the index does not hold has no entry. */
 export function indexEntries(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["ls-files", "-s", "-z", "--", ...relPaths])
-  if (result.status !== 0) return null
+  if (result.status !== 0 || result.error) return null
   return result.stdout.split("\0").filter(Boolean).map((record) => {
     const [meta, entryPath] = record.split("\t")
     const [mode, sha, stage] = meta.split(" ")
@@ -161,14 +203,23 @@ export function indexEntries(root, relPaths, spawnGit) {
  * entry for each path (or removes the path when the real index has none), and commits that index. The real index is untouched, so other staged work stays
  * staged, and a later edit to a file in the working tree can never ride along. Returns `{ ok, stderr }`; never throws on a Git failure.
  */
-export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
+export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch, { publicationContext, executionCapability } = {}) {
+  if (executionCapability !== undefined) {
+    if (publicationContext !== undefined) throw new Error("Conflicting producer capabilities")
+    return import("../runtime/producer-body.js").then(({ commitAcceptedPaths }) =>
+      commitAcceptedPaths({ executionCapability, root, paths: relPaths, entries, message, stateBranch }))
+  }
+  if (publicationContext !== undefined) return import("../runtime/publication-state.js").then(({ commitPublicationPaths }) =>
+    commitPublicationPaths({ context: publicationContext, root, paths: relPaths, entries, message, stateBranch }))
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
-    const hasHead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"]).status === 0
-    const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
+    const head = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+    if (head.error || ![0, 1].includes(head.status))
+      return { ok: false, stderr: `HEAD could not be inspected: ${head.stderr || head.error?.code || head.status}` }
+    const seed = run(spawnGit, root, head.status === 0 ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
     if (seed.status !== 0) return { ok: false, stderr: seed.stderr }
     const held = new Set(entries.map((entry) => entry.path))
     const lines = [
@@ -177,9 +228,11 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
     ]
     const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
     if (update.status !== 0) return { ok: false, stderr: update.stderr }
+    const before = observedHead(root, spawnGit)
     const result = run(spawnGit, root, ["commit", "-m", message], { env })
-    if (timedOut(result)) return { ok: false, stderr: "timeout" }
-    return { ok: result.status === 0, stderr: result.stderr }
+    return mutationResult(result, result.status === 0 && !result.error ? undefined : {
+      readback: { head_before: before, head_after: observedHead(root, spawnGit), attribution: "unverified" },
+    })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -193,9 +246,12 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
 export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false } = {}) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
+  if (!yieldsGitLock()) {
+    const deadline = Date.now() + LOCK_WAIT_MS
+    while (indexLockHeld(root, spawnGit) && Date.now() < deadline) sleepSync(LOCK_RETRY_MS)
+  }
   const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
-  if (timedOut(result)) return { ok: false, stderr: "timeout" }
-  return { ok: result.status === 0, stderr: result.stderr }
+  return mutationResult(result)
 }
 
 /**
@@ -207,12 +263,21 @@ export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false 
  * that runs past `GIT_TIMEOUT_MS` (a hung commit hook, most often) is killed
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
-export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
+export function commitPaths(root, relPaths, message, spawnGit, stateBranch, { publicationContext, executionCapability } = {}) {
+  if (executionCapability !== undefined) {
+    if (publicationContext !== undefined) throw new Error("Conflicting producer capabilities")
+    return import("../runtime/producer-body.js").then(({ commitAcceptedPaths }) =>
+      commitAcceptedPaths({ executionCapability, root, paths: relPaths, message, stateBranch }))
+  }
+  if (publicationContext !== undefined) return import("../runtime/publication-state.js").then(({ commitPublicationPaths }) =>
+    commitPublicationPaths({ context: publicationContext, root, paths: relPaths, message, stateBranch }))
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
   // The desk's own pre-commit hook (`desk/card-commit-guard.js`) refuses a commit that changes a task card unless Desk is the one committing:
   // this is Desk's commit path, so it says so for the git call (and only for that call).
+  const before = observedHead(root, spawnGit)
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths], { env: { ...process.env, [TOOL_COMMIT_ENV]: "1" } })
-  if (timedOut(result)) return { ok: false, stderr: "timeout" }
-  return { ok: result.status === 0, stderr: result.stderr }
+  return mutationResult(result, result.status === 0 && !result.error ? undefined : {
+    readback: { head_before: before, head_after: observedHead(root, spawnGit), attribution: "unverified" },
+  })
 }

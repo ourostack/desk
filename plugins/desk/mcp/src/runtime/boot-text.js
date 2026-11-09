@@ -50,17 +50,19 @@ function strayDir(sync, root) {
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
- * One plain sentence about the sync, phrased for what happened, never a word like "partial". A failed sync pulled
- * nothing and pushed nothing; a conflict while restoring local changes means the pull itself succeeded; a desk with no
- * remote or upstream has nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null
- * when it did not return one); `timedOut` says the boot's time budget ended it; `lastSyncAt` is ISO text or null;
+ * One sentence separating verified synchronization, pending custody and unresolved effects. A desk with no remote or
+ * upstream has nothing to sync, which is not a sync that worked. `sync` is `syncWorkspace`'s answer (null
+ * when it did not return one); `timedOut` says the boot stopped waiting; `lastSyncAt` is ISO text or null;
  * `root` is the desk's path, used to name where moved files went.
  */
 export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = "" }) {
   const asOf = `local desk is as of ${lastSyncAt ?? "unknown"}`
-  const failed = (why) => `sync failed: ${why}; nothing was pulled or pushed; ${asOf}`
+  const failed = (why) => `sync unresolved: ${why}; effects require readback; ${asOf}`
   if (timedOut) return failed("it did not finish within the boot's time budget")
   if (sync === null || sync === undefined) return failed("it did not run")
+  if (sync.nothingToSync === "background") return "Sync belongs to the recovery operation; background inspection did not run it"
+  if (sync.state === "recovering") return "Desk sync is pending in the background"
+  if (sync.operation && sync.state === "unresolved") return `Desk sync unresolved: ${sync.reason}; operation ${sync.operation.id}; inspect desk_status before another attempt`
   const unpushed = unpushedText(sync.unpushed)
   if (sync.state === "unresolved") {
     const moved = Array.isArray(sync.quarantinedPaths) && sync.quarantinedPaths.length > 0 ? ` (${plural(sync.quarantinedPaths.length, "stray untracked path")} had been moved to ${strayDir(sync, root)} first)` : ""
@@ -332,7 +334,7 @@ function groupHeading(status, count) {
 function taskSection(result, lines) {
   const tracks = result.active_tasks?.tracks
   if (!Array.isArray(tracks)) {
-    if (result.status !== "setup_required") lines.push("", "Active tasks: unavailable (see degraded)")
+    if (result.status !== "setup_required" && result.background?.state !== "pending") lines.push("", "Active tasks: unavailable (see degraded)")
     return
   }
   // With one task named, it leads in full and the rest are one line: the operator asked for that task, and the others pushed the question below the fold (round S2).
