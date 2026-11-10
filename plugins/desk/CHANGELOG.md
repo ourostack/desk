@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.79 — 2026-11-10
+
+Desk Browser `mine` no longer refuses a read or a click on a live page such as Teams web when the page changes between its two native reads and the change event arrives a moment after the snapshot. One DOM round trip now delivers pending change events before the reader decides, so a changed page is read again instead of returning `AUTH_CONTROL_COVERAGE_REFUSED`. A mismatch with no change behind it is still refused, and refs from earlier snapshots are retired, so an agent snapshots again before acting. See the [owned reader](mcp/web-auth.cjs).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.78 — 2026-11-10
 
 [Work orchestration](skills/work-orchestration/SKILL.md): restarting an agent host is now a courtesy. Agents still never wait for idle sessions, but they never pull a host out from under a person who is using it: they show a small notice that takes no focus ("needs a restart to <reason>. Close this when you're ready."). Once it is up, they restart only when it is closed, the screen locks, the display sleeps, the screen saver starts, or 20 minutes pass with no input and no call. Restarts of the host and of the whole machine share one queue on the machine, which is the only way agents restart either. The watcher that resumes sessions now counts work the restart killed (a shell or subagent a session was waiting on), resumes within seconds of the host answering, confirms each message arrived and was acted on, sends again until it was, and is never replaced by resuming sessions by hand.
