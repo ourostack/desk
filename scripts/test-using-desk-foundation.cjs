@@ -326,10 +326,9 @@ function main() {
     "Visual proof",
     "Instruction coherence",
     "Child agents",
-    "The RFC",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the sixteen foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fifteen foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
@@ -568,19 +567,14 @@ function main() {
     "A child agent never calls task_focus.",
   ]);
 
-  assertSectionPhrases(section(skill, "The RFC"), "using-desk The RFC", [
-    "Agentic Engineering V2 RFC",
-    "`Desk RFC:` line",
-    "from any repository",
-    "before you explain Desk or its method to people",
-    "or write or review its docs, sites, pitches or onboarding",
-    "not at every startup",
-  ]);
-  assert.doesNotMatch(
-    section(skill, "The RFC"),
-    /plugins\/desk\/docs/u,
-    "using-desk must point at the installed RFC path the hooks append, not a repository-relative path",
-  );
+  // The foundation opens by saying what system this is and when to read its RFC (2026-11-10: an agent redesigning
+  // Desk had to search for the RFC it was standing in, because the only pointer said "not at every startup").
+  const intro = skill.slice(skill.indexOf("# Using Desk"), skill.indexOf("\n## "));
+  for (const phrase of ["You're working in **Desk**", "`Desk RFC:` line", "Read it before you change how Desk works"]) {
+    assert.ok(intro.includes(phrase), `using-desk must open with: ${phrase}`);
+  }
+  assert.doesNotMatch(intro, /not at every startup/u, "the RFC is read before changing Desk, not only before explaining it");
+  assert.doesNotMatch(intro, /plugins\/desk\/docs/u, "using-desk must point at the installed RFC path the hooks append, not a repository-relative path");
 
   assert.doesNotMatch(section(skill, "Source and channels"), /Work on the channel/u, "the foundation must not read as permission to commit straight to the channel");
   assert.doesNotMatch(skill, /froz|freez/iu, "using-desk must not describe frozen candidates or freezing: work tracks channels");
