@@ -871,7 +871,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     refs.forEach(function (record, ref) { if (record.reader === reader && record.read <= reader.reads - REF_READS) refs.delete(ref); });
   }
   function unpolled(records) {
-    records.forEach(function (record) { if (refs.get(record.ref) === record) refs.delete(record.ref); });
+    // Ref numbers never repeat and nothing else runs during a wait, so these are still the poll's own records.
+    records.forEach(function (record) { refs.delete(record.ref); });
   }
   async function settled(reader, save, applied, poll) {
     for (var attempt = 1; ; attempt++) {
