@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.80 — 2026-11-10
+
+Desk Browser `mine` can act on pages that never stop changing, such as a busy chat web app, through ordinary tool calls. A ref is re-resolved when it is used: it acts on the same element if that element itself is unchanged (its name, attributes other than class and style, and its text), and the browser confirms the element is still where the ref points. Changes elsewhere on the page no longer refuse the action. A rich-text editor (a chat composer) shows as a `textbox` named by its label, and `type`, `fill` and `press` go to the editor itself rather than a paragraph inside it. `fill` and `type` report `typed: { verified }`, whether the field now holds the text, since typed text stays redacted from snapshots. See the [owned reader](mcp/web-auth.cjs).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.79 — 2026-11-10
 
 Desk Browser `mine` no longer refuses a read or a click on a live page such as Teams web when the page changes between its two native reads and the change event arrives a moment after the snapshot. One DOM round trip now delivers pending change events before the reader decides, so a changed page is read again instead of returning `AUTH_CONTROL_COVERAGE_REFUSED`. A mismatch with no change behind it is still refused, and refs from earlier snapshots are retired, so an agent snapshots again before acting. See the [owned reader](mcp/web-auth.cjs).
