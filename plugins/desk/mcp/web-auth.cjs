@@ -9,6 +9,13 @@ var STYLES = ["display", "visibility", "-webkit-user-modify"];
 var TARGET_WAIT_MS = 2000;
 var SNAPSHOT_ATTEMPTS = 5;
 var SNAPSHOT_SETTLE_MS = 250;
+// wait: a bare wait pauses this long; no wait outlasts half the command time or a minute; text is looked for this often.
+var WAIT_DEFAULT_MS = 2000;
+var WAIT_MAX_MS = 60000;
+var WAIT_POLL_MS = 1000;
+// A page this small whose words read as an error is usually a transient error page, worth one reload.
+var ERROR_PAGE_CHARS = 20000;
+var ERROR_PAGE = /\b(?:oops|something went wrong|unknown error|an error occurred|try again later)\b/i;
 // A large store product page has about 18,000 nodes and 250,000 native values.
 var MAX_NODES = 100000;
 var MAX_VALUES = 2000000;
@@ -29,14 +36,49 @@ var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
 var ARITY = {
   snapshot: [1, 2], goto: [2, 2], "go-back": [1, 1], "go-forward": [1, 1], reload: [1, 1],
-  click: [2, 2], dblclick: [2, 2], fill: [3, 3], type: [3, 3], press: [3, 3], select: [3, 3],
+  click: [2, 2], dblclick: [2, 2], fill: [3, 3], type: [3, 3], press: [2, 3], select: [3, 3], wait: [1, 3],
   check: [2, 2], uncheck: [2, 2], hover: [2, 2], "tab-list": [1, 1], "tab-new": [1, 1],
   "tab-close": [1, 1], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3]
 };
 
+var COMMANDS = "snapshot; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
+  "click, dblclick, hover, check or uncheck <ref>; fill or type <ref> <text>; press [<ref>] <key>; select <ref> <value>; " +
+  "mousewheel <dx> <dy>; resize <width> <height>; tab-list; tab-new; tab-select <index>; tab-close";
+var SNAPSHOT_AGAIN = "Run [\"snapshot\"] to see the page as it is now and act on a ref from it.";
+var CHANGING = "The page was changing while it was read. Run [\"wait\",\"2\"] (or wait for text you expect), then try again.";
+// What to do instead, for each refusal. Nothing here ever needs eval or a page script: refs from a snapshot cover it.
+var HINTS = {
+  AUTH_COMMAND_REFUSED: "Commands in mine: " + COMMANDS + ". eval and page scripts are never needed: snapshot, then act on its refs; to let a page load, use wait.",
+  AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
+  AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
+  AUTH_TARGET_REFUSED: "That ref is not from the latest snapshot of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
+  AUTH_SNAPSHOT_INVALIDATED: "The page changed under that ref. " + SNAPSHOT_AGAIN + " On a page that keeps changing, act right after the snapshot.",
+  AUTH_PROTECTION_INVALIDATED: CHANGING,
+  AUTH_REDACTION_INVALIDATED: CHANGING,
+  AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, read the frame's own page with goto, or use another way in.",
+  AUTH_SHADOW_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine.",
+  AUTH_CONTROL_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine.",
+  AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
+  AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
+  AUTH_OUTPUT_TOO_LARGE: "The page is too large to read whole. Go to a narrower page (a single item or chat) with goto, or close panels you do not need.",
+  AUTH_TIMEOUT: "The command ran out of time, so this context was closed. Open a new one with browser_context and start again; keep waits under a minute.",
+  AUTH_CONTEXT_REFUSED: "This context is closed. Open a new one with browser_context.",
+  AUTH_TIMEOUT_CLOSE_FAILED: "Open a new context with browser_context.",
+  AUTH_RUNTIME_POLICY_REFUSED: "This Desk process cannot protect authenticated output now. Close the context and open a new one with browser_context; if it repeats, report it with desk_doctor.",
+  AUTH_READER_REFUSED: "The tab was replaced or closed. Run [\"tab-list\"], select a tab, then snapshot.",
+  AUTH_READER_SETUP_FAILED: "The tab could not be read yet. Run [\"wait\",\"2\"], then snapshot; if it repeats, open a new context.",
+  AUTH_DOCUMENT_REFUSED: "This page is not an ordinary HTML document mine can read. Go to the page's HTML address with goto.",
+  AUTH_TARGET_KIND_REFUSED: "That element cannot be acted on in mine. " + SNAPSHOT_AGAIN + " Choose its labelled parent or another control."
+};
+var GENERAL_HINT = SNAPSHOT_AGAIN + " If the same refusal repeats, open a new context with browser_context.";
+
+function hintFor(code) {
+  return HINTS[String(code).split(";")[0]] || GENERAL_HINT;
+}
+
 function fail(code, applied) {
   var message = code + ": The authenticated browser could not safely complete this operation." +
-    (applied ? " The action may have applied; its output was refused." : "");
+    (applied ? " The action may have applied; its output was refused." : "") + " " + hintFor(code);
   var error = new Error(message);
   error.plain = true;
   error.authCode = code;
@@ -351,10 +393,12 @@ function prepare(packet, scope, frameId, nextRef) {
   var frames = 0;
   function render(row) {
     if (row.excluded) return null;
-    if (row.type === 3) return { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) };
+    // Only what the page renders is read: text with no layout, or hidden, is not on screen (Teams keeps a hidden
+    // "Oops, unknown error!" template in its DOM that would read as a failure).
+    if (row.type === 3) return shown(row) ? { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) } : null;
     if (row.type !== 1 && row.type !== 9) return null;
     var node = { role: ROLES[row.name] || (row.type === 9 ? "document" : "generic"), children: [] };
-    var visible = row.css.length === 3 && row.css[0] !== "none" && ["hidden", "collapse"].indexOf(row.css[1]) === -1;
+    var visible = shown(row);
     node.visible = visible;
     if (!row.opaque && row.attrs.has("aria-label")) node.name = scrub(row.attrs.get("aria-label"));
     if (row.name === "INPUT" && !row.shadow && row.attrs.has("aria-label") && row.css[2] === "read-only" && !(row.parent && row.parent.opaque)) {
@@ -386,8 +430,12 @@ function prepare(packet, scope, frameId, nextRef) {
       });
       if (row.opaque && !node.children.length) node.children.push({ role: "text", text: "[redacted]" });
     }
+    // An element that is not on screen and holds nothing that is is left out (display: contents keeps its shown
+    // children); a hidden control or private region still shows as redacted.
+    if (row.type === 1 && !visible && !row.frame && !node.children.length) return null;
     return node;
   }
+  function shown(row) { return row.css.length === 3 && row.css[0] !== "none" && ["hidden", "collapse"].indexOf(row.css[1]) === -1; }
   try {
     var tree = render(rows[0]);
     dataOnly(tree);
@@ -427,11 +475,43 @@ function checkArgs(args) {
     try { url = new URL(args[1]); } catch (error) { throw fail("AUTH_URL_REFUSED"); }
     requireTrue(["http:", "https:"].indexOf(url.protocol) !== -1 && !url.username && !url.password, "AUTH_URL_REFUSED");
   }
+  if (args[0] === "wait") waitPlan(args);
+  // A key alone goes to whatever has focus: a key name or one character, with + between modifiers.
+  if (args[0] === "press" && args.length === 2) requireTrue(/^[\x21-\x7e]{1,40}$/.test(args[1]), "AUTH_ARGUMENTS_REFUSED");
   if (["resize", "mousewheel", "tab-select"].indexOf(args[0]) !== -1) {
     args.slice(1).forEach(function (value) { requireTrue(/^-?\d+$/.test(value) && Math.abs(Number(value)) <= 10000, "AUTH_ARGUMENTS_REFUSED"); });
     if (args[0] !== "mousewheel") requireTrue(args.slice(1).every(function (value) { return Number(value) >= (args[0] === "resize" ? 1 : 0); }), "AUTH_ARGUMENTS_REFUSED");
   }
 }
+
+// ["wait"], ["wait","<n>"] (up to 60 is seconds, more is milliseconds), ["wait","--time","<n>"],
+// ["wait","<text>"], ["wait","--text","<text>"] or ["wait","--gone","<text>"].
+function waitPlan(args) {
+  var flag = args.length === 3 ? args[1] : null;
+  requireTrue(flag === null || ["--time", "--text", "--gone"].indexOf(flag) !== -1, "AUTH_ARGUMENTS_REFUSED");
+  var value = args[args.length - 1];
+  if (args.length === 1) return { ms: WAIT_DEFAULT_MS };
+  if (flag === "--time" || (flag === null && /^\d+(?:\.\d+)?$/.test(value))) {
+    requireTrue(/^\d+(?:\.\d+)?$/.test(value), "AUTH_ARGUMENTS_REFUSED");
+    var number = Number(value);
+    var ms = number <= 60 ? number * 1000 : number;
+    requireTrue(ms >= 100 && ms <= WAIT_MAX_MS, "AUTH_ARGUMENTS_REFUSED");
+    return { ms: Math.round(ms) };
+  }
+  // Text that starts with "-" (a negative number, an unknown option) needs --text in front of it.
+  requireTrue(value.length <= 200 && value.trim().length > 0 && (flag !== null || value[0] !== "-"), "AUTH_ARGUMENTS_REFUSED");
+  return { text: value, gone: flag === "--gone" };
+}
+
+function shows(node, text) {
+  var needle = text.toLowerCase();
+  return (function visit(n) {
+    return [n.name, n.text].some(function (value) { return typeof value === "string" && value.toLowerCase().indexOf(needle) !== -1; }) ||
+      (n.children || []).some(visit);
+  })(node);
+}
+
+function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
 function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   requireTrue(typeof runtimePolicy === "function", "AUTH_RUNTIME_POLICY_MISSING");
@@ -603,6 +683,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       checkRuntime();
       var result = { snapshot: prepared.tree, text: renderText(prepared.tree) };
       if (prepared.frames) result.framesOmitted = prepared.frames;
+      if (result.text.length <= ERROR_PAGE_CHARS && ERROR_PAGE.test(result.text)) {
+        result.hint = "This page reads as an error, which is often transient: run [\"reload\"], then [\"wait\",\"<text you expect>\"].";
+      }
       if (applied) result.actionMayHaveApplied = true;
       var final;
       if (save) {
@@ -672,6 +755,38 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       }
     }
   }
+  // A wait reads nothing new: it pauses, or reads ordinary snapshots until text shows (or goes), and returns the last.
+  async function wait(reader, plan) {
+    var limit = Math.min(WAIT_MAX_MS, Math.floor(timeoutMs / 2));
+    if (plan.ms !== undefined) {
+      var ms = Math.min(plan.ms, limit);
+      await sleep(ms);
+      checkRuntime();
+      var paused = await settled(reader, false, false);
+      paused.waited = { seconds: ms / 1000 };
+      return paused;
+    }
+    var deadline = Date.now() + limit;
+    for (;;) {
+      var last;
+      try { last = await settled(reader, false, false); }
+      catch (error) {
+        if (closed || RETRIED.indexOf(safeFailure(error).code) === -1 || Date.now() >= deadline) throw error;
+        last = undefined;
+      }
+      if (last && shows(last.snapshot, plan.text) !== plan.gone) {
+        last.waited = { text: plan.text, found: true };
+        return last;
+      }
+      if (last && Date.now() >= deadline) {
+        last.waited = { text: plan.text, found: false };
+        last.hint = "The text did not " + (plan.gone ? "go" : "show") + " within " + limit / 1000 + " s. Read this snapshot; if the page is still loading, wait again.";
+        return last;
+      }
+      await sleep(WAIT_POLL_MS);
+      checkRuntime();
+    }
+  }
   async function execute(args) {
     checkRuntime();
     checkArgs(args);
@@ -699,6 +814,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_READER_SETUP_FAILED", command === "tab-new");
     }
     if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
+    if (command === "wait") return wait(reader, waitPlan(args));
     var applied = false;
     try {
       if (["goto", "go-back", "go-forward", "reload", "resize", "mousewheel"].indexOf(command) !== -1) {
@@ -710,6 +826,11 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         if (command === "reload") await page.reload({ timeout: timeoutMs });
         if (command === "resize") await page.setViewportSize({ width: Number(args[1]), height: Number(args[2]) });
         if (command === "mousewheel") await page.mouse.wheel(Number(args[1]), Number(args[2]));
+        checkRuntime();
+      } else if (command === "press" && args.length === 2) {
+        checkRuntime();
+        applied = true;
+        await page.keyboard.press(args[1]);
         checkRuntime();
       } else {
         requireTrue(/^e[1-9]\d*$/.test(args[1]), "AUTH_TARGET_REFUSED");
@@ -822,4 +943,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, FAILURE_CODES: Object.keys(HINTS) };

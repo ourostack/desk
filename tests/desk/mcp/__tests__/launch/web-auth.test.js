@@ -1173,7 +1173,7 @@ test("hidden page text inherits its editing mode, so it neither hides as a secre
   const text = JSON.stringify(sanitize(hiddenTextPage()))
   noPassword(text)
   assert.ok(text.includes("USB Bluetooth Dongle"))
-  assert.ok(text.includes("\"US\""), "hidden read-only text is page text")
+  assert.equal(text.includes("\"US\""), false, "hidden text is not on screen, so it is not read")
   for (const attributes of [["contenteditable", ""], ["contenteditable", "true"], ["contenteditable", "plaintext-only"], ["contenteditable", "TRUE"]]) {
     const editable = JSON.stringify(sanitize(hiddenTextPage(attributes)))
     assert.equal(editable.includes("USB"), false, "hidden editable content stays a secret everywhere")
@@ -1571,5 +1571,171 @@ test("read-back is a strict verdict: a page that answers anything but true repor
   try {
     const result = await adapter.call(["fill", inputRef(await adapter.call(["snapshot"])), "x"])
     assert.deepEqual(result.typed, { verified: false })
+  } finally { await adapter.close() }
+})
+
+
+// A page keeps markup it does not show (a hidden error template, say "Oops, unknown error!"), which must not read as
+// if the page showed it.
+function templatePage(display = "none", visibility = "visible") {
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  table.parentIndex.push(2, 4, 2, 6, 2, 8, 9)
+  table.nodeType.push(1, 3, 1, 3, 1, 1, 3)
+  table.nodeName.push(s("DIV"), s("#text"), s("SECTION"), s("#text"), s("DIV"), s("SPAN"), s("#text"))
+  table.nodeValue.push(-1, s("Shown words"), -1, s("Oops, unknown error!"), -1, -1, s("Contents child"))
+  table.backendNodeId.push(105, 106, 107, 108, 109, 110, 111)
+  table.attributes.push([], [], [], [], [], [], [])
+  const css = layout.styles[0]
+  const row = (index, styles) => { layout.nodeIndex.push(index); layout.styles.push(styles); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1) }
+  row(4, css.slice()); row(5, css.slice())
+  // The template: either no layout at all (display: none) or laid out but hidden.
+  if (display !== "none") { row(6, [s(display), s(visibility), css[2]]); row(7, [s(display), s(visibility), css[2]]) }
+  // display: contents has no box of its own, yet its children show.
+  row(9, css.slice()); row(10, css.slice())
+  return packet
+}
+
+test("text and elements the page does not show are not read, while hidden controls stay redacted", () => {
+  for (const [display, visibility] of [["none", "visible"], ["block", "hidden"], ["block", "collapse"]]) {
+    const tree = sanitize(templatePage(display, visibility))
+    const text = JSON.stringify(tree)
+    noPassword(text)
+    assert.equal(text.includes("Oops"), false, `${display}/${visibility} template text is not read`)
+    assert.equal(text.includes("section"), false, "an element holding nothing shown is left out")
+    assert.ok(text.includes("Shown words"))
+    assert.ok(text.includes("Contents child"), "display: contents children still show")
+  }
+})
+
+test("wait pauses for seconds or milliseconds, or until text shows or goes, and returns a fresh snapshot", async () => {
+  const root = await mkTempRoot("auth-native-wait-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root, 8000)
+  try {
+    let started = Date.now()
+    const timed = await adapter.call(["wait", "1"])
+    assert.ok(Date.now() - started >= 950, "a number up to 60 is seconds")
+    assert.equal(timed.waited.seconds, 1)
+    assert.ok(timed.snapshot.children[0].children[0].children[0].ref, "the snapshot's refs are usable")
+    started = Date.now()
+    assert.equal((await adapter.call(["wait", "300"])).waited.seconds, 0.3, "a larger number is milliseconds")
+    assert.ok(Date.now() - started < 950)
+    assert.equal((await adapter.call(["wait", "--time", "0.2"])).waited.seconds, 0.2)
+    assert.ok((await adapter.call(["wait"])).waited.seconds > 0, "a bare wait pauses briefly")
+    const found = await adapter.call(["wait", "password"])
+    assert.deepEqual(found.waited, { text: "password", found: true }, "text matches names case-insensitively")
+    assert.equal((await adapter.call(["wait", "--text", "Password"])).waited.found, true)
+    assert.equal((await adapter.call(["wait", "--gone", "Loading"])).waited.found, true, "text that is gone is found gone at once")
+    assert.equal((await adapter.call(["wait", "--text", "-1"])).waited.found, false, "text that starts with - follows --text")
+    // Text that never comes gives the last snapshot, not a refusal, within half the command time.
+    started = Date.now()
+    const missing = await adapter.call(["wait", "never shows"])
+    assert.equal(missing.waited.found, false)
+    assert.match(missing.hint, /snapshot/u)
+    assert.ok(Date.now() - started >= 3900 && Date.now() - started < 7000)
+    const ref = missing.snapshot.children[0].children[0].children[0].ref
+    await adapter.call(["click", ref])
+    for (const args of [["wait", "0"], ["wait", "61000"], ["wait", "-1"], ["wait", ""], ["wait", "--time", "x"], ["wait", "--text", ""], ["wait", "--bogus", "x"], ["wait", "--text"], ["wait", "a".repeat(201)], ["wait", "   "]]) {
+      await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED.*wait/u, JSON.stringify(args))
+    }
+  } finally { await adapter.close() }
+})
+
+test("wait keeps waiting through a page that is still changing, and a closed context refuses it", async () => {
+  const root = await mkTempRoot("auth-native-wait-churn-")
+  let churn = 3
+  const native = fakeDriver({
+    hook: ({ method, cdp }) => { if (method === "DOMSnapshot.captureSnapshot" && churn-- > 0) cdp.emit("DOM.childNodeCountUpdated", {}) },
+  })
+  const adapter = adapterFor(native, root, 8000)
+  try {
+    assert.equal((await adapter.call(["wait", "--text", "password"])).waited.found, true)
+  } finally { await adapter.close() }
+  await assert.rejects(adapter.call(["wait", "1"]), /AUTH_CONTEXT_REFUSED.*browser_context/u)
+  const stuck = fakeDriver({ hook: ({ method, cdp }) => { if (method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const busy = adapterFor(stuck, await mkTempRoot("auth-native-wait-stuck-"), 2000)
+  try {
+    await assert.rejects(busy.call(["wait", "password"]), /AUTH_SNAPSHOT_INVALIDATED.*snapshot/u, "a page that never settles is reported at the deadline")
+  } finally { await busy.close() }
+  const broken = fakeDriver({ hook: ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD) } })
+  const failing = adapterFor(broken, await mkTempRoot("auth-native-wait-broken-"), 8000)
+  try {
+    const started = Date.now()
+    await assert.rejects(failing.call(["wait", "password"]), error => !error.message.includes(PASSWORD) && /^AUTH_/u.test(error.message))
+    assert.ok(Date.now() - started < 2000, "a refusal that waiting cannot fix is reported at once")
+  } finally { await failing.close() }
+})
+
+test("wait for text to go reports when it stays", async () => {
+  const root = await mkTempRoot("auth-native-wait-gone-")
+  const adapter = adapterFor(fakeDriver(), root, 2000)
+  try {
+    const stays = await adapter.call(["wait", "--gone", "Password"])
+    assert.deepEqual(stays.waited, { text: "Password", found: false })
+    assert.match(stays.hint, /did not go within 1 s/u)
+  } finally { await adapter.close() }
+})
+
+test("press with only a key presses it on whatever has focus", async () => {
+  const root = await mkTempRoot("auth-native-key-")
+  const native = fakeDriver()
+  native.page.keyboard = { press: async (...args) => native.calls.push(["keyboard.press", ...args]) }
+  const adapter = adapterFor(native, root)
+  try {
+    const result = await adapter.call(["press", "Enter"])
+    assert.ok(native.calls.some(call => call[0] === "keyboard.press" && call[1] === "Enter"))
+    assert.equal(result.actionMayHaveApplied, true)
+    assert.ok(result.snapshot)
+    await adapter.call(["press", "Shift+Tab"])
+    for (const key of ["", "Enter Enter", "a".repeat(41)]) await assert.rejects(adapter.call(["press", key]), /AUTH_ARGUMENTS_REFUSED/u)
+    native.page.keyboard.press = async () => { throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["press", "Enter"]), error => /AUTH_ACTION_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
+  } finally { await adapter.close() }
+})
+
+test("every refusal says what to do instead, and none points at eval or page scripts", async () => {
+  const root = await mkTempRoot("auth-native-hints-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root)
+  try {
+    for (const command of ["eval", "run-code", "evaluate", "console", "screenshot", "wait-for"]) {
+      await assert.rejects(adapter.call([command, "document.title"]), error => {
+        assert.match(error.message, /^AUTH_COMMAND_REFUSED: /u)
+        for (const word of ["snapshot", "wait", "goto", "click", "fill", "press", "reload"]) assert.ok(error.message.includes(word), word)
+        assert.match(error.message, /eval.*never needed/u)
+        return true
+      })
+    }
+    await assert.rejects(adapter.call(["click", "e999"]), /AUTH_TARGET_REFUSED.*\["snapshot"\]/u)
+    await assert.rejects(adapter.call(["goto", "file:///etc"]), /AUTH_URL_REFUSED.*https/u)
+  } finally { await adapter.close() }
+  for (const code of auth.FAILURE_CODES) {
+    const message = auth.hintFor(code)
+    assert.ok(message && message.length > 20, code)
+    assert.equal(/\beval\b(?!.*never needed)/u.test(message), false, code)
+  }
+  assert.ok(auth.hintFor("AUTH_SOMETHING_NEW").length > 20, "an unlisted code still gets the general advice")
+})
+
+test("a small page that reads as an error gets reload advice; a large page that mentions one does not", async () => {
+  const root = await mkTempRoot("auth-native-error-page-")
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  packet.strings.push("#text", "Oops, unknown error!")
+  table.parentIndex.push(2); table.nodeType.push(3); table.nodeName.push(packet.strings.length - 2)
+  table.nodeValue.push(packet.strings.length - 1); table.backendNodeId.push(105); table.attributes.push([])
+  layout.nodeIndex.push(4); layout.styles.push(layout.styles[0].slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1)
+  const native = fakeDriver({ packet })
+  const adapter = adapterFor(native, root)
+  try {
+    const small = await adapter.call(["snapshot"])
+    assert.match(small.hint, /\["reload"\].*\["wait"/u)
+    packet.strings.push("x".repeat(30000))
+    table.nodeValue[4] = packet.strings.length - 1
+    assert.equal((await adapter.call(["snapshot"])).hint, undefined)
   } finally { await adapter.close() }
 })
