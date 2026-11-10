@@ -645,7 +645,13 @@ function command(s, id, args) {
   if (record && record.kind === "mine") {
     if (owner.browser !== "mine" || owner.transport !== "auth-api" || owner.profilePolicy !== AUTH_PROFILE_POLICY ||
       owner.pid !== process.pid || !record.adapter) throw plain("AUTH_CONTEXT_POLICY: This context has no current password-store exclusion policy and owned native handle. Open a new context; no profile was migrated.");
-    return record.adapter.call(args);
+    // The reply carries the snapshot's text; its JSON tree says the same at twice the size (a saved artifact keeps it).
+    return record.adapter.call(args).then(function (result) {
+      if (!result || typeof result !== "object" || !("snapshot" in result)) return result;
+      var reply = Object.assign({}, result);
+      delete reply.snapshot;
+      return reply;
+    });
   }
   if (!record || owner.browser !== "fresh" || owner.transport !== "legacy-cli" || owner.pid !== process.pid || owner.profilePolicy !== PROFILE_POLICY) {
     throw plain("This browser context has no current password-store exclusion policy. Close it with browser_context and open a new context; Desk will not scrub or migrate an existing profile.");

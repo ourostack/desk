@@ -15,6 +15,10 @@ var WAIT_MAX_MS = 60000;
 var WAIT_POLL_MS = 1000;
 // A page this small whose words read as an error is usually a transient error page, worth one reload.
 var ERROR_PAGE_CHARS = 20000;
+// Text an agent reads in one reply: hosts set aside larger tool output in a file the agent may never open.
+var TEXT_BUDGET = 24000;
+// One text longer than this reads cut short, so a single long paragraph cannot crowd out the rest of the page.
+var LINE_CHARS = 4000;
 var ERROR_PAGE = /\b(?:oops|something went wrong|unknown error|an error occurred|try again later)\b/i;
 // A large store product page has about 18,000 nodes and 250,000 native values.
 var MAX_NODES = 100000;
@@ -35,13 +39,13 @@ var UNTYPED_CODE_LENGTH = 8;
 var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "NOSCRIPT"]);
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
 var ARITY = {
-  snapshot: [1, 2], goto: [2, 2], "go-back": [1, 1], "go-forward": [1, 1], reload: [1, 1],
+  snapshot: [1, 2], find: [2, 2], goto: [2, 2], "go-back": [1, 1], "go-forward": [1, 1], reload: [1, 1],
   click: [2, 2], dblclick: [2, 2], fill: [3, 3], type: [3, 3], press: [2, 3], select: [3, 3], wait: [1, 3],
   check: [2, 2], uncheck: [2, 2], hover: [2, 2], "tab-list": [1, 1], "tab-new": [1, 1],
   "tab-close": [1, 1], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3]
 };
 
-var COMMANDS = "snapshot; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
+var COMMANDS = "snapshot [--interactive | --save]; find <text>; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
   "click, dblclick, hover, check or uncheck <ref>; fill or type <ref> <text>; press [<ref>] <key>; select <ref> <value>; " +
   "mousewheel <dx> <dy>; resize <width> <height>; tab-list; tab-new; tab-select <index>; tab-close";
 var SNAPSHOT_AGAIN = "Run [\"snapshot\"] to see the page as it is now and act on a ref from it.";
@@ -463,14 +467,77 @@ function prepare(packet, scope, frameId, nextRef) {
   }
 }
 
-function renderText(node, depth) {
-  depth = depth || 0;
-  var line = "  ".repeat(depth) + "- " + node.role;
-  if (node.ref) line += " [ref=" + node.ref + "]";
-  if (node.name) line += " " + JSON.stringify(node.name);
-  if (node.text !== undefined) line += ": " + JSON.stringify(node.text);
-  return [line].concat((node.children || []).map(function (child) { return renderText(child, depth + 1); })).join("\n");
+// The text agents read is compact: busy apps nest dozens of unnamed wrappers per item, which read as nothing but cost
+// most of the output. An unnamed wrapper with nothing in it is left out; one holding a single text reads as one line;
+// one holding a single element, or holding several without a ref of its own, gives way to what it holds. Every
+// named node, every text and every ref that holds something stays; the JSON tree (and a saved artifact) keeps it all.
+// A view narrows it: find keeps lines holding the text and the lines that contain them; interactive keeps lines with
+// a ref or a name. Past TEXT_BUDGET characters, named and non-generic lines stay, then the rest in page order.
+function renderText(node, view) {
+  var entries = [];
+  // A wrapper that gives way to the one thing it holds hands that thing its ref, so the text stays clickable.
+  (function walk(n, depth, parent, carried) {
+    var children = n.children || [];
+    var plain = (n.role === "generic" && !n.name && n.text === undefined) || n.role === "text";
+    var ref = n.ref || (plain ? carried : undefined);
+    if (n.role === "text" && ref) {
+      entries.push({ depth: depth, parent: parent, ref: true, key: false, words: n.text, line: "- generic [ref=" + ref + "]: " + quote(n.text) });
+      return;
+    }
+    if (n.role === "generic" && plain) {
+      if (!children.length) return;
+      if (children.length === 1) { walk(children[0], depth, parent, ref); return; }
+      if (!ref) { children.forEach(function (child) { walk(child, depth, parent); }); return; }
+    }
+    var line = "- " + n.role;
+    if (ref) line += " [ref=" + ref + "]";
+    if (n.name) line += " " + JSON.stringify(n.name);
+    if (n.text !== undefined) line += ": " + quote(n.text);
+    var index = entries.length;
+    entries.push({ depth: depth, parent: parent, ref: Boolean(ref), key: Boolean(n.name) || ["generic", "text"].indexOf(n.role) === -1,
+      words: [n.name, n.text].filter(function (value) { return typeof value === "string"; }).join(" "), line: line });
+    children.forEach(function (child) { walk(child, depth + 1, index); });
+  })(node, 0, -1);
+  var keep = entries.map(function () { return !view; });
+  var matches = 0;
+  if (view && view.find !== undefined) {
+    var needle = view.find.toLowerCase();
+    entries.forEach(function (entry, index) {
+      if (entry.words.toLowerCase().indexOf(needle) === -1) return;
+      matches++;
+      for (var at = index; at !== -1 && !keep[at]; at = entries[at].parent) keep[at] = true;
+    });
+  }
+  if (view && view.interactive) entries.forEach(function (entry, index) { keep[index] = entry.ref || entry.key; });
+  var full = entries.reduce(function (sum, entry) { return sum + entry.depth * 2 + entry.line.length + 1 + Math.max(0, entry.words.length - LINE_CHARS); }, 0);
+  var size = function (entry) { return entry.depth * 2 + entry.line.length + 1; };
+  var total = entries.reduce(function (sum, entry, index) { return keep[index] ? sum + size(entry) : sum; }, 0);
+  var shown = keep.slice();
+  if (total > TEXT_BUDGET) {
+    var used = 0;
+    shown = entries.map(function (entry, index) {
+      if (keep[index] && entry.key && used + size(entry) <= TEXT_BUDGET) { used += size(entry); return true; }
+      return false;
+    });
+    entries.forEach(function (entry, index) {
+      if (keep[index] && !shown[index] && used + size(entry) <= TEXT_BUDGET) { used += size(entry); shown[index] = true; }
+    });
+  }
+  var lines = [];
+  var gap = 0;
+  var left = 0;
+  entries.forEach(function (entry, index) {
+    if (!keep[index]) return;
+    if (!shown[index]) { gap++; left++; return; }
+    if (gap) lines.push("  ".repeat(entry.depth) + "- \u2026 " + gap + " lines left out");
+    gap = 0;
+    lines.push("  ".repeat(entry.depth) + entry.line);
+  });
+  if (gap) lines.push("- \u2026 " + gap + " lines left out");
+  return { text: lines.join("\n"), left: left, matches: matches, full: full };
 }
+
+function quote(text) { return JSON.stringify(text.length > LINE_CHARS ? text.slice(0, LINE_CHARS) + "\u2026" : text); }
 
 function checkArgs(args) {
   requireTrue(Array.isArray(args) && args.length > 0 && args.every(function (arg) {
@@ -478,7 +545,8 @@ function checkArgs(args) {
   }), "AUTH_ARGUMENTS_REFUSED");
   var bounds = ARITY[args[0]];
   requireTrue(bounds && args.length >= bounds[0] && args.length <= bounds[1], "AUTH_COMMAND_REFUSED");
-  if (args[0] === "snapshot") requireTrue(args.length === 1 || args[1] === "--save", "AUTH_ARGUMENTS_REFUSED");
+  if (args[0] === "snapshot") requireTrue(args.length === 1 || args[1] === "--save" || args[1] === "--interactive", "AUTH_ARGUMENTS_REFUSED");
+  if (args[0] === "find") requireTrue(args[1].trim().length > 0 && args[1].length <= 200, "AUTH_ARGUMENTS_REFUSED");
   if (args[0] === "goto") {
     var url;
     try { url = new URL(args[1]); } catch (error) { throw fail("AUTH_URL_REFUSED"); }
@@ -518,6 +586,21 @@ function shows(node, text) {
     return [n.name, n.text].some(function (value) { return typeof value === "string" && value.toLowerCase().indexOf(needle) !== -1; }) ||
       (n.children || []).some(visit);
   })(node);
+}
+
+function LEFT_OUT(count) {
+  return count + " lines were left out to keep this short. Use [\"find\",\"<text>\"] for the lines holding that text and " +
+    "what contains them, [\"snapshot\",\"--interactive\"] for refs and named controls only, or [\"snapshot\",\"--save\"] for the whole page in a file.";
+}
+
+// The same snapshot, read through a narrower view.
+function narrow(result, view) {
+  var rendered = renderText(result.snapshot, view);
+  result.text = rendered.text;
+  delete result.hint;
+  if (view.find !== undefined) result.matches = rendered.matches;
+  if (rendered.left) result.hint = LEFT_OUT(rendered.left);
+  return result;
 }
 
 function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
@@ -690,9 +773,11 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       same(before, qualified, reader, epoch);
       await verifyProtection(reader, qualified, prepared, epoch);
       checkRuntime();
-      var result = { snapshot: prepared.tree, text: renderText(prepared.tree) };
+      var rendered = renderText(prepared.tree);
+      var result = { snapshot: prepared.tree, text: rendered.text };
+      if (rendered.left) result.hint = LEFT_OUT(rendered.left);
       if (prepared.frames) result.framesOmitted = prepared.frames;
-      if (result.text.length <= ERROR_PAGE_CHARS && ERROR_PAGE.test(result.text)) {
+      if (rendered.full <= ERROR_PAGE_CHARS && ERROR_PAGE.test(result.text)) {
         result.hint = "This page reads as an error, which is often transient: run [\"reload\"], then [\"wait\",\"<text you expect>\"].";
       }
       if (applied) result.actionMayHaveApplied = true;
@@ -822,6 +907,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_READER_SETUP_FAILED", command === "tab-new");
     }
+    if (command === "snapshot" && args[1] === "--interactive") return narrow(await settled(reader, false, false), { interactive: true });
+    if (command === "find") return narrow(await settled(reader, false, false), { find: args[1] });
     if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
     if (command === "wait") return wait(reader, waitPlan(args));
     var applied = false;
@@ -952,4 +1039,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, FAILURE_CODES: Object.keys(HINTS) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(HINTS) };

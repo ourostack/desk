@@ -1767,3 +1767,98 @@ test("a shown select keeps its options readable though they have no layout, and 
   assert.equal(JSON.stringify(sanitize(selectPage({ selectShown: false }))).includes("Apple"), false, "a hidden select's options are not read")
   assert.equal(JSON.stringify(sanitize(selectPage({ optionCss: "none" }))).includes("Banana"), false, "an option styled away is not read")
 })
+
+const g = (ref, children = [], extra = {}) => ({ role: "generic", ...(ref ? { ref } : {}), ...extra, children })
+const t = (text) => ({ role: "text", text })
+
+test("the text agents read leaves out unnamed wrappers but keeps every name, text and ref that holds something", () => {
+  const tree = { role: "document", children: [g("e1", [g("e2", [g("e3", [g(null, [t("Inbox")])])]), g("e4", []), g(null, []),
+    g("e5", [g("e6", [t("Alpha")]), g("e7", [t("Beta")])]), g(null, [g("e8", [t("One")]), g("e9", [t("Two")])]),
+    { role: "textbox", ref: "e10", name: "Type a message", children: [t("[redacted]")] }, g("e11", [], { name: "Close" })])] }
+  const { text, left } = auth.renderText(tree)
+  assert.equal(left, 0)
+  assert.equal(auth.renderText({ role: "document", children: [g(null, [g(null, [t("Loose")])])] }).text, "- document\n  - text: \"Loose\"")
+  assert.equal(text, [
+    "- document",
+    "  - generic [ref=e1]",
+    "    - generic [ref=e3]: \"Inbox\"",
+    "    - generic [ref=e5]",
+    "      - generic [ref=e6]: \"Alpha\"",
+    "      - generic [ref=e7]: \"Beta\"",
+    "    - generic [ref=e8]: \"One\"",
+    "    - generic [ref=e9]: \"Two\"",
+    "    - textbox [ref=e10] \"Type a message\"",
+    "      - text: \"[redacted]\"",
+    "    - generic [ref=e11] \"Close\"",
+  ].join("\n"))
+})
+
+test("past the budget, controls and named lines stay, then text in page order, and the rest is counted", () => {
+  const rows = Array.from({ length: 2000 }, (_, i) => g(`e${i + 100}`, [t(`Message ${i} ${"x".repeat(40)}`)]))
+  const tree = { role: "document", children: [g("e1", [...rows, { role: "textbox", ref: "e9", name: "Type a message", children: [] }])] }
+  const { text, left } = auth.renderText(tree)
+  assert.ok(text.length <= auth.TEXT_BUDGET + 200, String(text.length))
+  assert.ok(left > 1000)
+  assert.ok(text.includes("Message 0 "), "page order keeps the start")
+  assert.ok(text.includes("textbox [ref=e9] \"Type a message\""), "a control at the end still shows")
+  assert.match(text, /\u2026 \d+ lines left out/u)
+  const long = auth.renderText({ role: "document", children: [t("y".repeat(50000))] })
+  assert.ok(long.text.length < 4100 && long.text.includes("\u2026"), "one long text is cut short")
+})
+
+test("find and snapshot --interactive narrow a snapshot whose refs stay usable", async () => {
+  const root = await mkTempRoot("auth-native-views-")
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  table.parentIndex.push(2, 4, 2, 6); table.nodeType.push(1, 3, 1, 3)
+  table.nodeName.push(s("DIV"), s("#text"), s("DIV"), s("#text")); table.nodeValue.push(-1, s("Ari (You)"), -1, s("Someone else"))
+  table.backendNodeId.push(105, 106, 107, 108); table.attributes.push([], [], [], [])
+  for (const index of [4, 5, 6, 7]) { layout.nodeIndex.push(index); layout.styles.push(layout.styles[0].slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1) }
+  const native = fakeDriver({ packet })
+  const adapter = adapterFor(native, root)
+  try {
+    const found = await adapter.call(["find", "(you)"])
+    assert.equal(found.matches, 1)
+    assert.ok(found.text.includes("Ari (You)"))
+    assert.equal(found.text.includes("Someone else"), false)
+    assert.ok(found.text.includes("document"), "what contains a match is shown")
+    noPassword(found)
+    const none = await adapter.call(["find", "nothing like this"])
+    assert.equal(none.matches, 0)
+    const interactive = await adapter.call(["snapshot", "--interactive"])
+    assert.ok(interactive.text.includes("textbox") && interactive.text.includes("Ari (You)"))
+    noPassword(interactive)
+    const ref = interactive.text.match(/generic \[ref=(e\d+)\]: "Ari \(You\)"/u)[1]
+    await adapter.call(["click", ref])
+    assert.ok(native.calls.some(call => call[0] === "click"))
+    for (const args of [["find", " "], ["find", "a".repeat(201)], ["snapshot", "--everything"]]) await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u)
+  } finally { await adapter.close() }
+})
+
+test("a page too long to read in one reply says how to see the rest, in every view", async () => {
+  const root = await mkTempRoot("auth-native-long-")
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const div = s("DIV"), textName = s("#text")
+  for (let i = 0; i < 1200; i++) {
+    const at = table.parentIndex.length
+    table.parentIndex.push(2, at); table.nodeType.push(1, 3); table.nodeName.push(div, textName)
+    table.nodeValue.push(-1, s(`Message ${i} ${"z".repeat(40)}`)); table.backendNodeId.push(1000 + 2 * i, 1001 + 2 * i); table.attributes.push([], [])
+    for (const index of [at, at + 1]) { layout.nodeIndex.push(index); layout.styles.push(layout.styles[0].slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1) }
+  }
+  const adapter = adapterFor(fakeDriver({ packet }), root, 20000)
+  try {
+    for (const args of [["snapshot"], ["find", "Message"], ["snapshot", "--interactive"]]) {
+      const result = await adapter.call(args)
+      assert.ok(result.text.length <= auth.TEXT_BUDGET + 200, `${args}: ${result.text.length}`)
+      assert.match(result.hint, /left out.*\["find"/u, String(args))
+      assert.match(result.text, /\u2026 \d+ lines left out$/u, "the end that did not fit is counted")
+      if (args[0] !== "find") assert.ok(result.text.includes("textbox"), "the control is kept")
+      noPassword(result)
+    }
+  } finally { await adapter.close() }
+})
