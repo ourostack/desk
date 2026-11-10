@@ -1872,3 +1872,20 @@ test("a page too long to read in one reply says how to see the rest, in every vi
     }
   } finally { await adapter.close() }
 })
+
+test("refs from the last three reads stay usable, and older ones are refused", async () => {
+  const root = await mkTempRoot("auth-native-ref-reads-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root)
+  try {
+    const first = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    await adapter.call(["find", "password"])
+    await adapter.call(["wait", "--text", "password"])
+    await adapter.call(["click", first])
+    assert.ok(native.calls.some(call => call[0] === "click"), "a ref from three reads ago still acts")
+    const second = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    for (let i = 0; i < 3; i++) await adapter.call(["snapshot"])
+    await assert.rejects(adapter.call(["click", second]), /AUTH_TARGET_REFUSED.*last 3 reads/u)
+    await assert.rejects(adapter.call(["click", first]), /AUTH_TARGET_REFUSED/u)
+  } finally { await adapter.close() }
+})

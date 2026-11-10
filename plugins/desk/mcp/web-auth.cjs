@@ -9,6 +9,9 @@ var STYLES = ["display", "visibility", "-webkit-user-modify"];
 var TARGET_WAIT_MS = 2000;
 var SNAPSHOT_ATTEMPTS = 5;
 var SNAPSHOT_SETTLE_MS = 250;
+// Refs from this many of the latest reads stay usable: an agent often reads twice (find, then find again) before it
+// acts. Every action re-resolves its ref against the page as it is now, so an older ref acts only on its own node.
+var REF_READS = 3;
 // wait: a bare wait pauses this long; no wait outlasts half the command time or a minute; text is looked for this often.
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
@@ -55,7 +58,7 @@ var HINTS = {
   AUTH_COMMAND_REFUSED: "Commands in mine: " + COMMANDS + ". eval and page scripts are never needed: snapshot, then act on its refs; to let a page load, use wait.",
   AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
   AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
-  AUTH_TARGET_REFUSED: "That ref is not from the latest snapshot of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
+  AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
   AUTH_SNAPSHOT_INVALIDATED: "The page changed under that ref. " + SNAPSHOT_AGAIN + " On a page that keeps changing, act right after the snapshot.",
   AUTH_PROTECTION_INVALIDATED: CHANGING,
   AUTH_REDACTION_INVALIDATED: CHANGING,
@@ -632,6 +635,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   var refs = new Map();
   var cleanupRecords = new Set();
   var next = 0;
+  var reads = 0;
   var selected = context.pages()[0];
   var queue = Promise.resolve();
   var pending = new Set();
@@ -825,7 +829,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           }
         }
       }
-      dropRefs();
       qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
       await verifyProtection(reader, qualified, prepared, epoch);
@@ -836,7 +839,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         checkRuntime();
         fs.renameSync(staged, final); staged = undefined; result.artifact = final;
       }
-      provisional.forEach(function (record) { refs.set(record.ref, record); });
+      reads++;
+      provisional.forEach(function (record) { record.read = reads; refs.set(record.ref, record); });
+      refs.forEach(function (record, ref) { if (record.read <= reads - REF_READS) refs.delete(ref); });
       return result;
     } catch (error) {
       primary = knownFailure(error) ? safeFailure(error).code : "AUTH_SNAPSHOT_FAILED";
