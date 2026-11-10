@@ -36,17 +36,63 @@ export function nativeSnapshot({ value = PASSWORD, userModify = "read-only", typ
   return { documents: [document], strings }
 }
 
-export function inspectedDOM(packet) {
-  const document = packet.documents[0]
+// DOM.getDocument with pierce: a frame owner carries its child document as contentDocument.
+export function inspectedDOM(packet, index = 0) {
+  const document = packet.documents[index]
   const table = document.nodes
   const text = (i) => i === -1 ? "" : packet.strings[i]
   const rows = table.nodeType.map((nodeType, i) => ({
-    nodeId: i + 1, backendNodeId: table.backendNodeId[i], nodeType,
+    nodeId: index * 1000 + i + 1, backendNodeId: table.backendNodeId[i], nodeType,
     nodeName: text(table.nodeName[i]), localName: nodeType === 1 ? text(table.nodeName[i]).toLowerCase() : "",
     nodeValue: text(table.nodeValue[i]), attributes: table.attributes[i].map(text), children: [],
   }))
   table.parentIndex.forEach((parent, i) => { if (parent >= 0) rows[parent].children.push(rows[i]) })
+  table.contentDocumentIndex.index.forEach((row, i) => { rows[row].contentDocument = inspectedDOM(packet, table.contentDocumentIndex.value[i]).root })
   return { root: rows[0] }
+}
+
+export const FRAME_TEXT = "CHILD_FRAME_TEXT_688"
+export const FALLBACK_TEXT = "FRAME_FALLBACK_TEXT_688"
+
+// The sign-in page plus a visible main-document paragraph and an iframe (with fallback text) whose
+// child document holds text and a filled password field, as DOMSnapshot reports a page with a child frame.
+export function framedSnapshot() {
+  const packet = nativeSnapshot()
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const main = packet.documents[0]
+  const css = main.layout.styles[0]
+  const add = (document, parent, type, name, value, id) => {
+    const nodes = document.nodes
+    nodes.parentIndex.push(parent)
+    nodes.nodeType.push(type)
+    nodes.nodeName.push(s(name))
+    nodes.nodeValue.push(value === undefined ? -1 : s(value))
+    nodes.backendNodeId.push(id)
+    nodes.attributes.push([])
+    document.layout.nodeIndex.push(nodes.nodeType.length - 1)
+    document.layout.styles.push(css.slice())
+    document.layout.bounds.push([0, 0, 100, 20])
+    document.layout.text.push(-1)
+    return nodes.nodeType.length - 1
+  }
+  add(main, add(main, 2, 1, "P", undefined, 105), 3, "#text", "Main product title", 106)
+  const iframe = add(main, 2, 1, "IFRAME", undefined, 107)
+  add(main, iframe, 3, "#text", FALLBACK_TEXT, 108)
+  main.nodes.contentDocumentIndex = { index: [iframe], value: [1] }
+  const child = structuredClone(main)
+  child.frameId = s("child")
+  child.nodes = {
+    parentIndex: [-1, 0, 1], nodeType: [9, 1, 1], nodeName: ["#document", "HTML", "BODY"].map(s),
+    nodeValue: [-1, -1, -1], backendNodeId: [201, 202, 203], attributes: [[], [], []],
+    inputValue: { index: [], value: [] }, textValue: { index: [], value: [] }, shadowRootType: { index: [], value: [] },
+    contentDocumentIndex: { index: [], value: [] }, inputChecked: { index: [] }, optionSelected: { index: [] }, isClickable: { index: [] },
+  }
+  child.layout = { nodeIndex: [1, 2], styles: [css.slice(), css.slice()], bounds: [[0, 0, 1, 1], [0, 0, 1, 1]], text: [-1, -1], stackingContexts: { index: [] } }
+  add(child, 2, 3, "#text", FRAME_TEXT, 204)
+  const input = add(child, 2, 1, "INPUT", undefined, 205)
+  child.nodes.inputValue = { index: [input], value: [s(PASSWORD)] }
+  packet.documents.push(child)
+  return packet
 }
 
 export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, closeError } = {}) {
