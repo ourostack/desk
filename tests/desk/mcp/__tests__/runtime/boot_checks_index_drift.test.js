@@ -63,6 +63,8 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
 // ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
 
 test("an index-drift block queues the detached filer, never awaiting it, and reports filing in background", async (t) => {
+  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
+  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   const launched = []
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
@@ -84,6 +86,8 @@ test("an index-drift block queues the detached filer, never awaiting it, and rep
 })
 
 test("an index-drift block still renders, with 'not filed', when the launcher itself fails to start", async (t) => {
+  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
+  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
@@ -124,6 +128,8 @@ test("a bound desk that resolves but is not itself a Git repository is never wat
 })
 
 test("a check that stages several files mid-run names every one of them, in the plural", async (t) => {
+  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
+  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray-a.txt"), "a\n")
   writeFileSync(path.join(repo, "stray-b.txt"), "b\n")
