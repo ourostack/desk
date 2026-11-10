@@ -13,6 +13,21 @@ var SNAPSHOT_SETTLE_MS = 250;
 var MAX_NODES = 100000;
 var MAX_VALUES = 2000000;
 var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
+var EDITS = ["type", "fill", "press"];
+var EDITABLE = ["read-write", "read-write-plaintext-only"];
+// Runs in the page: the editing host of a node inside contenteditable content, else the node itself.
+var EDITING_HOST = function (node) {
+  if (!node.isContentEditable) return node;
+  var host = node;
+  while (host.parentElement && host.parentElement.isContentEditable) host = host.parentElement;
+  return host;
+};
+// Runs in the page: whether a field or editing host now holds the text (all of it for fill, some of it for type).
+var HOLDS = function (node, input) {
+  var flat = function (value) { return String(value || "").replace(/\s+/g, " ").trim(); };
+  var current = flat(node.isContentEditable || typeof node.value !== "string" ? node.innerText : node.value);
+  return input[1] === "fill" ? current === flat(input[0]) : current.indexOf(flat(input[0])) !== -1;
+};
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
 var UNTYPED = new Set(["hidden", "submit", "button", "reset", "image"]);
 // Shorter values in fields nobody types into are page codes ("US", "0", "USD"), never a typed value's copy.
@@ -85,6 +100,25 @@ function integer(value, min, max) {
   return Number.isSafeInteger(value) && value >= min && value <= max;
 }
 
+// What an element is, for re-resolving a ref on a page that kept changing elsewhere: its name, its attributes other
+// than presentation (class, style), and its subtree's element names and text, open shadow roots included. Child
+// frames and template content are never read, and the hash never leaves the process.
+var PRESENTATION = ["class", "style"];
+function fingerprint(raw) {
+  var hash = crypto.createHash("sha256");
+  (function walk(node) {
+    var attrs = node.attributes || [];
+    var kept = [];
+    for (var i = 0; i + 1 < attrs.length; i += 2) if (PRESENTATION.indexOf(attrs[i]) === -1) kept.push(attrs[i], attrs[i + 1]);
+    hash.update(JSON.stringify([node.nodeType, node.nodeName, node.nodeType === 3 ? node.nodeValue : "", kept]));
+    if (EMBEDDED.has(node.nodeName)) return;
+    (node.children || []).forEach(walk);
+    (node.shadowRoots || []).forEach(function (root) { if (root.shadowRootType === "open") walk(root); });
+    hash.update(")");
+  })(raw);
+  return hash.digest("hex");
+}
+
 function inspect(root) {
   dataOnly(root);
   var nodes = new Map();
@@ -98,7 +132,7 @@ function inspect(root) {
     var children = node.children || [];
     requireTrue(Array.isArray(children));
     if (node.childNodeCount !== undefined) requireTrue(node.childNodeCount === children.length);
-    var entry = { id: node.backendNodeId, type: node.nodeType, name: node.nodeName, parent: parent, path: cssPath, shadow: shadow };
+    var entry = { id: node.backendNodeId, type: node.nodeType, name: node.nodeName, parent: parent, path: cssPath, shadow: shadow, raw: node };
     nodes.set(entry.id, entry);
     if (entry.name === "INPUT" || entry.name === "TEXTAREA") controls.add(entry.id);
     signature.push([entry.id, entry.type, entry.name, parent, shadow]);
@@ -333,6 +367,12 @@ function prepare(packet, scope, frameId, nextRef) {
     if (row.name === "INPUT" && !row.shadow && row.attrs.has("aria-label") && row.css[2] === "read-only" && !(row.parent && row.parent.opaque)) {
       node.name = scrub(row.attrs.get("aria-label"));
     }
+    // A rich-text editor's host (Teams' composer) is a textbox an agent can find by its author label; what was typed
+    // in it stays redacted, and so does a label that repeats it.
+    if (row.type === 1 && !row.shadow && EDITABLE.indexOf(row.modify) !== -1 && !(row.parent && EDITABLE.indexOf(row.parent.modify) !== -1)) {
+      node.role = "textbox";
+      if (row.attrs.has("aria-label")) node.name = scrub(row.attrs.get("aria-label"));
+    }
     var inspected = scope.nodes.get(row.id);
     if (nextRef && row.type === 1 && visible && !row.shadow && inspected && inspected.path) {
       node.ref = "e" + nextRef();
@@ -439,6 +479,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   async function disposeRecords(records) {
     var results = await Promise.allSettled(records.map(function (record) {
       return Promise.resolve().then(async function () {
+        if (record.host) { await record.host.dispose(); record.host = null; }
         await record.handle.dispose();
         cleanupRecords.delete(record);
       });
@@ -505,6 +546,17 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var scope = inspect(dom.root);
     return { scope: scope, frameId: tree.frame.id, loaderId: tree.frame.loaderId };
   }
+  // The browser resolves the path and names its native node; one DOM round trip, which also resets the session's
+  // node bindings, so every earlier read is retired.
+  async function sameNode(reader, cssPath, id) {
+    var resolved;
+    try {
+      var doc = await send(reader, "DOM.getDocument", { depth: 0 });
+      var found = await send(reader, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: cssPath });
+      resolved = found.nodeId ? (await send(reader, "DOM.describeNode", { nodeId: found.nodeId })).node.backendNodeId : 0;
+    } finally { reader.epoch++; }
+    requireTrue(resolved === id, "AUTH_SNAPSHOT_INVALIDATED");
+  }
   function same(a, b, reader, epoch) {
     checkRuntime();
     requireTrue(!closed && reader.alive && reader.epoch === epoch &&
@@ -548,7 +600,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       // Refs bind lazily: an action re-qualifies the unchanged document before resolving its path,
       // so a page with thousands of elements does not wait on one selector round trip per element.
       prepared.targets.forEach(function (target) {
-        provisional.push({ ref: target.ref, path: target.path, reader: reader, epoch: epoch, stamp: before });
+        provisional.push({ ref: target.ref, path: target.path, id: target.id, reader: reader, epoch: epoch, stamp: before });
       });
       var qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
@@ -668,19 +720,27 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         requireTrue(/^e[1-9]\d*$/.test(args[1]), "AUTH_TARGET_REFUSED");
         var record = refs.get(args[1]);
         requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
-        same(record.stamp, await qualify(reader), reader, record.epoch);
+        // A live page (Teams) changes somewhere every few milliseconds, so the ref is re-resolved now: the same native
+        // node, in the same main-frame document, with the same name, attributes and subtree text the snapshot read.
+        var now = await qualify(reader);
+        var quiet = reader.epoch;
+        var target = now.scope.nodes.get(record.id);
+        requireTrue(now.frameId === record.stamp.frameId && now.loaderId === record.stamp.loaderId &&
+          target && target.path && !target.shadow &&
+          fingerprint(target.raw) === fingerprint(record.stamp.scope.nodes.get(record.id).raw), "AUTH_SNAPSHOT_INVALIDATED");
         checkRuntime();
         var bound;
         try {
-          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + record.path,
+          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + target.path,
             { state: "attached", strict: true, timeout: Math.min(timeoutMs, TARGET_WAIT_MS) }) };
         } catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
         requireTrue(bound.handle, "AUTH_TARGET_REFUSED");
         cleanupRecords.add(bound);
         var actionError;
+        var typed;
         try {
-          // The document is still the one the ref was read from, so its path names the same element.
-          same(record.stamp, record.stamp, reader, record.epoch);
+          // Unchanged since the read, the path still names that node; otherwise the browser itself confirms it does.
+          if (reader.epoch !== quiet) await sameNode(reader, target.path, record.id);
           checkRuntime();
           applied = true;
           // Playwright waits for an element to be enabled before scrolling it into view, but some pages enable a control
@@ -688,8 +748,18 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           await bound.handle.scrollIntoViewIfNeeded({ timeout: timeoutMs });
           checkRuntime();
           var method = command === "select" ? "selectOption" : command;
-          if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
-          else await bound.handle[method]({ timeout: timeoutMs });
+          var actor = bound.handle;
+          // Focusing a node inside a rich-text editor blurs the editor, so keys and text go to its editing host.
+          if (EDITS.indexOf(command) !== -1) {
+            var host = await bound.handle.evaluateHandle(EDITING_HOST);
+            bound.host = host;
+            actor = host.asElement() || bound.handle;
+          }
+          if (args.length === 3) await actor[method](args[2], { timeout: timeoutMs });
+          else await actor[method]({ timeout: timeoutMs });
+          checkRuntime();
+          // Typed text is redacted from every snapshot, so the field itself says whether it now holds it.
+          if (command === "fill" || command === "type") typed = { verified: Boolean(await actor.evaluate(HOLDS, [args[2], command])) };
           checkRuntime();
         } catch (error) {
           actionError = error;
@@ -699,7 +769,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           try { await disposeRecords([bound]); } catch (cleanupError) { if (!actionError) throw cleanupError; }
         }
       }
-      return await settled(reader, false, applied);
+      var outcome = await settled(reader, false, applied);
+      if (typed) outcome.typed = typed;
+      return outcome;
     } catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_ACTION_FAILED", applied);
     }
@@ -750,4 +822,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure };

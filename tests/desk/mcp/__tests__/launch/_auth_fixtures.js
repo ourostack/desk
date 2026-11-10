@@ -126,6 +126,17 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
         }
       }
     }
+    // The editing host of a plain control is the control itself; read-back runs the page function on its value.
+    handle.evaluateHandle = async () => {
+      calls.push(["evaluateHandle", id])
+      return { asElement: () => handle, dispose: async () => { calls.push(["disposeHost", id]) } }
+    }
+    handle.evaluate = async (fn, arg) => {
+      calls.push(["evaluate", id])
+      const table = packet.documents[0].nodes
+      const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
+      return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
+    }
     handles.set(id, handle)
   }
   const frame = {
