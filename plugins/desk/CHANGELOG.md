@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.84 — 2026-11-10
+
+### Fixed
+
+- In `mine`, a `goto`, `reload`, `go-back` or `go-forward` whose page is still loading too fast to read now reports `navigated: true` with advice to `wait` for text, instead of refusing a navigation that already happened.
+
+### Fixed
+
+- In `mine`, refs from the last three reads of a tab stay usable. An agent that finds a field, reads again or waits for text, then acts on the field no longer has its ref refused; a `wait` counts as one read however often it looks. Every action still re-resolves its ref against the page as it is now, so an older ref acts only on its own unchanged node, and anything older than three reads is refused with advice to snapshot again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.83 — 2026-11-10
 
 `task_update` and `desk_save` now support opt-in, published repository purpose policies. Calls declare whether their new payload is project context, preserved source, or current product authority; wrong-home current product contracts, tools, and run artifacts are refused before mutation. Mixed payloads require complete byte coverage, without filename or extension bans, and preserved history does not become an execution lease.
