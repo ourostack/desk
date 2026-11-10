@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
 import { mkTempRoot } from "../_temp_roots.js"
-import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, PASSWORD, FRAME_TEXT, FALLBACK_TEXT } from "./_auth_fixtures.js"
+import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
 const auth = require("../../../../../plugins/desk/mcp/web-auth.cjs")
@@ -223,10 +223,49 @@ test("a child frame's document, fallback and controls are omitted from the main-
   const prepared = auth.prepare(packet, auth.inspect(inspectedDOM(packet).root), "main", () => ++next)
   const text = JSON.stringify(prepared.tree)
   assert.ok(text.includes("Main product title"))
-  for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, PASSWORD]) assert.equal(text.includes(hidden), false)
+  for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED]) assert.equal(text.includes(hidden), false)
   assert.equal(prepared.frames, 1)
   const frame = prepared.tree.children[0].children[0].children.find((node) => node.role === "frame")
   assert.deepEqual(frame.children, [])
+})
+
+test("what may have been typed in a child frame is scrubbed where the main document copies it; frame page text is not", () => {
+  for (const typed of [FRAME_TYPED, FRAME_EDITED]) {
+    const text = JSON.stringify(sanitize(framedSnapshot({ echo: "Sending " + typed })))
+    assert.equal(text.includes(typed), false)
+    assert.ok(text.includes("Main product title Sending [redacted]"))
+  }
+  const page = JSON.stringify(sanitize(framedSnapshot({ echo: FRAME_TEXT })))
+  assert.ok(page.includes(FRAME_TEXT), "read-only frame text is page text, not a secret")
+  const controls = framedSnapshot({ echo: "Draft CHILD_TEXTAREA_688 for USB" })
+  const child = controls.documents[1].nodes
+  const s = (text) => controls.strings.push(text) - 1
+  child.parentIndex.push(2, 2)
+  child.nodeType.push(1, 1)
+  child.nodeName.push(s("TEXTAREA"), s("INPUT"))
+  child.nodeValue.push(-1, -1)
+  child.backendNodeId.push(208, 209)
+  child.attributes.push([], [s("type"), s("hidden")])
+  child.textValue = { index: [child.nodeType.length - 2], value: [s("CHILD_TEXTAREA_688")] }
+  child.inputValue.index.push(child.nodeType.length - 1)
+  child.inputValue.value.push(s("US"))
+  const drafted = JSON.stringify(sanitize(controls))
+  assert.equal(drafted.includes("CHILD_TEXTAREA_688"), false, "a frame's textarea value is scrubbed")
+  assert.ok(drafted.includes("for USB"), "a frame's hidden code is page content")
+  for (const mutate of [
+    (p) => { p.documents[1].nodes = undefined },
+    (p) => { p.documents[1].nodes.nodeValue.pop() },
+    (p) => { p.documents[1].nodes.parentIndex[2] = 5 },
+  ]) {
+    const packet = framedSnapshot()
+    const scope = auth.inspect(inspectedDOM(packet).root)
+    mutate(packet)
+    assert.throws(() => auth.prepare(packet, scope, "main", () => 1), /AUTH_FRAME_COVERAGE_REFUSED/u)
+  }
+  const large = framedSnapshot()
+  const scope = auth.inspect(inspectedDOM(large).root)
+  large.documents[1].nodes.nodeType = new Array(100001).fill(1)
+  assert.throws(() => auth.prepare(large, scope, "main", () => 1), /AUTH_OUTPUT_TOO_LARGE/u)
 })
 
 test("only frame owners may own child documents, and the main document must come first", () => {
@@ -943,7 +982,7 @@ test("a page with child frames is read from its main document and its saved arti
     assert.ok(result.text.includes("Main product title"))
     assert.match(result.text, /^ *- frame/mu)
     const artifact = fs.readFileSync(result.artifact, "utf8")
-    for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, PASSWORD]) {
+    for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED]) {
       assert.equal(JSON.stringify(result).includes(hidden), false)
       assert.equal(artifact.includes(hidden), false)
     }
@@ -1081,26 +1120,20 @@ test("checkbox markup values and whitespace never become redaction secrets; type
   assert.equal(JSON.stringify(sanitize(radio)).includes("Echo on"), false, "an input without a type is a text field")
 })
 
-test("hidden and button input values from markup never become redaction secrets; script-set ones still do", () => {
+test("short hidden and button input values are page codes; longer ones may copy a typed value and stay secrets", () => {
+  const page = (type, value, spanValue) => {
+    const packet = labelledPage({ checkbox: value, spanValue })
+    packet.documents[0].nodes.attributes[6] = [packet.strings.indexOf("type"), packet.strings.push(type) - 1]
+    return JSON.stringify(sanitize(packet))
+  }
   for (const type of ["hidden", "submit", "button", "reset", "image", "HIDDEN"]) {
-    const page = labelledPage({ checkbox: "US", spanValue: "USB Bluetooth" })
-    const table = page.documents[0].nodes
-    table.attributes[6] = [page.strings.indexOf("type"), page.strings.push(type) - 1, page.strings.indexOf("value"), page.strings.indexOf("US")]
-    assert.ok(JSON.stringify(sanitize(page)).includes("USB Bluetooth"), type + " markup is not typed")
-    page.strings.push("SET")
-    table.inputValue.value[1] = page.strings.length - 1
-    page.strings[page.strings.indexOf("USB Bluetooth")] = "SET by script"
-    assert.equal(JSON.stringify(sanitize(page)).includes("SET"), false, type + " value differing from its markup is protected")
-    table.attributes[6] = table.attributes[6].slice(0, 2)
-    assert.equal(JSON.stringify(sanitize(page)).includes("SET"), false, type + " value set without markup is protected")
+    assert.ok(page(type, "US", "USB Bluetooth 5.0").includes("USB Bluetooth 5.0"), type + " codes are page content")
+    assert.equal(page(type, "+15551234567", "Code sent to +15551234567").includes("+1555"), false, type + " copies of typed values stay secret")
   }
   for (const type of ["text", "number", "email", "search"]) {
-    const page = labelledPage({ checkbox: "US", spanValue: "USB Bluetooth" })
-    page.documents[0].nodes.attributes[6] = [page.strings.indexOf("type"), page.strings.push(type) - 1, page.strings.indexOf("value"), page.strings.indexOf("US")]
-    assert.equal(JSON.stringify(sanitize(page)).includes("USB"), false, type + " fields stay protected even when equal to markup")
+    assert.equal(page(type, "US", "USB Bluetooth").includes("USB"), false, type + " fields stay protected however short")
   }
 })
-
 // <div style="display:none">US</div><span>USB Bluetooth Dongle</span>: hidden nodes have no layout row, so no computed style.
 function hiddenTextPage(divAttributes = []) {
   const packet = nativeSnapshot()
