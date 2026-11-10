@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { task_update } from "../../../../plugins/desk/mcp/src/tools/task.js"
 import { desk_save } from "../../../../plugins/desk/mcp/src/tools/desk-save.js"
+import { admitContent, assertCleanContentTarget, assertPublishedContentBase } from "../../../../plugins/desk/mcp/src/desk/content-home.js"
 
 const POLICY = {
   schema_version: 1,
@@ -340,4 +341,178 @@ test("opted-in tidy preserves frozen card bytes and unrelated staged source", as
   assert.equal(git(root, ["ls-files", "--stage", "--", "held-original.json"]), held)
   assert.equal(git(root, ["status", "--porcelain", "--", "held-original.json"]), "A  held-original.json")
   assert.deepEqual(git(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).split("\n").sort(), [cardPath, "track/renamed/task.md"].sort())
+})
+
+test("policy discovery preserves legacy non-Git desks but refuses an unpublished local policy", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-content-home-unpublished-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const request = { deskRoot: root, tool: "desk_save", subjects: [] }
+  assert.equal(admitContent(request), null)
+  assertPublishedContentBase(root, null, "desk_save")
+  assertCleanContentTarget(root, "original.md", null, "desk_save")
+  await fs.mkdir(path.join(root, ".desk"))
+  await fs.writeFile(path.join(root, ".desk/content-home.json"), JSON.stringify(POLICY))
+  assert.throws(() => admitContent(request), /content_home_policy_unpublished/u)
+  assert.throws(() => assertPublishedContentBase(root, { policy_commit: "missing" }, "desk_save"), /content_home_unpublished_base/u)
+  assert.throws(() => assertCleanContentTarget(root, "original.md", {}, "desk_save"), /content_home_dirty_target/u)
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, ".desk/content-home.json"), "utf8")), POLICY)
+})
+
+test("missing upstream cannot make a tracked or local policy disappear", async (t) => {
+  const root = await fixture(t)
+  git(root, ["config", "--unset", "branch.main.remote"])
+  await fs.unlink(path.join(root, ".desk/content-home.json"))
+  const before = await snapshot(root)
+  assert.throws(() => admitContent({ deskRoot: root, tool: "task_update", subjects: [] }), /content_home_policy_unpublished/u)
+  assert.deepEqual(await snapshot(root), before)
+})
+
+test("unpublished opt-in and declarations without published policy refuse before writing", async (t) => {
+  const root = await fixture(t, null)
+  await assert.rejects(update(root, { note: "Context.", content_home: context() }), /content_home_policy_unpublished/u)
+  await fs.mkdir(path.join(root, ".desk"))
+  await fs.writeFile(path.join(root, ".desk/content-home.json"), JSON.stringify(POLICY))
+  const before = await snapshot(root)
+  await assert.rejects(update(root, { note: "Context.", content_home: context() }), /content_home_policy_unpublished/u)
+  assert.deepEqual(await snapshot(root), before)
+})
+
+test("a policy with unreadable published tree or blob refuses instead of falling back", async (t) => {
+  for (const object of ["HEAD^{tree}", "HEAD:.desk/content-home.json"]) {
+    const root = await fixture(t)
+    const oid = git(root, ["rev-parse", object])
+    await fs.unlink(path.join(root, ".git/objects", oid.slice(0, 2), oid.slice(2)))
+    assert.throws(() => admitContent({ deskRoot: root, tool: "task_update", declaration: context(), subjects: [] }), /content_home_policy_invalid/u)
+    assert.equal(await fs.readFile(path.join(root, cardPath), "utf8"), CARD)
+  }
+})
+
+test("malformed JSON and every invalid policy field refuse before mutation", async (t) => {
+  const root = await fixture(t)
+  const invalid = [
+    "not-json", "null", JSON.stringify([]),
+    ...[
+      { schema_version: 2 }, { mode: "other" }, { repository: null }, { repository: "not-a-repository" },
+      { context_purposes: null }, { context_purposes: [] }, { context_purposes: [null] },
+      { context_purposes: [" "] }, { context_purposes: ["mixed"] }, { context_purposes: ["unknown"] },
+      { product_purposes: [] }, { product_purposes: ["coordination"] },
+    ].map((patch) => JSON.stringify({ ...POLICY, ...patch })),
+  ]
+  for (const bytes of invalid) {
+    await fs.writeFile(path.join(root, ".desk/content-home.json"), bytes)
+    git(root, ["add", ".desk/content-home.json"])
+    git(root, ["commit", "-qm", "Published invalid policy fixture"])
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+    const before = await snapshot(root)
+    await assert.rejects(update(root, { note: "Context.", content_home: context() }), /content_home_policy_invalid/u)
+    assert.deepEqual(await snapshot(root), before)
+  }
+})
+
+test("invalid declarations, historical product leases, and missing canonical owners refuse without mutation", async (t) => {
+  const root = await fixture(t)
+  const before = await snapshot(root)
+  for (const declaration of [
+    null, [], "coordination", {},
+    { purpose: "coordination", lifecycle: "unknown" },
+    { ...context(), sections: [] },
+    { purpose: "product-contract", lifecycle: "historical", product_repository: "sample/product" },
+    { purpose: "product-contract", lifecycle: "current" },
+    { purpose: "product-contract", lifecycle: "current", product_repository: "invalid" },
+  ]) {
+    await assert.rejects(update(root, { note: "Unresolved source.", content_home: declaration }), /content_home_unresolved/u)
+    assert.deepEqual(await snapshot(root), before)
+  }
+})
+
+test("current product authority is accepted only in its declared owning repository", async (t) => {
+  const root = await fixture(t)
+  const result = await update(root, { note: "Owned product contract.", content_home: { ...product(), product_repository: "SAMPLE/CONTEXT" } })
+  assert.equal(result.status, "updated")
+  assert.equal(result.content_admission.subjects.note.sha256, digest("Owned product contract."))
+})
+
+test("malformed mixed declarations and incomplete subject coverage preserve the complete card", async (t) => {
+  const root = await fixture(t)
+  const before = await snapshot(root)
+  const section = { subject: "note", ...context() }
+  for (const sections of [
+    undefined, [], {}, [null], [[]], [{ ...section, subject: "absent" }],
+    [{ ...section, misspelled: true }],
+    [{ ...section, start: 0, end: 0 }],
+    [{ ...section, start: -1, end: 5 }],
+    [{ ...section, start: 0.5, end: 5 }],
+    [{ ...section, start: 0, end: "5" }],
+    [{ ...section, start: 0, end: -1 }],
+    [{ ...section, start: 0, end: 6 }],
+    [section, section],
+  ]) {
+    await assert.rejects(update(root, { note: "abcde", content_home: { purpose: "mixed", sections } }), /content_home_unresolved/u)
+    assert.deepEqual(await snapshot(root), before)
+  }
+  await assert.rejects(update(root, {
+    note: "abcde", body_append: "Unclassified subject.",
+    content_home: { purpose: "mixed", sections: [section] },
+  }), /content_home_unresolved/u)
+  assert.deepEqual(await snapshot(root), before)
+})
+
+test("mixed receipts bind exact UTF-8 and binary bytes, including an empty preserved original", async (t) => {
+  const root = await fixture(t)
+  const receipt = admitContent({
+    deskRoot: root, tool: "desk_save",
+    declaration: {
+      purpose: "mixed", sections: [
+        { subject: "unicode", ...context("source-context", "historical") },
+        { subject: "binary", start: 0, end: 2, ...context("historical-evidence", "historical") },
+        { subject: "empty", start: 0, end: 0, ...context("historical-evidence", "historical") },
+      ],
+    },
+    subjects: [
+      { id: "unicode", content: "\u00e9" },
+      { id: "binary", content: Buffer.from([0, 255]) },
+      { id: "empty", content: "" },
+    ],
+  })
+  assert.deepEqual(receipt.subjects, {
+    unicode: { sha256: digest(Buffer.from([195, 169])), bytes: 2 },
+    binary: { sha256: digest(Buffer.from([0, 255])), bytes: 2 },
+    empty: { sha256: digest(""), bytes: 0 },
+  })
+})
+
+test("desk_save classifies a supplied file once when it is also named in paths", async (t) => {
+  const root = await fixture(t)
+  const result = await save(root, {
+    files: [{ path: "context.md", content: "Project context." }], paths: ["context.md"], content_home: context(),
+  })
+  assert.equal(result.status, "committed")
+  assert.deepEqual(Object.keys(result.content_admission.subjects), ["files/0/content"])
+  assert.equal(await fs.readFile(path.join(root, "context.md"), "utf8"), "Project context.")
+})
+
+test("desk_save refuses directories and paths through outside junctions before staging", async (t) => {
+  const root = await fixture(t)
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-content-home-outside-"))
+  t.after(() => fs.rm(outside, { recursive: true, force: true }))
+  await fs.writeFile(path.join(outside, "original.log"), "Unique external evidence.")
+  await fs.mkdir(path.join(root, "directory"))
+  await fs.symlink(outside, path.join(root, "escape"), "junction")
+  const before = await snapshot(root)
+  for (const selected of ["directory", "escape/original.log"]) {
+    await assert.rejects(save(root, { paths: [selected], content_home: context("historical-evidence", "historical") }), /content_home_unresolved/u)
+    assert.deepEqual(await snapshot(root), before)
+  }
+  assert.equal(await fs.readFile(path.join(outside, "original.log"), "utf8"), "Unique external evidence.")
+})
+
+test("desk_save hashes the preserved link itself, not the target's bytes", { skip: process.platform === "win32" && "File symlinks require Windows developer privileges; directory-junction refusal is tested separately" }, async (t) => {
+  const root = await fixture(t)
+  await fs.writeFile(path.join(root, "original.log"), "Unique original evidence.")
+  await fs.symlink("original.log", path.join(root, "original-link"))
+  const result = await save(root, { paths: ["original-link"], content_home: context("historical-evidence", "historical") })
+  assert.equal(result.status, "committed")
+  assert.deepEqual(result.content_admission.subjects["paths/0"], { sha256: digest("original.log"), bytes: 12 })
+  assert.equal(await fs.readlink(path.join(root, "original-link")), "original.log")
+  assert.equal(git(root, ["show", "HEAD:original-link"]), "original.log")
 })
