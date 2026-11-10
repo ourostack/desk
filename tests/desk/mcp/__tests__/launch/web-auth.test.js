@@ -1801,12 +1801,14 @@ test("past the budget, controls and named lines stay, then text in page order, a
   assert.ok(left > 1000)
   assert.ok(text.includes("Message 0 "), "page order keeps the start")
   assert.ok(text.includes("textbox [ref=e9] \"Type a message\""), "a control at the end still shows")
+  assert.ok(text.length > auth.TEXT_BUDGET * 0.9, "the budget is used")
   assert.match(text, /\u2026 \d+ lines left out/u)
   // Controls spread down the whole page leave a marker between almost every pair of kept lines; those count too.
   const nest = (depth, inner) => depth ? g(`n${depth}-${inner.ref}`, [inner, g(`m${depth}-${inner.ref}`, [t("x")])]) : inner
   const items = Array.from({ length: 3000 }, (_, i) => nest(12, g(`e${i + 5000}`, [g(`w${i}`, [t(`Message ${i}`)]), { role: "button", ref: `b${i}`, name: "More", children: [] }])))
   const spread = auth.renderText({ role: "document", children: items })
-  assert.ok(spread.text.length <= auth.TEXT_BUDGET, String(spread.text.length))
+  assert.ok(spread.text.length <= auth.TEXT_BUDGET && spread.text.length > auth.TEXT_BUDGET * 0.9, String(spread.text.length))
+  assert.ok((spread.text.match(/Message \d+/gu) || []).length > 50, "named buttons do not crowd out the text")
   assert.ok(spread.left > 0 && spread.text.includes("\u2026"))
   const long = auth.renderText({ role: "document", children: [t("y".repeat(50000))] })
   assert.ok(long.text.length < 4100 && long.text.includes("\u2026"), "one long text is cut short")

@@ -481,7 +481,7 @@ function renderText(node, view) {
     var plain = (n.role === "generic" && !n.name && n.text === undefined) || n.role === "text";
     var ref = n.ref || (plain ? carried : undefined);
     if (n.role === "text" && ref) {
-      entries.push({ depth: depth, parent: parent, ref: true, key: false, words: n.text, line: "- generic [ref=" + ref + "]: " + quote(n.text) });
+      entries.push({ depth: depth, parent: parent, ref: true, key: false, field: false, words: n.text, line: "- generic [ref=" + ref + "]: " + quote(n.text) });
       return;
     }
     if (n.role === "generic" && plain) {
@@ -495,6 +495,7 @@ function renderText(node, view) {
     if (n.text !== undefined) line += ": " + quote(n.text);
     var index = entries.length;
     entries.push({ depth: depth, parent: parent, ref: Boolean(ref), key: Boolean(n.name) || ["generic", "text"].indexOf(n.role) === -1,
+      field: ["textbox", "combobox", "heading"].indexOf(n.role) !== -1,
       words: [n.name, n.text].filter(function (value) { return typeof value === "string"; }).join(" "), line: line });
     children.forEach(function (child) { walk(child, depth + 1, index); });
   })(node, 0, -1);
@@ -511,16 +512,19 @@ function renderText(node, view) {
   if (view && view.interactive) entries.forEach(function (entry, index) { keep[index] = entry.ref || entry.key; });
   var full = entries.reduce(function (sum, entry) { return sum + entry.depth * 2 + entry.line.length + 1 + Math.max(0, entry.words.length - LINE_CHARS); }, 0);
   var size = function (entry) { return entry.depth * 2 + entry.line.length + 1; };
-  // Choose lines for a budget: named and non-generic lines first, then the rest in page order.
+  // Choose lines for a budget: fields and headings first, other named lines up to half of it, then the rest in page
+  // order, so a page full of named buttons still shows its text.
   function choose(budget) {
     var used = 0;
-    var shown = entries.map(function (entry, index) {
-      if (keep[index] && entry.key && used + size(entry) <= budget) { used += size(entry); return true; }
-      return false;
-    });
-    entries.forEach(function (entry, index) {
-      if (keep[index] && !shown[index] && used + size(entry) <= budget) { used += size(entry); shown[index] = true; }
-    });
+    var shown = entries.map(function () { return false; });
+    function take(test, limit) {
+      entries.forEach(function (entry, index) {
+        if (keep[index] && !shown[index] && test(entry) && used + size(entry) <= limit) { used += size(entry); shown[index] = true; }
+      });
+    }
+    take(function (entry) { return entry.field; }, budget);
+    take(function (entry) { return entry.key; }, budget / 2);
+    take(function () { return true; }, budget);
     return shown;
   }
   function print(shown) {
@@ -537,11 +541,17 @@ function renderText(node, view) {
     if (gap) lines.push("- \u2026 " + gap + " lines left out");
     return { text: lines.join("\n"), left: left };
   }
-  // The markers for what was left out cost room too, so the choice narrows until the whole reply fits.
+  // The markers for what was left out cost room too: the largest choice whose whole print fits is found by halving.
   var printed = print(keep);
-  for (var budget = TEXT_BUDGET; printed.text.length > TEXT_BUDGET;) {
-    printed = print(choose(Math.max(0, budget)));
-    budget -= printed.text.length - TEXT_BUDGET;
+  if (printed.text.length > TEXT_BUDGET) {
+    var low = 0;
+    var high = TEXT_BUDGET;
+    printed = print(choose(0));
+    while (high - low > 64) {
+      var middle = Math.floor((low + high) / 2);
+      var tried = print(choose(middle));
+      if (tried.text.length <= TEXT_BUDGET) { low = middle; printed = tried; } else high = middle;
+    }
   }
   return { text: printed.text, left: printed.left, matches: matches, full: full };
 }
