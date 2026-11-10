@@ -1298,3 +1298,97 @@ test("a coverage refusal from a document that changed between the two native rea
     await assert.rejects(unchanged.call(["snapshot"]), /AUTH_NATIVE_DATA_INVALID/u, "an unchanged document keeps its coverage verdict")
   } finally { await unchanged.close() }
 })
+
+// Teams web: the page removes a <script> from <head> between DOM.getDocument and DOMSnapshot.captureSnapshot,
+// and its mutation event reaches the reader only with the next native response.
+function lateRemovalDriver({ emits = true } = {}) {
+  const native = fakeDriver()
+  const send = native.cdp.send
+  let documents = 0
+  let pending = false
+  native.cdp.send = async (method, params) => {
+    if (pending && method !== "DOMSnapshot.captureSnapshot") { pending = false; if (emits) native.cdp.emit("DOM.childNodeRemoved", {}) }
+    const result = await send(method, params)
+    if (method === "DOM.getDocument" && ++documents === 1) {
+      result.root.children[0].children.unshift({ nodeId: 900, backendNodeId: 900, nodeType: 1, nodeName: "SCRIPT", localName: "script", nodeValue: "", attributes: [], children: [] })
+      pending = true
+    }
+    return result
+  }
+  return native
+}
+
+test("a node removed between the two native reads is a stale pair once its late mutation event arrives, never a coverage verdict", async () => {
+  const root = await mkTempRoot("auth-late-removal-")
+  const once = adapterFor(lateRemovalDriver(), root)
+  try { await assert.rejects(once.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u) } finally { await once.close() }
+  const native = lateRemovalDriver()
+  const settles = auth.create(native.context, root, 5000, () => {})
+  try { assert.match((await settles.call(["snapshot"])).text, /Password/u) } finally { await settles.close() }
+})
+
+test("a coverage mismatch with no mutation behind it is still refused as coverage", async () => {
+  const root = await mkTempRoot("auth-late-removal-none-")
+  const native = lateRemovalDriver({ emits: false })
+  const adapter = auth.create(native.context, root, 5000, () => {})
+  try { await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u) } finally { await adapter.close() }
+})
+
+test("a failed round trip before the coverage verdict keeps the coverage refusal", async () => {
+  const root = await mkTempRoot("auth-late-removal-flush-")
+  const native = lateRemovalDriver({ emits: false })
+  const send = native.cdp.send
+  native.cdp.send = async (method, params) => {
+    if (method === "DOM.getDocument" && params && params.depth === 0) throw new Error("flush unavailable")
+    return send(method, params)
+  }
+  const adapter = adapterFor(native, root)
+  try { await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u) } finally { await adapter.close() }
+})
+
+test("a control that appears before the protection re-read is a stale pair once its late event arrives", async () => {
+  const root = await mkTempRoot("auth-late-insert-")
+  for (const [emits, expected] of [[true, /AUTH_SNAPSHOT_INVALIDATED/u], [false, /AUTH_CONTROL_COVERAGE_REFUSED/u]]) {
+    const native = fakeDriver()
+    const send = native.cdp.send
+    let snapshots = 0
+    let pending = false
+    native.cdp.send = async (method, params) => {
+      if (pending && method !== "DOMSnapshot.captureSnapshot") { pending = false; if (emits) native.cdp.emit("DOM.childNodeInserted", {}) }
+      const result = await send(method, params)
+      if (method === "DOMSnapshot.captureSnapshot" && ++snapshots === 2) {
+        const table = result.documents[0].nodes
+        table.parentIndex.push(2); table.nodeType.push(1); table.nodeName.push(table.nodeName[3]); table.nodeValue.push(-1)
+        table.backendNodeId.push(905); table.attributes.push([])
+        result.strings.push(""); table.inputValue.index.push(table.nodeType.length - 1); table.inputValue.value.push(result.strings.length - 1)
+        pending = true
+      }
+      return result
+    }
+    const adapter = adapterFor(native, root)
+    try { await assert.rejects(adapter.call(["snapshot"]), expected) } finally { await adapter.close() }
+  }
+})
+
+test("after the round trip resets native node bindings, refs from an earlier snapshot are refused instead of acting unseen", async () => {
+  const root = await mkTempRoot("auth-flush-refs-")
+  const native = fakeDriver()
+  const send = native.cdp.send
+  let documents = 0
+  native.cdp.send = async (method, params) => {
+    const result = await send(method, params)
+    // The second snapshot's scope has a node its packet lacks, and no change event ever explains it.
+    if (method === "DOM.getDocument" && params && params.depth === -1 && ++documents === 4) {
+      result.root.children[0].children.unshift({ nodeId: 900, backendNodeId: 900, nodeType: 1, nodeName: "SCRIPT", localName: "script", nodeValue: "", attributes: [], children: [] })
+    }
+    return result
+  }
+  const adapter = adapterFor(native, root)
+  try {
+    const first = await adapter.call(["snapshot"])
+    const ref = first.text.match(/\[ref=(\w+)\]/u)[1]
+    await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u)
+    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    assert.equal(native.calls.some((call) => call[0] === "click"), false, "nothing is clicked")
+  } finally { await adapter.close() }
+})
