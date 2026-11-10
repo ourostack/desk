@@ -454,7 +454,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
     const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
-    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null })
+    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null, publication: outcome.publication ?? null })
     if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
     if (outcome.state !== "failed" && outcome.skipped.length === 0) continue
     return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: outcome.state === "failed" ? outcome.reason : "conflict", paths: outcome.skipped.flatMap((skip) => skip.paths), error: outcome.error ?? null })
@@ -651,6 +651,12 @@ export function deskPushNote({ root, env = process.env, spawnGit = spawnSync, no
     // A stale record with nothing actually left local says nothing: the next push clears it.
     if (left === 0) return { desk_note: note }
     const why = blockedWords(recorded.reason, Array.isArray(recorded.paths) ? recorded.paths : [])
+    if (recorded.reason === "publication_blocked") return {
+      desk_note: `Desk committed this locally, but it has not merged into the shared upstream. ${recorded.error ?? why}`,
+      desk_unpushed: left,
+      desk_push_blocked: recorded.reason,
+      desk_publication: recorded.publication ?? null,
+    }
     return {
       desk_note: `Desk committed this, but it is NOT on the remote yet: the last push failed because ${why}, so ${left} local Desk commit(s) are only on this machine. Desk retries with every write and at session start; until desk_status shows sync not blocked, say this is saved locally, not pushed, and run no git for it.`,
       desk_unpushed: left,

@@ -78,6 +78,24 @@ tools/unused-code/                # knip config for the Unused code check
 
 All code has a purpose, so CI fails a pull request that leaves unused code behind. Run `cd tools/unused-code && npm ci && npm run knip` to find unused files, exports, dependencies and duplicate exports before you push; [`tools/unused-code/knip.jsonc`](tools/unused-code/knip.jsonc) lists the entry points and gives the reason for every exception, and the CI job is named "Unused code".
 
+## Publish workspace saves through pull requests
+
+A workspace can require Desk save/sync to publish through a branch, a pull request, and CI instead of pushing its upstream branch. Add this policy at the repository root through the repository's normal contribution path:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "pull-request",
+  "required_checks": ["your-workspace-policy-check"]
+}
+```
+
+Save it as `.desk/publication.json`, using the actual check names that must succeed on every publication. The policy must reach the upstream before it takes effect. Desk reads that fetched version, not an outgoing edit or a dirty working copy, even when your desk is a repository subdirectory.
+
+With the policy enabled, Desk pushes the exact captured or replayed commit only to `desk/publish/<commit>`, creates or reuses its PR, and waits up to five minutes for all named checks and other reported checks. Missing checks never count as green. Only a successful exact-head GitHub PR merge, fetched and verified against the actual upstream, counts as delivered. A changed, closed, or draft PR is not merged. The GitHub CLI must already have access to the upstream repository; non-GitHub publication needs a provider integration and fails rather than falling back to a direct push.
+
+If publication is blocked, the save stays local or on its contribution branch, not merged into the shared upstream. `desk_status` and the next save note expose the PR receipt, cause, and exact retry command. Fix the named check or prerequisite before retrying. This is a contract of the updated Desk worker, not a substitute for server-side branch protection: older workers, other clients, and API writers require separate enforcement and adoption.
+
 ## Releasing
 
 <details>

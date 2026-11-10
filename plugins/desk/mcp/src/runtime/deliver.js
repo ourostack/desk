@@ -25,6 +25,7 @@ import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
+import { publicationPolicy, publicationRecovery, publishPullRequest } from "./pr-publication.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const NETWORK_TIMEOUT_MS = 60_000
@@ -66,7 +67,7 @@ export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = f
 }
 
 /** The host's state rather than a Desk defect: these are reported, never filed as Desk problems. */
-export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline"])
+export const NOT_A_DESK_DEFECT = new Set(["unreachable", "auth_failed", "deadline", "publication_blocked"])
 
 const BLOCKED_WORDS = {
   auth_failed: "the remote refused this machine's credentials",
@@ -75,6 +76,7 @@ const BLOCKED_WORDS = {
   conflict: "a conflict Desk could not resolve on its own",
   push_rejected: "the remote kept rejecting the push",
   unpushed_at_session_end: "a session ended before its push finished",
+  publication_blocked: "the workspace publication PR has not passed and merged",
 }
 
 /** Plain words for why a push is blocked, from the reason the push worker recorded. */
@@ -281,7 +283,7 @@ function failure(result, reason) {
  * local commits now on the remote (as themselves or as a resolved copy), `skipped` the ones with a conflict Desk could not
  * resolve (`{ commit, paths }`), and `checkout` whether the shared checkout now matches the remote (see `catchUp`).
  */
-export function deliver({ root, env = process.env, spawnGit = spawnSync, delivered = [] }) {
+export function deliver({ root, env = process.env, spawnGit = spawnSync, delivered = [], publicationClock }) {
   const git = runner(spawnGit, root)
   const upstream = upstreamOf(git)
   if (upstream === null) return { state: "failed", reason: "no_upstream", error: "", delivered: [], skipped: [] }
@@ -295,15 +297,31 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     const commits = undeliveredCommits({ root, spawnGit, delivered, head })
     const onto = git(["rev-parse", upstream.tracking]).stdout.trim()
     if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: catchUp({ git, upstream, head, target: onto }) }
+    let policy
+    try { policy = publicationPolicy(git, onto) } catch (error) {
+      return { state: "failed", reason: "publication_blocked", error: `${error.message}. Fix: repair .desk/publication.json through a PR, then run ${publicationRecovery(root)}`, delivered: [], skipped: [] }
+    }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0
     const built = fastForward ? { head, replayed: commits, skipped: [] } : replay({ git, spawnGit, paths, onto, commits, prefix })
     if (built.error !== undefined) return { state: "failed", reason: "replay_failed", error: built.error.trim(), delivered: [], skipped: [] }
-    const pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
+    let pushed, publication, target = built.head
+    if (policy !== null && built.head !== onto) {
+      try {
+        const published = publishPullRequest({ git, spawnGit, root, upstream, head: built.head, onto, policy, clock: publicationClock })
+        target = published.head
+        publication = published.receipt
+        pushed = { status: 0 }
+      } catch (error) {
+        if (!fastForward) removeWorktree(git, paths)
+        const recovery = error.message.includes("Fix:") ? "" : `. Fix: run ${publicationRecovery(root)}`
+        return { state: "failed", reason: "publication_blocked", error: error.message + recovery, publication: error.publication ?? null, delivered: [], skipped: [] }
+      }
+    } else pushed = built.head === onto ? { status: 0 } : git(["push", "--quiet", upstream.remote, `${built.head}:${upstream.merge}`], NETWORK_TIMEOUT_MS)
     if (!fastForward) removeWorktree(git, paths)
     if (pushed.status === 0) {
-      git(["update-ref", upstream.tracking, built.head])
-      const checkout = built.skipped.length === 0 ? catchUp({ git, upstream, head, target: built.head }) : { state: "behind", reason: "skipped_commits" }
-      return { state: "delivered", delivered: built.replayed, skipped: built.skipped, checkout }
+      git(["update-ref", upstream.tracking, target])
+      const checkout = built.skipped.length === 0 ? catchUp({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }
+      return { state: "delivered", delivered: built.replayed, skipped: built.skipped, checkout, ...(publication ? { publication } : {}) }
     }
     // Rejected because the remote moved on while this ran: fetch and replay again, a bounded number of times.
     const failed = failure(pushed, "push_rejected")
@@ -367,4 +385,3 @@ function catchUp({ git, upstream, head, target }) {
   git(["read-tree", "-m", "-u", target, "HEAD"], CHECKOUT_TIMEOUT_MS)
   return { state: "behind", reason: "moved" }
 }
-

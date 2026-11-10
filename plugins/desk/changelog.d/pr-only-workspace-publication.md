@@ -1,0 +1,3 @@
+### Fixed
+
+- Workspaces can require branch → pull request → CI publication through a published `.desk/publication.json` policy. Desk save/sync pushes only the immutable captured or replayed candidate to a contribution branch, waits for the named checks and other reported checks, and advances the shared upstream only through GitHub's exact-head PR merge API. Missing, failing, stale, or draft PRs fail closed, retaining local work and an actionable recovery receipt in save notes and sync status. Policy is read from the fetched upstream, including when a member's desk is a repository subdirectory, not from outgoing or uncommitted policy edits.
