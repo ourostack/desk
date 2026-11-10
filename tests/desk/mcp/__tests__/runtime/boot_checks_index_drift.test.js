@@ -35,6 +35,13 @@ function fixture(t) {
   return { repo, env, git }
 }
 
+// Real staging data with neither wall-clock race: the snapshot's own spawn timeout (the registry's remaining budget)
+// can kill a slow Windows `git diff --cached`, and the registry's 300 ms budget can skip the after-snapshot.
+function untimedGit(t, env) {
+  t.mock.method(performance, "now", () => 0)
+  return (command, args) => ({ status: 0, stdout: execFileSync(command, args, { env, encoding: "utf8" }), stderr: "" })
+}
+
 test("a check that stages a file mid-run produces a Desk problem: index-drift block, without accusing the check of it", async (t) => {
   t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
@@ -63,13 +70,12 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
 // ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
 
 test("an index-drift block queues the detached filer, never awaiting it, and reports filing in background", async (t) => {
-  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
-  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   const launched = []
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
     ...quiet,
+    spawnGit: untimedGit(t, env),
     host: "claude",
     env,
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
@@ -86,12 +92,11 @@ test("an index-drift block queues the detached filer, never awaiting it, and rep
 })
 
 test("an index-drift block still renders, with 'not filed', when the launcher itself fails to start", async (t) => {
-  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
-  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
   const line = await runBootChecks({
     ...quiet,
+    spawnGit: untimedGit(t, env),
     env,
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
     launchRepair: async () => { throw new Error("spawn unavailable") },
@@ -102,7 +107,7 @@ test("an index-drift block still renders, with 'not filed', when the launcher it
 
 test("a check with no index change adds no index-drift block, and the usual line still comes through", async (t) => {
   const { env } = fixture(t)
-  const line = await runBootChecks({ ...quiet, env, checks: [{ id: "quiet-check", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
+  const line = await runBootChecks({ ...quiet, env, spawnGit: untimedGit(t, env), checks: [{ id: "quiet-check", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
   assert.equal(line, "Desk boot pre-checks: fine")
   assert.doesNotMatch(line, /Desk problem/)
 })
@@ -128,13 +133,12 @@ test("a bound desk that resolves but is not itself a Git repository is never wat
 })
 
 test("a check that stages several files mid-run names every one of them, in the plural", async (t) => {
-  // Pin the clock: on a slow Windows runner the real git spawns outlast the 300 ms registry budget and skip the after-snapshot.
-  t.mock.method(performance, "now", () => 0)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray-a.txt"), "a\n")
   writeFileSync(path.join(repo, "stray-b.txt"), "b\n")
   const line = await runBootChecks({
     ...quiet,
+    spawnGit: untimedGit(t, env),
     env,
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray-a.txt", "stray-b.txt"); return {} } }],
   })
