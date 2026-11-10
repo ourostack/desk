@@ -674,6 +674,10 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           same(record.stamp, record.stamp, reader, record.epoch);
           checkRuntime();
           applied = true;
+          // Playwright waits for an element to be enabled before scrolling it into view, but some pages enable a control
+          // only once it has been seen (GitHub's OAuth "Authorize" button), so it would wait forever. Scroll first.
+          await bound.handle.scrollIntoViewIfNeeded({ timeout: timeoutMs });
+          checkRuntime();
           var method = command === "select" ? "selectOption" : command;
           if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
           else await bound.handle[method]({ timeout: timeoutMs });
