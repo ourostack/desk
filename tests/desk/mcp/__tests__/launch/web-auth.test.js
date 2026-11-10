@@ -1812,6 +1812,8 @@ test("past the budget, controls and named lines stay, then text in page order, a
   assert.ok(spread.left > 0 && spread.text.includes("\u2026"))
   const long = auth.renderText({ role: "document", children: [t("y".repeat(50000))] })
   assert.ok(long.text.length < 4100 && long.text.includes("\u2026"), "one long text is cut short")
+  const named = auth.renderText({ role: "document", children: [{ role: "button", ref: "e1", name: "n".repeat(30000), children: [] }] })
+  assert.ok(named.text.length < 4100 && named.text.includes("button [ref=e1]"), "one long name is cut short, not dropped")
 })
 
 test("find and snapshot --interactive narrow a snapshot whose refs stay usable", async () => {

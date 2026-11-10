@@ -491,7 +491,7 @@ function renderText(node, view) {
     }
     var line = "- " + n.role;
     if (ref) line += " [ref=" + ref + "]";
-    if (n.name) line += " " + JSON.stringify(n.name);
+    if (n.name) line += " " + quote(n.name);
     if (n.text !== undefined) line += ": " + quote(n.text);
     var index = entries.length;
     entries.push({ depth: depth, parent: parent, ref: Boolean(ref), key: Boolean(n.name) || ["generic", "text"].indexOf(n.role) === -1,
