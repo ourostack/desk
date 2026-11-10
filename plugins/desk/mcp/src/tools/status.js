@@ -36,7 +36,8 @@ async function syncStatus({ deskRoot, env, signal }) {
     ? { last_pull: recorded.last_pull }
     : {}
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null, ...lastPull }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null,
+      ...(recorded.reason === "publication_blocked" ? { error: recorded.error ?? null, publication: recorded.publication ?? null } : {}), ...lastPull }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
@@ -44,6 +45,7 @@ async function syncStatus({ deskRoot, env, signal }) {
     ahead: counts?.ahead ?? 0,
     behind: counts?.behind ?? 0,
     last_push_at: recorded?.last_push_at ?? null,
+    ...(recorded?.publication ? { publication: recorded.publication } : {}),
     ...lastPull,
   }
 }

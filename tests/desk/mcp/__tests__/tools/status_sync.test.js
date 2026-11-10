@@ -108,6 +108,19 @@ test("desk_status reports how many local commits a blocked push left off the rem
   assert.deepEqual(body.sync, { blocked: true, reason: "auth_failed", paths: [], unpushed: 4 })
 })
 
+test("desk_status exposes checked-publication receipts and missing-receipt recovery truthfully", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  const publication = { url: "https://github.example/example/workspace/pull/42", head: "a".repeat(40) }
+  for (const receipt of [publication, null]) {
+    seedStatus(cloneA, { blocked: true, reason: "publication_blocked", error: receipt ? "Required check failed. Fix: inspect the PR." : null, publication: receipt })
+    const body = await desk_status({ deskRoot: cloneA, env })
+    assert.deepEqual(body.sync.publication, receipt)
+    assert.equal(body.sync.error, receipt ? "Required check failed. Fix: inspect the PR." : null)
+  }
+  seedStatus(cloneA, { blocked: false, publication })
+  assert.deepEqual((await desk_status({ deskRoot: cloneA, env })).sync.publication, publication)
+})
+
 test("desk_status treats a blocked status with no reason, paths or count recorded as blocked: true, reason: null, paths: [], unpushed: null", async () => {
   const { cloneA } = await mkOriginWithClone()
   seedStatus(cloneA, { blocked: true })
@@ -186,4 +199,3 @@ test("the close wait for a desk_status call that never settles ends in an error"
   // Once the call has settled, the next wait for the same run resolves.
   await waitForStatusInspection(run.signal, { callSettleMs: 50 })
 })
-

@@ -60,7 +60,9 @@ import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
+import { redactCredentialLikeText } from "../util/redact.js"
 import { createGitReader } from "./git-read-worker.js"
+import { publicationRecovery } from "./pr-publication.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -454,7 +456,7 @@ function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
     const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
-    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null })
+    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null, publication: outcome.publication ?? null })
     if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
     if (outcome.state !== "failed" && outcome.skipped.length === 0) continue
     return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: outcome.state === "failed" ? outcome.reason : "conflict", paths: outcome.skipped.flatMap((skip) => skip.paths), error: outcome.error ?? null })
@@ -575,14 +577,20 @@ function parseSyncPushArgs(argv) {
  * The detached worker script's whole CLI surface, kept here so it is
  * unit-tested directly rather than through a subprocess — the script itself
  * is one line, the same shape as `file-desk-problem.js`'s own
- * `runFileDeskProblemCli`. `runWorker` is a test seam.
+ * `runFileDeskProblemCli`. Blocked publication throws so the CLI exits
+ * nonzero; busy and intentionally skipped work remain successful no-ops.
+ * `runWorker` is a test seam.
  */
 export async function runSyncPushCli({ argv = process.argv.slice(2), env = process.env, runWorker = runPushWorker } = {}) {
   const options = parseSyncPushArgs(argv)
   const root = options.get("root")
   if (typeof root !== "string" || root === "") throw new Error("sync-push.js: --root <path> is required")
   const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
-  await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
+  const outcome = await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
+  if (outcome?.result === "blocked") {
+    const detail = text(readSyncStatus({ root, env })?.error) ?? outcome.reason
+    throw new Error(redactCredentialLikeText(`Workspace publication blocked; local commits are preserved. ${detail}. Fix: inspect desk_status, resolve the reported cause, then run ${publicationRecovery(root)}`))
+  }
   return 0
 }
 
@@ -651,6 +659,12 @@ export function deskPushNote({ root, env = process.env, spawnGit = spawnSync, no
     // A stale record with nothing actually left local says nothing: the next push clears it.
     if (left === 0) return { desk_note: note }
     const why = blockedWords(recorded.reason, Array.isArray(recorded.paths) ? recorded.paths : [])
+    if (recorded.reason === "publication_blocked") return {
+      desk_note: `Desk committed this locally, but it has not merged into the shared upstream. ${recorded.error ?? why}`,
+      desk_unpushed: left,
+      desk_push_blocked: recorded.reason,
+      desk_publication: recorded.publication ?? null,
+    }
     return {
       desk_note: `Desk committed this, but it is NOT on the remote yet: the last push failed because ${why}, so ${left} local Desk commit(s) are only on this machine. Desk retries with every write and at session start; until desk_status shows sync not blocked, say this is saved locally, not pushed, and run no git for it.`,
       desk_unpushed: left,
