@@ -55,6 +55,7 @@ import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
+import { admitContent, assertCleanContentTarget, assertPublishedContentBase } from "../desk/content-home.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -319,7 +320,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section", "content_home"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -988,6 +989,14 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   ) {
     throw new Error("task_update: `track` and `slug` are required")
   }
+  const contentAdmission = admitContent({
+    deskRoot,
+    tool: "task_update",
+    declaration: values.content_home,
+    subjects: Object.entries(values)
+      .filter(([key, value]) => !["track", "slug", "display_label", "content_home"].includes(key) && value !== undefined)
+      .map(([id, value]) => ({ id, content: typeof value === "string" ? value : JSON.stringify(value) })),
+  })
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
   const givenFrontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
@@ -1043,7 +1052,11 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (!(await pathExists(filePath)) && resource !== undefined) {
     const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
     if (await pathExists(archived)) {
-      return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, search, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush } })
+      assertCleanContentTarget(deskRoot, relPath(deskRoot, archived), contentAdmission, "task_update")
+      const archivedValues = Object.fromEntries(Object.entries(values).filter(([key]) => key !== "content_home"))
+      const result = await recordArchivedDisposition({ deskRoot, file: archived, track, slug, values: archivedValues, resource, search, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush } })
+      if (contentAdmission !== null) result.content_admission = contentAdmission
+      return result
     }
   }
   if (!(await pathExists(filePath))) {
@@ -1051,6 +1064,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
       `task_update: task does not exist at ${relPath(deskRoot, filePath)}`,
     )
   }
+  assertCleanContentTarget(deskRoot, relPath(deskRoot, filePath), contentAdmission, "task_update")
 
   // The steps are refreshed from GitHub first, from this read of the card. The card is then read again, whole, and everything this call writes
   // (its frontmatter, its step, the refreshed cells, the done check) is built from that second read, so nothing another session wrote during the wait is overwritten.
@@ -1059,6 +1073,8 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos, stepVerdict({ ...seen.data, ...(frontmatter ?? {}) }.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
   // The delivery of a pull request given as done evidence is checked in this same phase, so nothing slow happens after the card is read again.
   const delivery = frontmatter?.status === "done" && seen.data.status !== "done" && evidence?.kind === "pr" && typeof evidence.ref === "string" && !readSteps(seen.content).found ? await checkDelivery({ toolName: "task_update", evidence, env, fetchFn }) : null
+  assertPublishedContentBase(deskRoot, contentAdmission, "task_update")
+  assertCleanContentTarget(deskRoot, relPath(deskRoot, filePath), contentAdmission, "task_update")
   const existing = await readMarkdown(filePath)
   assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
@@ -1171,6 +1187,11 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   const conflicted = onGit && hasUnmergedPath(path.dirname(filePath), [path.basename(filePath)], spawnGit)
   const stage = onGit && !conflicted
   const heldChanges = stage && hasUnstagedWork(path.dirname(filePath), [path.basename(filePath)], spawnGit)
+  assertPublishedContentBase(deskRoot, contentAdmission, "task_update")
+  assertCleanContentTarget(deskRoot, relPath(deskRoot, filePath), contentAdmission, "task_update")
+  if (merged.status !== existing.data.status) {
+    assertCleanContentTarget(deskRoot, relPath(deskRoot, path.join(path.dirname(path.dirname(filePath)), "track.md")), contentAdmission, "task_update")
+  }
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
   await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
   // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
@@ -1193,6 +1214,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
+  if (contentAdmission !== null) result.content_admission = contentAdmission
   if (commit) result.commit = commit
   const cardBytes = (await fs.stat(filePath)).size
   if (cardBytes > CARD_WARN_BYTES) result.card_size_warning = `This card is ${Math.round(cardBytes / 1024)} KB. Boot reads only the first 64 KB of a card, so move older history into the task's iteration folder and shorten the card (task_update with replace_section).`
