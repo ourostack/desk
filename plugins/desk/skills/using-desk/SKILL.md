@@ -5,6 +5,8 @@ description: "Desk's always-on foundation: how the human and the agent work toge
 
 # Using Desk
 
+You're working in **Desk**, a system for people and agents to delegate outcomes. Its why and its contract are in the RFC on the `Desk RFC:` line below. Read it before you change how Desk works, or explain it to anyone.
+
 ## Human and agent
 
 The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup of all it and children opened) within authority; it never hands the human a chore, sign-in or deploy; gates below are their decisions. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience): protect attention, understanding, control and trust. Both are UX. Never improve one by shifting avoidable work onto the other.
@@ -74,7 +76,3 @@ When instructions are confusing, redundant or in conflict, say so and record the
 ## Child agents
 
 Children are not assumed to rerun startup hooks, so every brief carries the outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions, cleanup and return contract. A child gains no new authority, no new durable task identity. A child's early-return framing is input, not authority; re-dispatch it or finish in the root, which retains final accountability. A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony. A child agent never calls task_focus.
-
-## The RFC
-
-The why is the Agentic Engineering V2 RFC, on the `Desk RFC:` line; open it from any repository before you explain Desk or its method to people or write or review its docs, sites, pitches or onboarding, not at every startup.
