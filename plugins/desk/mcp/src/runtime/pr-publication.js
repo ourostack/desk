@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url"
 import { shellQuote } from "../util/shell-quote.js"
 
 const POLICY = ".desk/publication.json"
-const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,statusCheckRollup,mergeCommit"
+const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,mergeCommit"
 const WAIT_MS = 300_000
 const CLOCK = {
   now: Date.now,
@@ -40,15 +40,7 @@ function repository(remote) {
   return { host, name, full: `${host}/${name}` }
 }
 
-const checkIdentity = (check) => JSON.stringify([check.name ?? check.context, check.detailsUrl ?? check.targetUrl ?? null])
-
-function checkState(pr, required, observed) {
-  if (!Array.isArray(pr.statusCheckRollup)) throw new Error("GitHub did not return the PR check states")
-  const checks = pr.statusCheckRollup.map((check) => ({
-    id: checkIdentity(check),
-    name: check.name ?? check.context,
-    state: check.status === "COMPLETED" ? check.conclusion : check.state ?? "PENDING",
-  }))
+function checkState(checks, required, observed) {
   for (const check of checks) observed.set(check.id, check.name)
   const bad = checks.find((check) => ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"].includes(check.state))
   if (bad) throw new Error(`PR check ${bad.name} failed (${bad.state})`)
@@ -87,6 +79,30 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     if (!Array.isArray(prs) || prs.length > 1) throw new Error("GitHub did not return one unambiguous publication PR")
     return prs[0]
   }
+  const loadChecks = () => {
+    const paged = (endpoint, field) => {
+      const pages = gh(["api", "--hostname", repo.host, `repos/${repo.name}/commits/${head}/${endpoint}`, "--paginate", "--slurp"])
+      if (!Array.isArray(pages) || pages.length === 0 || pages.some((page) => !Array.isArray(page?.[field]))) {
+        throw new Error("GitHub did not return complete PR check states")
+      }
+      return pages.flatMap((page) => page[field])
+    }
+    const statuses = paged("status?per_page=100", "statuses").map((status) => {
+      if (typeof status?.context !== "string" || status.context.trim() === "" || typeof status.state !== "string") {
+        throw new Error("GitHub did not return valid status-context check states")
+      }
+      return { id: `context:${status.context}`, name: status.context, state: status.state.toUpperCase() }
+    })
+    const runs = paged("check-runs?filter=latest&per_page=100", "check_runs").map((run) => {
+      if (!Number.isSafeInteger(run?.id) || run.id <= 0 || typeof run.name !== "string" || run.name.trim() === "" || typeof run.status !== "string") {
+        throw new Error("GitHub did not return stable check-run identities")
+      }
+      const state = run.status === "completed" ? run.conclusion : "pending"
+      if (typeof state !== "string") throw new Error("GitHub did not return complete check-run conclusions")
+      return { id: `run:${run.id}`, name: run.name, state: state.toUpperCase() }
+    })
+    return [...statuses, ...runs]
+  }
   const pushed = git(["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`], 60_000)
   if (pushed.status !== 0) throw new Error(`The contribution branch push was refused by its hook or remote; the upstream branch was not pushed. Fix: git push ${commandArgument(upstream.remote)} ${commandArgument(`${head}:refs/heads/${branch}`)} to read its admission diagnostic`)
   let pr = list()
@@ -104,14 +120,16 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     }
   }
   try {
-    const observed = new Map((pr.statusCheckRollup ?? []).map((check) => [checkIdentity(check), check.name ?? check.context]))
+    verify(pr)
+    const observed = new Map()
+    if (pr.state !== "MERGED") for (const check of loadChecks()) observed.set(check.id, check.name)
     const deadline = clock.now() + WAIT_MS
     for (;;) {
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
       if (pr.baseRefOid !== onto) throw new Error("The publication base advanced; retry to qualify a fresh candidate")
-      const waiting = checkState(pr, policy.required_checks, observed)
+      const waiting = checkState(loadChecks(), policy.required_checks, observed)
       if (waiting.length === 0) {
         const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
           "-f", `sha=${head}`, "-f", "merge_method=merge"])

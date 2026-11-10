@@ -159,7 +159,6 @@ function publicationServer(shared, { failed = false, missing = false } = {}) {
   const pr = () => ({
     number, url: "https://github.com/example/workspace/pull/42", state: "OPEN", isDraft: false,
     headRefOid: head, baseRefName: "main", baseRefOid: bare(shared.origin, ["rev-parse", "main"]).trim(),
-    statusCheckRollup: missing ? [] : [{ name: "workspace-policy", status: "COMPLETED", conclusion: failed ? "FAILURE" : "SUCCESS" }],
   })
   const spawnGit = (cmd, args, opts) => {
     if (cmd === "git") {
@@ -178,6 +177,13 @@ function publicationServer(shared, { failed = false, missing = false } = {}) {
       number = 42
       return { status: 0, stdout: pr().url + "\n", stderr: "" }
     } else if (args.includes("view")) response = pr()
+    else if (args.includes(`repos/example/workspace/commits/${head}/status?per_page=100`)) {
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"))
+      response = [{ statuses: [] }]
+    } else if (args.includes(`repos/example/workspace/commits/${head}/check-runs?filter=latest&per_page=100`)) {
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"))
+      response = [{ check_runs: missing ? [] : [{ id: 4242, name: "workspace-policy", status: "completed", conclusion: failed ? "failure" : "success" }] }]
+    }
     else if (args.includes("PUT")) {
       merges.push(head)
       bare(shared.origin, ["update-ref", "refs/heads/main", head])

@@ -14,12 +14,16 @@ function fixture(options = {}) {
   const calls = []
   let created = false
   let views = 0
+  let checkReads = 0
+  let statusReads = 0
+  const runIds = new Map()
   let elapsed = 0
   const pr = {
     number: 42, url: "https://github.example/example/workspace/pull/42", state: "OPEN", isDraft: false,
     headRefOid: head, baseRefName: "main", baseRefOid: onto, statusCheckRollup: [success],
     ...options.pr,
   }
+  let currentPr = pr
   const git = (args) => {
     calls.push(["git", ...args])
     if (args[0] === "remote") return options.remoteResult ?? { status: 0, stdout: options.remote ?? "https://github.example/example/workspace.git" }
@@ -32,14 +36,34 @@ function fixture(options = {}) {
   const spawnGit = (command, args) => {
     assert.equal(command, "gh")
     calls.push(["gh", ...args])
-    const operation = args[0] === "api" ? "merge" : args[1]
+    const operation = args[0] === "api" ? args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses" : "checks" : args[1]
     if (options.fail === operation) return { status: options.timeout ? null : 1, stderr: "made-up-private-credential" }
     if (options.invalidJson === operation) return { status: 0, stdout: "not JSON" }
     if (operation === "list") return ok(options.list ?? (options.noReadback || !created && options.create ? [] : [pr]))
     if (operation === "create") { created = true; return { status: 0, stdout: pr.url } }
     if (operation === "view") {
       const current = options.views?.[Math.min(views++, options.views.length - 1)] ?? pr
+      currentPr = current
       return ok(current)
+    }
+    if (operation === "checks") {
+      assert.ok(args.includes(`repos/example/workspace/commits/${head}/check-runs?filter=latest&per_page=100`))
+      assert.ok(args.includes("--paginate"))
+      assert.ok(args.includes("--slurp"))
+      if (options.checkPages !== undefined) return ok(options.checkPages[Math.min(checkReads++, options.checkPages.length - 1)])
+      const runs = (currentPr.statusCheckRollup ?? []).filter((check) => check.name !== undefined).map((check) => {
+        if (!runIds.has(check.name)) runIds.set(check.name, runIds.size + 1)
+        return { ...check, id: runIds.get(check.name), status: check.status.toLowerCase(), conclusion: check.conclusion?.toLowerCase() ?? null }
+      })
+      return ok([{ check_runs: runs }])
+    }
+    if (operation === "statuses") {
+      assert.ok(args.includes(`repos/example/workspace/commits/${head}/status?per_page=100`))
+      assert.ok(args.includes("--paginate"))
+      assert.ok(args.includes("--slurp"))
+      if (options.statusPages !== undefined) return ok(options.statusPages[Math.min(statusReads++, options.statusPages.length - 1)])
+      const statuses = currentPr.statusCheckRollup?.filter((check) => check.context !== undefined).map((check) => ({ context: check.context, state: check.state.toLowerCase() })) ?? null
+      return ok([{ statuses }])
     }
     if (operation === "merge") return ok(options.mergeResult ?? { merged: true, sha: merged })
     assert.fail(`unexpected gh call: ${args.join(" ")}`)
@@ -91,6 +115,10 @@ test("remote, branch, JSON, lookup, creation and merge failures refuse without c
     [{ fail: "view", timeout: true }, /CLI pr view failed.*timeout/u],
     [{ invalidJson: "list" }, /invalid publication JSON/u],
     [{ fail: "merge" }, /CLI api --hostname failed/u],
+    [{ fail: "checks" }, /CLI api --hostname failed/u],
+    [{ invalidJson: "checks" }, /invalid publication JSON/u],
+    [{ fail: "statuses" }, /CLI api --hostname failed/u],
+    [{ invalidJson: "statuses" }, /invalid publication JSON/u],
     [{ mergeResult: { merged: false, sha: merged } }, /refused the exact-head merge/u],
     [{ mergeResult: { merged: true, sha: null } }, /refused the exact-head merge/u],
     [{ fetchResult: { status: 1 } }, /could not be fetched/u],
@@ -140,7 +168,7 @@ test("context checks, optional skipped/neutral checks and an observed pending ch
   const optional = [{ context: "optional", state: "NEUTRAL" }, { name: "skipped", status: "COMPLETED", conclusion: "SKIPPED" }]
   const initial = { ...fixture().pr, statusCheckRollup: [{ context: "workspace-policy", state: "SUCCESS" }, ...optional, { context: "later", state: "PENDING" }] }
   const ready = { ...initial, statusCheckRollup: [{ context: "workspace-policy", state: "SUCCESS" }, ...optional, { context: "later", state: "SUCCESS" }] }
-  const server = fixture({ views: [initial, ready] })
+  const server = fixture({ pr: initial, views: [initial, ready] })
   assert.equal(publishPullRequest(server.request).receipt.merge, merged)
 })
 
@@ -159,7 +187,11 @@ test("observed job identities stay pending when another job with the same name s
   const pending = { name: "same-name", detailsUrl: "https://github.example/jobs/1", status: "IN_PROGRESS" }
   const replacement = { ...pending, detailsUrl: "https://github.example/jobs/2", status: "COMPLETED", conclusion: "SUCCESS" }
   const initial = { ...fixture().pr, statusCheckRollup: [success, pending] }
-  const f = fixture({ pr: initial, views: [{ ...initial, statusCheckRollup: [success, replacement] }] })
+  const requiredRun = { id: 99, name: "workspace-policy", status: "completed", conclusion: "success" }
+  const f = fixture({
+    pr: initial, views: [{ ...initial, statusCheckRollup: [success, replacement] }],
+    checkPages: [[{ check_runs: [requiredRun, { id: 1, name: pending.name, status: "in_progress", conclusion: null }] }], [{ check_runs: [requiredRun, { id: 2, name: replacement.name, status: "completed", conclusion: "success" }] }]],
+  })
   assert.throws(() => publishPullRequest(f.request), /still missing or pending: same-name/u)
   assert.ok(!f.calls.some((call) => call.includes("PUT")))
 })
@@ -181,6 +213,48 @@ test("contexts sharing a target URL keep independent observed identities", () =>
   const f = fixture({ pr: initial, views: [{ ...initial, statusCheckRollup: [required] }] })
   assert.throws(() => publishPullRequest(f.request), /still missing or pending: later/u)
   assert.ok(!f.calls.some((call) => call.includes("PUT")))
+})
+
+test("status contexts can complete when their results URL appears or changes", () => {
+  for (const before of [null, "https://github.example/status/started"]) {
+    const pending = { context: "later", targetUrl: before, state: "PENDING" }
+    const initial = { ...fixture().pr, statusCheckRollup: [success, pending] }
+    const ready = { ...initial, statusCheckRollup: [success, { ...pending, targetUrl: "https://github.example/status/completed", state: "SUCCESS" }] }
+    const f = fixture({ views: [initial, ready] })
+    assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+  }
+})
+
+test("the same check run can complete when its results URL appears or changes", () => {
+  for (const before of [null, "https://github.example/jobs/started"]) {
+    const pending = { name: "later", detailsUrl: before, status: "IN_PROGRESS" }
+    const initial = { ...fixture().pr, statusCheckRollup: [success, pending] }
+    const ready = { ...initial, statusCheckRollup: [success, { ...pending, detailsUrl: "https://github.example/jobs/completed", status: "COMPLETED", conclusion: "SUCCESS" }] }
+    const f = fixture({ views: [initial, ready] })
+    assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+  }
+})
+
+test("check-run pagination is complete and malformed immutable identities fail closed", () => {
+  const pages = [{ check_runs: [{ id: 1, name: "workspace-policy", status: "completed", conclusion: "success" }] }, { check_runs: [{ id: 2, name: "optional", status: "completed", conclusion: "success" }] }]
+  assert.equal(publishPullRequest(fixture({ checkPages: [pages] }).request).receipt.merge, merged)
+  for (const invalid of [null, {}, [], [null], [{ check_runs: null }],
+    ...[null, { name: "job" }, { id: 0, name: "job" }, { id: 1 }, { id: 1, name: " " }, { id: 1, name: "job" }, { id: 1, name: "job", status: "completed", conclusion: null }].map((run) => [{ check_runs: [run] }])]) {
+    const f = fixture({ checkPages: [invalid] })
+    assert.throws(() => publishPullRequest(f.request), /GitHub did not return.*check/u)
+    assert.ok(!f.calls.some((call) => call.includes("PUT")))
+  }
+})
+
+test("status-context pagination is complete and malformed status states fail closed", () => {
+  const pages = [{ statuses: [{ context: "workspace-policy", state: "success" }] }, { statuses: [{ context: "optional", state: "success" }] }]
+  assert.equal(publishPullRequest(fixture({ statusPages: [pages], checkPages: [[{ check_runs: [] }]] }).request).receipt.merge, merged)
+  for (const invalid of [null, {}, [], [null], [{ statuses: null }],
+    ...[null, {}, { context: " " }, { context: "job", state: null }].map((status) => [{ statuses: [status] }])]) {
+    const f = fixture({ statusPages: [invalid] })
+    assert.throws(() => publishPullRequest(f.request), /GitHub did not return.*check/u)
+    assert.ok(!f.calls.some((call) => call.includes("PUT")))
+  }
 })
 
 test("recovery commands preserve literal paths in POSIX shells and PowerShell", () => {
