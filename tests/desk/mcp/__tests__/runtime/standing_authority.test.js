@@ -26,7 +26,7 @@ test("a solo desk's own file is read, named, and a long section is capped with a
   const line = standingAuthorityLine({ root: "/d", cap: 200, read })
   assert.match(line, /^Desk standing authority: /u)
   assert.ok(line.includes(`From ${path.join("/d", "AGENTS.md")}:\n- long grant line`))
-  assert.match(line, /\(The section continues in .*\/d\/AGENTS\.md\.\)$/u)
+  assert.ok(line.endsWith(`(The section continues in ${path.join("/d", "AGENTS.md")}.)`), line.slice(-120))
   assert.equal(standingAuthorityLine({ root: "/d", read: () => null }), "")
   assert.equal(standingAuthorityLine({ root: null, read }), "")
 })
