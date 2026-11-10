@@ -1544,14 +1544,21 @@ test("an editing host that the browser no longer names at its path, or that is n
     const root = await mkTempRoot("auth-editor-refuse-")
     const packet = editorPacket()
     const native = fakeDriver({ packet })
-    browserNames(native, () => 999)
+    // "moved": the browser names another node at the host's path. "detached": it names the host correctly, so only
+    // the ancestor check can stop the keys, before anything is bound.
+    browserNames(native, (selector) => variant === "moved" ? 999 : /div:nth-of-type\(1\)$/u.test(selector) ? 104 : 106)
     const adapter = adapterFor(native, root)
     try {
       const snapshot = await adapter.call(["snapshot"])
       const ref = snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
       if (variant === "detached") packet.documents[0].nodes.parentIndex[5] = 2
+      const before = native.calls.length
       await assert.rejects(adapter.call(["fill", ref, "x"]), /AUTH_SNAPSHOT_INVALIDATED/u)
       assert.equal(native.calls.some((call) => call[0] === "fill"), false)
+      if (variant === "detached") {
+        const after = native.calls.slice(before)
+        assert.equal(after.some((call) => call[0] === "waitForSelector" || call[1] === "DOM.querySelector"), false, "refused before binding")
+      }
     } finally { await adapter.close() }
   }
 })
