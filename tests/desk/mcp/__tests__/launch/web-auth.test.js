@@ -1931,3 +1931,21 @@ test("a wait stopped by the runtime policy leaves none of its polls' refs behind
     await assert.rejects(unsettled.call(["wait", "never shows"]), /AUTH_(RUNTIME_POLICY_REFUSED|SNAPSHOT_INVALIDATED)/u)
   } finally { await unsettled.close() }
 })
+
+test("a navigation whose page is still loading reports that it went through and how to read the page", async () => {
+  const root = await mkTempRoot("auth-native-loading-")
+  let loading = false
+  const native = fakeDriver({ hook: ({ method, cdp }) => { if (loading && method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const adapter = adapterFor(native, root)
+  try {
+    loading = true
+    for (const args of [["goto", "https://synthetic.invalid/next"], ["reload"], ["go-back"], ["go-forward"]]) {
+      const result = await adapter.call(args)
+      assert.equal(result.navigated, true, String(args))
+      assert.match(result.hint, /\["wait"/u)
+    }
+    await assert.rejects(adapter.call(["mousewheel", "0", "10"]), /AUTH_SNAPSHOT_INVALIDATED.*wait/u, "other actions still refuse an unread page")
+    loading = false
+    assert.ok((await adapter.call(["goto", "https://synthetic.invalid/"])).snapshot, "a settled page is read as before")
+  } finally { await adapter.close() }
+})

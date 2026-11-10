@@ -12,6 +12,7 @@ var SNAPSHOT_SETTLE_MS = 250;
 // Refs from this many of the latest reads stay usable: an agent often reads twice (find, then find again) before it
 // acts. Every action re-resolves its ref against the page as it is now, so an older ref acts only on its own node.
 var REF_READS = 3;
+var NAVIGATIONS = ["goto", "go-back", "go-forward", "reload"];
 // wait: a bare wait pauses this long; no wait outlasts half the command time or a minute; text is looked for this often.
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
@@ -59,7 +60,7 @@ var HINTS = {
   AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
   AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
   AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
-  AUTH_SNAPSHOT_INVALIDATED: "The page changed under that ref. " + SNAPSHOT_AGAIN + " On a page that keeps changing, act right after the snapshot.",
+  AUTH_SNAPSHOT_INVALIDATED: "The page changed while it was read, or under that ref. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"]; on a page that keeps changing, act soon after reading it.",
   AUTH_PROTECTION_INVALIDATED: CHANGING,
   AUTH_REDACTION_INVALIDATED: CHANGING,
   AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, read the frame's own page with goto, or use another way in.",
@@ -952,7 +953,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "wait") return wait(reader, waitPlan(args));
     var applied = false;
     try {
-      if (["goto", "go-back", "go-forward", "reload", "resize", "mousewheel"].indexOf(command) !== -1) {
+      if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
         checkRuntime();
         applied = true;
         if (command === "goto") await page.goto(args[1], { timeout: timeoutMs });
@@ -1025,7 +1026,14 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           try { await disposeRecords([bound]); } catch (cleanupError) { if (!actionError) throw cleanupError; }
         }
       }
-      var outcome = await settled(reader, false, applied);
+      var outcome;
+      try { outcome = await settled(reader, false, applied); }
+      catch (error) {
+        // A page still loading changes faster than it can be read. The navigation itself went through, so it says so
+        // and how to read the page, rather than refusing what already happened.
+        if (NAVIGATIONS.indexOf(command) === -1 || closed || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
+        return { navigated: true, hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
+      }
       if (typed) outcome.typed = typed;
       return outcome;
     } catch (error) {
