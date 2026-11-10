@@ -1453,40 +1453,6 @@ test("when the page changes while the ref binds, the browser must name the same 
   }
 })
 
-test("typing goes to the editing host of a rich-text editor, and the field reports whether it holds the text", async () => {
-  const root = await mkTempRoot("auth-editor-")
-  const native = fakeDriver()
-  const inner = native.handles.get(104)
-  const host = { calls: [], dispose: async () => { native.calls.push(["disposeHost", "editor"]) } }
-  for (const method of ["scrollIntoViewIfNeeded", "fill", "type", "press"]) host[method] = async (...args) => { native.calls.push(["host." + method, ...args]) }
-  let holds = "typed text"
-  host.evaluate = async (fn, arg) => fn({ isContentEditable: true, innerText: holds }, arg)
-  inner.evaluateHandle = async (fn) => {
-    native.calls.push(["evaluateHandle", 104])
-    assert.equal(fn({ isContentEditable: false }).isContentEditable, false, "a plain control is its own target")
-    const editor = { isContentEditable: true, parentElement: { isContentEditable: false } }
-    const paragraph = { isContentEditable: true, parentElement: editor }
-    assert.equal(fn(paragraph), editor, "a paragraph inside an editor resolves to the editor")
-    return { asElement: () => host, dispose: host.dispose }
-  }
-  const adapter = adapterFor(native, root)
-  try {
-    let result = await adapter.call(["type", inputRef(await adapter.call(["snapshot"])), "typed text"])
-    assert.deepEqual(result.typed, { verified: true })
-    assert.ok(native.calls.some((call) => call[0] === "host.type" && call[1] === "typed text"))
-    assert.equal(native.calls.some((call) => call[0] === "type"), false, "the inner node never takes the keys")
-    holds = "something else"
-    result = await adapter.call(["fill", inputRef(await adapter.call(["snapshot"])), "typed text"])
-    assert.deepEqual(result.typed, { verified: false })
-    assert.equal(JSON.stringify(result).includes("something else"), false, "read-back reports a verdict, never the field's text")
-    result = await adapter.call(["press", inputRef(await adapter.call(["snapshot"])), "Enter"])
-    assert.equal(result.typed, undefined)
-    assert.ok(native.calls.some((call) => call[0] === "host.press" && call[1] === "Enter"))
-    assert.equal(native.calls.filter((call) => call[0] === "disposeHost").length, 3)
-    await adapter.call(["click", inputRef(await adapter.call(["snapshot"]))])
-    assert.equal(native.calls.filter((call) => call[0] === "evaluateHandle").length, 3, "a click acts on the node it names")
-  } finally { await adapter.close() }
-})
 
 test("an element's fingerprint is its name, non-presentation attributes and subtree text, never a child frame's content", () => {
   const el = (name, attributes, children = [], extra = {}) => ({ nodeType: 1, nodeName: name, attributes, children, ...extra })
@@ -1511,19 +1477,6 @@ test("read-back compares whitespace-normalised text and treats a missing value a
   assert.equal(auth.HOLDS({ isContentEditable: true, innerText: "before a b after" }, ["a b", "fill"]), false)
 })
 
-test("an editing host that is not an element falls back to the node the ref names", async () => {
-  const root = await mkTempRoot("auth-editor-fallback-")
-  const native = fakeDriver()
-  const inner = native.handles.get(104)
-  inner.evaluateHandle = async () => ({ asElement: () => null, dispose: async () => { native.calls.push(["disposeHost", 104]) } })
-  const adapter = adapterFor(native, root)
-  try {
-    const result = await adapter.call(["fill", inputRef(await adapter.call(["snapshot"])), "x"])
-    assert.ok(native.calls.some((call) => call[0] === "fill" && call[1] === "x"))
-    assert.deepEqual(result.typed, { verified: true })
-    assert.ok(native.calls.some((call) => call[0] === "disposeHost"))
-  } finally { await adapter.close() }
-})
 
 test("a rich-text editor's host is a textbox named by its author label, its content and a label repeating it still redacted", () => {
   const find = (node, role) => node.role === role ? node : (node.children || []).map((child) => find(child, role)).find(Boolean)
@@ -1541,4 +1494,75 @@ test("a rich-text editor's host is a textbox named by its author label, its cont
   const tree = sanitize(nested)
   assert.equal(JSON.stringify(tree).match(/"textbox"/gu).length, 1, "only the editing host, not its editable children")
   assert.equal(find(sanitize(editingSnapshot("read-only")), "textbox"), undefined, "read-only content is not a textbox")
+})
+
+// A rich-text editor: an editable DIV (the host) holding an editable P, both refs in the snapshot.
+function editorPacket() {
+  const packet = editingSnapshot()
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const document = packet.documents[0]
+  const nodes = document.nodes
+  nodes.parentIndex.push(3); nodes.nodeType.push(1); nodes.nodeName.push(s("P")); nodes.nodeValue.push(-1)
+  nodes.backendNodeId.push(106); nodes.attributes.push([])
+  document.layout.nodeIndex.push(5)
+  document.layout.styles.push(document.layout.styles[3].slice())
+  document.layout.bounds.push([0, 0, 100, 20]); document.layout.text.push(-1)
+  return packet
+}
+function browserNames(native, byTag) {
+  const send = native.cdp.send
+  native.cdp.send = async (method, params) => {
+    if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: 7, selector: params.selector } }
+    if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId: byTag(native.calls.filter((c) => c[1] === "DOM.querySelector").at(-1)[2].selector) } } }
+    return send(method, params)
+  }
+}
+
+test("keys typed at a node inside a rich-text editor go to its editing host, chosen from the snapshot and confirmed by the browser", async () => {
+  const root = await mkTempRoot("auth-editor-")
+  const native = fakeDriver({ packet: editorPacket() })
+  browserNames(native, (selector) => /div:nth-of-type\(1\)$/u.test(selector) ? 104 : /p:nth-of-type\(1\)$/u.test(selector) ? 106 : 0)
+  native.handles.get(104).evaluate = async (fn, arg) => fn({ isContentEditable: true, innerText: "typed text" }, arg)
+  const adapter = adapterFor(native, root)
+  const paragraphRef = (snapshot) => snapshot.text.match(/- generic \[ref=(\w+)\]\n\s*$/u)?.[1] ?? snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
+  try {
+    let snapshot = await adapter.call(["snapshot"])
+    assert.match(snapshot.text, /- textbox \[ref=e\d+\]/u, "the host is a textbox")
+    const result = await adapter.call(["type", paragraphRef(snapshot), "typed text"])
+    assert.deepEqual(result.typed, { verified: true })
+    assert.ok(native.calls.some((call) => call[0] === "type" && call[1] === "typed text"))
+    assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /div:nth-of-type\(1\)$/u, "bound at the host")
+    assert.ok(native.calls.some((call) => call[0] === "cdp" && call[1] === "DOM.querySelector"), "the browser confirms the host")
+    snapshot = await adapter.call(["snapshot"])
+    await adapter.call(["click", paragraphRef(snapshot)])
+    assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /p:nth-of-type\(1\)$/u, "a click acts on the node it names")
+  } finally { await adapter.close() }
+})
+
+test("an editing host that the browser no longer names at its path, or that is no longer an ancestor, takes no keys", async () => {
+  for (const variant of ["moved", "detached"]) {
+    const root = await mkTempRoot("auth-editor-refuse-")
+    const packet = editorPacket()
+    const native = fakeDriver({ packet })
+    browserNames(native, () => 999)
+    const adapter = adapterFor(native, root)
+    try {
+      const snapshot = await adapter.call(["snapshot"])
+      const ref = snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
+      if (variant === "detached") packet.documents[0].nodes.parentIndex[5] = 2
+      await assert.rejects(adapter.call(["fill", ref, "x"]), /AUTH_SNAPSHOT_INVALIDATED/u)
+      assert.equal(native.calls.some((call) => call[0] === "fill"), false)
+    } finally { await adapter.close() }
+  }
+})
+
+test("read-back is a strict verdict: a page that answers anything but true reports unverified", async () => {
+  const root = await mkTempRoot("auth-readback-")
+  const native = fakeDriver()
+  native.handles.get(104).evaluate = async () => "true"
+  const adapter = adapterFor(native, root)
+  try {
+    const result = await adapter.call(["fill", inputRef(await adapter.call(["snapshot"])), "x"])
+    assert.deepEqual(result.typed, { verified: false })
+  } finally { await adapter.close() }
 })

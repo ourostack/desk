@@ -15,13 +15,6 @@ var MAX_VALUES = 2000000;
 var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
 var EDITS = ["type", "fill", "press"];
 var EDITABLE = ["read-write", "read-write-plaintext-only"];
-// Runs in the page: the editing host of a node inside contenteditable content, else the node itself.
-var EDITING_HOST = function (node) {
-  if (!node.isContentEditable) return node;
-  var host = node;
-  while (host.parentElement && host.parentElement.isContentEditable) host = host.parentElement;
-  return host;
-};
 // Runs in the page: whether a field or editing host now holds the text (all of it for fill, some of it for type).
 var HOLDS = function (node, input) {
   var flat = function (value) { return String(value || "").replace(/\s+/g, " ").trim(); };
@@ -376,7 +369,10 @@ function prepare(packet, scope, frameId, nextRef) {
     var inspected = scope.nodes.get(row.id);
     if (nextRef && row.type === 1 && visible && !row.shadow && inspected && inspected.path) {
       node.ref = "e" + nextRef();
-      targets.push({ ref: node.ref, path: inspected.path, id: row.id });
+      // Keys typed into a node inside a rich-text editor go to its editing host: the outermost editable ancestor.
+      var host = row;
+      while (EDITABLE.indexOf(host.modify) !== -1 && host.parent && !host.parent.shadow && EDITABLE.indexOf(host.parent.modify) !== -1) host = host.parent;
+      targets.push({ ref: node.ref, path: inspected.path, id: row.id, host: EDITABLE.indexOf(row.modify) !== -1 ? host.id : row.id });
     }
     if (row.frame) {
       node.role = "frame";
@@ -479,7 +475,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   async function disposeRecords(records) {
     var results = await Promise.allSettled(records.map(function (record) {
       return Promise.resolve().then(async function () {
-        if (record.host) { await record.host.dispose(); record.host = null; }
         await record.handle.dispose();
         cleanupRecords.delete(record);
       });
@@ -600,7 +595,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       // Refs bind lazily: an action re-qualifies the unchanged document before resolving its path,
       // so a page with thousands of elements does not wait on one selector round trip per element.
       prepared.targets.forEach(function (target) {
-        provisional.push({ ref: target.ref, path: target.path, id: target.id, reader: reader, epoch: epoch, stamp: before });
+        provisional.push({ ref: target.ref, path: target.path, id: target.id, host: target.host, reader: reader, epoch: epoch, stamp: before });
       });
       var qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
@@ -728,10 +723,21 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         requireTrue(now.frameId === record.stamp.frameId && now.loaderId === record.stamp.loaderId &&
           target && target.path && !target.shadow &&
           fingerprint(target.raw) === fingerprint(record.stamp.scope.nodes.get(record.id).raw), "AUTH_SNAPSHOT_INVALIDATED");
+        // Focusing a node inside a rich-text editor blurs the editor, so keys and text go to its editing host, chosen
+        // from the snapshot's computed editing modes and still an ancestor of the node now; never by page script.
+        var actorId = record.id;
+        var actor = target;
+        if (EDITS.indexOf(command) !== -1 && record.host !== record.id) {
+          actorId = record.host;
+          actor = now.scope.nodes.get(actorId);
+          var up = target;
+          while (up && up.id !== actorId) up = now.scope.nodes.get(up.parent);
+          requireTrue(up && actor.path && !actor.shadow, "AUTH_SNAPSHOT_INVALIDATED");
+        }
         checkRuntime();
         var bound;
         try {
-          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + target.path,
+          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + actor.path,
             { state: "attached", strict: true, timeout: Math.min(timeoutMs, TARGET_WAIT_MS) }) };
         } catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
         requireTrue(bound.handle, "AUTH_TARGET_REFUSED");
@@ -740,7 +746,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         var typed;
         try {
           // Unchanged since the read, the path still names that node; otherwise the browser itself confirms it does.
-          if (reader.epoch !== quiet) await sameNode(reader, target.path, record.id);
+          if (reader.epoch !== quiet || actorId !== record.id) await sameNode(reader, actor.path, actorId);
           checkRuntime();
           applied = true;
           // Playwright waits for an element to be enabled before scrolling it into view, but some pages enable a control
@@ -748,18 +754,12 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           await bound.handle.scrollIntoViewIfNeeded({ timeout: timeoutMs });
           checkRuntime();
           var method = command === "select" ? "selectOption" : command;
-          var actor = bound.handle;
-          // Focusing a node inside a rich-text editor blurs the editor, so keys and text go to its editing host.
-          if (EDITS.indexOf(command) !== -1) {
-            var host = await bound.handle.evaluateHandle(EDITING_HOST);
-            bound.host = host;
-            actor = host.asElement() || bound.handle;
-          }
-          if (args.length === 3) await actor[method](args[2], { timeout: timeoutMs });
-          else await actor[method]({ timeout: timeoutMs });
+          if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
+          else await bound.handle[method]({ timeout: timeoutMs });
           checkRuntime();
-          // Typed text is redacted from every snapshot, so the field itself says whether it now holds it.
-          if (command === "fill" || command === "type") typed = { verified: Boolean(await actor.evaluate(HOLDS, [args[2], command])) };
+          // Typed text is redacted from every snapshot, so the field itself says whether it now holds it; only the
+          // verdict comes back, never the field's text.
+          if (command === "fill" || command === "type") typed = { verified: (await bound.handle.evaluate(HOLDS, [args[2], command])) === true };
           checkRuntime();
         } catch (error) {
           actionError = error;

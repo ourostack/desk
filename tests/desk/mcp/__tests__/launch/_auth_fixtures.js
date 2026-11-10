@@ -126,11 +126,7 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
         }
       }
     }
-    // The editing host of a plain control is the control itself; read-back runs the page function on its value.
-    handle.evaluateHandle = async () => {
-      calls.push(["evaluateHandle", id])
-      return { asElement: () => handle, dispose: async () => { calls.push(["disposeHost", id]) } }
-    }
+    // Read-back runs the page function on the control's current value.
     handle.evaluate = async (fn, arg) => {
       calls.push(["evaluate", id])
       const table = packet.documents[0].nodes
