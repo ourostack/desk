@@ -511,10 +511,13 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       a.frameId === b.frameId && a.loaderId === b.loaderId && a.scope.signature === b.scope.signature, "AUTH_SNAPSHOT_INVALIDATED");
   }
   // A document that changed between the two native reads is a stale pair, not a coverage verdict. Mutation events
-  // can trail the snapshot response, so one DOM round trip delivers them before the epoch decides.
+  // can trail the snapshot response, so one DOM round trip delivers them before the epoch decides. That round trip
+  // resets the session's node bindings, so no later change would reach the epoch: every earlier ref is retired.
   async function staleOr(reader, epoch, error) {
-    try { await send(reader, "DOM.getDocument", { depth: 0 }); } catch (flushError) { return error; }
-    requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
+    try { await send(reader, "DOM.getDocument", { depth: 0 }); } catch (flushError) { /* the epoch alone decides */ }
+    var moved = reader.epoch !== epoch;
+    reader.epoch++;
+    requireTrue(!moved, "AUTH_SNAPSHOT_INVALIDATED");
     return error;
   }
   async function verifyProtection(reader, scope, prepared, epoch) {

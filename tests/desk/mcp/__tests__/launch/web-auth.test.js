@@ -1369,3 +1369,26 @@ test("a control that appears before the protection re-read is a stale pair once 
     try { await assert.rejects(adapter.call(["snapshot"]), expected) } finally { await adapter.close() }
   }
 })
+
+test("after the round trip resets native node bindings, refs from an earlier snapshot are refused instead of acting unseen", async () => {
+  const root = await mkTempRoot("auth-flush-refs-")
+  const native = fakeDriver()
+  const send = native.cdp.send
+  let documents = 0
+  native.cdp.send = async (method, params) => {
+    const result = await send(method, params)
+    // The second snapshot's scope has a node its packet lacks, and no change event ever explains it.
+    if (method === "DOM.getDocument" && params && params.depth === -1 && ++documents === 4) {
+      result.root.children[0].children.unshift({ nodeId: 900, backendNodeId: 900, nodeType: 1, nodeName: "SCRIPT", localName: "script", nodeValue: "", attributes: [], children: [] })
+    }
+    return result
+  }
+  const adapter = adapterFor(native, root)
+  try {
+    const first = await adapter.call(["snapshot"])
+    const ref = first.text.match(/\[ref=(\w+)\]/u)[1]
+    await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u)
+    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    assert.equal(native.calls.some((call) => call[0] === "click"), false, "nothing is clicked")
+  } finally { await adapter.close() }
+})
