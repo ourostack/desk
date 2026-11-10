@@ -53,10 +53,13 @@ export function inspectedDOM(packet, index = 0) {
 
 export const FRAME_TEXT = "CHILD_FRAME_TEXT_688"
 export const FALLBACK_TEXT = "FRAME_FALLBACK_TEXT_688"
+export const FRAME_TYPED = "CHILD_FRAME_TYPED_688"
+export const FRAME_EDITED = "CHILD_FRAME_EDITED_688"
 
 // The sign-in page plus a visible main-document paragraph and an iframe (with fallback text) whose
-// child document holds text and a filled password field, as DOMSnapshot reports a page with a child frame.
-export function framedSnapshot() {
+// child document holds text, a filled field and a hidden editable region, as DOMSnapshot reports a page with a child frame.
+// `echo` adds main-document text, as when page script copies something from the frame.
+export function framedSnapshot({ echo } = {}) {
   const packet = nativeSnapshot()
   const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
   const main = packet.documents[0]
@@ -75,7 +78,7 @@ export function framedSnapshot() {
     document.layout.text.push(-1)
     return nodes.nodeType.length - 1
   }
-  add(main, add(main, 2, 1, "P", undefined, 105), 3, "#text", "Main product title", 106)
+  add(main, add(main, 2, 1, "P", undefined, 105), 3, "#text", "Main product title" + (echo ? " " + echo : ""), 106)
   const iframe = add(main, 2, 1, "IFRAME", undefined, 107)
   add(main, iframe, 3, "#text", FALLBACK_TEXT, 108)
   main.nodes.contentDocumentIndex = { index: [iframe], value: [1] }
@@ -90,7 +93,14 @@ export function framedSnapshot() {
   child.layout = { nodeIndex: [1, 2], styles: [css.slice(), css.slice()], bounds: [[0, 0, 1, 1], [0, 0, 1, 1]], text: [-1, -1], stackingContexts: { index: [] } }
   add(child, 2, 3, "#text", FRAME_TEXT, 204)
   const input = add(child, 2, 1, "INPUT", undefined, 205)
-  child.nodes.inputValue = { index: [input], value: [s(PASSWORD)] }
+  child.nodes.inputValue = { index: [input], value: [s(FRAME_TYPED)] }
+  const editor = add(child, 2, 1, "DIV", undefined, 206)
+  child.nodes.attributes[editor] = [s("contenteditable"), s("")]
+  add(child, editor, 3, "#text", FRAME_EDITED, 207)
+  for (const row of [editor, editor + 1]) {
+    const at = child.layout.nodeIndex.indexOf(row)
+    for (const key of ["nodeIndex", "styles", "bounds", "text"]) child.layout[key].splice(at, 1)
+  }
   packet.documents.push(child)
   return packet
 }
