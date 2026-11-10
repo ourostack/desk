@@ -1,0 +1,1 @@
+- Browser `mine` no longer refuses a click or read on a live page (Teams web) when the page changes between its two native reads and the change event arrives a moment late: it reads again instead of returning `AUTH_CONTROL_COVERAGE_REFUSED`.
