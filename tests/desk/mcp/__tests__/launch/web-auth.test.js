@@ -1903,3 +1903,31 @@ test("refs from the last three reads stay usable, and older ones are refused", a
     }
   } finally { await adapter.close() }
 })
+
+test("a wait stopped by the runtime policy leaves none of its polls' refs behind", async () => {
+  const root = await mkTempRoot("auth-native-wait-policy-")
+  const native = fakeDriver()
+  let blocked = false
+  let checks = 0
+  const adapter = auth.create(native.context, root, 8000, () => { if (blocked && ++checks > 40) throw new Error(PASSWORD) }, ONCE)
+  try {
+    const before = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    blocked = true
+    await assert.rejects(adapter.call(["wait", "never shows"]), /AUTH_RUNTIME_POLICY_REFUSED/u)
+    blocked = false
+    const after = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    for (let ref = Number(before.slice(1)) + 1; ref < Number(after.slice(1)) - 3; ref++) {
+      await assert.rejects(adapter.call(["click", `e${ref}`]), /AUTH_TARGET_REFUSED/u, `e${ref}`)
+    }
+  } finally { await adapter.close() }
+  // The same refusal after a poll that itself failed (the page never settled) has no refs to drop.
+  let churn = false
+  let late = 0
+  const busy = fakeDriver({ hook: ({ method, cdp }) => { if (churn && method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const unsettled = auth.create(busy.context, await mkTempRoot("auth-native-wait-policy-busy-"), 8000, () => { if (churn && ++late > 30) throw new Error(PASSWORD) }, ONCE)
+  try {
+    await unsettled.call(["snapshot"])
+    churn = true
+    await assert.rejects(unsettled.call(["wait", "never shows"]), /AUTH_(RUNTIME_POLICY_REFUSED|SNAPSHOT_INVALIDATED)/u)
+  } finally { await unsettled.close() }
+})

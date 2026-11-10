@@ -869,8 +869,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     records.forEach(function (record) { record.read = reader.reads; });
     refs.forEach(function (record, ref) { if (record.reader === reader && record.read <= reader.reads - REF_READS) refs.delete(ref); });
   }
-  function unpolled(result) {
-    polled.get(result).forEach(function (record) { if (refs.get(record.ref) === record) refs.delete(record.ref); });
+  function unpolled(records) {
+    records.forEach(function (record) { if (refs.get(record.ref) === record) refs.delete(record.ref); });
   }
   async function settled(reader, save, applied, poll) {
     for (var attempt = 1; ; attempt++) {
@@ -896,26 +896,28 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }
     var deadline = Date.now() + limit;
     var last;
+    var pending = [];
     for (;;) {
-      if (last) unpolled(last);
-      try { last = await settled(reader, false, false, true); }
+      unpolled(pending);
+      pending = [];
+      try { last = await settled(reader, false, false, true); pending = polled.get(last); }
       catch (error) {
         if (closed || RETRIED.indexOf(safeFailure(error).code) === -1 || Date.now() >= deadline) throw error;
         last = undefined;
       }
       if (last && shows(last.snapshot, plan.text) !== plan.gone) {
         last.waited = { text: plan.text, found: true };
-        counted(reader, polled.get(last));
+        counted(reader, pending);
         return last;
       }
       if (last && Date.now() >= deadline) {
-        counted(reader, polled.get(last));
+        counted(reader, pending);
         last.waited = { text: plan.text, found: false };
         last.hint = "The text did not " + (plan.gone ? "go" : "show") + " within " + limit / 1000 + " s. Read this snapshot; if the page is still loading, wait again.";
         return last;
       }
+      // The next poll rechecks the runtime policy first thing, after this poll's refs are dropped.
       await sleep(WAIT_POLL_MS);
-      checkRuntime();
     }
   }
   async function execute(args) {
