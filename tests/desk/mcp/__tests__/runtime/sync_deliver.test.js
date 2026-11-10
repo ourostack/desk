@@ -214,19 +214,26 @@ for (const replayed of [false, true]) {
   })
 }
 
-test("failed PR checks preserve the local save and never advance main", async () => {
-  const shared = await mkShared()
-  await enablePullRequests(shared)
-  const base = bare(shared.origin, ["rev-parse", "main"])
-  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
-  const server = publicationServer(shared, { failed: true })
-  const result = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
-  assert.equal(result.state, "failed")
-  assert.match(result.error, /workspace-policy.*Fix:.*gh pr checks/u)
-  assert.equal(bare(shared.origin, ["rev-parse", "main"]), base)
-  assert.equal(git(shared.desk, ["show", "HEAD:tasks/mine.md"]), "saved\n")
-  assert.deepEqual(server.merges, [])
-})
+for (const replayed of [false, true]) {
+  test(`failed PR checks preserve the ${replayed ? "replayed" : "captured"} save and never advance main`, async () => {
+    const shared = await mkShared()
+    await enablePullRequests(shared)
+    if (replayed) {
+      await commit(shared.elsewhere, "notes/remote.md", "advance\n", "advance base")
+      git(shared.elsewhere, ["push", "-q", "origin", "main"])
+    }
+    const base = bare(shared.origin, ["rev-parse", "main"])
+    await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+    const server = publicationServer(shared, { failed: true })
+    const result = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
+    assert.equal(result.state, "failed")
+    assert.match(result.error, /workspace-policy.*Fix:.*gh pr checks/u)
+    assert.equal(bare(shared.origin, ["rev-parse", "main"]), base)
+    assert.equal(git(shared.desk, ["show", "HEAD:tasks/mine.md"]), "saved\n")
+    assert.deepEqual(server.merges, [])
+    assert.equal(git(shared.desk, ["worktree", "list", "--porcelain"]).match(/^worktree /gmu).length, 1)
+  })
+}
 
 test("missing required PR checks time out with recovery instead of counting as green", async () => {
   const shared = await mkShared()
@@ -285,6 +292,22 @@ test("a blocked PR publication reaches save-note recovery with its actual PR rec
   const note = deskPushNote({ root: shared.desk, env: process.env, note: "publishing" })
   assert.equal(note.desk_publication.url, "https://github.com/example/workspace/pull/42")
   assert.match(note.desk_note, /not merged.*workspace-policy.*Fix:.*gh pr checks/u)
+})
+
+test("publication refusal before PR creation and legacy missing-receipt status remain blocked", async () => {
+  const shared = await mkShared()
+  await enablePullRequests(shared)
+  await commit(shared.desk, "tasks/mine.md", "saved\n", "desk: save")
+  const server = publicationServer(shared)
+  const spawnGit = (cmd, args, opts) => cmd === "gh" ? { status: 1, stdout: "", stderr: "private diagnostic" } : server.spawnGit(cmd, args, opts)
+  const result = deliver({ root: shared.desk, spawnGit, publicationClock: server.clock })
+  assert.equal(result.state, "failed")
+  assert.equal(result.publication, null)
+  assert.match(result.error, /Fix: run node .*sync-push/u)
+  updateSyncStatus(shared.desk, process.env, { blocked: true, reason: "publication_blocked" })
+  const note = deskPushNote({ root: shared.desk, env: process.env, note: "publishing" })
+  assert.equal(note.desk_publication, null)
+  assert.match(note.desk_note, /not merged/u)
 })
 
 // The desk is behind its remote and has its own commit: delivery has to replay, not fast-forward.
