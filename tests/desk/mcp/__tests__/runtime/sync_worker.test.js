@@ -714,6 +714,38 @@ test("runSyncPushCli falls back to DEFAULT_DEBOUNCE_MS when --debounce-ms is omi
   assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
 })
 
+test("the recovery CLI rejects a blocked publication instead of returning success", async () => {
+  const root = await mkTempRoot("desk-publication-cli-")
+  const env = { XDG_STATE_HOME: await mkTempRoot("desk-publication-cli-state-") }
+  const statusFile = syncStatusPath({ root, env })
+  for (const diagnostic of [null, "PR check workspace-policy failed. Fix: gh pr checks https://github.example/example/workspace/pull/42; token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"]) {
+    if (diagnostic !== null) {
+      await fs.mkdir(path.dirname(statusFile), { recursive: true })
+      await fs.writeFile(statusFile, JSON.stringify({ error: diagnostic }))
+    }
+    await assert.rejects(runSyncPushCli({
+      argv: ["--root", root], env,
+      runWorker: async () => ({ result: "blocked", reason: "publication_blocked", unpushed: 1 }),
+    }), (error) => {
+      assert.match(error.message, /publication.*blocked/iu)
+      assert.match(error.message, /local commits.*preserved/iu)
+      assert.match(error.message, /Fix:.*sync-push\.js/u)
+      assert.doesNotMatch(error.message, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/u)
+      if (diagnostic !== null) assert.match(error.message, /workspace-policy failed/u)
+      return true
+    })
+  }
+})
+
+test("the recovery CLI preserves intentional busy and skipped outcomes", async () => {
+  for (const result of ["busy", "skipped", "ok"]) {
+    assert.equal(await runSyncPushCli({
+      argv: ["--root", "/made-up/workspace"], env: {},
+      runWorker: async () => ({ result }),
+    }), 0)
+  }
+})
+
 // ---------------------------------------------------------------------------
 // finalUnpushedCheck (sync-end.cjs's own SessionEnd/sessionEnd safety net).
 // ---------------------------------------------------------------------------

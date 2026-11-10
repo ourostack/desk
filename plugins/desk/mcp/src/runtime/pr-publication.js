@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url"
+import { shellQuote } from "../util/shell-quote.js"
 
 const POLICY = ".desk/publication.json"
 const FIELDS = "number,url,state,isDraft,headRefOid,baseRefName,baseRefOid,statusCheckRollup,mergeCommit"
@@ -39,22 +40,30 @@ function repository(remote) {
   return { host, name, full: `${host}/${name}` }
 }
 
-function checkState(pr, required) {
+const checkIdentity = (check) => JSON.stringify([check.name ?? check.context, check.detailsUrl ?? check.targetUrl ?? null])
+
+function checkState(pr, required, observed) {
   if (!Array.isArray(pr.statusCheckRollup)) throw new Error("GitHub did not return the PR check states")
   const checks = pr.statusCheckRollup.map((check) => ({
+    id: checkIdentity(check),
     name: check.name ?? check.context,
     state: check.status === "COMPLETED" ? check.conclusion : check.state ?? "PENDING",
   }))
+  for (const check of checks) observed.set(check.id, check.name)
   const bad = checks.find((check) => ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"].includes(check.state))
   if (bad) throw new Error(`PR check ${bad.name} failed (${bad.state})`)
   const waiting = required.filter((name) => !checks.some((check) => check.name === name && check.state === "SUCCESS"))
-  if (waiting.length > 0) return waiting
-  return checks.filter((check) => !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.state)).map((check) => check.name)
+  const missing = [...observed].filter(([id]) => !checks.some((check) => check.id === id)).map(([, name]) => name)
+  return [...new Set([...waiting, ...missing, ...checks.filter((check) => !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.state)).map((check) => check.name)])]
 }
 
-export function publicationRecovery(root) {
+function commandArgument(value, platform = process.platform) {
+  return platform === "win32" ? `'${value.replaceAll("'", "''")}'` : shellQuote(value)
+}
+
+export function publicationRecovery(root, platform = process.platform) {
   const script = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
-  return `node ${JSON.stringify(script)} --root ${JSON.stringify(root)}`
+  return `node ${commandArgument(script, platform)} --root ${commandArgument(root, platform)}`
 }
 
 /** Publishes one immutable candidate. No upstream ref is pushed; only GitHub's exact-head merge endpoint can advance it. */
@@ -79,7 +88,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     return prs[0]
   }
   const pushed = git(["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`], 60_000)
-  if (pushed.status !== 0) throw new Error(`The contribution branch push was refused by its hook or remote; the upstream branch was not pushed. Fix: git push ${JSON.stringify(upstream.remote)} ${JSON.stringify(`${head}:refs/heads/${branch}`)} to read its admission diagnostic`)
+  if (pushed.status !== 0) throw new Error(`The contribution branch push was refused by its hook or remote; the upstream branch was not pushed. Fix: git push ${commandArgument(upstream.remote)} ${commandArgument(`${head}:refs/heads/${branch}`)} to read its admission diagnostic`)
   let pr = list()
   if (pr === undefined) {
     gh(["pr", "create", "--repo", repo.full, "--head", branch, "--base", base, "--title", "Publish workspace changes",
@@ -95,13 +104,14 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     }
   }
   try {
+    const observed = new Map((pr.statusCheckRollup ?? []).map((check) => [checkIdentity(check), check.name ?? check.context]))
     const deadline = clock.now() + WAIT_MS
     for (;;) {
       pr = view()
       verify(pr)
       if (pr.state === "MERGED") break
       if (pr.baseRefOid !== onto) throw new Error("The publication base advanced; retry to qualify a fresh candidate")
-      const waiting = checkState(pr, policy.required_checks)
+      const waiting = checkState(pr, policy.required_checks, observed)
       if (waiting.length === 0) {
         const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
           "-f", `sha=${head}`, "-f", "merge_method=merge"])
