@@ -96,7 +96,6 @@ test("HTTPS, SCP and SSH publication use an exact-head merge and never push upst
     assert.equal(result.receipt.merge, merged)
     assert.deepEqual(f.calls.filter((call) => call[1] === "push").map((call) => call.at(-1)), [`${head}:refs/heads/desk/publish/${head}`])
     assert.ok(f.calls.some((call) => call.includes(`sha=${head}`)))
-    assert.match(publicationRecovery(f.request.root), /sync-push\.js.*--root \/made-up\/workspace/u)
   }
 })
 
@@ -257,20 +256,22 @@ test("status-context pagination is complete and malformed status states fail clo
   }
 })
 
-test("recovery commands preserve literal paths in POSIX shells and PowerShell", () => {
+test("recovery commands preserve simple and metacharacter paths in POSIX shells and PowerShell", () => {
   for (const platform of ["linux", "win32"]) {
-    const root = platform === "win32" ? "C:\\Desk Space\\O'Brien\\$DeskReviewMissing\\`literal`" : "/Desk Space/O'Brien/$DeskReviewMissing/`literal`"
-    const command = publicationRecovery(root, platform)
-    const args = platform === "win32"
-      ? ["-NoProfile", "-NonInteractive", "-Command", `function node { ConvertTo-Json -Compress -InputObject @($args) }; ${command}`]
-      : ["-c", `node() { printf '%s\\0' "$@"; }; ${command}`]
-    const result = spawnSync(platform === "win32" ? "pwsh" : "bash", args, { encoding: "utf8", timeout: 10_000 })
-    assert.equal(result.status, 0, result.stderr)
-    const actual = platform === "win32" ? JSON.parse(result.stdout) : result.stdout.split("\0").slice(0, -1)
-    assert.equal(actual.length, 3)
-    assert.equal(actual[1], "--root")
-    assert.equal(actual[2], root)
-    assert.match(actual[0], /sync-push\.js$/u)
+    const special = platform === "win32" ? "C:\\Desk Space\\O'Brien\\$DeskReviewMissing\\`literal`" : "/Desk Space/O'Brien/$DeskReviewMissing/`literal`"
+    for (const root of ["/made-up/workspace", special]) {
+      const command = publicationRecovery(root, platform)
+      const args = platform === "win32"
+        ? ["-NoProfile", "-NonInteractive", "-Command", `function node { ConvertTo-Json -Compress -InputObject @($args) }; ${command}`]
+        : ["-c", `node() { printf '%s\\0' "$@"; }; ${command}`]
+      const result = spawnSync(platform === "win32" ? "pwsh" : "bash", args, { encoding: "utf8", timeout: 10_000 })
+      assert.equal(result.status, 0, result.stderr)
+      const actual = platform === "win32" ? JSON.parse(result.stdout) : result.stdout.split("\0").slice(0, -1)
+      assert.equal(actual.length, 3)
+      assert.equal(actual[1], "--root")
+      assert.equal(actual[2], root)
+      assert.match(actual[0], /sync-push\.js$/u)
+    }
   }
 })
 
