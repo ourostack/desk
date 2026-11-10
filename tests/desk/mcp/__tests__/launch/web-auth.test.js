@@ -788,7 +788,8 @@ test("a closed selected Page refuses navigation instead of choosing another tab"
     native.page.emit("close")
     await assert.rejects(adapter.call(["goto", "https://synthetic.invalid/"]), /AUTH_CONTEXT_REFUSED/u)
     assert.equal(other.calls.some(call => call[0] === "goto"), false)
-    await assert.rejects(adapter.call(["tab-close"]), /AUTH_TARGET_REFUSED/u)
+    await assert.rejects(adapter.call(["tab-close"]), /AUTH_TAB_REFUSED.*tab-list/u)
+    await assert.rejects(adapter.call(["tab-select", "3"]), /AUTH_TAB_REFUSED.*tab-list/u)
     assert.deepEqual(pages, [other.page])
   } finally { await adapter.close() }
 })
@@ -1738,4 +1739,31 @@ test("a small page that reads as an error gets reload advice; a large page that 
     table.nodeValue[4] = packet.strings.length - 1
     assert.equal((await adapter.call(["snapshot"])).hint, undefined)
   } finally { await adapter.close() }
+})
+
+// Chrome lays out neither a dropdown's options nor any option's text, so a shown select keeps them readable.
+function selectPage({ selectShown = true, optionCss = null } = {}) {
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  table.parentIndex.push(2, 4, 5, 4, 7, 7, 8, 2, 11)
+  table.nodeType.push(1, 1, 3, 1, 1, 3, 3, 1, 3)
+  table.nodeName.push(s("SELECT"), s("OPTION"), s("#text"), s("OPTGROUP"), s("OPTION"), s("#text"), s("#text"), s("P"), s("#text"))
+  table.nodeValue.push(-1, -1, s("Apple"), -1, -1, s("Group text"), s("Banana"), -1, s("Hidden paragraph"))
+  table.backendNodeId.push(105, 106, 107, 108, 109, 110, 111, 112, 113)
+  table.attributes.push([s("aria-label"), s("Fruit")], [], [], [], [], [], [], [], [])
+  const css = layout.styles[0]
+  if (selectShown) { layout.nodeIndex.push(4); layout.styles.push(css.slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1) }
+  if (optionCss) { layout.nodeIndex.push(8); layout.styles.push([s(optionCss), css[1], css[2]]); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1) }
+  return packet
+}
+
+test("a shown select keeps its options readable though they have no layout, and nothing else unlaid is read", () => {
+  const text = JSON.stringify(sanitize(selectPage()))
+  noPassword(text)
+  for (const label of ["Apple", "Banana", "Group text"]) assert.ok(text.includes(label), label)
+  assert.equal(text.includes("Hidden paragraph"), false)
+  assert.equal(JSON.stringify(sanitize(selectPage({ selectShown: false }))).includes("Apple"), false, "a hidden select's options are not read")
+  assert.equal(JSON.stringify(sanitize(selectPage({ optionCss: "none" }))).includes("Banana"), false, "an option styled away is not read")
 })

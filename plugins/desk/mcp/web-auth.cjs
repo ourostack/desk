@@ -60,9 +60,10 @@ var HINTS = {
   AUTH_CONTROL_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine.",
   AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
   AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
+  AUTH_TAB_REFUSED: "There is no such open tab. Run [\"tab-list\"] and use an index from it with tab-select.",
   AUTH_OUTPUT_TOO_LARGE: "The page is too large to read whole. Go to a narrower page (a single item or chat) with goto, or close panels you do not need.",
   AUTH_TIMEOUT: "The command ran out of time, so this context was closed. Open a new one with browser_context and start again; keep waits under a minute.",
-  AUTH_CONTEXT_REFUSED: "This context is closed. Open a new one with browser_context.",
+  AUTH_CONTEXT_REFUSED: "This context, or its selected tab, is closed. If [\"tab-list\"] shows tabs, select one with tab-select; otherwise open a new context with browser_context.",
   AUTH_TIMEOUT_CLOSE_FAILED: "Open a new context with browser_context.",
   AUTH_RUNTIME_POLICY_REFUSED: "This Desk process cannot protect authenticated output now. Close the context and open a new one with browser_context; if it repeats, report it with desk_doctor.",
   AUTH_READER_REFUSED: "The tab was replaced or closed. Run [\"tab-list\"], select a tab, then snapshot.",
@@ -395,7 +396,7 @@ function prepare(packet, scope, frameId, nextRef) {
     if (row.excluded) return null;
     // Only what the page renders is read: text with no layout, or hidden, is not on screen (Teams keeps a hidden
     // "Oops, unknown error!" template in its DOM that would read as a failure).
-    if (row.type === 3) return shown(row) ? { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) } : null;
+    if (row.type === 3) return shown(row) || listed(row) ? { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) } : null;
     if (row.type !== 1 && row.type !== 9) return null;
     var node = { role: ROLES[row.name] || (row.type === 9 ? "document" : "generic"), children: [] };
     var visible = shown(row);
@@ -432,10 +433,18 @@ function prepare(packet, scope, frameId, nextRef) {
     }
     // An element that is not on screen and holds nothing that is is left out (display: contents keeps its shown
     // children); a hidden control or private region still shows as redacted.
-    if (row.type === 1 && !visible && !row.frame && !node.children.length) return null;
+    if (row.type === 1 && !visible && !row.frame && !node.children.length && !listed(row)) return null;
     return node;
   }
   function shown(row) { return row.css.length === 3 && row.css[0] !== "none" && ["hidden", "collapse"].indexOf(row.css[1]) === -1; }
+  // A dropdown's options (and a list box's option text) have no layout of their own, yet they are what a shown select
+  // offers; only an option styled away is left out.
+  function listed(row) {
+    if (row.css.length === 3) return false;
+    var up = row.parent;
+    while (["OPTION", "OPTGROUP"].indexOf(up.name) !== -1 && (up.css.length !== 3 || shown(up))) up = up.parent;
+    return up.name === "SELECT" && shown(up);
+  }
   try {
     var tree = render(rows[0]);
     dataOnly(tree);
@@ -794,7 +803,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var pages = context.pages();
     var page = selected;
     var command = args[0];
-    if (command === "tab-select") { requireTrue(Number(args[1]) < pages.length, "AUTH_TARGET_REFUSED"); selected = pages[Number(args[1])]; page = selected; }
+    if (command === "tab-select") { requireTrue(Number(args[1]) < pages.length, "AUTH_TAB_REFUSED"); selected = pages[Number(args[1])]; page = selected; }
     if (command === "tab-new") {
       try { checkRuntime(); page = await context.newPage(); checkRuntime(); selected = page; }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
@@ -802,7 +811,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "tab-list") return { tabs: context.pages().map(function (tab, index) { return { index: index, selected: tab === selected }; }) };
     if (command === "tab-close") {
       try {
-        requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TARGET_REFUSED");
+        requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TAB_REFUSED");
         checkRuntime(); await page.close(); checkRuntime(); selected = context.pages()[0];
         dropRefs(); checkRuntime(); return { closed: true };
       }
