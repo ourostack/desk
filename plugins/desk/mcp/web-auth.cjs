@@ -9,6 +9,10 @@ var STYLES = ["display", "visibility", "-webkit-user-modify"];
 var TARGET_WAIT_MS = 2000;
 var SNAPSHOT_ATTEMPTS = 5;
 var SNAPSHOT_SETTLE_MS = 250;
+// Refs from this many of the latest reads stay usable: an agent often reads twice (find, then find again) before it
+// acts. Every action re-resolves its ref against the page as it is now, so an older ref acts only on its own node.
+var REF_READS = 3;
+var NAVIGATIONS = ["goto", "go-back", "go-forward", "reload"];
 // wait: a bare wait pauses this long; no wait outlasts half the command time or a minute; text is looked for this often.
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
@@ -55,8 +59,8 @@ var HINTS = {
   AUTH_COMMAND_REFUSED: "Commands in mine: " + COMMANDS + ". eval and page scripts are never needed: snapshot, then act on its refs; to let a page load, use wait.",
   AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
   AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
-  AUTH_TARGET_REFUSED: "That ref is not from the latest snapshot of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
-  AUTH_SNAPSHOT_INVALIDATED: "The page changed under that ref. " + SNAPSHOT_AGAIN + " On a page that keeps changing, act right after the snapshot.",
+  AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
+  AUTH_SNAPSHOT_INVALIDATED: "The page changed while it was read, or under that ref. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"]; on a page that keeps changing, act soon after reading it.",
   AUTH_PROTECTION_INVALIDATED: CHANGING,
   AUTH_REDACTION_INVALIDATED: CHANGING,
   AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, read the frame's own page with goto, or use another way in.",
@@ -632,6 +636,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   var refs = new Map();
   var cleanupRecords = new Set();
   var next = 0;
+  // A wait's polls are reads the agent never sees: their refs are kept apart until one is returned.
+  var polled = new WeakMap();
   var selected = context.pages()[0];
   var queue = Promise.resolve();
   var pending = new Set();
@@ -768,7 +774,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     requireTrue(JSON.stringify(current.protection) === JSON.stringify(prepared.protection), "AUTH_PROTECTION_INVALIDATED");
     requireTrue(current.redaction === prepared.redaction, "AUTH_REDACTION_INVALIDATED");
   }
-  async function snapshot(reader, save, applied) {
+  async function snapshot(reader, save, applied, poll) {
     var provisional = [];
     var staged;
     var stageIdentity;
@@ -825,7 +831,6 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           }
         }
       }
-      dropRefs();
       qualified = await qualify(reader);
       same(before, qualified, reader, epoch);
       await verifyProtection(reader, qualified, prepared, epoch);
@@ -837,6 +842,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         fs.renameSync(staged, final); staged = undefined; result.artifact = final;
       }
       provisional.forEach(function (record) { refs.set(record.ref, record); });
+      if (poll) polled.set(result, provisional);
+      else counted(reader, provisional);
       return result;
     } catch (error) {
       primary = knownFailure(error) ? safeFailure(error).code : "AUTH_SNAPSHOT_FAILED";
@@ -857,9 +864,19 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }
   }
   // Live pages (clocks, relative times, loading) change between reads; take a fresh, fully re-qualified snapshot.
-  async function settled(reader, save, applied) {
+  // One more read of this tab: its refs join the last REF_READS reads, and older ones go.
+  function counted(reader, records) {
+    reader.reads = (reader.reads || 0) + 1;
+    records.forEach(function (record) { record.read = reader.reads; });
+    refs.forEach(function (record, ref) { if (record.reader === reader && record.read <= reader.reads - REF_READS) refs.delete(ref); });
+  }
+  function unpolled(records) {
+    // Ref numbers never repeat and nothing else runs during a wait, so these are still the poll's own records.
+    records.forEach(function (record) { refs.delete(record.ref); });
+  }
+  async function settled(reader, save, applied, poll) {
     for (var attempt = 1; ; attempt++) {
-      try { return await snapshot(reader, save, applied); }
+      try { return await snapshot(reader, save, applied, poll); }
       catch (error) {
         // snapshot() only throws branded failures.
         if (closed || attempt >= attempts || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
@@ -880,24 +897,29 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       return paused;
     }
     var deadline = Date.now() + limit;
+    var last;
+    var pending = [];
     for (;;) {
-      var last;
-      try { last = await settled(reader, false, false); }
+      unpolled(pending);
+      pending = [];
+      try { last = await settled(reader, false, false, true); pending = polled.get(last); }
       catch (error) {
         if (closed || RETRIED.indexOf(safeFailure(error).code) === -1 || Date.now() >= deadline) throw error;
         last = undefined;
       }
       if (last && shows(last.snapshot, plan.text) !== plan.gone) {
         last.waited = { text: plan.text, found: true };
+        counted(reader, pending);
         return last;
       }
       if (last && Date.now() >= deadline) {
+        counted(reader, pending);
         last.waited = { text: plan.text, found: false };
         last.hint = "The text did not " + (plan.gone ? "go" : "show") + " within " + limit / 1000 + " s. Read this snapshot; if the page is still loading, wait again.";
         return last;
       }
+      // The next poll rechecks the runtime policy first thing, after this poll's refs are dropped.
       await sleep(WAIT_POLL_MS);
-      checkRuntime();
     }
   }
   async function execute(args) {
@@ -932,7 +954,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "wait") return wait(reader, waitPlan(args));
     var applied = false;
     try {
-      if (["goto", "go-back", "go-forward", "reload", "resize", "mousewheel"].indexOf(command) !== -1) {
+      if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
         checkRuntime();
         applied = true;
         if (command === "goto") await page.goto(args[1], { timeout: timeoutMs });
@@ -1005,7 +1027,14 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           try { await disposeRecords([bound]); } catch (cleanupError) { if (!actionError) throw cleanupError; }
         }
       }
-      var outcome = await settled(reader, false, applied);
+      var outcome;
+      try { outcome = await settled(reader, false, applied); }
+      catch (error) {
+        // A page still loading changes faster than it can be read. The navigation itself went through, so it says so
+        // and how to read the page, rather than refusing what already happened.
+        if (NAVIGATIONS.indexOf(command) === -1 || closed || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
+        return { navigated: true, hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
+      }
       if (typed) outcome.typed = typed;
       return outcome;
     } catch (error) {

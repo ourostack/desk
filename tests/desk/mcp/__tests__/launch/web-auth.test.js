@@ -1872,3 +1872,80 @@ test("a page too long to read in one reply says how to see the rest, in every vi
     }
   } finally { await adapter.close() }
 })
+
+test("refs from the last three reads stay usable, and older ones are refused", async () => {
+  const root = await mkTempRoot("auth-native-ref-reads-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root)
+  try {
+    const first = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    await adapter.call(["find", "password"])
+    await adapter.call(["wait", "--text", "password"])
+    await adapter.call(["click", first])
+    assert.ok(native.calls.some(call => call[0] === "click"), "a ref from three reads ago still acts")
+    const second = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    for (let i = 0; i < 3; i++) await adapter.call(["snapshot"])
+    await assert.rejects(adapter.call(["click", second]), /AUTH_TARGET_REFUSED.*last 3 reads/u)
+    await assert.rejects(adapter.call(["click", first]), /AUTH_TARGET_REFUSED/u)
+    // A wait that polls many times counts as one read, and its unseen polls leave no refs behind.
+    const held = (await adapter.call(["find", "password"])).text.match(/\[ref=(e\d+)\]/u)[1]
+    const before = Math.max(...JSON.stringify(await adapter.call(["snapshot"])).match(/e\d+/gu).map(ref => Number(ref.slice(1))))
+    const polled = await adapter.call(["wait", "never shows"])
+    assert.equal(polled.waited.found, false)
+    await adapter.call(["click", held])
+    const returned = polled.snapshot.children[0].children[0].children[0].ref
+    assert.ok(Number(returned.slice(1)) > before + 1, "the wait read the page more than once")
+    await adapter.call(["click", returned])
+    const kept = new Set(JSON.stringify(polled.snapshot).match(/e\d+/gu))
+    for (let ref = before + 1; ref < Number(returned.slice(1)); ref++) {
+      if (kept.has(`e${ref}`)) continue
+      await assert.rejects(adapter.call(["click", `e${ref}`]), /AUTH_TARGET_REFUSED/u, `poll ref e${ref} is not kept`)
+    }
+  } finally { await adapter.close() }
+})
+
+test("a wait stopped by the runtime policy leaves none of its polls' refs behind", async () => {
+  const root = await mkTempRoot("auth-native-wait-policy-")
+  const native = fakeDriver()
+  let blocked = false
+  let checks = 0
+  const adapter = auth.create(native.context, root, 8000, () => { if (blocked && ++checks > 40) throw new Error(PASSWORD) }, ONCE)
+  try {
+    const before = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    blocked = true
+    await assert.rejects(adapter.call(["wait", "never shows"]), /AUTH_RUNTIME_POLICY_REFUSED/u)
+    blocked = false
+    const after = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0].ref
+    for (let ref = Number(before.slice(1)) + 1; ref < Number(after.slice(1)) - 3; ref++) {
+      await assert.rejects(adapter.call(["click", `e${ref}`]), /AUTH_TARGET_REFUSED/u, `e${ref}`)
+    }
+  } finally { await adapter.close() }
+  // The same refusal after a poll that itself failed (the page never settled) has no refs to drop.
+  let churn = false
+  let late = 0
+  const busy = fakeDriver({ hook: ({ method, cdp }) => { if (churn && method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const unsettled = auth.create(busy.context, await mkTempRoot("auth-native-wait-policy-busy-"), 8000, () => { if (churn && ++late > 30) throw new Error(PASSWORD) }, ONCE)
+  try {
+    await unsettled.call(["snapshot"])
+    churn = true
+    await assert.rejects(unsettled.call(["wait", "never shows"]), /AUTH_(RUNTIME_POLICY_REFUSED|SNAPSHOT_INVALIDATED)/u)
+  } finally { await unsettled.close() }
+})
+
+test("a navigation whose page is still loading reports that it went through and how to read the page", async () => {
+  const root = await mkTempRoot("auth-native-loading-")
+  let loading = false
+  const native = fakeDriver({ hook: ({ method, cdp }) => { if (loading && method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const adapter = adapterFor(native, root)
+  try {
+    loading = true
+    for (const args of [["goto", "https://synthetic.invalid/next"], ["reload"], ["go-back"], ["go-forward"]]) {
+      const result = await adapter.call(args)
+      assert.equal(result.navigated, true, String(args))
+      assert.match(result.hint, /\["wait"/u)
+    }
+    await assert.rejects(adapter.call(["mousewheel", "0", "10"]), /AUTH_SNAPSHOT_INVALIDATED.*wait/u, "other actions still refuse an unread page")
+    loading = false
+    assert.ok((await adapter.call(["goto", "https://synthetic.invalid/"])).snapshot, "a settled page is read as before")
+  } finally { await adapter.close() }
+})
