@@ -41,6 +41,37 @@ const TASK_TARGET = {
 
 const DISPLAY_LABEL = text("Optional transient display proposal for the current focused task: author a short safe functional description, at most 72 Unicode code points. Never supply paths, URLs, email addresses or credential-like values. Omitted/unsafe labels do not change task CRUD. A proposal is not an applied native name, activity, ownership or delivery proof; no card title is used as a fallback.")
 
+const CONTENT_HOME = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    purpose: text("A context or product purpose from the repository's published .desk/content-home.json; mixed requires sections. Unknown or ambiguous purposes are refused, not inferred from filenames."),
+    lifecycle: { type: "string", enum: ["current", "historical"], description: "Whether the supplied material is current or preserved historical source." },
+    product_repository: text("Canonical owner/repository for new authoritative product material. A different repository is refused; source preservation is not a new execution lease."),
+    source_reference: text("Original provenance, restrictions, or unknown. Preserving evidence grants no public-copy, migration, deletion, or execution permission."),
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          subject: text("Mutation subject: a task_update field such as note or body_append (objects use JSON.stringify), desk_save files/<index>/content, or paths/<index>."),
+          start: integer("Inclusive UTF-8 byte offset; may be omitted for one section covering the whole subject."),
+          end: integer("Exclusive UTF-8 byte offset; may be omitted for one section covering the whole subject."),
+          purpose: text("Declared context or product purpose from the published policy."),
+          lifecycle: { type: "string", enum: ["current", "historical"], description: "Current material or preserved historical source." },
+          product_repository: text("Canonical owner/repository for current product authority."),
+          source_reference: text("Source provenance, restrictions, or unknown; not public-copy clearance."),
+        },
+        required: ["subject", "purpose", "lifecycle"],
+      },
+      description: "For mixed content, classify every subject's exact bytes once, in order, without gaps or overlaps. No partial batch is written.",
+    },
+  },
+  required: ["purpose"],
+  description: "Required only by repositories with a published .desk/content-home.json. Purpose/lifecycle admission happens before mutation; preserves CIT-style project context and historical evidence, refuses wrong-home current product authority, and surfaces ambiguous mixed sections. Does not classify semantic truth, migrate sources, authorize publication, or cover other tools.",
+}
+
 const CARD_UPDATE = {
   frontmatter: {
     type: "object",
@@ -195,7 +226,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, content_home: CONTENT_HOME }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),
@@ -280,6 +311,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     note: text("The note's path as session start listed it (desks/<you>/_inbox/<file>.md), or its file name."),
   }, ["note"]),
   desk_save: schema({
+    content_home: CONTENT_HOME,
     paths: list("The paths to commit, relative to the desk root. Required unless `files` is given."),
     files: {
       type: "array",

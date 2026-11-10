@@ -18,7 +18,7 @@
 // written, so a refused call writes nothing.
 
 import * as path from "node:path"
-import { existsSync, statSync, lstatSync, realpathSync, constants as fsConstants, promises as fs } from "node:fs"
+import { existsSync, statSync, lstatSync, realpathSync, readFileSync, readlinkSync, constants as fsConstants, promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
@@ -27,12 +27,13 @@ import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, index
 import { commitFailure, commitRoute } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
+import { admitContent, assertCleanContentTarget } from "../desk/content-home.js"
 
 // Every field desk_save reads off `input`, kept next to the handler so a
 // field added to its reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_SAVE_FIELDS = ["paths", "files", "message", "tidy"]
+export const DESK_SAVE_FIELDS = ["paths", "files", "message", "tidy", "content_home"]
 
 const TIDY_TRAILER = "Desk-Tidy: true"
 
@@ -222,8 +223,35 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
       throw new Error(`desk_save: remove ${relativePath} from \`paths\` and write the task card with task_update, task_create, task_move or task_archive, which commit it; to commit a tidy that moved cards, pass tidy: true`)
     }
   }
+  const checked = files.length > 0 ? await checkFiles(deskRoot, person, effectiveRoot, files) : []
+  const contentAdmission = admitContent({
+    deskRoot,
+    tool: "desk_save",
+    declaration: values.content_home,
+    subjects: () => {
+      const subjects = files.map((file, i) => ({ id: `files/${i}/content`, content: file.content }))
+      const supplied = new Set(files.map((file) => path.resolve(deskRoot, file.path)))
+      for (const [i, relativePath] of paths.entries()) {
+        if (PATHSPEC_SPECIAL.test(relativePath)) throw new Error("desk_save: content_home_unresolved: use exact file paths with forward slashes, not Git patterns or magic; nothing was written or committed")
+        const absolute = path.resolve(deskRoot, relativePath)
+        if (supplied.has(absolute)) continue
+        const entry = lstatSync(absolute, { throwIfNoEntry: false })
+        if (entry?.isDirectory()) throw new Error("desk_save: content_home_unresolved: use exact file paths so every committed subject has a declared purpose; nothing was written or committed")
+        let content = Buffer.alloc(0)
+        if (entry !== undefined) {
+          if (!isPathContained(realpathSync.native(effectiveRoot), realpathSync.native(path.dirname(absolute)))) {
+            throw new Error("desk_save: content_home_unresolved: a path leads outside the write prefix; nothing was written or committed")
+          }
+          content = entry.isSymbolicLink() ? Buffer.from(readlinkSync(absolute), "utf8") : readFileSync(absolute)
+        }
+        subjects.push({ id: `paths/${i}`, content })
+      }
+      return subjects
+    },
+  })
+  for (const { absolute } of checked) assertCleanContentTarget(deskRoot, path.relative(deskRoot, absolute), contentAdmission, "desk_save")
   if (files.length > 0) {
-    await writeFiles(await checkFiles(deskRoot, person, effectiveRoot, files))
+    await writeFiles(checked)
     paths.push(...files.map((file) => file.path).filter((p) => !paths.includes(p)))
   }
 
@@ -231,7 +259,11 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     return { status: "nothing_to_commit" }
   }
 
-  if (tidy) return commitTidy({ deskRoot, paths, message, spawnGit, schedulePush })
+  if (tidy) {
+    const result = commitTidy({ deskRoot, paths, message, spawnGit, schedulePush })
+    if (contentAdmission !== null) result.content_admission = contentAdmission
+    return result
+  }
 
   // No unstaged change, no untracked file and no staged change at any of these paths means there is nothing here to commit:
   // most often a path that was never actually written. Checking this before staging means a caller's typo never becomes an
@@ -269,6 +301,7 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   const deskCommit = headSha(deskRoot, spawnGit)
   schedulePush({ root: deskRoot })
   const answer = { status: "committed", ...deskPushNote({ root: deskRoot, spawnGit, note: DESK_SAVE_NOTE }), desk_pushed: false }
+  if (contentAdmission !== null) answer.content_admission = contentAdmission
   return deskCommit === null ? answer : { ...answer, desk_commit: deskCommit, desk_commit_note: DESK_COMMIT_HASH_NOTE }
 }
 
