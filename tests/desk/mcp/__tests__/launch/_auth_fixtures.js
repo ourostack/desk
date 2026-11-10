@@ -112,7 +112,7 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   const handles = new Map()
   for (const id of packet.documents[0].nodes.backendNodeId) {
     const handle = { dispose: async () => { calls.push(["dispose", id]) } }
-    for (const method of ["click", "dblclick", "fill", "type", "press", "selectOption", "check", "uncheck", "hover"]) {
+    for (const method of ["scrollIntoViewIfNeeded", "click", "dblclick", "fill", "type", "press", "selectOption", "check", "uncheck", "hover"]) {
       handle[method] = async (...args) => {
         calls.push([method, ...args])
         if (method === "fill" || method === "type") {

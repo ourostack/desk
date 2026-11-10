@@ -694,6 +694,24 @@ test("an action's element handle is disposed after use and a failed disposal is 
   }
 })
 
+test("an action scrolls its element into view first, so a button enabled only once seen (GitHub's Authorize) is clicked", async () => {
+  const root = await mkTempRoot("auth-action-scroll-")
+  const native = fakeDriver()
+  const handle = native.handles.get(104)
+  let seen = false
+  handle.scrollIntoViewIfNeeded = async (options) => { native.calls.push(["scrollIntoViewIfNeeded", options]); seen = true }
+  // Like Playwright's click, the action waits for the element to be enabled before it would scroll; it never is unless seen.
+  handle.click = async () => { if (!seen) throw new Error("timeout waiting for enabled " + PASSWORD); native.calls.push(["click"]) }
+  const adapter = adapterFor(native, root)
+  try {
+    const input = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
+    await adapter.call(["click", input.ref])
+    const order = native.calls.map((call) => call[0]).filter((name) => name === "scrollIntoViewIfNeeded" || name === "click")
+    assert.deepEqual(order, ["scrollIntoViewIfNeeded", "click"])
+    assert.deepEqual(native.calls.find((call) => call[0] === "scrollIntoViewIfNeeded")[1], { timeout: 5000 })
+  } finally { await adapter.close() }
+})
+
 test("an action disposes its element handle and binds the path of the ref it names", async () => {
   const root = await mkTempRoot("auth-action-bind-")
   const native = fakeDriver()
