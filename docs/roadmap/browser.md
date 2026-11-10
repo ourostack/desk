@@ -15,7 +15,7 @@ On October 25, 2026 Desk's browser became two choices, `fresh` and `mine`, run h
 ## Known gap
 
 - **Unavailable essential session files:** `mine` refuses linked, unreadable or unqualified `Local State`/cookie files rather than claiming a protected signed-in copy. Files held by the running browser can therefore prevent a copy. Desk does not use administrator snapshots, read credential stores or modify the original profile to work around that refusal.
-- **Broader authenticated native output:** the first owned producer supports a single main document and qualified light-DOM actions. Child/OOPIF coverage, closed-shadow handling and open-shadow actions require their own qualified mechanisms; unsupported scope refuses rather than reverting to raw CLI output. Native/browser-build/installed qualification remains separate from synthetic source tests.
+- **Broader authenticated native output:** the owned producer reads the main document and supports qualified light-DOM actions. Child frames (same-process and OOPIF) are shown as empty `frame` nodes and never read; reading their content, closed-shadow handling and open-shadow actions require their own qualified mechanisms; unsupported scope refuses rather than reverting to raw CLI output. Native/browser-build/installed qualification remains separate from synthetic source tests.
 
 ## Out of scope
 

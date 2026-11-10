@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
 import { mkTempRoot } from "../_temp_roots.js"
-import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, PASSWORD } from "./_auth_fixtures.js"
+import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, PASSWORD, FRAME_TEXT, FALLBACK_TEXT } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
 const auth = require("../../../../../plugins/desk/mcp/web-auth.cjs")
@@ -154,6 +154,30 @@ test("overlap match budgets accept the boundary and refuse excess before renderi
   assert.throws(() => sanitize(overlappingValueSnapshot(["a", "z"], "a".repeat(200001))), /AUTH_OUTPUT_TOO_LARGE/u)
 })
 
+// The sign-in page plus `extra` visible DIVs, the shape of a large real page such as a store product page.
+function widePage(extra) {
+  const packet = nativeSnapshot()
+  const document = packet.documents[0]
+  const nodes = document.nodes
+  packet.strings.push("DIV")
+  const div = packet.strings.length - 1
+  const css = document.layout.styles[0]
+  for (let i = 0; i < extra; i++) {
+    nodes.parentIndex.push(2); nodes.nodeType.push(1); nodes.nodeName.push(div); nodes.nodeValue.push(-1)
+    nodes.backendNodeId.push(1000 + i); nodes.attributes.push([])
+    document.layout.nodeIndex.push(nodes.nodeType.length - 1); document.layout.styles.push(css.slice())
+    document.layout.bounds.push([0, 0, 100, 20]); document.layout.text.push(-1)
+  }
+  return packet
+}
+
+test("large real pages are read; a main document beyond 100,000 nodes is refused", () => {
+  const tree = sanitize(widePage(25000))
+  assert.equal(tree.children[0].children[0].children.length, 25001)
+  noPassword(tree)
+  assert.throws(() => sanitize(widePage(100000)), /AUTH_OUTPUT_TOO_LARGE/u)
+})
+
 test("malformed native control and style fields refuse instead of guessing", () => {
   for (const mutate of [
     (p) => { p.documents[0].nodes.inputValue = { index: [], value: [] } },
@@ -193,6 +217,36 @@ test("closed shadow and missing author controls refuse; open shadow controls sta
   assert.throws(() => auth.inspect(dom.root), /AUTH_SHADOW/u)
 })
 
+test("a child frame's document, fallback and controls are omitted from the main-document read", () => {
+  const packet = framedSnapshot()
+  let next = 0
+  const prepared = auth.prepare(packet, auth.inspect(inspectedDOM(packet).root), "main", () => ++next)
+  const text = JSON.stringify(prepared.tree)
+  assert.ok(text.includes("Main product title"))
+  for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, PASSWORD]) assert.equal(text.includes(hidden), false)
+  assert.equal(prepared.frames, 1)
+  const frame = prepared.tree.children[0].children[0].children.find((node) => node.role === "frame")
+  assert.deepEqual(frame.children, [])
+})
+
+test("only frame owners may own child documents, and the main document must come first", () => {
+  const dom = inspectedDOM(framedSnapshot())
+  dom.root.children[0].children[0].children[0].contentDocument = { nodeType: 9, nodeName: "#document", backendNodeId: 999, children: [] }
+  assert.throws(() => auth.inspect(dom.root), /AUTH_FRAME_COVERAGE_REFUSED/u)
+  for (const mutate of [
+    (p) => { p.documents[0].nodes.contentDocumentIndex.index = [3] },
+    (p) => { p.documents[0].nodes.contentDocumentIndex.value = [0] },
+    (p) => { p.documents[0].nodes.contentDocumentIndex.value = [2] },
+    (p) => { p.documents[0].nodes.contentDocumentIndex = { index: [5] } },
+    (p) => { p.documents.reverse() },
+  ]) {
+    const packet = framedSnapshot()
+    const scope = auth.inspect(inspectedDOM(packet).root)
+    mutate(packet)
+    assert.throws(() => auth.prepare(packet, scope, "main", () => 1), /AUTH_/u)
+  }
+})
+
 test("allowed actions pass literal data and all raw commands are refused before dispatch", async () => {
   const root = await mkTempRoot("auth-actions-")
   const native = fakeDriver()
@@ -218,7 +272,7 @@ test("allowed actions pass literal data and all raw commands are refused before 
 
 test("frame contradictions and API errors never return raw failure text or artifacts", async () => {
   for (const hook of [
-    ({ method, page }) => { if (method === "Page.getFrameTree") page.frames = () => [page.mainFrame(), {}] },
+    ({ method }) => { if (method === "Page.getFrameTree") throw new Error(PASSWORD) },
     ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD) },
   ]) {
     const root = await mkTempRoot("auth-refusal-")
@@ -869,16 +923,54 @@ test("an isolated stage-close failure remains owned through failed close and suc
   }
 })
 
-test("frame-tree children refuse complete output even when the public frame list is stale", async () => {
-  const root = await mkTempRoot("auth-tree-child-")
-  const native = fakeDriver()
+function framedDriver() {
+  const native = fakeDriver({ packet: framedSnapshot() })
+  native.page.frames = () => [native.page.mainFrame(), {}]
   const send = native.cdp.send
   native.cdp.send = async (method, params) => method === "Page.getFrameTree"
-    ? { frameTree: { frame: { id: "main", loaderId: "loader" }, childFrames: [{ frame: { id: "child" } }] } }
+    ? { frameTree: { frame: { id: "main", loaderId: "loader" }, childFrames: [{ frame: { id: "child", parentId: "main", loaderId: "child-loader" } }] } }
     : send(method, params)
+  return native
+}
+
+test("a page with child frames is read from its main document and its saved artifact omits every frame", async () => {
+  const root = await mkTempRoot("auth-tree-child-")
+  const native = framedDriver()
   const adapter = adapterFor(native, root)
-  try { await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_FRAME_COVERAGE_REFUSED/u) }
-  finally { await adapter.close() }
+  try {
+    const result = await adapter.call(["snapshot", "--save"])
+    assert.equal(result.framesOmitted, 1)
+    assert.ok(result.text.includes("Main product title"))
+    assert.match(result.text, /^ *- frame/mu)
+    const artifact = fs.readFileSync(result.artifact, "utf8")
+    for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, PASSWORD]) {
+      assert.equal(JSON.stringify(result).includes(hidden), false)
+      assert.equal(artifact.includes(hidden), false)
+    }
+  } finally { await adapter.close() }
+})
+
+test("child-frame navigation does not invalidate a main-document read; main-frame navigation does", async () => {
+  for (const [event, params, settles] of [
+    ["Page.frameNavigated", { frame: { id: "child", parentId: "main", loaderId: "next" } }, true],
+    ["Page.frameAttached", { frameId: "child2", parentFrameId: "child" }, true],
+    ["Page.frameDetached", { frameId: "child" }, true],
+    ["Page.frameNavigated", { frame: { id: "main", loaderId: "next" } }, false],
+  ]) {
+    const root = await mkTempRoot("auth-child-frame-event-")
+    const native = framedDriver()
+    const send = native.cdp.send
+    let reads = 0
+    native.cdp.send = async (method, params2) => {
+      if (method === "DOMSnapshot.captureSnapshot" && ++reads === 1) native.cdp.emit(event, params)
+      return send(method, params2)
+    }
+    const adapter = adapterFor(native, root)
+    try {
+      if (settles) assert.equal((await adapter.call(["snapshot"])).framesOmitted, 1)
+      else await assert.rejects(adapter.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    } finally { await adapter.close() }
+  }
 })
 
 test("runtime changes after successful tab creation retain the applied-effect refusal", async () => {
@@ -987,6 +1079,64 @@ test("checkbox markup values and whitespace never become redaction secrets; type
   assert.equal(JSON.stringify(sanitize(radio)).includes("Echo on"), false, "a text field's value is protected however short")
   radio.documents[0].nodes.attributes[6] = []
   assert.equal(JSON.stringify(sanitize(radio)).includes("Echo on"), false, "an input without a type is a text field")
+})
+
+test("hidden and button input values from markup never become redaction secrets; script-set ones still do", () => {
+  for (const type of ["hidden", "submit", "button", "reset", "image", "HIDDEN"]) {
+    const page = labelledPage({ checkbox: "US", spanValue: "USB Bluetooth" })
+    const table = page.documents[0].nodes
+    table.attributes[6] = [page.strings.indexOf("type"), page.strings.push(type) - 1, page.strings.indexOf("value"), page.strings.indexOf("US")]
+    assert.ok(JSON.stringify(sanitize(page)).includes("USB Bluetooth"), type + " markup is not typed")
+    page.strings.push("SET")
+    table.inputValue.value[1] = page.strings.length - 1
+    page.strings[page.strings.indexOf("USB Bluetooth")] = "SET by script"
+    assert.equal(JSON.stringify(sanitize(page)).includes("SET"), false, type + " value differing from its markup is protected")
+    table.attributes[6] = table.attributes[6].slice(0, 2)
+    assert.equal(JSON.stringify(sanitize(page)).includes("SET"), false, type + " value set without markup is protected")
+  }
+  for (const type of ["text", "number", "email", "search"]) {
+    const page = labelledPage({ checkbox: "US", spanValue: "USB Bluetooth" })
+    page.documents[0].nodes.attributes[6] = [page.strings.indexOf("type"), page.strings.push(type) - 1, page.strings.indexOf("value"), page.strings.indexOf("US")]
+    assert.equal(JSON.stringify(sanitize(page)).includes("USB"), false, type + " fields stay protected even when equal to markup")
+  }
+})
+
+// <div style="display:none">US</div><span>USB Bluetooth Dongle</span>: hidden nodes have no layout row, so no computed style.
+function hiddenTextPage(divAttributes = []) {
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const css = packet.documents[0].layout.styles[0]
+  table.parentIndex.push(2, 4, 2, 6)
+  table.nodeType.push(1, 3, 1, 3)
+  table.nodeName.push(s("DIV"), s("#text"), s("SPAN"), s("#text"))
+  table.nodeValue.push(-1, s("US"), -1, s("USB Bluetooth Dongle"))
+  table.backendNodeId.push(105, 106, 107, 108)
+  table.attributes.push(divAttributes.map(s), [], [], [])
+  packet.documents[0].layout.nodeIndex.push(6, 7)
+  packet.documents[0].layout.styles.push(css.slice(), css.slice())
+  return packet
+}
+
+test("hidden page text inherits its editing mode, so it neither hides as a secret nor redacts visible words", () => {
+  const text = JSON.stringify(sanitize(hiddenTextPage()))
+  noPassword(text)
+  assert.ok(text.includes("USB Bluetooth Dongle"))
+  assert.ok(text.includes("\"US\""), "hidden read-only text is page text")
+  for (const attributes of [["contenteditable", ""], ["contenteditable", "true"], ["contenteditable", "plaintext-only"], ["contenteditable", "TRUE"]]) {
+    const editable = JSON.stringify(sanitize(hiddenTextPage(attributes)))
+    assert.equal(editable.includes("USB"), false, "hidden editable content stays a secret everywhere")
+    assert.ok(editable.includes("[redacted]B Bluetooth Dongle"))
+  }
+  const off = JSON.stringify(sanitize(hiddenTextPage(["contenteditable", "false"])))
+  assert.ok(off.includes("USB Bluetooth Dongle"))
+  const editingBody = hiddenTextPage()
+  editingBody.strings.push("read-write")
+  editingBody.documents[0].layout.styles[1][2] = editingBody.strings.length - 1
+  assert.equal(JSON.stringify(sanitize(editingBody)).includes("USB"), false, "hidden content of an editable ancestor stays a secret")
+  const noAncestor = hiddenTextPage()
+  for (const key of ["nodeIndex", "styles", "bounds", "text"]) noAncestor.documents[0].layout[key].splice(0, 2)
+  assert.equal(JSON.stringify(sanitize(noAncestor)).includes("\"US\""), false, "without a styled ancestor hidden text stays opaque")
 })
 
 test("one node's repeated layout rows must agree", () => {

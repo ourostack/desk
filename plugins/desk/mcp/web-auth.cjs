@@ -9,8 +9,12 @@ var STYLES = ["display", "visibility", "-webkit-user-modify"];
 var TARGET_WAIT_MS = 2000;
 var SNAPSHOT_ATTEMPTS = 5;
 var SNAPSHOT_SETTLE_MS = 250;
+// A large store product page has about 18,000 nodes and 250,000 native values.
+var MAX_NODES = 100000;
+var MAX_VALUES = 2000000;
 var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
+var UNTYPED = new Set(["checkbox", "radio", "hidden", "submit", "button", "reset", "image"]);
 var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "NOSCRIPT"]);
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
 var ARITY = {
@@ -50,7 +54,7 @@ function requireTrue(value, code) {
 
 function dataOnly(value, budget) {
   budget = budget || { nodes: 0, chars: 0, active: new WeakSet() };
-  requireTrue(++budget.nodes <= 200000, "AUTH_OUTPUT_TOO_LARGE");
+  requireTrue(++budget.nodes <= MAX_VALUES, "AUTH_OUTPUT_TOO_LARGE");
   if (typeof value === "string") {
     budget.chars += value.length;
     requireTrue(value.length <= 1048576 && budget.chars <= 16777216, "AUTH_OUTPUT_TOO_LARGE");
@@ -65,7 +69,7 @@ function dataOnly(value, budget) {
   budget.active.add(value);
   try {
     if (Array.isArray(value)) {
-      requireTrue(value.length <= 200000);
+      requireTrue(value.length <= MAX_VALUES);
       for (var i = 0; i < value.length; i++) requireTrue(Object.prototype.hasOwnProperty.call(value, i));
     }
     Object.values(Object.getOwnPropertyDescriptors(value)).forEach(function (descriptor) {
@@ -87,7 +91,8 @@ function inspect(root) {
   function walk(node, parent, cssPath, shadow) {
     requireTrue(node && integer(node.backendNodeId, 1, Number.MAX_SAFE_INTEGER) && !nodes.has(node.backendNodeId));
     requireTrue(integer(node.nodeType, 1, 12) && typeof node.nodeName === "string");
-    requireTrue(!EMBEDDED.has(node.nodeName) && !node.contentDocument, "AUTH_FRAME_COVERAGE_REFUSED");
+    var frame = EMBEDDED.has(node.nodeName);
+    requireTrue(frame || !node.contentDocument, "AUTH_FRAME_COVERAGE_REFUSED");
     var children = node.children || [];
     requireTrue(Array.isArray(children));
     if (node.childNodeCount !== undefined) requireTrue(node.childNodeCount === children.length);
@@ -95,6 +100,8 @@ function inspect(root) {
     nodes.set(entry.id, entry);
     if (entry.name === "INPUT" || entry.name === "TEXTAREA") controls.add(entry.id);
     signature.push([entry.id, entry.type, entry.name, parent, shadow]);
+    // A frame owner is opaque: its child document, fallback content and their controls are never read.
+    if (frame) return;
     var ordinal = new Map();
     children.forEach(function (child) {
       var childPath = cssPath;
@@ -134,7 +141,8 @@ function inspect(root) {
 
 function prepare(packet, scope, frameId, nextRef) {
   dataOnly(packet);
-  requireTrue(Array.isArray(packet.documents) && packet.documents.length === 1, "AUTH_FRAME_COVERAGE_REFUSED");
+  // Child frames' documents follow the main document; they are never read.
+  requireTrue(Array.isArray(packet.documents) && packet.documents.length >= 1, "AUTH_DOCUMENT_REFUSED");
   requireTrue(Array.isArray(packet.strings));
   var strings = packet.strings;
   function text(index, empty) {
@@ -148,7 +156,7 @@ function prepare(packet, scope, frameId, nextRef) {
   var table = document.nodes;
   requireTrue(table && Array.isArray(table.nodeType));
   var count = table.nodeType.length;
-  requireTrue(count > 0 && count <= 20000, "AUTH_OUTPUT_TOO_LARGE");
+  requireTrue(count > 0 && count <= MAX_NODES, "AUTH_OUTPUT_TOO_LARGE");
   ["parentIndex", "nodeName", "nodeValue", "backendNodeId", "attributes"].forEach(function (key) {
     requireTrue(Array.isArray(table[key]) && table[key].length === count);
   });
@@ -165,8 +173,10 @@ function prepare(packet, scope, frameId, nextRef) {
   var input = sparse(table.inputValue);
   var textarea = sparse(table.textValue);
   var shadows = sparse(table.shadowRootType);
-  requireTrue(table.contentDocumentIndex && Array.isArray(table.contentDocumentIndex.index) &&
-    table.contentDocumentIndex.index.length === 0, "AUTH_FRAME_COVERAGE_REFUSED");
+  var owners = table.contentDocumentIndex;
+  requireTrue(owners && Array.isArray(owners.index) && Array.isArray(owners.value) &&
+    owners.index.length === owners.value.length, "AUTH_FRAME_COVERAGE_REFUSED");
+  owners.value.forEach(function (index) { requireTrue(integer(index, 1, packet.documents.length - 1), "AUTH_FRAME_COVERAGE_REFUSED"); });
   var layout = document.layout;
   requireTrue(layout && Array.isArray(layout.nodeIndex) && Array.isArray(layout.styles) &&
     layout.nodeIndex.length === layout.styles.length);
@@ -189,8 +199,9 @@ function prepare(packet, scope, frameId, nextRef) {
     ids.add(id);
     requireTrue(integer(table.nodeType[i], 1, 12) && integer(table.parentIndex[i], i === 0 ? -1 : 0, i - 1));
     var name = text(table.nodeName[i], false);
-    requireTrue(!EMBEDDED.has(name), "AUTH_FRAME_COVERAGE_REFUSED");
-    requireTrue(!shadows.has(i) || shadows.get(i) === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
+    var parent = i === 0 ? null : rows[table.parentIndex[i]];
+    var framed = Boolean(parent && (parent.frame || parent.framed));
+    requireTrue(framed || !shadows.has(i) || shadows.get(i) === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
     var attributes = table.attributes[i];
     requireTrue(Array.isArray(attributes) && attributes.length % 2 === 0);
     var attrs = new Map();
@@ -199,23 +210,28 @@ function prepare(packet, scope, frameId, nextRef) {
       requireTrue(!attrs.has(key));
       attrs.set(key, text(attributes[a + 1]));
     }
-    var control = name === "INPUT" || name === "TEXTAREA";
+    var control = !framed && (name === "INPUT" || name === "TEXTAREA");
     if (control) {
       controls.add(id);
       requireTrue((name === "INPUT" ? input : textarea).has(i));
     }
-    var parent = i === 0 ? null : rows[table.parentIndex[i]];
     var css = style.get(i) || [];
+    // Unrendered (display: none) nodes have no layout row, so no computed style. -webkit-user-modify is inherited
+    // and only contenteditable changes it in markup, so they take their nearest styled ancestor's mode.
+    var editable = attrs.has("contenteditable") ? attrs.get("contenteditable").toLowerCase() : undefined;
+    var modify = style.has(i) ? (css.length === 3 ? css[2] : "unknown") : editable === "false" ? "read-only" :
+      editable !== undefined ? "read-write" : parent ? parent.modify : "unknown";
     var shadow = Boolean(shadows.has(i) || (parent && parent.shadow));
-    var excluded = EXCLUDED.has(name) || Boolean(parent && parent.excluded);
-    var unknown = table.nodeType[i] !== 9 && (css.length !== 3 || css[2] !== "read-only" || shadow);
+    var excluded = EXCLUDED.has(name) || framed || Boolean(parent && parent.excluded);
+    var unknown = table.nodeType[i] !== 9 && (modify !== "read-only" || shadow);
     var opaque = control || unknown || Boolean(parent && parent.opaque);
     rows.push({ id: id, name: name, type: table.nodeType[i], attrs: attrs, parent: parent,
-      css: css, shadow: shadow, excluded: excluded, opaque: opaque,
+      css: css, shadow: shadow, excluded: excluded, opaque: opaque, modify: modify, frame: EMBEDDED.has(name), framed: framed,
       value: text(table.nodeValue[i]), children: [] });
     if (parent) parent.children.push(rows[i]);
   }
   requireTrue(rows[0].type === 9 && rows[0].id === scope.root, "AUTH_DOCUMENT_REFUSED");
+  owners.index.forEach(function (index) { requireTrue(integer(index, 0, count - 1) && rows[index].frame, "AUTH_FRAME_COVERAGE_REFUSED"); });
   requireTrue(controls.size === scope.controls.size &&
     Array.from(controls).every(function (id) { return scope.controls.has(id); }), "AUTH_CONTROL_COVERAGE_REFUSED");
   // A shadow host's unslotted light children are outside the flat tree DOMSnapshot captures and are never rendered.
@@ -235,8 +251,8 @@ function prepare(packet, scope, frameId, nextRef) {
   input.forEach(function (value, index) {
     var attrs = rows[index].attrs;
     var type = (attrs.get("type") || "").toLowerCase();
-    // A checkbox or radio value is page markup nobody types ("on" when unset).
-    if ((type === "checkbox" || type === "radio") && value === (attrs.has("value") ? attrs.get("value") : "on")) return;
+    // A checkbox, radio, hidden or button value nobody can type; equal to its markup, it is page content ("on" when unset).
+    if (UNTYPED.has(type) && value === (attrs.has("value") ? attrs.get("value") : type === "checkbox" || type === "radio" ? "on" : "")) return;
     secret(value);
   });
   textarea.forEach(secret);
@@ -267,6 +283,7 @@ function prepare(packet, scope, frameId, nextRef) {
     return result + value.slice(copied, start) + "[redacted]" + value.slice(end);
   }
   var targets = [];
+  var frames = 0;
   function render(row) {
     if (row.excluded) return null;
     if (row.type === 3) return { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) };
@@ -283,7 +300,10 @@ function prepare(packet, scope, frameId, nextRef) {
       node.ref = "e" + nextRef();
       targets.push({ ref: node.ref, path: inspected.path, id: row.id });
     }
-    if (row.name === "INPUT" || row.name === "TEXTAREA") {
+    if (row.frame) {
+      node.role = "frame";
+      frames++;
+    } else if (row.name === "INPUT" || row.name === "TEXTAREA") {
       node.children.push({ role: "text", text: "[redacted]" });
     } else {
       row.children.forEach(function (child) {
@@ -302,7 +322,7 @@ function prepare(packet, scope, frameId, nextRef) {
       return [row.id, row.parent ? row.parent.id : 0, row.type, row.opaque, modify];
     });
     var redaction = crypto.createHash("sha256").update(JSON.stringify(Array.from(secrets).sort())).digest("hex");
-    return { tree: tree, targets: targets, protection: protection, redaction: redaction };
+    return { tree: tree, targets: targets, protection: protection, redaction: redaction, frames: frames };
   } finally {
     secrets.clear();
     rows.length = 0;
@@ -401,8 +421,13 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var dirty = function () { reader.epoch++; };
     ["DOM.documentUpdated", "DOM.childNodeInserted", "DOM.childNodeRemoved", "DOM.childNodeCountUpdated",
       "DOM.attributeModified", "DOM.attributeRemoved", "DOM.characterDataModified", "DOM.shadowRootPushed", "DOM.shadowRootPopped",
-      "Page.frameAttached", "Page.frameDetached", "Page.frameNavigated", "Runtime.executionContextsCleared", "Runtime.executionContextDestroyed"]
+      "Runtime.executionContextsCleared", "Runtime.executionContextDestroyed"]
       .forEach(function (event) { watch(reader, cdp, event, dirty); });
+    // Child frames are never read, so only the main frame's own lifecycle invalidates a read.
+    // Adding or removing a frame owner in the main document is a DOM mutation above.
+    var mainFrame = function (id) { if (typeof id !== "string" || !reader.mainFrameId || id === reader.mainFrameId) dirty(); };
+    watch(reader, cdp, "Page.frameNavigated", function (event) { mainFrame(event && event.frame && event.frame.id); });
+    watch(reader, cdp, "Page.frameDetached", function (event) { mainFrame(event && event.frameId); });
     watch(reader, cdp, "close", function () { reader.alive = false; dirty(); });
     watch(reader, page, "close", function () { reader.alive = false; dirty(); });
     watch(reader, page, "crash", function () { reader.alive = false; dirty(); });
@@ -429,13 +454,13 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     checkRuntime();
     requireTrue(!closed && reader.alive && !reader.page.isClosed() && reader.page.context() === context &&
       context.pages().indexOf(reader.page) !== -1, "AUTH_CONTEXT_REFUSED");
-    requireTrue(reader.page.frames().length === 1 && reader.page.frames()[0] === reader.page.mainFrame(), "AUTH_FRAME_COVERAGE_REFUSED");
     var response = await send(reader, "Page.getFrameTree");
     dataOnly(response);
     var tree = response.frameTree;
     requireTrue(tree && tree.frame && typeof tree.frame.id === "string" && tree.frame.id &&
       typeof tree.frame.loaderId === "string" && tree.frame.loaderId &&
-      (tree.childFrames === undefined || (Array.isArray(tree.childFrames) && tree.childFrames.length === 0)), "AUTH_FRAME_COVERAGE_REFUSED");
+      (tree.childFrames === undefined || Array.isArray(tree.childFrames)), "AUTH_FRAME_COVERAGE_REFUSED");
+    reader.mainFrameId = tree.frame.id;
     var dom = await send(reader, "DOM.getDocument", { depth: -1, pierce: true });
     dataOnly(dom);
     var scope = inspect(dom.root);
@@ -482,6 +507,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       await verifyProtection(reader, qualified, prepared, epoch);
       checkRuntime();
       var result = { snapshot: prepared.tree, text: renderText(prepared.tree) };
+      if (prepared.frames) result.framesOmitted = prepared.frames;
       if (applied) result.actionMayHaveApplied = true;
       var final;
       if (save) {
