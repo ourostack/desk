@@ -1,5 +1,14 @@
 # desk plugin — changelog
 
+## 3.2.81 — 2026-11-10
+
+### Fixed
+
+- Workspaces can require branch → pull request → CI publication through a published `.desk/publication.json` policy. Desk save/sync pushes only the immutable captured or replayed candidate to a contribution branch, waits for the named checks and other reported checks, and advances the shared upstream only through GitHub's exact-head PR merge API. Missing, failing, stale, or draft PRs fail closed, retaining local work and an actionable recovery receipt in save notes and sync status. Policy is read from the fetched upstream, including when a member's desk is a repository subdirectory, not from outgoing or uncommitted policy edits.
+- Previously observed checks cannot authorize a merge by disappearing, and distinct jobs and contexts remain independently qualified through paginated exact-head status contexts and immutable check-run IDs. Results URLs can appear or change without losing a check's identity. A blocked recovery CLI exits nonzero with credential-redacted diagnostics; its POSIX and PowerShell commands preserve literal paths.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.80 — 2026-11-10
 
 Desk Browser `mine` can act on pages that never stop changing, such as a busy chat web app, through ordinary tool calls. A ref is re-resolved when it is used: it acts on the same element if that element itself is unchanged (its name, attributes other than class and style, and its text), and the browser confirms the element is still where the ref points. Changes elsewhere on the page no longer refuse the action. A rich-text editor (a chat composer) shows as a `textbox` named by its label, and `type`, `fill` and `press` go to the editor itself rather than a paragraph inside it. `fill` and `type` report `typed: { verified }`, whether the field now holds the text, since typed text stays redacted from snapshots. See the [owned reader](mcp/web-auth.cjs).
