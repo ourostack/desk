@@ -1797,11 +1797,17 @@ test("past the budget, controls and named lines stay, then text in page order, a
   const rows = Array.from({ length: 2000 }, (_, i) => g(`e${i + 100}`, [t(`Message ${i} ${"x".repeat(40)}`)]))
   const tree = { role: "document", children: [g("e1", [...rows, { role: "textbox", ref: "e9", name: "Type a message", children: [] }])] }
   const { text, left } = auth.renderText(tree)
-  assert.ok(text.length <= auth.TEXT_BUDGET + 200, String(text.length))
+  assert.ok(text.length <= auth.TEXT_BUDGET, String(text.length))
   assert.ok(left > 1000)
   assert.ok(text.includes("Message 0 "), "page order keeps the start")
   assert.ok(text.includes("textbox [ref=e9] \"Type a message\""), "a control at the end still shows")
   assert.match(text, /\u2026 \d+ lines left out/u)
+  // Controls spread down the whole page leave a marker between almost every pair of kept lines; those count too.
+  const nest = (depth, inner) => depth ? g(`n${depth}-${inner.ref}`, [inner, g(`m${depth}-${inner.ref}`, [t("x")])]) : inner
+  const items = Array.from({ length: 3000 }, (_, i) => nest(12, g(`e${i + 5000}`, [g(`w${i}`, [t(`Message ${i}`)]), { role: "button", ref: `b${i}`, name: "More", children: [] }])))
+  const spread = auth.renderText({ role: "document", children: items })
+  assert.ok(spread.text.length <= auth.TEXT_BUDGET, String(spread.text.length))
+  assert.ok(spread.left > 0 && spread.text.includes("\u2026"))
   const long = auth.renderText({ role: "document", children: [t("y".repeat(50000))] })
   assert.ok(long.text.length < 4100 && long.text.includes("\u2026"), "one long text is cut short")
 })
@@ -1854,7 +1860,7 @@ test("a page too long to read in one reply says how to see the rest, in every vi
   try {
     for (const args of [["snapshot"], ["find", "Message"], ["snapshot", "--interactive"]]) {
       const result = await adapter.call(args)
-      assert.ok(result.text.length <= auth.TEXT_BUDGET + 200, `${args}: ${result.text.length}`)
+      assert.ok(result.text.length <= auth.TEXT_BUDGET, `${args}: ${result.text.length}`)
       assert.match(result.hint, /left out.*\["find"/u, String(args))
       assert.match(result.text, /\u2026 \d+ lines left out$/u, "the end that did not fit is counted")
       if (args[0] !== "find") assert.ok(result.text.includes("textbox"), "the control is kept")

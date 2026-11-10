@@ -511,30 +511,39 @@ function renderText(node, view) {
   if (view && view.interactive) entries.forEach(function (entry, index) { keep[index] = entry.ref || entry.key; });
   var full = entries.reduce(function (sum, entry) { return sum + entry.depth * 2 + entry.line.length + 1 + Math.max(0, entry.words.length - LINE_CHARS); }, 0);
   var size = function (entry) { return entry.depth * 2 + entry.line.length + 1; };
-  var total = entries.reduce(function (sum, entry, index) { return keep[index] ? sum + size(entry) : sum; }, 0);
-  var shown = keep.slice();
-  if (total > TEXT_BUDGET) {
+  // Choose lines for a budget: named and non-generic lines first, then the rest in page order.
+  function choose(budget) {
     var used = 0;
-    shown = entries.map(function (entry, index) {
-      if (keep[index] && entry.key && used + size(entry) <= TEXT_BUDGET) { used += size(entry); return true; }
+    var shown = entries.map(function (entry, index) {
+      if (keep[index] && entry.key && used + size(entry) <= budget) { used += size(entry); return true; }
       return false;
     });
     entries.forEach(function (entry, index) {
-      if (keep[index] && !shown[index] && used + size(entry) <= TEXT_BUDGET) { used += size(entry); shown[index] = true; }
+      if (keep[index] && !shown[index] && used + size(entry) <= budget) { used += size(entry); shown[index] = true; }
     });
+    return shown;
   }
-  var lines = [];
-  var gap = 0;
-  var left = 0;
-  entries.forEach(function (entry, index) {
-    if (!keep[index]) return;
-    if (!shown[index]) { gap++; left++; return; }
-    if (gap) lines.push("  ".repeat(entry.depth) + "- \u2026 " + gap + " lines left out");
-    gap = 0;
-    lines.push("  ".repeat(entry.depth) + entry.line);
-  });
-  if (gap) lines.push("- \u2026 " + gap + " lines left out");
-  return { text: lines.join("\n"), left: left, matches: matches, full: full };
+  function print(shown) {
+    var lines = [];
+    var gap = 0;
+    var left = 0;
+    entries.forEach(function (entry, index) {
+      if (!keep[index]) return;
+      if (!shown[index]) { gap++; left++; return; }
+      if (gap) lines.push("  ".repeat(entry.depth) + "- \u2026 " + gap + " lines left out");
+      gap = 0;
+      lines.push("  ".repeat(entry.depth) + entry.line);
+    });
+    if (gap) lines.push("- \u2026 " + gap + " lines left out");
+    return { text: lines.join("\n"), left: left };
+  }
+  // The markers for what was left out cost room too, so the choice narrows until the whole reply fits.
+  var printed = print(keep);
+  for (var budget = TEXT_BUDGET; printed.text.length > TEXT_BUDGET;) {
+    printed = print(choose(Math.max(0, budget)));
+    budget -= printed.text.length - TEXT_BUDGET;
+  }
+  return { text: printed.text, left: printed.left, matches: matches, full: full };
 }
 
 function quote(text) { return JSON.stringify(text.length > LINE_CHARS ? text.slice(0, LINE_CHARS) + "\u2026" : text); }
