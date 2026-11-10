@@ -126,6 +126,13 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
         }
       }
     }
+    // Read-back runs the page function on the control's current value.
+    handle.evaluate = async (fn, arg) => {
+      calls.push(["evaluate", id])
+      const table = packet.documents[0].nodes
+      const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
+      return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
+    }
     handles.set(id, handle)
   }
   const frame = {

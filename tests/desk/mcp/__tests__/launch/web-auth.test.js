@@ -1370,7 +1370,7 @@ test("a control that appears before the protection re-read is a stale pair once 
   }
 })
 
-test("after the round trip resets native node bindings, refs from an earlier snapshot are refused instead of acting unseen", async () => {
+test("after the round trip resets native node bindings, an earlier ref acts only on its unchanged node", async () => {
   const root = await mkTempRoot("auth-flush-refs-")
   const native = fakeDriver()
   const send = native.cdp.send
@@ -1388,7 +1388,188 @@ test("after the round trip resets native node bindings, refs from an earlier sna
     const first = await adapter.call(["snapshot"])
     const ref = first.text.match(/\[ref=(\w+)\]/u)[1]
     await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u)
-    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    const label = native.packet.documents[0].nodes.attributes[3]
+    native.packet.strings.push("Delete everything")
+    label[3] = native.packet.strings.length - 1
+    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u, "its own label changed unseen")
     assert.equal(native.calls.some((call) => call[0] === "click"), false, "nothing is clicked")
+  } finally { await adapter.close() }
+})
+
+// Live pages (Teams web) change somewhere every few milliseconds; a ref is re-resolved when it is used.
+function inputRef(snapshot) { return snapshot.snapshot.children[0].children[0].children[0].ref }
+
+test("a ref acts after the page changed elsewhere, but not after its own node changed or the main frame navigated", async () => {
+  const root = await mkTempRoot("auth-live-ref-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root)
+  try {
+    let ref = inputRef(await adapter.call(["snapshot"]))
+    native.cdp.emit("DOM.childNodeRemoved", {})
+    native.cdp.emit("DOM.attributeModified", {})
+    await adapter.call(["click", ref])
+    assert.equal(native.calls.filter((call) => call[0] === "click").length, 1, "elsewhere changes do not block the action")
+    ref = inputRef(await adapter.call(["snapshot"]))
+    const attrs = native.packet.documents[0].nodes.attributes[3]
+    native.packet.strings.push("highlighted")
+    attrs.push(native.packet.strings.indexOf("class") === -1 ? (native.packet.strings.push("class"), native.packet.strings.length - 1) : native.packet.strings.indexOf("class"), native.packet.strings.indexOf("highlighted"))
+    await adapter.call(["click", ref])
+    assert.equal(native.calls.filter((call) => call[0] === "click").length, 2, "a presentation-only change is not a different element")
+    ref = inputRef(await adapter.call(["snapshot"]))
+    native.packet.strings.push("Delete everything")
+    attrs[3] = native.packet.strings.length - 1
+    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    assert.equal(native.calls.filter((call) => call[0] === "click").length, 2, "its own label changed")
+    ref = inputRef(await adapter.call(["snapshot"]))
+    const send = native.cdp.send
+    native.cdp.send = async (method, params) => method === "Page.getFrameTree" ? { frameTree: { frame: { id: "main", loaderId: "next", mimeType: "text/html" } } } : send(method, params)
+    await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+    assert.equal(native.calls.filter((call) => call[0] === "click").length, 2, "the main frame navigated")
+  } finally { await adapter.close() }
+})
+
+test("when the page changes while the ref binds, the browser must name the same node at its path", async () => {
+  for (const [backendNodeId, acts] of [[104, true], [999, false], [0, false]]) {
+    const root = await mkTempRoot("auth-live-bind-")
+    const native = fakeDriver()
+    const send = native.cdp.send
+    native.cdp.send = async (method, params) => {
+      if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: backendNodeId ? 7 : 0 } }
+      if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId } } }
+      return send(method, params)
+    }
+    const frame = native.page.mainFrame()
+    const wait = frame.waitForSelector
+    frame.waitForSelector = async (...args) => { native.cdp.emit("DOM.childNodeInserted", {}); return wait(...args) }
+    const adapter = adapterFor(native, root)
+    try {
+      const ref = inputRef(await adapter.call(["snapshot"]))
+      if (acts) await adapter.call(["click", ref])
+      else await assert.rejects(adapter.call(["click", ref]), /AUTH_SNAPSHOT_INVALIDATED/u)
+      assert.equal(native.calls.some((call) => call[0] === "click"), acts)
+      assert.ok(native.calls.some((call) => call[0] === "cdp" && call[1] === "DOM.querySelector" && /input:nth-of-type\(1\)$/u.test(call[2].selector)))
+      assert.ok(native.calls.some((call) => call[0] === "dispose" && call[1] === 104), "the bound handle is disposed either way")
+    } finally { await adapter.close() }
+  }
+})
+
+
+test("an element's fingerprint is its name, non-presentation attributes and subtree text, never a child frame's content", () => {
+  const el = (name, attributes, children = [], extra = {}) => ({ nodeType: 1, nodeName: name, attributes, children, ...extra })
+  const text = (value) => ({ nodeType: 3, nodeName: "#text", nodeValue: value })
+  const base = el("BUTTON", ["aria-label", "Cancel", "class", "a"], [text("Cancel")])
+  const fp = auth.fingerprint
+  assert.equal(fp(base), fp(el("BUTTON", ["aria-label", "Cancel", "class", "b", "style", "x"], [text("Cancel")])), "presentation is ignored")
+  assert.notEqual(fp(base), fp(el("BUTTON", ["aria-label", "Delete", "class", "a"], [text("Cancel")])), "a label change is a change")
+  assert.notEqual(fp(base), fp(el("BUTTON", ["aria-label", "Cancel"], [text("Delete")])), "a text change is a change")
+  assert.equal(fp({ nodeType: 1, nodeName: "DIV" }), fp(el("DIV", [])), "missing attributes and children are empty")
+  assert.equal(fp(el("IFRAME", [], [], { contentDocument: { nodeType: 9, nodeName: "#document", children: [text("one")] } })),
+    fp(el("IFRAME", [], [], { contentDocument: { nodeType: 9, nodeName: "#document", children: [text("two")] } })), "a child frame is never read")
+  const host = (inside, type = "open") => el("DIV", [], [], { shadowRoots: [{ nodeType: 11, nodeName: "#document-fragment", shadowRootType: type, children: [text(inside)] }] })
+  assert.notEqual(fp(host("one")), fp(host("two")), "open shadow content counts")
+  assert.equal(fp(host("one", "user-agent")), fp(host("two", "user-agent")), "browser-internal trees do not")
+})
+
+test("read-back compares whitespace-normalised text and treats a missing value as empty", () => {
+  assert.equal(auth.HOLDS({ isContentEditable: false }, ["", "fill"]), true)
+  assert.equal(auth.HOLDS({ isContentEditable: false, value: "a  b\n" }, ["a b", "fill"]), true)
+  assert.equal(auth.HOLDS({ isContentEditable: true, innerText: "before a b after" }, ["a b", "type"]), true)
+  assert.equal(auth.HOLDS({ isContentEditable: true, innerText: "before a b after" }, ["a b", "fill"]), false)
+})
+
+
+test("a rich-text editor's host is a textbox named by its author label, its content and a label repeating it still redacted", () => {
+  const find = (node, role) => node.role === role ? node : (node.children || []).map((child) => find(child, role)).find(Boolean)
+  for (const [label, shown] of [["Type a message", "Type a message"], [PASSWORD, "[redacted]"]]) {
+    const packet = editingSnapshot()
+    packet.strings.push("aria-label", label)
+    packet.documents[0].nodes.attributes[3] = [packet.strings.length - 2, packet.strings.length - 1]
+    const tree = sanitize(packet)
+    const box = find(tree, "textbox")
+    assert.ok(box, "the editing host is a textbox")
+    assert.equal(box.name, shown)
+    noPassword(tree)
+  }
+  const nested = editingSnapshot()
+  const tree = sanitize(nested)
+  assert.equal(JSON.stringify(tree).match(/"textbox"/gu).length, 1, "only the editing host, not its editable children")
+  assert.equal(find(sanitize(editingSnapshot("read-only")), "textbox"), undefined, "read-only content is not a textbox")
+})
+
+// A rich-text editor: an editable DIV (the host) holding an editable P, both refs in the snapshot.
+function editorPacket() {
+  const packet = editingSnapshot()
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const document = packet.documents[0]
+  const nodes = document.nodes
+  nodes.parentIndex.push(3); nodes.nodeType.push(1); nodes.nodeName.push(s("P")); nodes.nodeValue.push(-1)
+  nodes.backendNodeId.push(106); nodes.attributes.push([])
+  document.layout.nodeIndex.push(5)
+  document.layout.styles.push(document.layout.styles[3].slice())
+  document.layout.bounds.push([0, 0, 100, 20]); document.layout.text.push(-1)
+  return packet
+}
+function browserNames(native, byTag) {
+  const send = native.cdp.send
+  native.cdp.send = async (method, params) => {
+    if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: 7, selector: params.selector } }
+    if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId: byTag(native.calls.filter((c) => c[1] === "DOM.querySelector").at(-1)[2].selector) } } }
+    return send(method, params)
+  }
+}
+
+test("keys typed at a node inside a rich-text editor go to its editing host, chosen from the snapshot and confirmed by the browser", async () => {
+  const root = await mkTempRoot("auth-editor-")
+  const native = fakeDriver({ packet: editorPacket() })
+  browserNames(native, (selector) => /div:nth-of-type\(1\)$/u.test(selector) ? 104 : /p:nth-of-type\(1\)$/u.test(selector) ? 106 : 0)
+  native.handles.get(104).evaluate = async (fn, arg) => fn({ isContentEditable: true, innerText: "typed text" }, arg)
+  const adapter = adapterFor(native, root)
+  const paragraphRef = (snapshot) => snapshot.text.match(/- generic \[ref=(\w+)\]\n\s*$/u)?.[1] ?? snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
+  try {
+    let snapshot = await adapter.call(["snapshot"])
+    assert.match(snapshot.text, /- textbox \[ref=e\d+\]/u, "the host is a textbox")
+    const result = await adapter.call(["type", paragraphRef(snapshot), "typed text"])
+    assert.deepEqual(result.typed, { verified: true })
+    assert.ok(native.calls.some((call) => call[0] === "type" && call[1] === "typed text"))
+    assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /div:nth-of-type\(1\)$/u, "bound at the host")
+    assert.ok(native.calls.some((call) => call[0] === "cdp" && call[1] === "DOM.querySelector"), "the browser confirms the host")
+    snapshot = await adapter.call(["snapshot"])
+    await adapter.call(["click", paragraphRef(snapshot)])
+    assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /p:nth-of-type\(1\)$/u, "a click acts on the node it names")
+  } finally { await adapter.close() }
+})
+
+test("an editing host that the browser no longer names at its path, or that is no longer an ancestor, takes no keys", async () => {
+  for (const variant of ["moved", "detached"]) {
+    const root = await mkTempRoot("auth-editor-refuse-")
+    const packet = editorPacket()
+    const native = fakeDriver({ packet })
+    // "moved": the browser names another node at the host's path. "detached": it names the host correctly, so only
+    // the ancestor check can stop the keys, before anything is bound.
+    browserNames(native, (selector) => variant === "moved" ? 999 : /div:nth-of-type\(1\)$/u.test(selector) ? 104 : 106)
+    const adapter = adapterFor(native, root)
+    try {
+      const snapshot = await adapter.call(["snapshot"])
+      const ref = snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
+      if (variant === "detached") packet.documents[0].nodes.parentIndex[5] = 2
+      const before = native.calls.length
+      await assert.rejects(adapter.call(["fill", ref, "x"]), /AUTH_SNAPSHOT_INVALIDATED/u)
+      assert.equal(native.calls.some((call) => call[0] === "fill"), false)
+      if (variant === "detached") {
+        const after = native.calls.slice(before)
+        assert.equal(after.some((call) => call[0] === "waitForSelector" || call[1] === "DOM.querySelector"), false, "refused before binding")
+      }
+    } finally { await adapter.close() }
+  }
+})
+
+test("read-back is a strict verdict: a page that answers anything but true reports unverified", async () => {
+  const root = await mkTempRoot("auth-readback-")
+  const native = fakeDriver()
+  native.handles.get(104).evaluate = async () => "true"
+  const adapter = adapterFor(native, root)
+  try {
+    const result = await adapter.call(["fill", inputRef(await adapter.call(["snapshot"])), "x"])
+    assert.deepEqual(result.typed, { verified: false })
   } finally { await adapter.close() }
 })
