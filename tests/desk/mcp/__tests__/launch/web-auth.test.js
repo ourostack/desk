@@ -1887,5 +1887,19 @@ test("refs from the last three reads stay usable, and older ones are refused", a
     for (let i = 0; i < 3; i++) await adapter.call(["snapshot"])
     await assert.rejects(adapter.call(["click", second]), /AUTH_TARGET_REFUSED.*last 3 reads/u)
     await assert.rejects(adapter.call(["click", first]), /AUTH_TARGET_REFUSED/u)
+    // A wait that polls many times counts as one read, and its unseen polls leave no refs behind.
+    const held = (await adapter.call(["find", "password"])).text.match(/\[ref=(e\d+)\]/u)[1]
+    const before = Math.max(...JSON.stringify(await adapter.call(["snapshot"])).match(/e\d+/gu).map(ref => Number(ref.slice(1))))
+    const polled = await adapter.call(["wait", "never shows"])
+    assert.equal(polled.waited.found, false)
+    await adapter.call(["click", held])
+    const returned = polled.snapshot.children[0].children[0].children[0].ref
+    assert.ok(Number(returned.slice(1)) > before + 1, "the wait read the page more than once")
+    await adapter.call(["click", returned])
+    const kept = new Set(JSON.stringify(polled.snapshot).match(/e\d+/gu))
+    for (let ref = before + 1; ref < Number(returned.slice(1)); ref++) {
+      if (kept.has(`e${ref}`)) continue
+      await assert.rejects(adapter.call(["click", `e${ref}`]), /AUTH_TARGET_REFUSED/u, `poll ref e${ref} is not kept`)
+    }
   } finally { await adapter.close() }
 })

@@ -635,7 +635,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   var refs = new Map();
   var cleanupRecords = new Set();
   var next = 0;
-  var reads = 0;
+  // A wait's polls are reads the agent never sees: their refs are kept apart until one is returned.
+  var polled = new WeakMap();
   var selected = context.pages()[0];
   var queue = Promise.resolve();
   var pending = new Set();
@@ -772,7 +773,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     requireTrue(JSON.stringify(current.protection) === JSON.stringify(prepared.protection), "AUTH_PROTECTION_INVALIDATED");
     requireTrue(current.redaction === prepared.redaction, "AUTH_REDACTION_INVALIDATED");
   }
-  async function snapshot(reader, save, applied) {
+  async function snapshot(reader, save, applied, poll) {
     var provisional = [];
     var staged;
     var stageIdentity;
@@ -839,9 +840,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         checkRuntime();
         fs.renameSync(staged, final); staged = undefined; result.artifact = final;
       }
-      reads++;
-      provisional.forEach(function (record) { record.read = reads; refs.set(record.ref, record); });
-      refs.forEach(function (record, ref) { if (record.read <= reads - REF_READS) refs.delete(ref); });
+      provisional.forEach(function (record) { refs.set(record.ref, record); });
+      if (poll) polled.set(result, provisional);
+      else counted(reader, provisional);
       return result;
     } catch (error) {
       primary = knownFailure(error) ? safeFailure(error).code : "AUTH_SNAPSHOT_FAILED";
@@ -862,9 +863,18 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }
   }
   // Live pages (clocks, relative times, loading) change between reads; take a fresh, fully re-qualified snapshot.
-  async function settled(reader, save, applied) {
+  // One more read of this tab: its refs join the last REF_READS reads, and older ones go.
+  function counted(reader, records) {
+    reader.reads = (reader.reads || 0) + 1;
+    records.forEach(function (record) { record.read = reader.reads; });
+    refs.forEach(function (record, ref) { if (record.reader === reader && record.read <= reader.reads - REF_READS) refs.delete(ref); });
+  }
+  function unpolled(result) {
+    polled.get(result).forEach(function (record) { if (refs.get(record.ref) === record) refs.delete(record.ref); });
+  }
+  async function settled(reader, save, applied, poll) {
     for (var attempt = 1; ; attempt++) {
-      try { return await snapshot(reader, save, applied); }
+      try { return await snapshot(reader, save, applied, poll); }
       catch (error) {
         // snapshot() only throws branded failures.
         if (closed || attempt >= attempts || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
@@ -885,18 +895,21 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       return paused;
     }
     var deadline = Date.now() + limit;
+    var last;
     for (;;) {
-      var last;
-      try { last = await settled(reader, false, false); }
+      if (last) unpolled(last);
+      try { last = await settled(reader, false, false, true); }
       catch (error) {
         if (closed || RETRIED.indexOf(safeFailure(error).code) === -1 || Date.now() >= deadline) throw error;
         last = undefined;
       }
       if (last && shows(last.snapshot, plan.text) !== plan.gone) {
         last.waited = { text: plan.text, found: true };
+        counted(reader, polled.get(last));
         return last;
       }
       if (last && Date.now() >= deadline) {
+        counted(reader, polled.get(last));
         last.waited = { text: plan.text, found: false };
         last.hint = "The text did not " + (plan.gone ? "go" : "show") + " within " + limit / 1000 + " s. Read this snapshot; if the page is still loading, wait again.";
         return last;
