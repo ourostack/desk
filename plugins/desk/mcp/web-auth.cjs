@@ -14,7 +14,9 @@ var MAX_NODES = 100000;
 var MAX_VALUES = 2000000;
 var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
-var UNTYPED = new Set(["checkbox", "radio", "hidden", "submit", "button", "reset", "image"]);
+var UNTYPED = new Set(["hidden", "submit", "button", "reset", "image"]);
+// Shorter values in fields nobody types into are page codes ("US", "0", "USD"), never a typed value's copy.
+var UNTYPED_CODE_LENGTH = 8;
 var EXCLUDED = new Set(["HEAD", "SCRIPT", "STYLE", "TEMPLATE", "META", "LINK", "NOSCRIPT"]);
 var ROLES = { INPUT: "textbox", TEXTAREA: "textbox", BUTTON: "button", A: "link", SELECT: "combobox", OPTION: "option", FORM: "form", H1: "heading", H2: "heading", H3: "heading" };
 var ARITY = {
@@ -139,6 +141,22 @@ function inspect(root) {
   return { root: root.backendNodeId, nodes: nodes, controls: controls, signature: JSON.stringify(signature) };
 }
 
+// Unrendered (display: none) nodes have no layout row, so no computed style. -webkit-user-modify is inherited
+// and only contenteditable changes it in markup, so they take their nearest styled ancestor's mode.
+function editingMode(styled, css, attrs, parentMode) {
+  if (styled) return css.length === STYLES.length ? css[2] : "unknown";
+  var editable = attrs.has("contenteditable") ? attrs.get("contenteditable").toLowerCase() : undefined;
+  return editable === "false" ? "read-only" : editable !== undefined ? "read-write" : parentMode || "unknown";
+}
+
+// Whether a native control value could have been typed, and so must be scrubbed wherever it appears.
+function typedValue(value, attrs) {
+  var type = (attrs.get("type") || "").toLowerCase();
+  // A checkbox or radio value is page markup nobody types ("on" when unset).
+  if ((type === "checkbox" || type === "radio") && value === (attrs.has("value") ? attrs.get("value") : "on")) return false;
+  return !(UNTYPED.has(type) && value.length < UNTYPED_CODE_LENGTH);
+}
+
 function prepare(packet, scope, frameId, nextRef) {
   dataOnly(packet);
   // Child frames' documents follow the main document; they are never read.
@@ -160,16 +178,64 @@ function prepare(packet, scope, frameId, nextRef) {
   ["parentIndex", "nodeName", "nodeValue", "backendNodeId", "attributes"].forEach(function (key) {
     requireTrue(Array.isArray(table[key]) && table[key].length === count);
   });
-  function sparse(field) {
+  function sparse(field, size) {
     requireTrue(field && Array.isArray(field.index));
     requireTrue(Array.isArray(field.value) && field.index.length === field.value.length);
     var result = new Map();
     field.index.forEach(function (index, offset) {
-      requireTrue(integer(index, 0, count - 1) && !result.has(index));
+      requireTrue(integer(index, 0, (size || count) - 1) && !result.has(index));
       result.set(index, text(field.value[offset]));
     });
     return result;
   }
+  function attributesOf(attributes) {
+    requireTrue(Array.isArray(attributes) && attributes.length % 2 === 0);
+    var attrs = new Map();
+    for (var a = 0; a < attributes.length; a += 2) {
+      var key = text(attributes[a], false);
+      requireTrue(!attrs.has(key));
+      attrs.set(key, text(attributes[a + 1]));
+    }
+    return attrs;
+  }
+  function styles(layout, size) {
+    requireTrue(layout && Array.isArray(layout.nodeIndex) && Array.isArray(layout.styles) &&
+      layout.nodeIndex.length === layout.styles.length);
+    var result = new Map();
+    layout.nodeIndex.forEach(function (index, offset) {
+      requireTrue(integer(index, 0, size - 1));
+      var row = layout.styles[offset];
+      requireTrue(Array.isArray(row) && (row.length === 0 || row.length === STYLES.length));
+      var values = row.map(function (value) { return text(value); });
+      // One node can own several layout objects (inline continuations, anonymous wrappers); their styles must agree.
+      if (result.has(index)) requireTrue(JSON.stringify(result.get(index)) === JSON.stringify(values));
+      else result.set(index, values);
+    });
+    return result;
+  }
+  // A child frame is never read, but what may have been typed there is still scrubbed from the main
+  // document, where page script can copy it.
+  var framedValues = [];
+  packet.documents.slice(1).forEach(function (child) {
+    var nodes = child && child.nodes;
+    requireTrue(nodes && Array.isArray(nodes.nodeType), "AUTH_FRAME_COVERAGE_REFUSED");
+    var size = nodes.nodeType.length;
+    requireTrue(size <= MAX_NODES, "AUTH_OUTPUT_TOO_LARGE");
+    ["parentIndex", "nodeValue", "attributes"].forEach(function (key) {
+      requireTrue(Array.isArray(nodes[key]) && nodes[key].length === size, "AUTH_FRAME_COVERAGE_REFUSED");
+    });
+    var childStyles = styles(child.layout, size);
+    var modes = [];
+    var attrs = nodes.attributes.map(attributesOf);
+    sparse(nodes.inputValue, size).forEach(function (value, index) { if (typedValue(value, attrs[index])) framedValues.push(value); });
+    sparse(nodes.textValue, size).forEach(function (value) { framedValues.push(value); });
+    for (var j = 0; j < size; j++) {
+      var up = nodes.parentIndex[j];
+      requireTrue(integer(up, j === 0 ? -1 : 0, j - 1), "AUTH_FRAME_COVERAGE_REFUSED");
+      modes.push(editingMode(childStyles.has(j), childStyles.get(j) || [], attrs[j], up === -1 ? undefined : modes[up]));
+      if (nodes.nodeType[j] === 3 && modes[j] !== "read-only") framedValues.push(text(nodes.nodeValue[j]));
+    }
+  });
   var input = sparse(table.inputValue);
   var textarea = sparse(table.textValue);
   var shadows = sparse(table.shadowRootType);
@@ -177,19 +243,7 @@ function prepare(packet, scope, frameId, nextRef) {
   requireTrue(owners && Array.isArray(owners.index) && Array.isArray(owners.value) &&
     owners.index.length === owners.value.length, "AUTH_FRAME_COVERAGE_REFUSED");
   owners.value.forEach(function (index) { requireTrue(integer(index, 1, packet.documents.length - 1), "AUTH_FRAME_COVERAGE_REFUSED"); });
-  var layout = document.layout;
-  requireTrue(layout && Array.isArray(layout.nodeIndex) && Array.isArray(layout.styles) &&
-    layout.nodeIndex.length === layout.styles.length);
-  var style = new Map();
-  layout.nodeIndex.forEach(function (index, offset) {
-    requireTrue(integer(index, 0, count - 1));
-    var row = layout.styles[offset];
-    requireTrue(Array.isArray(row) && (row.length === 0 || row.length === STYLES.length));
-    var values = row.map(function (value) { return text(value); });
-    // One node can own several layout objects (inline continuations, anonymous wrappers); their styles must agree.
-    if (style.has(index)) requireTrue(JSON.stringify(style.get(index)) === JSON.stringify(values));
-    else style.set(index, values);
-  });
+  var style = styles(document.layout, count);
   var ids = new Set();
   var controls = new Set();
   var rows = [];
@@ -202,25 +256,14 @@ function prepare(packet, scope, frameId, nextRef) {
     var parent = i === 0 ? null : rows[table.parentIndex[i]];
     var framed = Boolean(parent && (parent.frame || parent.framed));
     requireTrue(framed || !shadows.has(i) || shadows.get(i) === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
-    var attributes = table.attributes[i];
-    requireTrue(Array.isArray(attributes) && attributes.length % 2 === 0);
-    var attrs = new Map();
-    for (var a = 0; a < attributes.length; a += 2) {
-      var key = text(attributes[a], false);
-      requireTrue(!attrs.has(key));
-      attrs.set(key, text(attributes[a + 1]));
-    }
+    var attrs = attributesOf(table.attributes[i]);
     var control = !framed && (name === "INPUT" || name === "TEXTAREA");
     if (control) {
       controls.add(id);
       requireTrue((name === "INPUT" ? input : textarea).has(i));
     }
     var css = style.get(i) || [];
-    // Unrendered (display: none) nodes have no layout row, so no computed style. -webkit-user-modify is inherited
-    // and only contenteditable changes it in markup, so they take their nearest styled ancestor's mode.
-    var editable = attrs.has("contenteditable") ? attrs.get("contenteditable").toLowerCase() : undefined;
-    var modify = style.has(i) ? (css.length === 3 ? css[2] : "unknown") : editable === "false" ? "read-only" :
-      editable !== undefined ? "read-write" : parent ? parent.modify : "unknown";
+    var modify = editingMode(style.has(i), css, attrs, parent && parent.modify);
     var shadow = Boolean(shadows.has(i) || (parent && parent.shadow));
     var excluded = EXCLUDED.has(name) || framed || Boolean(parent && parent.excluded);
     var unknown = table.nodeType[i] !== 9 && (modify !== "read-only" || shadow);
@@ -248,14 +291,9 @@ function prepare(packet, scope, frameId, nextRef) {
   // Complete the native value pass before any label or text is rendered.
   // Whitespace alone protects nothing and would blank every space in the page.
   function secret(value) { if (value && /\S/u.test(value)) secrets.add(value); }
-  input.forEach(function (value, index) {
-    var attrs = rows[index].attrs;
-    var type = (attrs.get("type") || "").toLowerCase();
-    // A checkbox, radio, hidden or button value nobody can type; equal to its markup, it is page content ("on" when unset).
-    if (UNTYPED.has(type) && value === (attrs.has("value") ? attrs.get("value") : type === "checkbox" || type === "radio" ? "on" : "")) return;
-    secret(value);
-  });
+  input.forEach(function (value, index) { if (typedValue(value, rows[index].attrs)) secret(value); });
   textarea.forEach(secret);
+  framedValues.forEach(secret);
   rows.forEach(function (row) { if (row.opaque && !row.excluded) secret(row.value); });
   function scrub(value) {
     var matches = [];
@@ -325,6 +363,7 @@ function prepare(packet, scope, frameId, nextRef) {
     return { tree: tree, targets: targets, protection: protection, redaction: redaction, frames: frames };
   } finally {
     secrets.clear();
+    framedValues.length = 0;
     rows.length = 0;
     input.clear();
     textarea.clear();
