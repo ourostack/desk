@@ -510,10 +510,19 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     requireTrue(!closed && reader.alive && reader.epoch === epoch &&
       a.frameId === b.frameId && a.loaderId === b.loaderId && a.scope.signature === b.scope.signature, "AUTH_SNAPSHOT_INVALIDATED");
   }
+  // A document that changed between the two native reads is a stale pair, not a coverage verdict. Mutation events
+  // can trail the snapshot response, so one DOM round trip delivers them before the epoch decides.
+  async function staleOr(reader, epoch, error) {
+    try { await send(reader, "DOM.getDocument", { depth: 0 }); } catch (flushError) { return error; }
+    requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
+    return error;
+  }
   async function verifyProtection(reader, scope, prepared, epoch) {
     var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
     var current;
-    try { current = prepare(packet, scope.scope, scope.frameId); } finally { packet = null; }
+    try { current = prepare(packet, scope.scope, scope.frameId); }
+    catch (error) { packet = null; throw await staleOr(reader, epoch, error); }
+    finally { packet = null; }
     same(scope, scope, reader, epoch);
     requireTrue(JSON.stringify(current.protection) === JSON.stringify(prepared.protection), "AUTH_PROTECTION_INVALIDATED");
     requireTrue(current.redaction === prepared.redaction, "AUTH_REDACTION_INVALIDATED");
@@ -531,11 +540,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
       var prepared;
       try { prepared = prepare(packet, before.scope, before.frameId, function () { return ++next; }); }
-      catch (error) {
-        // A document that changed between the two native reads is a stale pair, not a coverage verdict.
-        requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
-        throw error;
-      } finally { packet = null; }
+      catch (error) { packet = null; throw await staleOr(reader, epoch, error); }
+      finally { packet = null; }
       // Refs bind lazily: an action re-qualifies the unchanged document before resolving its path,
       // so a page with thousands of elements does not wait on one selector round trip per element.
       prepared.targets.forEach(function (target) {
