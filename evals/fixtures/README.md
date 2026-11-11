@@ -9,3 +9,7 @@ Use Node 22 for the fixture. The original eleven tests are green while the multi
 Copy the directory into an isolated execution environment, initialize a local baseline with the operator's configured Git identity, install the frozen dependencies there, and expose only the approved fixture and explicit method roots to the subject. Keep the oracle and judge evidence outside the subject's workspace. A scratch directory on a host with ambient credentials is not an isolation boundary.
 
 All eleven prepared files, including the publication variant, participate in the current `engineering-v2-kernel.json` source fingerprint. Earlier runs retain their original fixture and source/contract bindings; they must not be relabeled with this variant's fingerprints. Preserve original fixtures and failed outcomes when the workflow changes. The existing evaluation receipt verifier validates identity and shape; it does not execute or judge a model.
+
+# Core meeting capture diagram
+
+`core-meeting-capture-diagram.png` is the synthetic raster that the `economical-model-no-price-catalogue` case in `core-meeting-capture.json` inspects. It is not a real meeting frame. `scripts/test-core-meeting-capture-model-choice.cjs` pins its SHA-256, so replace it only together with that hash and a fresh review of the case.
