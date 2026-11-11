@@ -24,7 +24,7 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ### Under Copilot CLI
 
-Run `agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot`, then start Copilot with `agency copilot`. `main` of `ourostack/desk` is the release channel.
+Run `agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot --cache-policy auto --cache-ttl 0`, then start Copilot with `agency copilot`. `main` of `ourostack/desk` is the release channel; the two cache flags make each new session fetch the latest `main` in the background, so a release loads at the next session ([SETUP](../../SETUP.md#copilot-cli)). Without them Agency keeps its copy for a day.
 
 Acquisition is ordinary and single-root: select `desk` and let its own declaration pull the rest. `plugins/desk/agency.json` declares exactly two generic dependencies — Superpowers and Plain Language, both tracked at `ourostack/desk@main` — so the standalone composition is the three roots Desk, Superpowers and Plain Language, with no Ponytail, no Work Suite and no private feedback API. A shared-workspace composition adds Crew and its organization overlay (five roots), and a Platform Workflows consumer adds its own root on top (six roots); those are consumer compositions, not this package's closure. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission. Later source corrections arrive through ordinary Agency branch tracking of `@main`, not a manual refresh or rollback channel.
 

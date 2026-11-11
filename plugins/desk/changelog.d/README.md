@@ -3,7 +3,7 @@
 A pull request that changes Desk adds one fragment here and leaves every version surface and `CHANGELOG.md` alone. Parallel pull requests then never conflict on the changelog head or on the next version.
 
 - Put the fragment directly in this folder, as one Markdown file named after the change, such as `coverage-shards.md`. The name must differ from every other open pull request's fragment and from any fragment still waiting here on `main`.
-- Write the changelog paragraph or paragraphs the change deserves: what changed for the reader and why, with links relative to `plugins/desk/`. Leave out the version heading and the `Ships desk-mcp@…` line; the release adds both. Do not use `#` or `##` headings, because the release writes the version heading; `###` and plain paragraphs are fine.
+- Write the changelog paragraph or paragraphs the change deserves: what changed for the reader and why, with links relative to `plugins/desk/`. Leave out the version heading and the `Ships desk-mcp@…` line; the release adds both. Don't write the current Desk version number either: `scripts/test-refresh-superpowers.cjs` treats any file naming it as a version surface the release must bump, and fails the pull request. Do not use `#` or `##` headings, because the release writes the version heading; `###` and plain paragraphs are fine.
 - Leave other fragments alone. A fragment already here belongs to a merged change, and only the release removes it.
 - Changes only to the Desk tests, which live outside this plugin in `tests/desk/`, need no fragment.
 
