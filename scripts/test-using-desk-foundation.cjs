@@ -481,12 +481,10 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
-    "Helper faults leave task authority intact",
-    "bounded known repairs or approved source work",
-    "not unsolicited repair children or PRs",
-    "respect repair owners",
-    "Fallbacks do not qualify helpers",
-    "permission denials",
+    "keep your task's authority",
+    "work around it with ordinary tools",
+    "never past a safeguard or permission denial",
+    "Start no unrequested repair work",
     "`desk-problem`",
   ]);
 
