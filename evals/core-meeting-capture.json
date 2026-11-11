@@ -3,7 +3,7 @@
   "id": "core-meeting-capture",
   "description": "Synthetic source-backed recap and visual-evidence pressure scenarios. External runs exercise judgment; CI validates this contract, not model behavior.",
   "sources": ["plugins/desk/skills/core-meeting-capture/SKILL.md", "plugins/desk/skills/core-meeting-capture/references/capture-contract.md"],
-  "reviewedSourceFingerprint": "73078aaeaecf45dda675e14bfd694ebf3218d000a4732ee33b8522fd5b995d91",
+  "reviewedSourceFingerprint": "325f8937fc2b1c69774bee7c11096b050b3fdbc86996364fc4a9f062f767b8cc",
   "requirements": [
     {"id": "substance", "description": "Recap explains purpose, discussion and reasoning, decisions versus proposals, commitments and unknowns with inline source anchors."},
     {"id": "retention", "description": "Retain complete eligible sources; review scope and exclusions constrain every derivative."},
