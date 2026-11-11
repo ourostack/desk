@@ -50,9 +50,13 @@ var ARITY = {
 };
 // A ref is bound this many times when the page keeps moving it between the read and the browser's confirmation.
 var BIND_ATTEMPTS = 3;
-// Fields whose value a screenshot never shows: a password (also once a "show password" toggle has made it text), or a
-// one-time code. The browser paints a box over each, in every frame.
-var SECRET_FIELDS = "input[type=password], input[autocomplete~=current-password], input[autocomplete~=new-password], input[autocomplete~=one-time-code]";
+// How long a focused target is given to start taking keys before `type` sends them.
+var TYPE_SETTLE_MS = 250;
+// What a screenshot never shows, as a snapshot never shows it: every input, textarea and editable region. The browser
+// paints a box over each in every frame (its CSS engine reaches into open shadows), including any that appear while
+// the picture is taken; the read before the picture adds what markup alone does not say (CSS-editable regions and
+// open-shadow content, masked by their host).
+var OPAQUE_FIELDS = "input, textarea, [contenteditable]";
 
 var COMMANDS = "snapshot [--interactive | --save]; find <text>; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
   "click, dblclick, hover, check or uncheck <ref>; fill or type <ref> <text>; press [<ref>] <key>; select <ref> <value>; " +
@@ -255,10 +259,12 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   function secret(value) { if (value && /\S/u.test(value)) secrets.add(value); }
   var main = rowsOf(packet, scope, frameId, undefined, secret, budget);
   var linked = new Map();
+  var reads = [];
   (outside || []).forEach(function (frame) {
     requireTrue(frame && typeof frame.frameId === "string" && frame.scope, "AUTH_FRAME_COVERAGE_REFUSED");
     // Two captures claiming one frame contradict each other: neither is shown, and both are still scrubbed.
     var read = rowsOf(frame.packet, frame.scope, frame.frameId, frame.key, secret, budget);
+    reads.push(read);
     linked.set(frame.frameId, linked.has(frame.frameId) ? null : read);
   });
   // The document root must be the one the DOM read named; otherwise the page navigated between the two reads.
@@ -298,6 +304,13 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   }
   var targets = [];
   var frames = 0;
+  // The outermost element of each opaque region, in every capture: what a screenshot must cover.
+  var masks = [];
+  [main].concat(reads).forEach(function (read) {
+    read.rows.forEach(function (row) {
+      if (row.type === 1 && row.opaque && !row.excluded && !(row.parent && row.parent.opaque)) masks.push({ key: read.key, id: row.id });
+    });
+  });
   function render(row) {
     if (row.excluded) return null;
     // Only what the page renders is read: text with no layout, or hidden, is not on screen (Teams keeps a hidden
@@ -357,7 +370,7 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   try {
     var tree = render(main.rows[0]);
     dataOnly(tree);
-    return { tree: tree, targets: targets, frames: frames };
+    return { tree: tree, targets: targets, frames: frames, masks: masks };
   } finally {
     secrets.clear();
   }
@@ -803,17 +816,22 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     return found;
   }
   // Whether the browser names that node at its path now, in the document it is in; one DOM round trip.
-  async function names(target, entry) {
-    var resolved = 0;
+  // Each frame owner on the way is checked too: its path still names that owner, and the frame it shows still holds
+  // the document the read found there, so the handle reached through them is in the frame the ref was read in.
+  async function names(target, entry, scope) {
     try {
       var doc = await send(target, "DOM.getDocument", entry.chain.length ? { depth: -1, pierce: true } : { depth: 0 });
-      var root = entry.chain.length ? findNode(doc.root, entry.doc) : doc.root;
-      if (root) {
-        var found = await send(target, "DOM.querySelector", { nodeId: root.nodeId, selector: entry.path });
-        resolved = found.nodeId ? (await send(target, "DOM.describeNode", { nodeId: found.nodeId })).node.backendNodeId : 0;
+      var steps = entry.chain.map(function (id) { return scope.nodes.get(id); }).concat([entry]);
+      var container = doc.root;
+      for (var i = 0; i < steps.length; i++) {
+        if (!container || container.backendNodeId !== steps[i].doc) return false;
+        var found = await send(target, "DOM.querySelector", { nodeId: container.nodeId, selector: steps[i].path });
+        var resolved = found.nodeId ? (await send(target, "DOM.describeNode", { nodeId: found.nodeId })).node.backendNodeId : 0;
+        if (resolved !== steps[i].id) return false;
+        if (i < steps.length - 1) container = (findNode(container, steps[i].id) || {}).contentDocument;
       }
+      return true;
     } finally { if (target.epoch !== undefined) target.epoch++; }
-    return resolved === entry.id;
   }
   function findNode(node, id) {
     if (node.backendNodeId === id) return node;
@@ -873,7 +891,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       // Unchanged since the read, the path still names that node; otherwise the browser itself confirms it does.
       var confirmed;
       try {
-        confirmed = reader.epoch === quiet && actorId === record.id && target === reader && !actor.chain.length ? true : await names(target, actor);
+        confirmed = reader.epoch === quiet && actorId === record.id && target === reader && !actor.chain.length ? true : await names(target, actor, now.scope);
       } catch (error) {
         await disposeRecords([bound]);
         throw error;
@@ -969,8 +987,44 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (cleanup.length) throw fail((primary || "AUTH_OPERATION_FAILED") + "; retained cleanup uncertainty: " + cleanup.join(", "), applied);
     }
   }
-  // A picture of the tab, or of one element, in the context's private files folder. Password and one-time-code fields
-  // are painted over in every frame, so the picture never shows what was typed there.
+  // Every opaque region of the tab as one read sees it, each with the element that covers it: itself, or the nearest
+  // ancestor the browser can name (an open shadow's host, or the frame owner of a frame it cannot reach). A closed
+  // shadow anywhere fails the read, so a picture is never taken of what no mask can cover.
+  async function opaqueRegions(reader) {
+    var before = await qualify(reader);
+    var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
+    var outside = await readOutside(reader);
+    var prepared;
+    var counter = 0;
+    try {
+      prepared = prepare(packet, before.scope, before.frameId, function () { return ++counter; }, outside.map(function (frame) {
+        return { packet: frame.packet, scope: frame.read.scope, frameId: frame.read.frameId, key: frame };
+      }));
+    } finally {
+      packet = null;
+      outside.forEach(function (frame) { frame.packet = null; });
+    }
+    return prepared.masks.map(function (mask) {
+      var session = mask.key ? mask.key.session : reader;
+      var scope = mask.key ? mask.key.read.scope : before.scope;
+      var entry = scope.nodes.get(mask.id);
+      var region = entry;
+      while (region && !(region.path && region.reach)) region = scope.nodes.get(region.parent);
+      // The capture has a region the DOM read lacks: the page changed between the two, so the read is tried again.
+      requireTrue(region, "AUTH_SNAPSHOT_INVALIDATED");
+      var marked = region === entry && (entry.name === "INPUT" || entry.name === "TEXTAREA" ||
+        entry.raw.attributes.some(function (name, index) { return index % 2 === 0 && name === "contenteditable"; }));
+      return { session: session, scope: scope, id: mask.id, region: region, marked: marked };
+    });
+  }
+  function maskOf(reader, found) {
+    var at = found.session === reader ? reader.page.mainFrame() : found.session.frame;
+    found.region.chain.forEach(function (id) { at = at.frameLocator("css=" + found.scope.nodes.get(id).path); });
+    return at.locator("css=" + found.region.path);
+  }
+  // A picture of the tab, or of one element, in the context's private files folder. Every input, textarea and editable
+  // region is painted over in every frame, as a snapshot redacts them. The tab is read before and after the picture; an
+  // opaque region the first read did not mask (one markup alone does not mark) means the picture is taken again.
   async function screenshot(reader, args) {
     var picked = args.slice(1).filter(function (value) { return value !== "--full"; })[0];
     var record;
@@ -983,13 +1037,26 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var written = false;
     try {
       if (record) bound = await bind(reader, record, "screenshot");
-      checkRuntime();
-      var mask = reader.page.frames().map(function (frame) { return frame.locator(SECRET_FIELDS); });
-      var options = { path: file, mask: mask, timeout: timeoutMs };
-      written = true;
-      if (bound) await bound.handle.screenshot(options);
-      else await reader.page.screenshot(Object.assign(options, { fullPage: args.indexOf("--full") !== -1 }));
-      checkRuntime();
+      for (var attempt = 1; ; attempt++) {
+        var regions = await opaqueRegions(reader);
+        checkRuntime();
+        var mask = reader.page.frames().map(function (frame) { return frame.locator(OPAQUE_FIELDS); })
+          .concat(regions.map(function (found) { return maskOf(reader, found); }));
+        var options = { path: file, mask: mask, timeout: timeoutMs };
+        written = true;
+        if (bound) await bound.handle.screenshot(options);
+        else await reader.page.screenshot(Object.assign(options, { fullPage: args.indexOf("--full") !== -1 }));
+        checkRuntime();
+        // What markup marks was masked by selector even if it is new; anything else must have been masked by the read.
+        var after = await opaqueRegions(reader);
+        var covered = after.every(function (found) {
+          return found.marked || regions.some(function (old) { return old.session === found.session && old.region.id === found.region.id; });
+        });
+        if (covered) break;
+        await fs.promises.unlink(file);
+        written = false;
+        requireTrue(attempt < BIND_ATTEMPTS, "AUTH_SNAPSHOT_INVALIDATED");
+      }
       requireTrue(!closed, "AUTH_CONTEXT_REFUSED");
       return { screenshot: file };
     } catch (error) {
@@ -1134,7 +1201,15 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           await bound.handle.scrollIntoViewIfNeeded({ timeout: timeoutMs });
           checkRuntime();
           var method = command === "select" ? "selectOption" : command;
-          if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
+          if (command === "type") {
+            // Some targets (a remote desktop's canvas) take keys only a moment after they get focus, and dropped the
+            // first characters when typing followed focus at once; so focus, let it settle, then type.
+            await bound.handle.focus();
+            checkRuntime();
+            await page.waitForTimeout(TYPE_SETTLE_MS);
+            checkRuntime();
+            await page.keyboard.type(args[2]);
+          } else if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
           else await bound.handle[method]({ timeout: timeoutMs });
           checkRuntime();
           // Typed text is redacted from every snapshot, so the field itself says whether it now holds it; only the

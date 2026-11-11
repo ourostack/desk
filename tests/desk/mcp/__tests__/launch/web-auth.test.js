@@ -1002,13 +1002,37 @@ test("a page with a child frame reads and saves the frame's content without its 
   const root = await mkTempRoot("auth-tree-child-")
   const native = framedDriver()
   const send = native.cdp.send
+  // The browser names each path: the frame owner's in the page, the field's in the frame's document.
+  const named = { owner: 107, child: 201 }
   native.cdp.send = async (method, params) => {
-    if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: 7 } }
-    if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId: 205 } } }
+    if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: /iframe:nth-of-type\(1\)$/u.test(params.selector) ? 8 : 7 } }
+    if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId: params.nodeId === 8 ? named.owner : 205 } } }
+    if (method === "DOM.getDocument") {
+      const dom = await send(method, params)
+      const owner = (function find(node) { return node.backendNodeId === 107 ? node : (node.children || []).map(find).find(Boolean) })(dom.root)
+      // Each bind reads the page, then confirms: a document replaced in between is seen only by the confirmation.
+      if (params.pierce && (named.child !== 201 || named.tree) && (named.reads = (named.reads ?? 0) + 1) % 2 === 0) {
+        owner.contentDocument.backendNodeId = named.child
+        if (named.tree) owner.backendNodeId = named.tree
+      }
+      return dom
+    }
     return send(method, params)
   }
   const adapter = adapterFor(native, root)
   try {
+    // Between the read and the action, the owner's path comes to name another iframe, or the frame shows another
+    // document: the field at the same path in it is not the one the ref was read in, so nothing is filled there.
+    for (const [moved, expected] of [[{ owner: 999 }, "owner"], [{ child: 299 }, "document"], [{ tree: 777 }, "owner gone from the document"]]) {
+      const read = await adapter.call(["snapshot"])
+      const stale = all(all(read.snapshot).find((node) => node.role === "frame")).find((node) => node.role === "textbox")
+      Object.assign(named, moved)
+      const confirmations = native.calls.filter((call) => call[1] === "DOM.getDocument").length
+      await assert.rejects(adapter.call(["fill", stale.ref, "elsewhere"]), /AUTH_SNAPSHOT_INVALIDATED/u, expected)
+      assert.ok(native.calls.filter((call) => call[1] === "DOM.getDocument").length > confirmations)
+      assert.equal(native.calls.some((call) => call[0] === "fill"), false, expected)
+      Object.assign(named, { owner: 107, child: 201, reads: 0, tree: undefined })
+    }
     const result = await adapter.call(["snapshot", "--save"])
     assert.equal(result.framesOmitted, undefined)
     assert.ok(result.text.includes("Main product title"))
@@ -1026,8 +1050,9 @@ test("a page with a child frame reads and saves the frame's content without its 
     const waits = native.calls.filter((call) => call[0] === "waitForSelector").map((call) => call[1])
     assert.match(waits[0], /iframe:nth-of-type\(1\)$/u, "through the frame's owner")
     assert.equal(waits[1], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)")
-    const confirm = native.calls.find((call) => call[1] === "DOM.querySelector")
-    assert.equal(confirm[2].nodeId, 1001, "the browser confirms the path inside the frame's document")
+    const confirm = native.calls.filter((call) => call[1] === "DOM.querySelector").slice(-2)
+    assert.equal(confirm[0][2].nodeId, 1, "the browser confirms the owner's path in the page")
+    assert.equal(confirm[1][2].nodeId, 1001, "and the field's path inside the frame's document")
     assert.equal(native.packet.strings[native.packet.documents[1].nodes.inputValue.value[0]], "literal")
     assert.equal(filled.typed.verified, true)
     assert.equal(JSON.stringify(filled).includes("literal"), false)
@@ -1543,7 +1568,8 @@ test("keys typed at a node inside a rich-text editor go to its editing host, cho
     assert.match(snapshot.text, /- textbox \[ref=e\d+\]/u, "the host is a textbox")
     const result = await adapter.call(["type", paragraphRef(snapshot), "typed text"])
     assert.deepEqual(result.typed, { verified: true })
-    assert.ok(native.calls.some((call) => call[0] === "type" && call[1] === "typed text"))
+    assert.ok(native.calls.some((call) => call[0] === "keyboard.type" && call[1] === "typed text"))
+    assert.deepEqual(native.calls.filter((call) => ["focus", "keyboard.type"].includes(call[0])).map((call) => call[1]), [104, "typed text"], "the keys go to the host it focused")
     assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /div:nth-of-type\(1\)$/u, "bound at the host")
     assert.ok(native.calls.some((call) => call[0] === "cdp" && call[1] === "DOM.querySelector"), "the browser confirms the host")
     snapshot = await adapter.call(["snapshot"])
@@ -2088,7 +2114,7 @@ test("tab-select brings the tab to the front, and refs from its snapshot act the
   } finally { await adapter.close() }
 })
 
-test("screenshot saves the tab or one element in the private files folder, with password and one-time-code fields masked in every frame", async () => {
+test("screenshot saves the tab or one element in the private files folder, with every input, textarea and editable region masked in every frame", async () => {
   const root = await mkTempRoot("auth-screenshot-")
   const native = framedDriver()
   const adapter = adapterFor(native, root)
@@ -2101,8 +2127,14 @@ test("screenshot saves the tab or one element in the private files folder, with 
     const shot = native.calls.find((call) => call[0] === "page.screenshot")[1]
     assert.equal(shot.fullPage, false)
     assert.equal(shot.timeout, 5000)
-    assert.equal(shot.mask.length, native.page.frames().length, "every frame is masked")
-    for (const mask of shot.mask) assert.match(mask.selector, /input\[type=password\].*one-time-code/u)
+    const frames = native.page.frames().length
+    assert.deepEqual(shot.mask.slice(0, frames).map((mask) => [mask.frame, mask.selector]),
+      native.page.frames().map((frame, index) => [index, "input, textarea, [contenteditable]"]), "every field in every frame, also one that appears meanwhile")
+    assert.deepEqual(shot.mask.slice(frames).map((mask) => [mask.through, mask.selector]), [
+      [[], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"],
+      [["css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"],
+      [["css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"], "css=html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)"],
+    ], "each opaque region the read found, in the frame it is in")
     await adapter.call(["screenshot", "--full"])
     assert.equal(native.calls.filter((call) => call[0] === "page.screenshot")[1][1].fullPage, true)
     const ref = inputRef(await adapter.call(["snapshot"]))
@@ -2110,7 +2142,7 @@ test("screenshot saves the tab or one element in the private files folder, with 
     const call = native.calls.find((entry) => entry[0] === "element.screenshot")
     assert.equal(call[1], 104)
     assert.equal(call[2].path, element.screenshot)
-    assert.equal(call[2].mask.length, native.page.frames().length)
+    assert.equal(call[2].mask.length, shot.mask.length)
     assert.ok(native.calls.some((entry) => entry[0] === "dispose" && entry[1] === 104), "the element handle is let go")
     for (const args of [["screenshot", "--full", "--full"], ["screenshot", ref, "--full"], ["screenshot", "x"], ["screenshot", ref, ref], ["screenshot", "--path=/tmp/x.png"]]) {
       await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u, JSON.stringify(args))
@@ -2234,4 +2266,125 @@ test("a ref in a child frame is refused when its owner, the frame or the browser
       if (failure === "confirm") assert.ok(native.calls.some((call) => call[0] === "dispose" && call[1] === 205), "the bound handle is let go")
     } finally { await adapter.close() }
   }
+})
+
+test("screenshot masks what markup alone does not mark: a CSS-editable page and open-shadow content by its host; a closed shadow or an unmasked region that stays is never pictured", async () => {
+  const root = await mkTempRoot("auth-screenshot-regions-")
+  const regions = (native) => native.calls.filter((call) => call[0] === "page.screenshot").at(-1)[1].mask
+    .filter((mask) => mask.selector !== "input, textarea, [contenteditable]").map((mask) => mask.selector)
+  const editable = fakeDriver({ packet: editingSnapshot() })
+  let adapter = adapterFor(editable, root)
+  try {
+    await adapter.call(["screenshot"])
+    assert.deepEqual(regions(editable), ["css=html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)"], "a region editable by CSS alone is covered from its outermost editable element")
+  } finally { await adapter.close() }
+  const packet = nativeSnapshot({ value: "Prefilled card 4111", type: "text" })
+  packet.strings.push("open")
+  packet.documents[0].nodes.shadowRootType = { index: [3], value: [packet.strings.length - 1] }
+  const shadowed = fakeDriver({ packet })
+  let kind = "open"
+  const send = shadowed.cdp.send
+  shadowed.cdp.send = async (method, params) => {
+    const result = await send(method, params)
+    if (method !== "DOM.getDocument") return result
+    const body = result.root.children[0].children[0]
+    body.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 106, shadowRootType: kind, children: body.children.splice(0) }]
+    return result
+  }
+  adapter = adapterFor(shadowed, root)
+  try {
+    const files = fs.readdirSync(root).length
+    await adapter.call(["screenshot"])
+    assert.deepEqual(regions(shadowed), ["css=html:nth-of-type(1) > body:nth-of-type(1)"], "a field in an open shadow is covered by its host")
+    kind = "closed"
+    await assert.rejects(adapter.call(["screenshot"]), /AUTH_SHADOW_COVERAGE_REFUSED/u)
+    assert.equal(fs.readdirSync(root).length, files + 1, "nothing is pictured past a closed shadow")
+  } finally { await adapter.close() }
+  // Page script makes a region editable by CSS while the picture is taken: the read after it finds a region the mask
+  // did not cover, so the picture is taken again; one that keeps appearing is refused and leaves no file.
+  for (const [appears, expected] of [[1, null], [Infinity, /AUTH_SNAPSHOT_INVALIDATED/u]]) {
+    const changing = nativeSnapshot({ type: "text" })
+    const native = fakeDriver({ packet: changing })
+    const body = changing.documents[0].layout.styles[1]
+    const readOnly = body[2]
+    const readWrite = changing.strings.push("read-write") - 1
+    let shots = 0
+    let shot = false
+    native.page.screenshot = async (options) => {
+      native.calls.push(["page.screenshot", options])
+      fs.writeFileSync(options.path, "FAKE_PNG")
+      shot = true
+      body[2] = shots++ < appears ? readWrite : readOnly
+    }
+    // A region that keeps appearing is gone again whenever the next picture's read is taken.
+    const send = native.cdp.send
+    native.cdp.send = async (method, params) => {
+      if (method === "DOMSnapshot.captureSnapshot" && !shot && appears === Infinity) body[2] = readOnly
+      const result = await send(method, params)
+      if (method === "DOMSnapshot.captureSnapshot") shot = false
+      return result
+    }
+    const other = adapterFor(native, root)
+    try {
+      const files = fs.readdirSync(root).length
+      if (expected) {
+        await assert.rejects(other.call(["screenshot"]), expected)
+        assert.equal(fs.readdirSync(root).length, files, "a picture that may show an unmasked region is removed")
+      } else {
+        const result = await other.call(["screenshot"])
+        assert.ok(fs.existsSync(result.screenshot))
+        assert.equal(native.calls.filter((call) => call[0] === "page.screenshot").length, 2, "taken again once the region was masked")
+        assert.equal(fs.readdirSync(root).length, files + 1, "only the kept picture stays")
+      }
+    } finally { await other.close() }
+  }
+})
+
+test("screenshot masks an out-of-process frame's fields in that frame", async () => {
+  const root = await mkTempRoot("auth-screenshot-oopif-")
+  const { packet, outside } = outOfProcess()
+  const native = fakeDriver({ packet, outside })
+  const adapter = adapterFor(native, root)
+  try {
+    const away = native.page.frames().at(-1)
+    away.locator = (selector) => ({ away: true, selector })
+    await adapter.call(["screenshot"])
+    const masks = native.calls.find((call) => call[0] === "page.screenshot")[1].mask
+    const field = "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)"
+    assert.ok(masks.some((mask) => mask.away && mask.selector === field), "the frame's own field, located in that frame")
+    assert.ok(masks.some((mask) => !mask.away && mask.selector === field), "and the page's, in the page")
+  } finally { await adapter.close() }
+})
+
+test("type gives a target that takes keys only a moment after focus (a remote desktop's canvas) time to settle, so no character is lost", async () => {
+  const root = await mkTempRoot("auth-type-settle-")
+  const packet = nativeSnapshot({ value: "", type: "text" })
+  const native = fakeDriver({ packet })
+  const field = native.handles.get(104)
+  const type = field.type
+  let ready = false
+  field.focus = async () => { native.calls.push(["focus", 104]); ready = false; native.focused = field }
+  // Keys that arrive before the target settles are dropped, as the remote desktop dropped the first characters.
+  field.type = async (text) => type(ready ? text : text.slice(13))
+  native.page.waitForTimeout = async (ms) => { native.calls.push(["waitForTimeout", ms]); ready = true }
+  native.page.keyboard.type = async (text) => { native.calls.push(["keyboard.type", text]); await native.focused.type(text) }
+  const adapter = adapterFor(native, root)
+  try {
+    const ref = inputRef(await adapter.call(["snapshot"]))
+    const command = "Write-Output desk679-type-ok; Get-Date"
+    const result = await adapter.call(["type", ref, command])
+    assert.equal(packet.strings[packet.documents[0].nodes.inputValue.value[0]], command, "every character arrives")
+    assert.deepEqual(result.typed, { verified: true })
+    assert.deepEqual(native.calls.filter((call) => ["focus", "waitForTimeout", "keyboard.type"].includes(call[0])).map((call) => call[0]),
+      ["focus", "waitForTimeout", "keyboard.type"])
+    assert.ok(native.calls.find((call) => call[0] === "waitForTimeout")[1] > 0)
+    let blocked = false
+    const policed = auth.create(native.context, root, 5000, () => { if (blocked) throw new Error(PASSWORD) }, ONCE)
+    try {
+      const again = inputRef(await policed.call(["snapshot"]))
+      field.focus = async () => { blocked = true }
+      await assert.rejects(policed.call(["type", again, "x"]), (error) => /AUTH_RUNTIME_POLICY_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
+      assert.equal(native.calls.filter((call) => call[0] === "keyboard.type").length, 1, "no keys after the policy refuses")
+    } finally { await policed.close() }
+  } finally { await adapter.close() }
 })

@@ -109,7 +109,11 @@ export function framedSnapshot({ echo } = {}) {
 // A tab over `packet`: every document of the capture is a frame whose elements bind by their last selector tag, and a
 // frame owner's handle opens the frame of the document it holds. `outside` adds an out-of-process child frame with its
 // own CDP session and capture, shown in the main-document owner whose backend node id is `outside.owner`.
-function fakeFrames(packet, calls, frameOf) {
+function through(d, owners) {
+  return { frameLocator: (selector) => through(d, [...owners, selector]), locator: (selector) => ({ frame: d, through: owners, selector }) }
+}
+
+function fakeFrames(packet, calls, frameOf, focus) {
   const handles = new Map()
   const frames = packet.documents.map((document, d) => {
     const table = document.nodes
@@ -120,7 +124,8 @@ function fakeFrames(packet, calls, frameOf) {
         const row = table.nodeName.findIndex((index) => packet.strings[index] === ending)
         return handles.get(table.backendNodeId[row])
       },
-      locator: (selector) => ({ frame: d, selector }),
+      locator: (selector) => ({ frame: d, through: [], selector }),
+      frameLocator: (selector) => through(d, [selector]),
     }
     for (const id of table.backendNodeId) {
       const handle = { dispose: async () => { calls.push(["dispose", id]) } }
@@ -142,6 +147,8 @@ function fakeFrames(packet, calls, frameOf) {
         const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
         return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
       }
+      // Keys typed after focus go to the focused element, as page.keyboard sends them.
+      handle.focus = async () => { calls.push(["focus", id]); focus.on = handle }
       handle.screenshot = async (options) => { calls.push(["element.screenshot", id, options]); fs.writeFileSync(options.path, "FAKE_PNG") }
       handle.contentFrame = async () => {
         const owner = table.contentDocumentIndex.index.indexOf(table.backendNodeId.indexOf(id))
@@ -171,8 +178,9 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   const context = new EventEmitter()
   const page = new EventEmitter()
   let away
-  const main = fakeFrames(packet, calls, (id) => outside && id === outside.owner ? away.frames[0] : null)
-  if (outside) away = fakeFrames(outside.packet, calls, () => null)
+  const focus = {}
+  const main = fakeFrames(packet, calls, (id) => outside && id === outside.owner ? away.frames[0] : null, focus)
+  if (outside) away = fakeFrames(outside.packet, calls, () => null, focus)
   const handles = new Map([...main.handles, ...(away ? away.handles : [])])
   const frame = main.frames[0]
   page.context = () => context
@@ -181,6 +189,11 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   page.isClosed = () => false
   for (const method of ["goto", "goBack", "goForward", "reload", "setViewportSize", "close", "bringToFront"]) {
     page[method] = async (...args) => { calls.push([method, ...args]) }
+  }
+  page.waitForTimeout = async (ms) => { calls.push(["waitForTimeout", ms]) }
+  page.keyboard = {
+    press: async (...args) => { calls.push(["keyboard.press", ...args]) },
+    type: async (text) => { calls.push(["keyboard.type", text]); if (focus.on) await focus.on.type(text) },
   }
   page.screenshot = async (options) => { calls.push(["page.screenshot", options]); fs.writeFileSync(options.path, "FAKE_PNG") }
   page.mouse = { wheel: async (...args) => calls.push(["wheel", ...args]) }
