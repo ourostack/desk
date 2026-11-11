@@ -27,7 +27,7 @@ var ERROR_PAGE = /\b(?:oops|something went wrong|unknown error|an error occurred
 // A large store product page has about 18,000 nodes and 250,000 native values.
 var MAX_NODES = 100000;
 var MAX_VALUES = 2000000;
-var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED", "AUTH_PROTECTION_INVALIDATED", "AUTH_REDACTION_INVALIDATED"];
+var RETRIED = ["AUTH_SNAPSHOT_INVALIDATED"];
 var EDITS = ["type", "fill", "press"];
 var EDITABLE = ["read-write", "read-write-plaintext-only"];
 // Runs in the page: whether a field or editing host now holds the text (all of it for fill, some of it for type).
@@ -46,12 +46,17 @@ var ARITY = {
   snapshot: [1, 2], find: [2, 2], goto: [2, 2], "go-back": [1, 1], "go-forward": [1, 1], reload: [1, 1],
   click: [2, 2], dblclick: [2, 2], fill: [3, 3], type: [3, 3], press: [2, 3], select: [3, 3], wait: [1, 3],
   check: [2, 2], uncheck: [2, 2], hover: [2, 2], "tab-list": [1, 1], "tab-new": [1, 1],
-  "tab-close": [1, 1], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3]
+  "tab-close": [1, 2], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3], screenshot: [1, 3]
 };
+// A ref is bound this many times when the page keeps moving it between the read and the browser's confirmation.
+var BIND_ATTEMPTS = 3;
+// Fields whose value a screenshot never shows: a password (also once a "show password" toggle has made it text), or a
+// one-time code. The browser paints a box over each, in every frame.
+var SECRET_FIELDS = "input[type=password], input[autocomplete~=current-password], input[autocomplete~=new-password], input[autocomplete~=one-time-code]";
 
 var COMMANDS = "snapshot [--interactive | --save]; find <text>; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
   "click, dblclick, hover, check or uncheck <ref>; fill or type <ref> <text>; press [<ref>] <key>; select <ref> <value>; " +
-  "mousewheel <dx> <dy>; resize <width> <height>; tab-list; tab-new; tab-select <index>; tab-close";
+  "mousewheel <dx> <dy>; resize <width> <height>; screenshot [<ref>] [--full]; tab-list; tab-new; tab-select <index>; tab-close [<index>]";
 var SNAPSHOT_AGAIN = "Run [\"snapshot\"] to see the page as it is now and act on a ref from it.";
 var CHANGING = "The page was changing while it was read. Run [\"wait\",\"2\"] (or wait for text you expect), then try again.";
 // What to do instead, for each refusal. Nothing here ever needs eval or a page script: refs from a snapshot cover it.
@@ -60,15 +65,13 @@ var HINTS = {
   AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
   AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
   AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
-  AUTH_SNAPSHOT_INVALIDATED: "The page changed while it was read, or under that ref. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"]; on a page that keeps changing, act soon after reading it.",
-  AUTH_PROTECTION_INVALIDATED: CHANGING,
-  AUTH_REDACTION_INVALIDATED: CHANGING,
-  AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, read the frame's own page with goto, or use another way in.",
-  AUTH_SHADOW_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine.",
-  AUTH_CONTROL_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine.",
+  AUTH_SNAPSHOT_INVALIDATED: "The page replaced that element, or navigated, since it was read. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"].",
+  AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, open the frame's own page with goto.",
+  AUTH_SHADOW_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine; [\"screenshot\"] shows it.",
   AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
+  AUTH_SCREENSHOT_FAILED: "Run [\"wait\",\"2\"], then try again; for one part of the page, pass a ref from a snapshot.",
   AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
-  AUTH_TAB_REFUSED: "There is no such open tab. Run [\"tab-list\"] and use an index from it with tab-select.",
+  AUTH_TAB_REFUSED: "There is no such open tab. Run [\"tab-list\"] and use an index from it with tab-select or tab-close.",
   AUTH_OUTPUT_TOO_LARGE: "The page is too large to read whole. Go to a narrower page (a single item or chat) with goto, or close panels you do not need.",
   AUTH_TIMEOUT: "The command ran out of time, so this context was closed. Open a new one with browser_context and start again; keep waits under a minute.",
   AUTH_CONTEXT_REFUSED: "This context, or its selected tab, is closed. If [\"tab-list\"] shows tabs, select one with tab-select; otherwise open a new context with browser_context.",
@@ -76,7 +79,7 @@ var HINTS = {
   AUTH_RUNTIME_POLICY_REFUSED: "This Desk process cannot protect authenticated output now. Close the context and open a new one with browser_context; if it repeats, report it with desk_doctor.",
   AUTH_READER_REFUSED: "The tab was replaced or closed. Run [\"tab-list\"], select a tab, then snapshot.",
   AUTH_READER_SETUP_FAILED: "The tab could not be read yet. Run [\"wait\",\"2\"], then snapshot; if it repeats, open a new context.",
-  AUTH_DOCUMENT_REFUSED: "This page is not an ordinary HTML document mine can read. Go to the page's HTML address with goto.",
+  AUTH_DOCUMENT_REFUSED: "This page is not an ordinary HTML document mine can read. Go to the page's HTML address with goto, or use [\"screenshot\"].",
   AUTH_TARGET_KIND_REFUSED: "That element cannot be acted on in mine. " + SNAPSHOT_AGAIN + " Choose its labelled parent or another control."
 };
 var GENERAL_HINT = SNAPSHOT_AGAIN + " If the same refusal repeats, open a new context with browser_context.";
@@ -163,12 +166,14 @@ function fingerprint(raw) {
   return hash.digest("hex");
 }
 
+// The DOM as the browser names it (DOM.getDocument with pierce), for the CSS path each ref binds by. A same-process
+// child frame's document is walked from its owner, with paths from that document's own root; `chain` lists the frame
+// owners between the read's top document and a node, outermost first.
 function inspect(root) {
   dataOnly(root);
   var nodes = new Map();
   var controls = new Set();
-  var signature = [];
-  function walk(node, parent, cssPath, shadow) {
+  function walk(node, parent, cssPath, shadow, doc, chain, reach) {
     requireTrue(node && integer(node.backendNodeId, 1, Number.MAX_SAFE_INTEGER) && !nodes.has(node.backendNodeId));
     requireTrue(integer(node.nodeType, 1, 12) && typeof node.nodeName === "string");
     var frame = EMBEDDED.has(node.nodeName);
@@ -176,12 +181,20 @@ function inspect(root) {
     var children = node.children || [];
     requireTrue(Array.isArray(children));
     if (node.childNodeCount !== undefined) requireTrue(node.childNodeCount === children.length);
-    var entry = { id: node.backendNodeId, type: node.nodeType, name: node.nodeName, parent: parent, path: cssPath, shadow: shadow, raw: node };
+    var entry = { id: node.backendNodeId, type: node.nodeType, name: node.nodeName, parent: parent, path: cssPath, shadow: shadow,
+      raw: node, doc: doc, chain: chain, reach: reach && !shadow };
     nodes.set(entry.id, entry);
     if (entry.name === "INPUT" || entry.name === "TEXTAREA") controls.add(entry.id);
-    signature.push([entry.id, entry.type, entry.name, parent, shadow]);
-    // A frame owner is opaque: its child document, fallback content and their controls are never read.
-    if (frame) return;
+    if (frame) {
+      if (typeof node.frameId === "string" && node.frameId) entry.frameId = node.frameId;
+      // A frame owner's fallback content is never rendered; the document it shows is read in its place.
+      if (node.contentDocument) {
+        var inner = node.contentDocument;
+        requireTrue(inner && inner.nodeType === 9, "AUTH_FRAME_COVERAGE_REFUSED");
+        walk(inner, entry.id, "", false, inner.backendNodeId, chain.concat([entry.id]), entry.reach && Boolean(cssPath));
+      }
+      return;
+    }
     var ordinal = new Map();
     children.forEach(function (child) {
       var childPath = cssPath;
@@ -191,19 +204,15 @@ function inspect(root) {
         ordinal.set(tag, (ordinal.get(tag) || 0) + 1);
         childPath = (cssPath ? cssPath + " > " : "") + tag + ":nth-of-type(" + ordinal.get(tag) + ")";
       }
-      walk(child, entry.id, childPath, shadow);
+      walk(child, entry.id, childPath, shadow, doc, chain, reach);
     });
     (node.shadowRoots || []).forEach(function (shadowRoot) {
       // Browser-internal trees (form controls, media controls, details, SVG use) are absent from
       // DOMSnapshot, so they are never rendered; control values come from the native value fields.
-      if (shadowRoot.shadowRootType === "user-agent") {
-        signature.push([entry.id, "user-agent"]);
-        return;
-      }
+      if (shadowRoot.shadowRootType === "user-agent") return;
       requireTrue(shadowRoot.shadowRootType === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
       entry.host = true;
-      signature.push([entry.id, shadowRoot.backendNodeId, "open"]);
-      walk(shadowRoot, entry.id, undefined, true);
+      walk(shadowRoot, entry.id, undefined, true, doc, chain, reach);
     });
     // Template content is inert, excluded from rendering and absent from DOMSnapshot; only its fragment is recorded.
     if (node.templateContent) inert(node.templateContent, entry.id);
@@ -212,11 +221,10 @@ function inspect(root) {
     requireTrue(fragment && integer(fragment.backendNodeId, 1, Number.MAX_SAFE_INTEGER) && !nodes.has(fragment.backendNodeId));
     requireTrue(fragment.nodeType === 11);
     nodes.set(fragment.backendNodeId, { id: fragment.backendNodeId, type: 11, name: fragment.nodeName, parent: parent, shadow: false });
-    signature.push([fragment.backendNodeId, 11, "template", parent]);
   }
   requireTrue(root && root.nodeType === 9, "AUTH_DOCUMENT_REFUSED");
-  walk(root, 0, "", false);
-  return { root: root.backendNodeId, nodes: nodes, controls: controls, signature: JSON.stringify(signature) };
+  walk(root, 0, "", false, root.backendNodeId, [], true);
+  return { root: root.backendNodeId, nodes: nodes, controls: controls };
 }
 
 // Unrendered (display: none) nodes have no layout row, so no computed style. -webkit-user-modify is inherited
@@ -235,144 +243,34 @@ function typedValue(value, attrs) {
   return !(UNTYPED.has(type) && value.length < UNTYPED_CODE_LENGTH);
 }
 
-function prepare(packet, scope, frameId, nextRef) {
-  dataOnly(packet);
-  // Child frames' documents follow the main document; they are never read.
-  requireTrue(Array.isArray(packet.documents) && packet.documents.length >= 1, "AUTH_DOCUMENT_REFUSED");
-  requireTrue(Array.isArray(packet.strings));
-  var strings = packet.strings;
-  function text(index, empty) {
-    requireTrue(integer(index, empty === false ? 0 : -1, strings.length - 1));
-    if (index === -1) return "";
-    requireTrue(typeof strings[index] === "string");
-    return strings[index];
-  }
-  var document = packet.documents[0];
-  requireTrue(text(document.frameId, false) === frameId, "AUTH_DOCUMENT_REFUSED");
-  var table = document.nodes;
-  requireTrue(table && Array.isArray(table.nodeType));
-  var count = table.nodeType.length;
-  requireTrue(count > 0 && count <= MAX_NODES, "AUTH_OUTPUT_TOO_LARGE");
-  ["parentIndex", "nodeName", "nodeValue", "backendNodeId", "attributes"].forEach(function (key) {
-    requireTrue(Array.isArray(table[key]) && table[key].length === count);
-  });
-  function sparse(field, size) {
-    requireTrue(field && Array.isArray(field.index));
-    requireTrue(Array.isArray(field.value) && field.index.length === field.value.length);
-    var result = new Map();
-    field.index.forEach(function (index, offset) {
-      requireTrue(integer(index, 0, (size || count) - 1) && !result.has(index));
-      result.set(index, text(field.value[offset]));
-    });
-    return result;
-  }
-  function attributesOf(attributes) {
-    requireTrue(Array.isArray(attributes) && attributes.length % 2 === 0);
-    var attrs = new Map();
-    for (var a = 0; a < attributes.length; a += 2) {
-      var key = text(attributes[a], false);
-      requireTrue(!attrs.has(key));
-      attrs.set(key, text(attributes[a + 1]));
-    }
-    return attrs;
-  }
-  function styles(layout, size) {
-    requireTrue(layout && Array.isArray(layout.nodeIndex) && Array.isArray(layout.styles) &&
-      layout.nodeIndex.length === layout.styles.length);
-    var result = new Map();
-    layout.nodeIndex.forEach(function (index, offset) {
-      requireTrue(integer(index, 0, size - 1));
-      var row = layout.styles[offset];
-      requireTrue(Array.isArray(row) && (row.length === 0 || row.length === STYLES.length));
-      var values = row.map(function (value) { return text(value); });
-      // One node can own several layout objects (inline continuations, anonymous wrappers); their styles must agree.
-      if (result.has(index)) requireTrue(JSON.stringify(result.get(index)) === JSON.stringify(values));
-      else result.set(index, values);
-    });
-    return result;
-  }
-  // A child frame is never read, but what may have been typed there is still scrubbed from the main
-  // document, where page script can copy it.
-  var framedValues = [];
-  packet.documents.slice(1).forEach(function (child) {
-    var nodes = child && child.nodes;
-    requireTrue(nodes && Array.isArray(nodes.nodeType), "AUTH_FRAME_COVERAGE_REFUSED");
-    var size = nodes.nodeType.length;
-    requireTrue(size <= MAX_NODES, "AUTH_OUTPUT_TOO_LARGE");
-    ["parentIndex", "nodeValue", "attributes"].forEach(function (key) {
-      requireTrue(Array.isArray(nodes[key]) && nodes[key].length === size, "AUTH_FRAME_COVERAGE_REFUSED");
-    });
-    var childStyles = styles(child.layout, size);
-    var modes = [];
-    var attrs = nodes.attributes.map(attributesOf);
-    sparse(nodes.inputValue, size).forEach(function (value, index) { if (typedValue(value, attrs[index])) framedValues.push(value); });
-    sparse(nodes.textValue, size).forEach(function (value) { framedValues.push(value); });
-    for (var j = 0; j < size; j++) {
-      var up = nodes.parentIndex[j];
-      requireTrue(integer(up, j === 0 ? -1 : 0, j - 1), "AUTH_FRAME_COVERAGE_REFUSED");
-      modes.push(editingMode(childStyles.has(j), childStyles.get(j) || [], attrs[j], up === -1 ? undefined : modes[up]));
-      if (nodes.nodeType[j] === 3 && modes[j] !== "read-only") framedValues.push(text(nodes.nodeValue[j]));
-    }
-  });
-  var input = sparse(table.inputValue);
-  var textarea = sparse(table.textValue);
-  var shadows = sparse(table.shadowRootType);
-  var owners = table.contentDocumentIndex;
-  requireTrue(owners && Array.isArray(owners.index) && Array.isArray(owners.value) &&
-    owners.index.length === owners.value.length, "AUTH_FRAME_COVERAGE_REFUSED");
-  owners.value.forEach(function (index) { requireTrue(integer(index, 1, packet.documents.length - 1), "AUTH_FRAME_COVERAGE_REFUSED"); });
-  var style = styles(document.layout, count);
-  var ids = new Set();
-  var controls = new Set();
-  var rows = [];
-  for (var i = 0; i < count; i++) {
-    var id = table.backendNodeId[i];
-    requireTrue(integer(id, 1, Number.MAX_SAFE_INTEGER) && !ids.has(id));
-    ids.add(id);
-    requireTrue(integer(table.nodeType[i], 1, 12) && integer(table.parentIndex[i], i === 0 ? -1 : 0, i - 1));
-    var name = text(table.nodeName[i], false);
-    var parent = i === 0 ? null : rows[table.parentIndex[i]];
-    var framed = Boolean(parent && (parent.frame || parent.framed));
-    requireTrue(framed || !shadows.has(i) || shadows.get(i) === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
-    var attrs = attributesOf(table.attributes[i]);
-    var control = !framed && (name === "INPUT" || name === "TEXTAREA");
-    if (control) {
-      controls.add(id);
-      requireTrue((name === "INPUT" ? input : textarea).has(i));
-    }
-    var css = style.get(i) || [];
-    var modify = editingMode(style.has(i), css, attrs, parent && parent.modify);
-    var shadow = Boolean(shadows.has(i) || (parent && parent.shadow));
-    var excluded = EXCLUDED.has(name) || framed || Boolean(parent && parent.excluded);
-    var unknown = table.nodeType[i] !== 9 && (modify !== "read-only" || shadow);
-    var opaque = control || unknown || Boolean(parent && parent.opaque);
-    rows.push({ id: id, name: name, type: table.nodeType[i], attrs: attrs, parent: parent,
-      css: css, shadow: shadow, excluded: excluded, opaque: opaque, modify: modify, frame: EMBEDDED.has(name), framed: framed,
-      value: text(table.nodeValue[i]), children: [] });
-    if (parent) parent.children.push(rows[i]);
-  }
-  requireTrue(rows[0].type === 9 && rows[0].id === scope.root, "AUTH_DOCUMENT_REFUSED");
-  owners.index.forEach(function (index) { requireTrue(integer(index, 0, count - 1) && rows[index].frame, "AUTH_FRAME_COVERAGE_REFUSED"); });
-  requireTrue(controls.size === scope.controls.size &&
-    Array.from(controls).every(function (id) { return scope.controls.has(id); }), "AUTH_CONTROL_COVERAGE_REFUSED");
-  // A shadow host's unslotted light children are outside the flat tree DOMSnapshot captures and are never rendered.
-  var unslotted = new Set();
-  scope.nodes.forEach(function (node) {
-    var parent = scope.nodes.get(node.parent);
-    var hidden = !ids.has(node.id) && node.type !== 11 && !scope.controls.has(node.id) && Boolean(parent) &&
-      ((parent.host && parent.type !== 11) || unslotted.has(parent.id));
-    // A shadow root inside unslotted content is outside the flat tree too.
-    if (hidden || (node.type === 11 && parent && unslotted.has(parent.id))) unslotted.add(node.id);
-    requireTrue(ids.has(node.id) || node.type === 11 || hidden, "AUTH_CONTROL_COVERAGE_REFUSED");
-  });
+// One DOMSnapshot capture is one instant of the page: every value and every text in it are from the same moment, so a
+// read needs nothing but the capture to protect what it shows. The DOM read (`scope`) only names the paths refs bind
+// by; a node one read has and the other lacks (the page changed between them) is shown without a ref, or not at all.
+// `outside` holds the captures of out-of-process child frames, each with its own DOM read and frame id; each is shown
+// inside the frame owner whose frame id it carries. Every value typed anywhere in the page is scrubbed everywhere.
+function prepare(packet, scope, frameId, nextRef, outside) {
   var secrets = new Set();
-  // Complete the native value pass before any label or text is rendered.
+  var budget = { rows: 0 };
   // Whitespace alone protects nothing and would blank every space in the page.
   function secret(value) { if (value && /\S/u.test(value)) secrets.add(value); }
-  input.forEach(function (value, index) { if (typedValue(value, rows[index].attrs)) secret(value); });
-  textarea.forEach(secret);
-  framedValues.forEach(secret);
-  rows.forEach(function (row) { if (row.opaque && !row.excluded) secret(row.value); });
+  var main = rowsOf(packet, scope, frameId, undefined, secret, budget);
+  var linked = new Map();
+  (outside || []).forEach(function (frame) {
+    requireTrue(frame && typeof frame.frameId === "string" && frame.scope, "AUTH_FRAME_COVERAGE_REFUSED");
+    // Two captures claiming one frame contradict each other: neither is shown, and both are still scrubbed.
+    var read = rowsOf(frame.packet, frame.scope, frame.frameId, frame.key, secret, budget);
+    linked.set(frame.frameId, linked.has(frame.frameId) ? null : read);
+  });
+  // The document root must be the one the DOM read named; otherwise the page navigated between the two reads.
+  requireTrue(main.rows[0].id === scope.root, "AUTH_SNAPSHOT_INVALIDATED");
+  [main].concat(Array.from(linked.values()).filter(Boolean)).forEach(function (read) {
+    read.rows.forEach(function (row) {
+      if (!row.frame || row.content || row.framed) return;
+      var owner = read.scope.nodes.get(row.id);
+      var inner = owner && owner.frameId ? linked.get(owner.frameId) : undefined;
+      if (inner && !inner.claimed) { inner.claimed = true; row.content = inner.rows[0]; }
+    });
+  });
   function scrub(value) {
     var matches = [];
     secrets.forEach(function (secret) {
@@ -419,17 +317,20 @@ function prepare(packet, scope, frameId, nextRef) {
       node.role = "textbox";
       if (row.attrs.has("aria-label")) node.name = scrub(row.attrs.get("aria-label"));
     }
-    var inspected = scope.nodes.get(row.id);
-    if (nextRef && row.type === 1 && visible && !row.shadow && inspected && inspected.path) {
+    var inspected = row.read.scope.nodes.get(row.id);
+    if (nextRef && row.type === 1 && visible && !row.shadow && inspected && inspected.path && inspected.reach && inspected.doc === row.doc) {
       node.ref = "e" + nextRef();
       // Keys typed into a node inside a rich-text editor go to its editing host: the outermost editable ancestor.
       var host = row;
       while (EDITABLE.indexOf(host.modify) !== -1 && host.parent && !host.parent.shadow && EDITABLE.indexOf(host.parent.modify) !== -1) host = host.parent;
-      targets.push({ ref: node.ref, path: inspected.path, id: row.id, host: EDITABLE.indexOf(row.modify) !== -1 ? host.id : row.id });
+      targets.push({ ref: node.ref, path: inspected.path, id: row.id, host: EDITABLE.indexOf(row.modify) !== -1 ? host.id : row.id, key: row.read.key });
     }
     if (row.frame) {
       node.role = "frame";
-      frames++;
+      if (node.name === undefined && !row.opaque && row.attrs.has("title")) node.name = scrub(row.attrs.get("title"));
+      var inner = row.content ? render(row.content) : null;
+      if (inner) node.children.push(inner);
+      else frames++;
     } else if (row.name === "INPUT" || row.name === "TEXTAREA") {
       node.children.push({ role: "text", text: "[redacted]" });
     } else {
@@ -448,27 +349,134 @@ function prepare(packet, scope, frameId, nextRef) {
   // A dropdown's options (and a list box's option text) have no layout of their own, yet they are what a shown select
   // offers; only an option styled away is left out.
   function listed(row) {
-    if (row.css.length === 3) return false;
+    if (row.css.length === 3 || !row.parent) return false;
     var up = row.parent;
-    while (["OPTION", "OPTGROUP"].indexOf(up.name) !== -1 && (up.css.length !== 3 || shown(up))) up = up.parent;
+    while (up.parent && ["OPTION", "OPTGROUP"].indexOf(up.name) !== -1 && (up.css.length !== 3 || shown(up))) up = up.parent;
     return up.name === "SELECT" && shown(up);
   }
   try {
-    var tree = render(rows[0]);
+    var tree = render(main.rows[0]);
     dataOnly(tree);
-    var protection = rows.map(function (row) {
-      var modify = row.css.length === 3 && ["read-only", "read-write", "read-write-plaintext-only"].indexOf(row.css[2]) !== -1 ? row.css[2] : "unknown";
-      return [row.id, row.parent ? row.parent.id : 0, row.type, row.opaque, modify];
-    });
-    var redaction = crypto.createHash("sha256").update(JSON.stringify(Array.from(secrets).sort())).digest("hex");
-    return { tree: tree, targets: targets, protection: protection, redaction: redaction, frames: frames };
+    return { tree: tree, targets: targets, frames: frames };
   } finally {
     secrets.clear();
-    framedValues.length = 0;
-    rows.length = 0;
-    input.clear();
-    textarea.clear();
   }
+}
+
+// Every document of one capture as rows, checked against the native contract, with each value that may have been
+// typed handed to `secret` before anything is rendered. Same-process child documents hang from their frame owners.
+function rowsOf(packet, scope, frameId, key, secret, budget) {
+  dataOnly(packet);
+  requireTrue(Array.isArray(packet.documents) && packet.documents.length >= 1, "AUTH_DOCUMENT_REFUSED");
+  requireTrue(Array.isArray(packet.strings));
+  var strings = packet.strings;
+  var read = { scope: scope, key: key, rows: [] };
+  function text(index, empty) {
+    requireTrue(integer(index, empty === false ? 0 : -1, strings.length - 1));
+    if (index === -1) return "";
+    requireTrue(typeof strings[index] === "string");
+    return strings[index];
+  }
+  requireTrue(text(packet.documents[0].frameId, false) === frameId, "AUTH_DOCUMENT_REFUSED");
+  function sparse(field, size) {
+    requireTrue(field && Array.isArray(field.index));
+    requireTrue(Array.isArray(field.value) && field.index.length === field.value.length);
+    var result = new Map();
+    field.index.forEach(function (index, offset) {
+      requireTrue(integer(index, 0, size - 1) && !result.has(index));
+      result.set(index, text(field.value[offset]));
+    });
+    return result;
+  }
+  function attributesOf(attributes) {
+    requireTrue(Array.isArray(attributes) && attributes.length % 2 === 0);
+    var attrs = new Map();
+    for (var a = 0; a < attributes.length; a += 2) {
+      var name = text(attributes[a], false);
+      requireTrue(!attrs.has(name));
+      attrs.set(name, text(attributes[a + 1]));
+    }
+    return attrs;
+  }
+  function styles(layout, size) {
+    requireTrue(layout && Array.isArray(layout.nodeIndex) && Array.isArray(layout.styles) &&
+      layout.nodeIndex.length === layout.styles.length);
+    var result = new Map();
+    layout.nodeIndex.forEach(function (index, offset) {
+      requireTrue(integer(index, 0, size - 1));
+      var row = layout.styles[offset];
+      requireTrue(Array.isArray(row) && (row.length === 0 || row.length === STYLES.length));
+      var values = row.map(function (value) { return text(value); });
+      // One node can own several layout objects (inline continuations, anonymous wrappers); their styles must agree.
+      if (result.has(index)) requireTrue(JSON.stringify(result.get(index)) === JSON.stringify(values));
+      else result.set(index, values);
+    });
+    return result;
+  }
+  var ids = new Set();
+  var documents = packet.documents.map(function (document, d) {
+    // A child document that breaks the native contract cannot be scrubbed, so nothing of the page is shown.
+    var coverage = d === 0 ? "AUTH_NATIVE_DATA_INVALID" : "AUTH_FRAME_COVERAGE_REFUSED";
+    var table = document && document.nodes;
+    requireTrue(table && Array.isArray(table.nodeType), coverage);
+    var count = table.nodeType.length;
+    budget.rows += count;
+    requireTrue(count > 0 && count <= MAX_NODES && budget.rows <= MAX_NODES * 4, count > 0 ? "AUTH_OUTPUT_TOO_LARGE" : coverage);
+    ["parentIndex", "nodeName", "nodeValue", "backendNodeId", "attributes"].forEach(function (name) {
+      requireTrue(Array.isArray(table[name]) && table[name].length === count, coverage);
+    });
+    var input = sparse(table.inputValue, count);
+    var textarea = sparse(table.textValue, count);
+    var shadows = sparse(table.shadowRootType, count);
+    var owners = table.contentDocumentIndex;
+    requireTrue(owners && Array.isArray(owners.index) && Array.isArray(owners.value) &&
+      owners.index.length === owners.value.length, "AUTH_FRAME_COVERAGE_REFUSED");
+    var style = styles(document.layout, count);
+    var rows = [];
+    for (var i = 0; i < count; i++) {
+      var id = table.backendNodeId[i];
+      requireTrue(integer(id, 1, Number.MAX_SAFE_INTEGER) && !ids.has(id));
+      ids.add(id);
+      requireTrue(integer(table.nodeType[i], 1, 12) && integer(table.parentIndex[i], i === 0 ? -1 : 0, i - 1), coverage);
+      var name = text(table.nodeName[i], false);
+      var parent = i === 0 ? null : rows[table.parentIndex[i]];
+      var framed = Boolean(parent && (parent.frame || parent.framed));
+      requireTrue(framed || !shadows.has(i) || shadows.get(i) === "open", "AUTH_SHADOW_COVERAGE_REFUSED");
+      var attrs = attributesOf(table.attributes[i]);
+      var control = !framed && (name === "INPUT" || name === "TEXTAREA");
+      if (control) requireTrue((name === "INPUT" ? input : textarea).has(i));
+      var css = style.get(i) || [];
+      var modify = editingMode(style.has(i), css, attrs, parent && parent.modify);
+      var shadow = Boolean(shadows.has(i) || (parent && parent.shadow));
+      var excluded = EXCLUDED.has(name) || framed || Boolean(parent && parent.excluded);
+      var unknown = table.nodeType[i] !== 9 && (modify !== "read-only" || shadow);
+      var opaque = control || unknown || Boolean(parent && parent.opaque);
+      var row = { id: id, name: name, type: table.nodeType[i], attrs: attrs, parent: parent, doc: id, read: read,
+        css: css, shadow: shadow, excluded: excluded, opaque: opaque, modify: modify, frame: EMBEDDED.has(name), framed: framed,
+        value: text(table.nodeValue[i]), children: [] };
+      if (parent) { row.doc = parent.doc; parent.children.push(row); }
+      rows.push(row);
+      read.rows.push(row);
+    }
+    requireTrue(rows[0].type === 9, "AUTH_DOCUMENT_REFUSED");
+    // Complete the native value pass before any label or text is rendered.
+    input.forEach(function (value, index) { if (typedValue(value, rows[index].attrs)) secret(value); });
+    textarea.forEach(secret);
+    rows.forEach(function (row) { if (row.opaque && !row.excluded) secret(row.value); });
+    return { rows: rows, owners: owners };
+  });
+  // Only frame owners own child documents, each at most once, and the top document is nobody's child.
+  var owned = new Set();
+  documents.forEach(function (document) {
+    document.owners.index.forEach(function (index, offset) {
+      var child = document.owners.value[offset];
+      requireTrue(integer(index, 0, document.rows.length - 1) && document.rows[index].frame &&
+        integer(child, 1, documents.length - 1) && !owned.has(child), "AUTH_FRAME_COVERAGE_REFUSED");
+      owned.add(child);
+      document.rows[index].content = documents[child].rows[0];
+    });
+  });
+  return read;
 }
 
 // The text agents read is compact: busy apps nest dozens of unnamed wrappers per item, which read as nothing but cost
@@ -578,7 +586,12 @@ function checkArgs(args) {
   if (args[0] === "wait") waitPlan(args);
   // A key alone goes to whatever has focus: a key name or one character, with + between modifiers.
   if (args[0] === "press" && args.length === 2) requireTrue(/^[\x21-\x7e]{1,40}$/.test(args[1]), "AUTH_ARGUMENTS_REFUSED");
-  if (["resize", "mousewheel", "tab-select"].indexOf(args[0]) !== -1) {
+  if (args[0] === "screenshot") {
+    var picks = args.slice(1).filter(function (value) { return value !== "--full"; });
+    requireTrue(args.length - 1 - picks.length <= 1 && picks.length <= 1 && picks.every(function (value) { return /^e[1-9]\d*$/.test(value); }) &&
+      !(picks.length && args.indexOf("--full") !== -1), "AUTH_ARGUMENTS_REFUSED");
+  }
+  if (["resize", "mousewheel", "tab-select", "tab-close"].indexOf(args[0]) !== -1) {
     args.slice(1).forEach(function (value) { requireTrue(/^-?\d+$/.test(value) && Math.abs(Number(value)) <= 10000, "AUTH_ARGUMENTS_REFUSED"); });
     if (args[0] !== "mousewheel") requireTrue(args.slice(1).every(function (value) { return Number(value) >= (args[0] === "resize" ? 1 : 0); }), "AUTH_ARGUMENTS_REFUSED");
   }
@@ -678,8 +691,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }));
     if (results.some(function (result) { return result.status === "rejected"; })) throw fail("AUTH_HANDLE_CLEANUP_FAILED");
   }
-  function dropRefs() {
-    refs.clear();
+  function dropRefs(page) {
+    refs.forEach(function (record, ref) { if (!page || record.reader.page === page) refs.delete(ref); });
   }
   async function readerFor(page) {
     checkRuntime();
@@ -689,20 +702,20 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       return readers.get(page);
     }
     var cdp = await context.newCDPSession(page);
-    var reader = { page: page, cdp: cdp, epoch: 0, alive: true, ready: false, listeners: [] };
+    var reader = { page: page, cdp: cdp, epoch: 0, alive: true, ready: false, listeners: [], outside: new Map() };
+    // The epoch only says whether the browser must confirm a ref's path before an action; it never refuses a read.
     var dirty = function () { reader.epoch++; };
     ["DOM.documentUpdated", "DOM.childNodeInserted", "DOM.childNodeRemoved", "DOM.childNodeCountUpdated",
       "DOM.attributeModified", "DOM.attributeRemoved", "DOM.characterDataModified", "DOM.shadowRootPushed", "DOM.shadowRootPopped",
-      "Runtime.executionContextsCleared", "Runtime.executionContextDestroyed"]
+      "Runtime.executionContextsCleared", "Runtime.executionContextDestroyed", "Page.frameNavigated", "Page.frameDetached"]
       .forEach(function (event) { watch(reader, cdp, event, dirty); });
-    // Child frames are never read, so only the main frame's own lifecycle invalidates a read.
-    // Adding or removing a frame owner in the main document is a DOM mutation above.
-    var mainFrame = function (id) { if (typeof id !== "string" || !reader.mainFrameId || id === reader.mainFrameId) dirty(); };
-    watch(reader, cdp, "Page.frameNavigated", function (event) { mainFrame(event && event.frame && event.frame.id); });
-    watch(reader, cdp, "Page.frameDetached", function (event) { mainFrame(event && event.frameId); });
     watch(reader, cdp, "close", function () { reader.alive = false; dirty(); });
     watch(reader, page, "close", function () { reader.alive = false; dirty(); });
     watch(reader, page, "crash", function () { reader.alive = false; dirty(); });
+    // A frame that navigates may move into or out of its own process; one that goes takes its session with it.
+    var forget = function (frame) { forgetFrame(reader, frame); };
+    watch(reader, page, "framenavigated", forget);
+    watch(reader, page, "framedetached", forget);
     readers.set(page, reader);
     try {
       checkRuntime();
@@ -722,57 +735,153 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     }
     return reader;
   }
-  async function qualify(reader) {
+  function forgetFrame(reader, frame) {
+    var session = reader.outside.get(frame);
+    reader.outside.delete(frame);
+    if (session) {
+      session.alive = false;
+      Promise.resolve().then(function () { return session.cdp.detach(); }).catch(function () {});
+    }
+  }
+  function live(reader) {
     checkRuntime();
     requireTrue(!closed && reader.alive && !reader.page.isClosed() && reader.page.context() === context &&
       context.pages().indexOf(reader.page) !== -1, "AUTH_CONTEXT_REFUSED");
-    var response = await send(reader, "Page.getFrameTree");
+  }
+  // One target's frame and DOM: the tab's own session, or an out-of-process frame's.
+  async function readTarget(target) {
+    var response = await send(target, "Page.getFrameTree");
     dataOnly(response);
     var tree = response.frameTree;
     requireTrue(tree && tree.frame && typeof tree.frame.id === "string" && tree.frame.id &&
       typeof tree.frame.loaderId === "string" && tree.frame.loaderId &&
       (tree.childFrames === undefined || Array.isArray(tree.childFrames)), "AUTH_FRAME_COVERAGE_REFUSED");
-    reader.mainFrameId = tree.frame.id;
-    var dom = await send(reader, "DOM.getDocument", { depth: -1, pierce: true });
+    var dom = await send(target, "DOM.getDocument", { depth: -1, pierce: true });
     dataOnly(dom);
-    var scope = inspect(dom.root);
-    return { scope: scope, frameId: tree.frame.id, loaderId: tree.frame.loaderId };
+    return { scope: inspect(dom.root), frameId: tree.frame.id, loaderId: tree.frame.loaderId };
   }
-  // The browser resolves the path and names its native node; one DOM round trip, which also resets the session's
-  // node bindings, so every earlier read is retired.
-  async function sameNode(reader, cssPath, id) {
-    var resolved;
+  async function qualify(reader) {
+    live(reader);
+    return readTarget(reader);
+  }
+  // Out-of-process child frames (another site's player, chat or sign-in) have their own sessions. Each is read the
+  // way the tab is; one that cannot be read now (it navigated or went) shows as an empty frame and the rest still reads.
+  async function readOutside(reader) {
+    var main = reader.page.mainFrame();
+    var found = [];
+    var frames = reader.page.frames();
+    for (var f = 0; f < frames.length; f++) {
+      var frame = frames[f];
+      if (frame === main) continue;
+      var session = reader.outside.get(frame);
+      if (session === undefined) {
+        session = null;
+        var cdp;
+        try {
+          checkRuntime();
+          // Only an out-of-process frame has a session of its own; for any other frame the browser says no.
+          cdp = await context.newCDPSession(frame);
+          session = { cdp: cdp, frame: frame, alive: true };
+          await send(session, "DOM.enable");
+        } catch (error) {
+          if (knownFailure(error) && safeFailure(error).code === "AUTH_RUNTIME_POLICY_REFUSED") throw error;
+          if (cdp) { try { await cdp.detach(); } catch (detachError) { /* the frame went with it */ } }
+          session = null;
+        }
+        reader.outside.set(frame, session);
+      }
+      if (!session) continue;
+      try {
+        var read = await readTarget(session);
+        var packet = await send(session, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
+        found.push({ session: session, read: read, packet: packet });
+      } catch (error) {
+        if (knownFailure(error) && safeFailure(error).code === "AUTH_RUNTIME_POLICY_REFUSED") throw error;
+        forgetFrame(reader, frame);
+      }
+    }
+    return found;
+  }
+  // Whether the browser names that node at its path now, in the document it is in; one DOM round trip.
+  async function names(target, entry) {
+    var resolved = 0;
     try {
-      var doc = await send(reader, "DOM.getDocument", { depth: 0 });
-      var found = await send(reader, "DOM.querySelector", { nodeId: doc.root.nodeId, selector: cssPath });
-      resolved = found.nodeId ? (await send(reader, "DOM.describeNode", { nodeId: found.nodeId })).node.backendNodeId : 0;
-    } finally { reader.epoch++; }
-    requireTrue(resolved === id, "AUTH_SNAPSHOT_INVALIDATED");
+      var doc = await send(target, "DOM.getDocument", entry.chain.length ? { depth: -1, pierce: true } : { depth: 0 });
+      var root = entry.chain.length ? findNode(doc.root, entry.doc) : doc.root;
+      if (root) {
+        var found = await send(target, "DOM.querySelector", { nodeId: root.nodeId, selector: entry.path });
+        resolved = found.nodeId ? (await send(target, "DOM.describeNode", { nodeId: found.nodeId })).node.backendNodeId : 0;
+      }
+    } finally { if (target.epoch !== undefined) target.epoch++; }
+    return resolved === entry.id;
   }
-  function same(a, b, reader, epoch) {
-    checkRuntime();
-    requireTrue(!closed && reader.alive && reader.epoch === epoch &&
-      a.frameId === b.frameId && a.loaderId === b.loaderId && a.scope.signature === b.scope.signature, "AUTH_SNAPSHOT_INVALIDATED");
+  function findNode(node, id) {
+    if (node.backendNodeId === id) return node;
+    var next = [].concat(node.children, node.shadowRoots, node.contentDocument).filter(Boolean);
+    for (var i = 0; i < next.length; i++) { var hit = findNode(next[i], id); if (hit) return hit; }
+    return undefined;
   }
-  // A document that changed between the two native reads is a stale pair, not a coverage verdict. Mutation events
-  // can trail the snapshot response, so one DOM round trip delivers them before the epoch decides. That round trip
-  // resets the session's node bindings, so no later change would reach the epoch: every earlier ref is retired.
-  async function staleOr(reader, epoch, error) {
-    try { await send(reader, "DOM.getDocument", { depth: 0 }); } catch (flushError) { /* the epoch alone decides */ }
-    var moved = reader.epoch !== epoch;
-    reader.epoch++;
-    requireTrue(!moved, "AUTH_SNAPSHOT_INVALIDATED");
-    return error;
-  }
-  async function verifyProtection(reader, scope, prepared, epoch) {
-    var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
-    var current;
-    try { current = prepare(packet, scope.scope, scope.frameId); }
-    catch (error) { packet = null; throw await staleOr(reader, epoch, error); }
-    finally { packet = null; }
-    same(scope, scope, reader, epoch);
-    requireTrue(JSON.stringify(current.protection) === JSON.stringify(prepared.protection), "AUTH_PROTECTION_INVALIDATED");
-    requireTrue(current.redaction === prepared.redaction, "AUTH_REDACTION_INVALIDATED");
+  // A ref binds to its node as the page is now: the same native node, in the same document load, whose name,
+  // attributes and subtree text are unchanged since the read. The page may change anywhere else meanwhile; if it moves
+  // the node while the browser binds it, the binding is tried again with the node's new path.
+  async function bind(reader, record, command) {
+    var target = record.target;
+    for (var attempt = 1; ; attempt++) {
+      var now = await qualify(reader);
+      if (target !== reader) {
+        requireTrue(target.alive && reader.outside.get(target.frame) === target, "AUTH_SNAPSHOT_INVALIDATED");
+        now = await readTarget(target);
+      }
+      var quiet = reader.epoch;
+      var node = now.scope.nodes.get(record.id);
+      var then = record.stamp.scope.nodes.get(record.id);
+      requireTrue(now.frameId === record.stamp.frameId && now.loaderId === record.stamp.loaderId &&
+        node && node.path && node.reach && fingerprint(node.raw) === fingerprint(then.raw), "AUTH_SNAPSHOT_INVALIDATED");
+      // Focusing a node inside a rich-text editor blurs the editor, so keys and text go to its editing host, chosen
+      // from the snapshot's computed editing modes and still an ancestor of the node now; never by page script.
+      var actorId = record.id;
+      var actor = node;
+      if (EDITS.indexOf(command) !== -1 && record.host !== record.id) {
+        actorId = record.host;
+        actor = now.scope.nodes.get(actorId);
+        var up = node;
+        while (up && up.id !== actorId) up = now.scope.nodes.get(up.parent);
+        requireTrue(up && actor.path && actor.reach && actor.doc === node.doc, "AUTH_SNAPSHOT_INVALIDATED");
+      }
+      checkRuntime();
+      var wait = { state: "attached", strict: true, timeout: Math.min(timeoutMs, TARGET_WAIT_MS) };
+      var frame = target === reader ? reader.page.mainFrame() : target.frame;
+      // Into each same-process frame between the read's top document and the node, through its owner element.
+      for (var c = 0; c < actor.chain.length; c++) {
+        var owner = now.scope.nodes.get(actor.chain[c]);
+        requireTrue(owner && owner.path && owner.reach, "AUTH_SNAPSHOT_INVALIDATED");
+        var held;
+        try { held = { handle: await frame.waitForSelector("css=" + owner.path, wait) }; }
+        catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
+        requireTrue(held.handle, "AUTH_TARGET_REFUSED");
+        cleanupRecords.add(held);
+        try { frame = await held.handle.contentFrame(); }
+        catch (error) { frame = null; }
+        finally { await disposeRecords([held]); }
+        requireTrue(frame, "AUTH_TARGET_REFUSED");
+      }
+      var bound;
+      try { bound = { handle: await frame.waitForSelector("css=" + actor.path, wait) }; }
+      catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
+      requireTrue(bound.handle, "AUTH_TARGET_REFUSED");
+      cleanupRecords.add(bound);
+      // Unchanged since the read, the path still names that node; otherwise the browser itself confirms it does.
+      var confirmed;
+      try {
+        confirmed = reader.epoch === quiet && actorId === record.id && target === reader && !actor.chain.length ? true : await names(target, actor);
+      } catch (error) {
+        await disposeRecords([bound]);
+        throw error;
+      }
+      if (confirmed) return bound;
+      await disposeRecords([bound]);
+      requireTrue(attempt < BIND_ATTEMPTS, "AUTH_SNAPSHOT_INVALIDATED");
+    }
   }
   async function snapshot(reader, save, applied, poll) {
     var provisional = [];
@@ -781,22 +890,22 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var stageCloseFailed = false;
     var primary;
     try {
-      var epoch = reader.epoch;
       var before = await qualify(reader);
-      requireTrue(reader.epoch === epoch, "AUTH_SNAPSHOT_INVALIDATED");
       var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
+      var outside = await readOutside(reader);
       var prepared;
-      try { prepared = prepare(packet, before.scope, before.frameId, function () { return ++next; }); }
-      catch (error) { packet = null; throw await staleOr(reader, epoch, error); }
-      finally { packet = null; }
-      // Refs bind lazily: an action re-qualifies the unchanged document before resolving its path,
+      try {
+        prepared = prepare(packet, before.scope, before.frameId, function () { return ++next; }, outside.map(function (frame) {
+          return { packet: frame.packet, scope: frame.read.scope, frameId: frame.read.frameId, key: frame };
+        }));
+      } finally { packet = null; }
+      // Refs bind lazily: an action re-reads the page and finds the ref's node in it before resolving its path,
       // so a page with thousands of elements does not wait on one selector round trip per element.
       prepared.targets.forEach(function (target) {
-        provisional.push({ ref: target.ref, path: target.path, id: target.id, host: target.host, reader: reader, epoch: epoch, stamp: before });
+        var from = target.key || { session: reader, read: before };
+        provisional.push({ ref: target.ref, path: target.path, id: target.id, host: target.host, reader: reader, target: from.session, stamp: from.read });
       });
-      var qualified = await qualify(reader);
-      same(before, qualified, reader, epoch);
-      await verifyProtection(reader, qualified, prepared, epoch);
+      outside.forEach(function (frame) { frame.packet = null; });
       checkRuntime();
       var rendered = renderText(prepared.tree);
       var result = { snapshot: prepared.tree, text: rendered.text };
@@ -831,10 +940,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           }
         }
       }
-      qualified = await qualify(reader);
-      same(before, qualified, reader, epoch);
-      await verifyProtection(reader, qualified, prepared, epoch);
-      same(before, before, reader, epoch);
+      requireTrue(!closed && reader.alive, "AUTH_CONTEXT_REFUSED");
       // No await between this admission check, the owned rename and ref activation.
       if (staged) {
         requireTrue(sameStage(stageIdentity, fs.lstatSync(staged, { bigint: true })), "AUTH_STAGE_IDENTITY_REFUSED");
@@ -863,7 +969,36 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (cleanup.length) throw fail((primary || "AUTH_OPERATION_FAILED") + "; retained cleanup uncertainty: " + cleanup.join(", "), applied);
     }
   }
-  // Live pages (clocks, relative times, loading) change between reads; take a fresh, fully re-qualified snapshot.
+  // A picture of the tab, or of one element, in the context's private files folder. Password and one-time-code fields
+  // are painted over in every frame, so the picture never shows what was typed there.
+  async function screenshot(reader, args) {
+    var picked = args.slice(1).filter(function (value) { return value !== "--full"; })[0];
+    var record;
+    if (picked) {
+      record = refs.get(picked);
+      requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
+    } else live(reader);
+    var file = path.join(outputDir, "screenshot-" + crypto.randomUUID() + ".png");
+    var bound;
+    var written = false;
+    try {
+      if (record) bound = await bind(reader, record, "screenshot");
+      checkRuntime();
+      var mask = reader.page.frames().map(function (frame) { return frame.locator(SECRET_FIELDS); });
+      var options = { path: file, mask: mask, timeout: timeoutMs };
+      written = true;
+      if (bound) await bound.handle.screenshot(options);
+      else await reader.page.screenshot(Object.assign(options, { fullPage: args.indexOf("--full") !== -1 }));
+      checkRuntime();
+      requireTrue(!closed, "AUTH_CONTEXT_REFUSED");
+      return { screenshot: file };
+    } catch (error) {
+      if (written) { try { await fs.promises.unlink(file); } catch (unlinkError) { /* never written */ } }
+      throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_SCREENSHOT_FAILED");
+    } finally {
+      if (bound) await disposeRecords([bound]);
+    }
+  }
   // One more read of this tab: its refs join the last REF_READS reads, and older ones go.
   function counted(reader, records) {
     reader.reads = (reader.reads || 0) + 1;
@@ -929,7 +1064,14 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var pages = context.pages();
     var page = selected;
     var command = args[0];
-    if (command === "tab-select") { requireTrue(Number(args[1]) < pages.length, "AUTH_TAB_REFUSED"); selected = pages[Number(args[1])]; page = selected; }
+    if (command === "tab-select") {
+      requireTrue(Number(args[1]) < pages.length, "AUTH_TAB_REFUSED");
+      page = pages[Number(args[1])];
+      // A tab in the background has no focus and paints lazily, so clicks and keys land on the one in front.
+      try { checkRuntime(); await page.bringToFront(); checkRuntime(); }
+      catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED"); }
+      selected = page;
+    }
     if (command === "tab-new") {
       try { checkRuntime(); page = await context.newPage(); checkRuntime(); selected = page; }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
@@ -937,9 +1079,14 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "tab-list") return { tabs: context.pages().map(function (tab, index) { return { index: index, selected: tab === selected }; }) };
     if (command === "tab-close") {
       try {
+        if (args.length === 2) {
+          requireTrue(Number(args[1]) < pages.length, "AUTH_TAB_REFUSED");
+          page = pages[Number(args[1])];
+        }
         requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TAB_REFUSED");
-        checkRuntime(); await page.close(); checkRuntime(); selected = context.pages()[0];
-        dropRefs(); checkRuntime(); return { closed: true };
+        checkRuntime(); await page.close(); checkRuntime();
+        if (page === selected || context.pages().indexOf(selected) === -1) selected = context.pages()[0];
+        dropRefs(page); checkRuntime(); return { closed: true };
       }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
@@ -952,6 +1099,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "find") return narrow(await settled(reader, false, false), { find: args[1] });
     if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
     if (command === "wait") return wait(reader, waitPlan(args));
+    if (command === "screenshot") return screenshot(reader, args);
     var applied = false;
     try {
       if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
@@ -973,38 +1121,12 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         requireTrue(/^e[1-9]\d*$/.test(args[1]), "AUTH_TARGET_REFUSED");
         var record = refs.get(args[1]);
         requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
-        // A live page (Teams) changes somewhere every few milliseconds, so the ref is re-resolved now: the same native
-        // node, in the same main-frame document, with the same name, attributes and subtree text the snapshot read.
-        var now = await qualify(reader);
-        var quiet = reader.epoch;
-        var target = now.scope.nodes.get(record.id);
-        requireTrue(now.frameId === record.stamp.frameId && now.loaderId === record.stamp.loaderId &&
-          target && target.path && !target.shadow &&
-          fingerprint(target.raw) === fingerprint(record.stamp.scope.nodes.get(record.id).raw), "AUTH_SNAPSHOT_INVALIDATED");
-        // Focusing a node inside a rich-text editor blurs the editor, so keys and text go to its editing host, chosen
-        // from the snapshot's computed editing modes and still an ancestor of the node now; never by page script.
-        var actorId = record.id;
-        var actor = target;
-        if (EDITS.indexOf(command) !== -1 && record.host !== record.id) {
-          actorId = record.host;
-          actor = now.scope.nodes.get(actorId);
-          var up = target;
-          while (up && up.id !== actorId) up = now.scope.nodes.get(up.parent);
-          requireTrue(up && actor.path && !actor.shadow, "AUTH_SNAPSHOT_INVALIDATED");
-        }
-        checkRuntime();
-        var bound;
-        try {
-          bound = { handle: await reader.page.mainFrame().waitForSelector("css=" + actor.path,
-            { state: "attached", strict: true, timeout: Math.min(timeoutMs, TARGET_WAIT_MS) }) };
-        } catch (error) { throw fail("AUTH_TARGET_REFUSED"); }
-        requireTrue(bound.handle, "AUTH_TARGET_REFUSED");
-        cleanupRecords.add(bound);
+        // A live page (Teams) changes somewhere every few milliseconds, so the ref is re-resolved now, wherever its
+        // node is: the main document, a child frame's, or an out-of-process frame's.
+        var bound = await bind(reader, record, command);
         var actionError;
         var typed;
         try {
-          // Unchanged since the read, the path still names that node; otherwise the browser itself confirms it does.
-          if (reader.epoch !== quiet || actorId !== record.id) await sameNode(reader, actor.path, actorId);
           checkRuntime();
           applied = true;
           // Playwright waits for an element to be enabled before scrolling it into view, but some pages enable a control

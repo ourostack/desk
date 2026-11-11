@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events"
+import fs from "node:fs"
 
 export const PASSWORD = "FAKE_PROPERTY_PASSWORD_577"
 
@@ -105,51 +106,83 @@ export function framedSnapshot({ echo } = {}) {
   return packet
 }
 
-export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, closeError } = {}) {
-  const calls = []
-  const context = new EventEmitter()
-  const page = new EventEmitter()
+// A tab over `packet`: every document of the capture is a frame whose elements bind by their last selector tag, and a
+// frame owner's handle opens the frame of the document it holds. `outside` adds an out-of-process child frame with its
+// own CDP session and capture, shown in the main-document owner whose backend node id is `outside.owner`.
+function fakeFrames(packet, calls, frameOf) {
   const handles = new Map()
-  for (const id of packet.documents[0].nodes.backendNodeId) {
-    const handle = { dispose: async () => { calls.push(["dispose", id]) } }
-    for (const method of ["scrollIntoViewIfNeeded", "click", "dblclick", "fill", "type", "press", "selectOption", "check", "uncheck", "hover"]) {
-      handle[method] = async (...args) => {
-        calls.push([method, ...args])
-        if (method === "fill" || method === "type") {
-          const table = packet.documents[0].nodes
-          const row = table.backendNodeId.indexOf(id)
-          const position = table.inputValue.index.indexOf(row)
-          if (position !== -1) {
-            packet.strings.push(args[0])
-            table.inputValue.value[position] = packet.strings.length - 1
+  const frames = packet.documents.map((document, d) => {
+    const table = document.nodes
+    const frame = {
+      waitForSelector: async (selector, options) => {
+        calls.push(["waitForSelector", selector, options])
+        const ending = selector.split(" > ").at(-1).replace(/^css=/, "").split(":")[0].toUpperCase()
+        const row = table.nodeName.findIndex((index) => packet.strings[index] === ending)
+        return handles.get(table.backendNodeId[row])
+      },
+      locator: (selector) => ({ frame: d, selector }),
+    }
+    for (const id of table.backendNodeId) {
+      const handle = { dispose: async () => { calls.push(["dispose", id]) } }
+      for (const method of ["scrollIntoViewIfNeeded", "click", "dblclick", "fill", "type", "press", "selectOption", "check", "uncheck", "hover"]) {
+        handle[method] = async (...args) => {
+          calls.push([method, ...args])
+          if (method === "fill" || method === "type") {
+            const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
+            if (position !== -1) {
+              packet.strings.push(args[0])
+              table.inputValue.value[position] = packet.strings.length - 1
+            }
           }
         }
       }
+      // Read-back runs the page function on the control's current value.
+      handle.evaluate = async (fn, arg) => {
+        calls.push(["evaluate", id])
+        const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
+        return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
+      }
+      handle.screenshot = async (options) => { calls.push(["element.screenshot", id, options]); fs.writeFileSync(options.path, "FAKE_PNG") }
+      handle.contentFrame = async () => {
+        const owner = table.contentDocumentIndex.index.indexOf(table.backendNodeId.indexOf(id))
+        return owner === -1 ? frameOf(id) : frames[table.contentDocumentIndex.value[owner]]
+      }
+      handles.set(id, handle)
     }
-    // Read-back runs the page function on the control's current value.
-    handle.evaluate = async (fn, arg) => {
-      calls.push(["evaluate", id])
-      const table = packet.documents[0].nodes
-      const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
-      return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
-    }
-    handles.set(id, handle)
+    return frame
+  })
+  return { frames, handles }
+}
+
+function fakeSession(calls, label, read) {
+  const cdp = new EventEmitter()
+  const counts = new Map()
+  cdp.send = async (method, params) => {
+    calls.push([label, method, params])
+    counts.set(method, (counts.get(method) ?? 0) + 1)
+    return read(method, params, counts.get(method), cdp)
   }
-  const frame = {
-    waitForSelector: async (selector, options) => {
-      calls.push(["waitForSelector", selector, options])
-      const ending = selector.split(" > ").at(-1).replace(/^css=/, "").split(":")[0].toUpperCase()
-      const row = packet.documents[0].nodes.nodeName.findIndex((index) => packet.strings[index] === ending)
-      return handles.get(packet.documents[0].nodes.backendNodeId[row])
-    },
-  }
+  cdp.detach = async () => { calls.push([label + ".detach"]) }
+  return cdp
+}
+
+export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, closeError, outside } = {}) {
+  const calls = []
+  const context = new EventEmitter()
+  const page = new EventEmitter()
+  let away
+  const main = fakeFrames(packet, calls, (id) => outside && id === outside.owner ? away.frames[0] : null)
+  if (outside) away = fakeFrames(outside.packet, calls, () => null)
+  const handles = new Map([...main.handles, ...(away ? away.handles : [])])
+  const frame = main.frames[0]
   page.context = () => context
   page.mainFrame = () => frame
-  page.frames = () => [frame]
+  page.frames = () => [frame, ...main.frames.slice(1), ...(away ? away.frames : [])]
   page.isClosed = () => false
-  for (const method of ["goto", "goBack", "goForward", "reload", "setViewportSize", "close"]) {
+  for (const method of ["goto", "goBack", "goForward", "reload", "setViewportSize", "close", "bringToFront"]) {
     page[method] = async (...args) => { calls.push([method, ...args]) }
   }
+  page.screenshot = async (options) => { calls.push(["page.screenshot", options]); fs.writeFileSync(options.path, "FAKE_PNG") }
   page.mouse = { wheel: async (...args) => calls.push(["wheel", ...args]) }
   context.pages = () => [page]
   context.newPage = async () => page
@@ -157,20 +190,31 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
     calls.push(["context.close"])
     if (closeError) throw closeError
   }
-  const cdp = new EventEmitter()
-  const counts = new Map()
-  cdp.send = async (method, params) => {
-    calls.push(["cdp", method, params])
-    counts.set(method, (counts.get(method) ?? 0) + 1)
-    hook?.({ method, count: counts.get(method), cdp, context, page })
+  const cdp = fakeSession(calls, "cdp", (method, params, count, session) => {
+    hook?.({ method, count, cdp: session, context, page })
     if (["Page.enable", "DOM.enable", "Runtime.enable"].includes(method)) return {}
     if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", loaderId: "loader", mimeType: "text/html" } } }
-    if (method === "DOM.getDocument") return inspectedDOM(packet)
+    if (method === "DOM.getDocument") {
+      const dom = inspectedDOM(packet)
+      if (outside) (function mark(node) {
+        if (node.backendNodeId === outside.owner) node.frameId = "oop"
+        ;(node.children || []).forEach(mark)
+      })(dom.root)
+      return dom
+    }
     if (method === "DOMSnapshot.captureSnapshot") return structuredClone(packet)
     throw new Error(`unsupported fake method ${PASSWORD}`)
-  }
-  cdp.detach = async () => { calls.push(["cdp.detach"]) }
+  })
+  const oop = outside && fakeSession(calls, "oop", (method, params, count, session) => {
+    outside.hook?.({ method, count, cdp: session })
+    if (method === "DOM.enable") return {}
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "oop", loaderId: "oop-loader", mimeType: "text/html" } } }
+    if (method === "DOM.getDocument") return inspectedDOM(outside.packet)
+    if (method === "DOMSnapshot.captureSnapshot") return structuredClone(outside.packet)
+    throw new Error(`unsupported fake method ${PASSWORD}`)
+  })
   context.newCDPSession = async (target) => {
+    if (oop && target === away.frames[0]) { calls.push(["newCDPSession", "oop"]); return oop }
     if (target !== page) throw new Error(PASSWORD)
     calls.push(["newCDPSession"])
     return cdp
@@ -185,7 +229,7 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
       },
     },
   }
-  return { driver, calls, context, page, cdp, handles, packet }
+  return { driver, calls, context, page, cdp, oop, handles, packet }
 }
 
 export function editingSnapshot(mode = "read-write") {

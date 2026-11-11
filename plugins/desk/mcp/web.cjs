@@ -410,7 +410,7 @@ async function openAuth(s) {
     s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); });
     var opened = {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir,
-      note: "Owned native output: all input/textarea/editable values are opaque. Only the main document is read (child frames show as empty frame nodes) and qualified light-DOM actions are supported; raw commands are refused. Close this context when done."
+      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks password fields; raw commands are refused. Close this context when done."
     };
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;

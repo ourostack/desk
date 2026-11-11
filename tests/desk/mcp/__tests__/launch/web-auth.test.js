@@ -19,6 +19,12 @@ function noPassword(value) {
   assert.ok(JSON.stringify(value).includes("[redacted]"))
 }
 
+// Every node of a snapshot tree, in page order.
+function all(node) { return [node, ...(node.children || []).flatMap(all)] }
+
+// A page mid-navigation: each capture sees a newer document than the DOM read just before it.
+function navigating(packet) { packet.documents[0].nodes.backendNodeId[0] += 1000 }
+
 // One snapshot attempt, so a single injected invalidation is the final answer.
 const ONCE = { snapshotAttempts: 1 }
 
@@ -217,16 +223,21 @@ test("closed shadow and missing author controls refuse; open shadow controls sta
   assert.throws(() => auth.inspect(dom.root), /AUTH_SHADOW/u)
 })
 
-test("a child frame's document, fallback and controls are omitted from the main-document read", () => {
+test("a child frame's document is read inside its owner: its text shows, its fallback does not, and what was typed there stays redacted", () => {
   const packet = framedSnapshot()
   let next = 0
   const prepared = auth.prepare(packet, auth.inspect(inspectedDOM(packet).root), "main", () => ++next)
   const text = JSON.stringify(prepared.tree)
   assert.ok(text.includes("Main product title"))
-  for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED]) assert.equal(text.includes(hidden), false)
-  assert.equal(prepared.frames, 1)
+  assert.ok(text.includes(FRAME_TEXT), "the frame's page text is read")
+  for (const hidden of [FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED, PASSWORD]) assert.equal(text.includes(hidden), false, hidden)
+  assert.equal(prepared.frames, 0)
   const frame = prepared.tree.children[0].children[0].children.find((node) => node.role === "frame")
-  assert.deepEqual(frame.children, [])
+  assert.equal(frame.children[0].role, "document")
+  assert.ok(JSON.stringify(frame).includes(FRAME_TEXT))
+  const control = prepared.targets.find((target) => target.id === 205)
+  assert.ok(control, "a control in the frame has a ref")
+  assert.match(control.path, /^html:nth-of-type\(1\) > body:nth-of-type\(1\) > input:nth-of-type\(1\)$/u, "its path is from the frame's own document")
 })
 
 test("what may have been typed in a child frame is scrubbed where the main document copies it; frame page text is not", () => {
@@ -256,6 +267,7 @@ test("what may have been typed in a child frame is scrubbed where the main docum
     (p) => { p.documents[1].nodes = undefined },
     (p) => { p.documents[1].nodes.nodeValue.pop() },
     (p) => { p.documents[1].nodes.parentIndex[2] = 5 },
+    (p) => { p.documents[1].nodes.nodeType = [] },
   ]) {
     const packet = framedSnapshot()
     const scope = auth.inspect(inspectedDOM(packet).root)
@@ -324,19 +336,30 @@ test("frame contradictions and API errors never return raw failure text or artif
   }
 })
 
-test("same-document shadow mutation ABA and staging invalidation refuse all output", async () => {
-  for (const event of ["DOM.shadowRootPushed", "DOM.documentUpdated", "DOM.childNodeInserted", "close"]) {
+test("a page that changes throughout a read is read from its one capture; a tab that closes during it refuses all output", async () => {
+  for (const event of ["DOM.shadowRootPushed", "DOM.documentUpdated", "DOM.childNodeInserted", "DOM.attributeModified", "Runtime.executionContextDestroyed"]) {
     const root = await mkTempRoot("auth-fence-")
-    const native = fakeDriver({ hook: ({ method, count, cdp }) => {
-      if (method === "DOM.getDocument" && count === 3) cdp.emit(event, {})
+    const native = fakeDriver({ hook: ({ method, cdp }) => {
+      if (method === "DOM.getDocument" || method === "DOMSnapshot.captureSnapshot") cdp.emit(event, {})
     } })
     const adapter = adapterFor(native, root)
     try {
-      await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_/u)
-      assert.deepEqual(fs.readdirSync(root), [])
+      const result = await adapter.call(["snapshot", "--save"])
+      noPassword(result)
+      noPassword(fs.readFileSync(result.artifact, "utf8"))
+      assert.equal(native.calls.filter((call) => call[0] === "cdp" && call[1] === "DOMSnapshot.captureSnapshot").length, 1, "one capture, no re-reads")
       assert.equal(native.calls.some((call) => call[0] === "waitForSelector"), false, "a snapshot binds no element")
+      await adapter.call(["click", inputRef(result)])
+      assert.equal(native.calls.filter((call) => call[0] === "click").length, 1, "its refs act on the busy page")
     } finally { await adapter.close() }
   }
+  const root = await mkTempRoot("auth-fence-close-")
+  const native = fakeDriver({ hook: ({ method, cdp }) => { if (method === "DOMSnapshot.captureSnapshot") cdp.emit("close", {}) } })
+  const adapter = adapterFor(native, root)
+  try {
+    await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_CONTEXT_REFUSED/u)
+    assert.deepEqual(fs.readdirSync(root), [])
+  } finally { await adapter.close() }
 })
 
 test("owned artifacts contain only sanitized production DTOs", async () => {
@@ -421,39 +444,35 @@ test("malformed native child-frame coverage is not treated as an empty frame tre
   } finally { await adapter.close() }
 })
 
-test("CSS-only protection changes during binding or staging refuse output and refs without DOM events", async () => {
-  for (const phase of ["binding", "staging"]) {
-    const root = await mkTempRoot("auth-css-continuity-")
-    const packet = editingSnapshot("read-only")
-    const change = () => {
-      packet.strings.push("read-write")
-      packet.documents[0].layout.styles[2][2] = packet.strings.length - 1
-      packet.documents[0].layout.styles[3][2] = packet.strings.length - 1
-    }
-    const native = fakeDriver({ packet, hook: ({ method, count }) => {
-      if (phase === "binding" && method === "DOM.getDocument" && count === 2) change()
-    } })
-    const adapter = adapterFor(native, root)
-    const restore = phase === "staging" ? hookStageWrites(root, change) : () => {}
-    try {
-      await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_PROTECTION_INVALIDATED/u)
-      assert.deepEqual(fs.readdirSync(root), [])
-      await assert.rejects(adapter.call(["fill", "e3", "literal"]), /AUTH_TARGET_REFUSED/u)
-      assert.equal(native.calls.some((call) => call[0] === "fill"), false)
-    } finally { restore(); await adapter.close() }
+test("a read is protected by its own capture: text made editable after it is redacted from the next read on", async () => {
+  const root = await mkTempRoot("auth-css-continuity-")
+  const packet = editingSnapshot("read-only")
+  const change = () => {
+    packet.strings.push("read-write")
+    packet.documents[0].layout.styles[2][2] = packet.strings.length - 1
+    packet.documents[0].layout.styles[3][2] = packet.strings.length - 1
   }
+  const native = fakeDriver({ packet })
+  const restore = hookStageWrites(root, change)
+  const adapter = adapterFor(native, root)
+  try {
+    const saved = await adapter.call(["snapshot", "--save"])
+    assert.ok(saved.text.includes(PASSWORD), "read-only page text at the capture is page text")
+    assert.equal(JSON.parse(fs.readFileSync(saved.artifact, "utf8")).text, saved.text, "the artifact is that capture's read")
+    noPassword(await adapter.call(["snapshot"]))
+  } finally { restore(); await adapter.close() }
 })
 
 test("privately branded error data remains safe if public error properties are replaced", async () => {
   const root = await mkTempRoot("auth-error-data-")
   let reads = 0
-  const owned = auth.fail("AUTH_PROTECTION_INVALIDATED")
+  const owned = auth.fail("AUTH_FRAME_COVERAGE_REFUSED")
   for (const key of ["message", "authCode"]) Object.defineProperty(owned, key, { get() { reads++; throw new Error(PASSWORD) } })
   const native = fakeDriver({ hook: ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") throw owned } })
   const adapter = adapterFor(native, root)
   try {
     await assert.rejects(adapter.call(["snapshot"]), (error) =>
-      error.message.includes("AUTH_PROTECTION_INVALIDATED") && !error.message.includes(PASSWORD))
+      error.message.includes("AUTH_FRAME_COVERAGE_REFUSED") && !error.message.includes(PASSWORD))
     assert.equal(reads, 0)
   } finally { await adapter.close() }
 })
@@ -492,15 +511,9 @@ test("runtime changes during native waits or staging refuse output but not owned
 test("rejected stage cleanup proceeds independently of failed handle disposal", async () => {
   for (const failUnlink of [false, true]) {
     const root = await mkTempRoot("auth-cleanup-independent-")
-    const packet = editingSnapshot("read-only")
-    const native = fakeDriver({ packet, hook: ({ method, count }) => {
-      if (method === "DOM.getDocument" && count === 3) {
-        packet.strings.push("read-write")
-        packet.documents[0].layout.styles[2][2] = packet.strings.length - 1
-        packet.documents[0].layout.styles[3][2] = packet.strings.length - 1
-      }
-    } })
+    const native = fakeDriver()
     for (const handle of native.handles.values()) handle.dispose = async () => { throw new Error(PASSWORD) }
+    const restore = hookStageWrites(root, () => native.page.emit("crash"))
     const adapter = auth.create(native.context, root, 5000, () => {}, ONCE)
     const original = fs.promises.unlink
     let attempts = 0
@@ -514,7 +527,7 @@ test("rejected stage cleanup proceeds independently of failed handle disposal", 
     try {
       await assert.rejects(adapter.call(["snapshot", "--save"]), (error) => {
         assert.equal(error.message.includes(PASSWORD), false)
-        assert.ok(error.message.includes("AUTH_PROTECTION_INVALIDATED"))
+        assert.ok(error.message.includes("AUTH_CONTEXT_REFUSED"))
         assert.equal(error.message.includes("AUTH_HANDLE_CLEANUP_FAILED"), false, "a snapshot owns no element handles")
         if (failUnlink) assert.ok(error.message.includes("AUTH_ARTIFACT_CLEANUP_FAILED"))
         return true
@@ -523,6 +536,7 @@ test("rejected stage cleanup proceeds independently of failed handle disposal", 
       assert.equal(fs.readdirSync(root).length, failUnlink ? 1 : 0)
     } finally {
       fs.promises.unlink = original
+      restore()
       await adapter.close()
     }
   }
@@ -552,13 +566,12 @@ test("runtime policy gates actions and their post-await output while allowing co
 test("a replaced staged pathname is retained rather than blindly unlinked", async () => {
   const root = await mkTempRoot("auth-stage-identity-")
   let stage
-  const native = fakeDriver({ hook: ({ method, count }) => {
-    if (method === "DOM.getDocument" && count === 3) {
-      fs.renameSync(stage, stage + ".displaced")
-      fs.writeFileSync(stage, "FAKE_FOREIGN_FILE")
-    }
-  } })
-  const restore = hookStageWrites(root, (file) => { stage = file })
+  const native = fakeDriver()
+  const restore = hookStageWrites(root, (file) => {
+    stage = file
+    fs.renameSync(stage, stage + ".displaced")
+    fs.writeFileSync(stage, "FAKE_FOREIGN_FILE")
+  })
   const adapter = adapterFor(native, root)
   try {
     await assert.rejects(adapter.call(["snapshot", "--save"]), (error) =>
@@ -642,26 +655,21 @@ test("successful tab creation carries effects through subsequent reader and prot
   }
 })
 
-test("native value changes during binding or staging invalidate earlier redaction decisions", async () => {
-  for (const phase of ["binding", "staging"]) {
-    const root = await mkTempRoot("auth-value-continuity-")
-    const packet = nativeSnapshot({ value: "" })
-    packet.strings.push(PASSWORD)
-    const marker = packet.strings.length - 1
-    packet.documents[0].nodes.attributes[3][3] = marker
-    const change = () => { packet.documents[0].nodes.inputValue.value[0] = marker }
-    const native = fakeDriver({ packet, hook: ({ method, count }) => {
-      if (phase === "binding" && method === "DOM.getDocument" && count === 2) change()
-    } })
-    const restore = phase === "staging" ? hookStageWrites(root, change) : () => {}
-    const adapter = adapterFor(native, root)
-    try {
-      await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_REDACTION_INVALIDATED/u)
-      assert.deepEqual(fs.readdirSync(root), [])
-      await assert.rejects(adapter.call(["fill", "e3", "literal"]), /AUTH_TARGET_REFUSED/u)
-      assert.equal(native.calls.some(call => call[0] === "fill"), false)
-    } finally { restore(); await adapter.close() }
-  }
+test("a value typed after a read is redacted from the next read on, wherever the page repeats it", async () => {
+  const root = await mkTempRoot("auth-value-continuity-")
+  const packet = nativeSnapshot({ value: "" })
+  packet.strings.push(PASSWORD)
+  const marker = packet.strings.length - 1
+  packet.documents[0].nodes.attributes[3][3] = marker
+  const change = () => { packet.documents[0].nodes.inputValue.value[0] = marker }
+  const native = fakeDriver({ packet })
+  const restore = hookStageWrites(root, change)
+  const adapter = adapterFor(native, root)
+  try {
+    const saved = await adapter.call(["snapshot", "--save"])
+    assert.equal(JSON.parse(fs.readFileSync(saved.artifact, "utf8")).text, saved.text, "the artifact is that capture's read")
+    noPassword(await adapter.call(["snapshot"]))
+  } finally { restore(); await adapter.close() }
 })
 
 test("an action's element handle is disposed after use and a failed disposal is retained for owned close", async () => {
@@ -983,7 +991,6 @@ test("an isolated stage-close failure remains owned through failed close and suc
 
 function framedDriver() {
   const native = fakeDriver({ packet: framedSnapshot() })
-  native.page.frames = () => [native.page.mainFrame(), {}]
   const send = native.cdp.send
   native.cdp.send = async (method, params) => method === "Page.getFrameTree"
     ? { frameTree: { frame: { id: "main", loaderId: "loader" }, childFrames: [{ frame: { id: "child", parentId: "main", loaderId: "child-loader" } }] } }
@@ -991,29 +998,49 @@ function framedDriver() {
   return native
 }
 
-test("a page with child frames is read from its main document and its saved artifact omits every frame", async () => {
+test("a page with a child frame reads and saves the frame's content without its fallback or typed values, and a ref in it acts through its owner", async () => {
   const root = await mkTempRoot("auth-tree-child-")
   const native = framedDriver()
+  const send = native.cdp.send
+  native.cdp.send = async (method, params) => {
+    if (method === "DOM.querySelector") { native.calls.push(["cdp", method, params]); return { nodeId: 7 } }
+    if (method === "DOM.describeNode") { native.calls.push(["cdp", method, params]); return { node: { backendNodeId: 205 } } }
+    return send(method, params)
+  }
   const adapter = adapterFor(native, root)
   try {
     const result = await adapter.call(["snapshot", "--save"])
-    assert.equal(result.framesOmitted, 1)
+    assert.equal(result.framesOmitted, undefined)
     assert.ok(result.text.includes("Main product title"))
+    assert.ok(result.text.includes(FRAME_TEXT))
     assert.match(result.text, /^ *- frame/mu)
     const artifact = fs.readFileSync(result.artifact, "utf8")
-    for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED]) {
-      assert.equal(JSON.stringify(result).includes(hidden), false)
-      assert.equal(artifact.includes(hidden), false)
+    assert.ok(artifact.includes(FRAME_TEXT))
+    for (const hidden of [FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED, PASSWORD]) {
+      assert.equal(JSON.stringify(result).includes(hidden), false, hidden)
+      assert.equal(artifact.includes(hidden), false, hidden)
     }
+    const frame = all(result.snapshot).find((node) => node.role === "frame")
+    const field = all(frame).find((node) => node.role === "textbox")
+    const filled = await adapter.call(["fill", field.ref, "literal"])
+    const waits = native.calls.filter((call) => call[0] === "waitForSelector").map((call) => call[1])
+    assert.match(waits[0], /iframe:nth-of-type\(1\)$/u, "through the frame's owner")
+    assert.equal(waits[1], "css=html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)")
+    const confirm = native.calls.find((call) => call[1] === "DOM.querySelector")
+    assert.equal(confirm[2].nodeId, 1001, "the browser confirms the path inside the frame's document")
+    assert.equal(native.packet.strings[native.packet.documents[1].nodes.inputValue.value[0]], "literal")
+    assert.equal(filled.typed.verified, true)
+    assert.equal(JSON.stringify(filled).includes("literal"), false)
+    for (const call of native.calls.filter((call) => call[0] === "dispose")) assert.ok([107, 205].includes(call[1]))
   } finally { await adapter.close() }
 })
 
-test("child-frame navigation does not invalidate a main-document read; main-frame navigation does", async () => {
-  for (const [event, params, settles] of [
-    ["Page.frameNavigated", { frame: { id: "child", parentId: "main", loaderId: "next" } }, true],
-    ["Page.frameAttached", { frameId: "child2", parentFrameId: "child" }, true],
-    ["Page.frameDetached", { frameId: "child" }, true],
-    ["Page.frameNavigated", { frame: { id: "main", loaderId: "next" } }, false],
+test("frame and navigation events during a read do not refuse it; a document replaced between the DOM read and the capture is read again", async () => {
+  for (const [event, params] of [
+    ["Page.frameNavigated", { frame: { id: "child", parentId: "main", loaderId: "next" } }],
+    ["Page.frameAttached", { frameId: "child2", parentFrameId: "child" }],
+    ["Page.frameDetached", { frameId: "child" }],
+    ["Page.frameNavigated", { frame: { id: "main", loaderId: "next" } }],
   ]) {
     const root = await mkTempRoot("auth-child-frame-event-")
     const native = framedDriver()
@@ -1025,8 +1052,23 @@ test("child-frame navigation does not invalidate a main-document read; main-fram
     }
     const adapter = adapterFor(native, root)
     try {
-      if (settles) assert.equal((await adapter.call(["snapshot"])).framesOmitted, 1)
-      else await assert.rejects(adapter.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u)
+      const result = await adapter.call(["snapshot"])
+      assert.equal(result.framesOmitted, undefined)
+      assert.ok(result.text.includes(FRAME_TEXT))
+    } finally { await adapter.close() }
+  }
+  for (const [attempts, expected] of [[1, /AUTH_SNAPSHOT_INVALIDATED/u], [undefined, null]]) {
+    const native = framedDriver()
+    let replaced = 0
+    const send = native.cdp.send
+    native.cdp.send = async (method, params) => {
+      if (method === "DOMSnapshot.captureSnapshot" && ++replaced === 1) navigating(native.packet)
+      return send(method, params)
+    }
+    const adapter = auth.create(native.context, await mkTempRoot("auth-replaced-"), 5000, () => {}, attempts ? { snapshotAttempts: attempts } : undefined)
+    try {
+      if (expected) await assert.rejects(adapter.call(["snapshot"]), expected)
+      else assert.ok((await adapter.call(["snapshot"])).text.includes(FRAME_TEXT), "the next attempt reads the new document")
     } finally { await adapter.close() }
   }
 })
@@ -1047,9 +1089,8 @@ test("runtime changes after successful tab creation retain the applied-effect re
 
 test("a branded empty primary code still reports staged artifact cleanup uncertainty", async () => {
   const root = await mkTempRoot("auth-empty-primary-")
-  const native = fakeDriver({ hook: ({ method, count }) => {
-    if (method === "DOM.getDocument" && count === 3) throw auth.fail("")
-  } })
+  const native = fakeDriver()
+  const restore = hookStageWrites(root, () => { throw auth.fail("") })
   const adapter = adapterFor(native, root)
   const original = fs.promises.unlink
   let attempts = 0
@@ -1064,6 +1105,7 @@ test("a branded empty primary code still reports staged artifact cleanup uncerta
     assert.equal(attempts, 1)
   } finally {
     fs.promises.unlink = original
+    restore()
     await adapter.close()
   }
 })
@@ -1202,7 +1244,7 @@ test("one node's repeated layout rows must agree", () => {
   assert.throws(() => sanitize(packet), /AUTH_NATIVE_DATA_INVALID/u)
 })
 
-test("unslotted light children of a shadow host may be absent from the capture; other absences refuse", () => {
+test("nodes the DOM read has but the capture lacks (unslotted, or removed between them) are not read and get no ref", () => {
   const packet = nativeSnapshot()
   const dom = inspectedDOM(packet)
   const body = dom.root.children[0].children[0]
@@ -1219,31 +1261,28 @@ test("unslotted light children of a shadow host may be absent from the capture; 
   table.backendNodeId.push(130)
   table.attributes.push([])
   let next = 0
-  noPassword(auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next).tree)
-  host.children.push({ nodeType: 1, nodeName: "INNER-EL", backendNodeId: 134, childNodeCount: 0, children: [],
+  const read = () => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next)
+  noPassword(read().tree)
+  host.children.push({ nodeType: 1, nodeName: "INNER-EL", backendNodeId: 134, childNodeCount: 1,
+    children: [{ nodeType: 1, nodeName: "INPUT", backendNodeId: 137, children: [] }],
     shadowRoots: [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 135, shadowRootType: "open",
       children: [{ nodeType: 3, nodeName: "#text", backendNodeId: 136, nodeValue: "nested" }] }] })
   host.childNodeCount = 2
-  noPassword(auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next).tree)
-  host.children[1].children = [{ nodeType: 1, nodeName: "INPUT", backendNodeId: 137, children: [] }]
-  host.children[1].childNodeCount = 1
-  assert.throws(() => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next), /AUTH_CONTROL_COVERAGE_REFUSED/u,
-    "an uncaptured control refuses wherever it is")
-  host.children.pop()
-  host.childNodeCount = 1
-  host.shadowRoots = []
-  assert.throws(() => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next), /AUTH_CONTROL_COVERAGE_REFUSED/u)
-  host.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 132, shadowRootType: "open",
-    children: [{ nodeType: 3, nodeName: "#text", backendNodeId: 133, nodeValue: "shadow text" }] }]
-  assert.throws(() => auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next), /AUTH_CONTROL_COVERAGE_REFUSED/u,
-    "shadow content itself must be captured")
+  host.shadowRoots[0].children.push({ nodeType: 3, nodeName: "#text", backendNodeId: 133, nodeValue: "shadow text" })
+  const prepared = read()
+  noPassword(prepared.tree)
+  const text = JSON.stringify(prepared.tree)
+  for (const absent of ["Nov 9", "nested", "shadow text"]) assert.equal(text.includes(absent), false, absent)
+  assert.equal(prepared.targets.some((target) => [131, 134, 137].includes(target.id)), false, "nothing the capture lacks has a ref")
+  assert.ok(prepared.targets.some((target) => target.id === 104), "the rest of the page keeps its refs")
 })
 
-test("a snapshot invalidated by a live page is retaken, fully re-qualified, within a bounded number of attempts", async () => {
+test("a document replaced between the DOM read and the capture is read again, within a bounded number of attempts", async () => {
   for (const [fires, expected] of [[1, "ok"], [4, "ok"], [5, "AUTH_SNAPSHOT_INVALIDATED"]]) {
     const root = await mkTempRoot("auth-retry-")
-    const native = fakeDriver({ hook: ({ method, count, cdp }) => {
-      if (method === "DOM.getDocument" && count % 3 === 2 && (count + 1) / 3 <= fires) cdp.emit("DOM.childNodeInserted", {})
+    const packet = nativeSnapshot()
+    const native = fakeDriver({ packet, hook: ({ method, count }) => {
+      if (method === "DOMSnapshot.captureSnapshot" && count <= fires) navigating(packet)
     } })
     const adapter = auth.create(native.context, root, 20000, () => {})
     try {
@@ -1256,7 +1295,7 @@ test("a snapshot invalidated by a live page is retaken, fully re-qualified, with
         assert.deepEqual(fs.readdirSync(root), [])
       }
       const reads = native.calls.filter((call) => call[0] === "cdp" && call[1] === "DOMSnapshot.captureSnapshot").length
-      assert.ok(reads >= Math.min(fires + 1, 5))
+      assert.equal(reads, Math.min(fires + 1, 5))
     } finally { await adapter.close() }
   }
   const root = await mkTempRoot("auth-retry-fixed-")
@@ -1269,34 +1308,23 @@ test("a snapshot invalidated by a live page is retaken, fully re-qualified, with
   } finally { await adapter.close() }
 })
 
-test("a coverage refusal from a document that changed between the two native reads is an invalidation", async () => {
+test("a capture is judged by the native contract alone: native failures are not reinterpreted and a control without its value refuses", async () => {
   const root = await mkTempRoot("auth-stale-pair-")
   const native = fakeDriver({ hook: ({ method, count, cdp }) => {
     if (method === "DOMSnapshot.captureSnapshot" && count === 1) {
       cdp.emit("DOM.childNodeInserted", {})
-      throw auth.fail("AUTH_CONTROL_COVERAGE_REFUSED")
+      throw auth.fail("AUTH_FRAME_COVERAGE_REFUSED")
     }
   } })
   const adapter = adapterFor(native, root)
   try {
-    await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u, "a native-call failure is not reinterpreted")
+    await assert.rejects(adapter.call(["snapshot"]), /AUTH_FRAME_COVERAGE_REFUSED/u, "a native-call failure is not reinterpreted")
   } finally { await adapter.close() }
-  const packet = nativeSnapshot()
-  const mutating = fakeDriver({ packet, hook: ({ method, count, cdp }) => {
-    if (method === "DOMSnapshot.captureSnapshot" && count === 1) {
-      cdp.emit("DOM.childNodeInserted", {})
-      packet.documents[0].nodes.inputValue = { index: [], value: [] }
-    }
-  } })
-  const stale = adapterFor(mutating, root)
-  try {
-    await assert.rejects(stale.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u)
-  } finally { await stale.close() }
   const steady = nativeSnapshot()
   steady.documents[0].nodes.inputValue = { index: [], value: [] }
   const unchanged = adapterFor(fakeDriver({ packet: steady }), root)
   try {
-    await assert.rejects(unchanged.call(["snapshot"]), /AUTH_NATIVE_DATA_INVALID/u, "an unchanged document keeps its coverage verdict")
+    await assert.rejects(unchanged.call(["snapshot"]), /AUTH_NATIVE_DATA_INVALID/u, "a control the capture has without its value is never guessed")
   } finally { await unchanged.close() }
 })
 
@@ -1319,67 +1347,51 @@ function lateRemovalDriver({ emits = true } = {}) {
   return native
 }
 
-test("a node removed between the two native reads is a stale pair once its late mutation event arrives, never a coverage verdict", async () => {
+test("Teams removing a script between the DOM read and the capture does not stop the read", async () => {
   const root = await mkTempRoot("auth-late-removal-")
-  const once = adapterFor(lateRemovalDriver(), root)
-  try { await assert.rejects(once.call(["snapshot"]), /AUTH_SNAPSHOT_INVALIDATED/u) } finally { await once.close() }
-  const native = lateRemovalDriver()
-  const settles = auth.create(native.context, root, 5000, () => {})
-  try { assert.match((await settles.call(["snapshot"])).text, /Password/u) } finally { await settles.close() }
+  for (const emits of [true, false]) {
+    const once = adapterFor(lateRemovalDriver({ emits }), root)
+    try { assert.match((await once.call(["snapshot"])).text, /Password/u) } finally { await once.close() }
+  }
 })
 
-test("a coverage mismatch with no mutation behind it is still refused as coverage", async () => {
-  const root = await mkTempRoot("auth-late-removal-none-")
-  const native = lateRemovalDriver({ emits: false })
-  const adapter = auth.create(native.context, root, 5000, () => {})
-  try { await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u) } finally { await adapter.close() }
-})
-
-test("a failed round trip before the coverage verdict keeps the coverage refusal", async () => {
-  const root = await mkTempRoot("auth-late-removal-flush-")
-  const native = lateRemovalDriver({ emits: false })
+test("a control only the capture has is read without a ref, and its value stays redacted", async () => {
+  const root = await mkTempRoot("auth-late-insert-")
+  const native = fakeDriver()
   const send = native.cdp.send
   native.cdp.send = async (method, params) => {
-    if (method === "DOM.getDocument" && params && params.depth === 0) throw new Error("flush unavailable")
-    return send(method, params)
+    const result = await send(method, params)
+    if (method === "DOMSnapshot.captureSnapshot") {
+      native.cdp.emit("DOM.childNodeInserted", {})
+      const table = result.documents[0].nodes
+      table.parentIndex.push(2); table.nodeType.push(1); table.nodeName.push(table.nodeName[3]); table.nodeValue.push(-1)
+      table.backendNodeId.push(905); table.attributes.push([])
+      result.strings.push("LATE_TYPED_VALUE_679"); table.inputValue.index.push(table.nodeType.length - 1); table.inputValue.value.push(result.strings.length - 1)
+      result.documents[0].layout.nodeIndex.push(table.nodeType.length - 1)
+      result.documents[0].layout.styles.push(result.documents[0].layout.styles[2].slice())
+    }
+    return result
   }
   const adapter = adapterFor(native, root)
-  try { await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u) } finally { await adapter.close() }
+  try {
+    const result = await adapter.call(["snapshot"])
+    noPassword(result)
+    assert.equal(JSON.stringify(result).includes("LATE_TYPED_VALUE_679"), false)
+    const fields = all(result.snapshot).filter((node) => node.role === "textbox")
+    assert.equal(fields.length, 2)
+    assert.equal(fields.filter((node) => node.ref).length, 1, "only the control the DOM read names has a ref")
+  } finally { await adapter.close() }
 })
 
-test("a control that appears before the protection re-read is a stale pair once its late event arrives", async () => {
-  const root = await mkTempRoot("auth-late-insert-")
-  for (const [emits, expected] of [[true, /AUTH_SNAPSHOT_INVALIDATED/u], [false, /AUTH_CONTROL_COVERAGE_REFUSED/u]]) {
-    const native = fakeDriver()
-    const send = native.cdp.send
-    let snapshots = 0
-    let pending = false
-    native.cdp.send = async (method, params) => {
-      if (pending && method !== "DOMSnapshot.captureSnapshot") { pending = false; if (emits) native.cdp.emit("DOM.childNodeInserted", {}) }
-      const result = await send(method, params)
-      if (method === "DOMSnapshot.captureSnapshot" && ++snapshots === 2) {
-        const table = result.documents[0].nodes
-        table.parentIndex.push(2); table.nodeType.push(1); table.nodeName.push(table.nodeName[3]); table.nodeValue.push(-1)
-        table.backendNodeId.push(905); table.attributes.push([])
-        result.strings.push(""); table.inputValue.index.push(table.nodeType.length - 1); table.inputValue.value.push(result.strings.length - 1)
-        pending = true
-      }
-      return result
-    }
-    const adapter = adapterFor(native, root)
-    try { await assert.rejects(adapter.call(["snapshot"]), expected) } finally { await adapter.close() }
-  }
-})
-
-test("after the round trip resets native node bindings, an earlier ref acts only on its unchanged node", async () => {
+test("a ref from an earlier read acts only on its unchanged node, whatever later reads saw", async () => {
   const root = await mkTempRoot("auth-flush-refs-")
   const native = fakeDriver()
   const send = native.cdp.send
   let documents = 0
   native.cdp.send = async (method, params) => {
     const result = await send(method, params)
-    // The second snapshot's scope has a node its packet lacks, and no change event ever explains it.
-    if (method === "DOM.getDocument" && params && params.depth === -1 && ++documents === 4) {
+    // The second snapshot's DOM read has a node its capture lacks.
+    if (method === "DOM.getDocument" && params && params.depth === -1 && ++documents === 2) {
       result.root.children[0].children.unshift({ nodeId: 900, backendNodeId: 900, nodeType: 1, nodeName: "SCRIPT", localName: "script", nodeValue: "", attributes: [], children: [] })
     }
     return result
@@ -1388,7 +1400,7 @@ test("after the round trip resets native node bindings, an earlier ref acts only
   try {
     const first = await adapter.call(["snapshot"])
     const ref = first.text.match(/\[ref=(\w+)\]/u)[1]
-    await assert.rejects(adapter.call(["snapshot"]), /AUTH_CONTROL_COVERAGE_REFUSED/u)
+    assert.match((await adapter.call(["snapshot"])).text, /Password/u)
     const label = native.packet.documents[0].nodes.attributes[3]
     native.packet.strings.push("Delete everything")
     label[3] = native.packet.strings.length - 1
@@ -1654,12 +1666,14 @@ test("wait keeps waiting through a page that is still changing, and a closed con
   const adapter = adapterFor(native, root, 8000)
   try {
     assert.equal((await adapter.call(["wait", "--text", "password"])).waited.found, true)
+    assert.equal(native.calls.filter((call) => call[1] === "DOMSnapshot.captureSnapshot").length, 1, "a busy page is read at once")
   } finally { await adapter.close() }
   await assert.rejects(adapter.call(["wait", "1"]), /AUTH_CONTEXT_REFUSED.*browser_context/u)
-  const stuck = fakeDriver({ hook: ({ method, cdp }) => { if (method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const loading = nativeSnapshot()
+  const stuck = fakeDriver({ packet: loading, hook: ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") navigating(loading) } })
   const busy = adapterFor(stuck, await mkTempRoot("auth-native-wait-stuck-"), 2000)
   try {
-    await assert.rejects(busy.call(["wait", "password"]), /AUTH_SNAPSHOT_INVALIDATED.*snapshot/u, "a page that never settles is reported at the deadline")
+    await assert.rejects(busy.call(["wait", "password"]), /AUTH_SNAPSHOT_INVALIDATED.*wait/u, "a page that never finishes loading is reported at the deadline")
   } finally { await busy.close() }
   const broken = fakeDriver({ hook: ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD) } })
   const failing = adapterFor(broken, await mkTempRoot("auth-native-wait-broken-"), 8000)
@@ -1702,7 +1716,7 @@ test("every refusal says what to do instead, and none points at eval or page scr
   const native = fakeDriver()
   const adapter = adapterFor(native, root)
   try {
-    for (const command of ["eval", "run-code", "evaluate", "console", "screenshot", "wait-for"]) {
+    for (const command of ["eval", "run-code", "evaluate", "console", "wait-for"]) {
       await assert.rejects(adapter.call([command, "document.title"]), error => {
         assert.match(error.message, /^AUTH_COMMAND_REFUSED: /u)
         for (const word of ["snapshot", "wait", "goto", "click", "fill", "press", "reload"]) assert.ok(error.message.includes(word), word)
@@ -1935,9 +1949,14 @@ test("a wait stopped by the runtime policy leaves none of its polls' refs behind
 test("a navigation whose page is still loading reports that it went through and how to read the page", async () => {
   const root = await mkTempRoot("auth-native-loading-")
   let loading = false
-  const native = fakeDriver({ hook: ({ method, cdp }) => { if (loading && method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {}) } })
+  const packet = nativeSnapshot()
+  const native = fakeDriver({ packet, hook: ({ method, cdp }) => {
+    if (method === "DOMSnapshot.captureSnapshot") cdp.emit("DOM.childNodeCountUpdated", {})
+    if (loading && method === "DOMSnapshot.captureSnapshot") navigating(packet)
+  } })
   const adapter = adapterFor(native, root)
   try {
+    assert.ok((await adapter.call(["mousewheel", "0", "10"])).snapshot, "a page that is only busy is read")
     loading = true
     for (const args of [["goto", "https://synthetic.invalid/next"], ["reload"], ["go-back"], ["go-forward"]]) {
       const result = await adapter.call(args)
@@ -1948,4 +1967,271 @@ test("a navigation whose page is still loading reports that it went through and 
     loading = false
     assert.ok((await adapter.call(["goto", "https://synthetic.invalid/"])).snapshot, "a settled page is read as before")
   } finally { await adapter.close() }
+})
+
+// Stream's player and transcript, Teams' panes: another site's document in its own process, under an IFRAME the main
+// document names by frame id. The frame's page repeats the tab's password, and the main page echoes the frame's field.
+const OOP_TEXT = "STREAM_TRANSCRIPT_679"
+const OOP_TYPED = "OOP_TYPED_VALUE_679"
+function outOfProcess() {
+  const main = nativeSnapshot()
+  const away = nativeSnapshot({ value: OOP_TYPED, type: "text" })
+  const add = (packet, parent, type, name, value, id, attrs = []) => {
+    const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+    const document = packet.documents[0]
+    document.nodes.parentIndex.push(parent)
+    document.nodes.nodeType.push(type)
+    document.nodes.nodeName.push(s(name))
+    document.nodes.nodeValue.push(value === undefined ? -1 : s(value))
+    document.nodes.backendNodeId.push(id)
+    document.nodes.attributes.push(attrs.map(s))
+    document.layout.nodeIndex.push(document.nodes.nodeType.length - 1)
+    document.layout.styles.push(document.layout.styles[0].slice())
+    document.layout.bounds.push([0, 0, 100, 20])
+    document.layout.text.push(-1)
+    return document.nodes.nodeType.length - 1
+  }
+  add(main, 2, 1, "IFRAME", undefined, 107, ["title", "Stream player"])
+  add(main, add(main, 2, 1, "P", undefined, 108), 3, "#text", "Sent " + OOP_TYPED, 109)
+  away.strings.push("oop")
+  away.documents[0].frameId = away.strings.length - 1
+  away.documents[0].nodes.backendNodeId = [301, 302, 303, 304]
+  add(away, add(away, 2, 1, "P", undefined, 305), 3, "#text", OOP_TEXT + " " + PASSWORD, 306)
+  return { packet: main, outside: { packet: away, owner: 107 } }
+}
+
+test("an out-of-process child frame is read inside its owner, scrubbed by every value typed anywhere in the tab, and its refs act in it", async () => {
+  const root = await mkTempRoot("auth-oopif-")
+  const { packet, outside } = outOfProcess()
+  const native = fakeDriver({ packet, outside })
+  const send = native.oop.send
+  native.oop.send = async (method, params) => {
+    if (method === "DOM.querySelector") { native.calls.push(["oop", method, params]); return { nodeId: 9 } }
+    if (method === "DOM.describeNode") { native.calls.push(["oop", method, params]); return { node: { backendNodeId: 304 } } }
+    return send(method, params)
+  }
+  const adapter = adapterFor(native, root)
+  try {
+    const result = await adapter.call(["snapshot", "--save"])
+    const artifact = fs.readFileSync(result.artifact, "utf8")
+    for (const output of [JSON.stringify(result), artifact]) {
+      assert.ok(output.includes(OOP_TEXT), "the frame's page text is read")
+      assert.ok(output.includes("Sent [redacted]"), "the frame's typed value is scrubbed where the main page repeats it")
+      for (const hidden of [PASSWORD, OOP_TYPED]) assert.equal(output.includes(hidden), false, hidden)
+    }
+    assert.equal(result.framesOmitted, undefined)
+    const frame = all(result.snapshot).find((node) => node.role === "frame")
+    assert.equal(frame.name, "Stream player")
+    const field = all(frame).find((node) => node.role === "textbox")
+    assert.ok(field.ref)
+    await adapter.call(["fill", field.ref, "literal"])
+    assert.equal(outside.packet.strings[outside.packet.documents[0].nodes.inputValue.value[0]], "literal", "typed into the frame's own field")
+    assert.ok(native.calls.some((call) => call[0] === "oop" && call[1] === "DOM.querySelector"), "its own session confirms the path")
+    assert.equal(native.calls.some((call) => call[0] === "cdp" && /^Runtime\.(?:evaluate|callFunctionOn)/u.test(call[1])), false)
+    assert.equal(native.calls.some((call) => call[0] === "oop" && /^Runtime\./u.test(call[1])), false)
+  } finally { await adapter.close() }
+  // A frame that cannot be read now shows empty; the rest of the tab still reads, and the tab's password stays redacted.
+  const failing = outOfProcess()
+  failing.outside.hook = ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD) }
+  const broken = fakeDriver(failing)
+  const other = adapterFor(broken, root)
+  try {
+    const result = await other.call(["snapshot"])
+    assert.equal(result.framesOmitted, 1)
+    noPassword(result)
+    assert.equal(JSON.stringify(result).includes(OOP_TEXT), false)
+    assert.ok(broken.calls.some((call) => call[0] === "oop.detach"), "its session is let go")
+  } finally { await other.close() }
+})
+
+test("tab-select brings the tab to the front, and refs from its snapshot act there; tab-close closes the tab it names", async () => {
+  const root = await mkTempRoot("auth-tab-front-")
+  const natives = [fakeDriver(), fakeDriver()]
+  const context = natives[0].context
+  let pages = natives.map((native) => native.page)
+  context.pages = () => pages.slice()
+  context.newCDPSession = async (page) => {
+    const native = natives.find((candidate) => candidate.page === page)
+    if (!native) throw new Error(PASSWORD)
+    return native.cdp
+  }
+  for (const native of natives) {
+    native.page.context = () => context
+    native.page.isClosed = () => !pages.includes(native.page)
+    native.page.close = async () => { pages = pages.filter((page) => page !== native.page); native.page.emit("close") }
+  }
+  let blocked = false
+  const adapter = auth.create(context, root, 5000, () => { if (blocked) throw new Error(PASSWORD) })
+  try {
+    await adapter.call(["snapshot"])
+    const front = natives[1].page.bringToFront
+    natives[1].page.bringToFront = async () => { blocked = true }
+    await assert.rejects(adapter.call(["tab-select", "1"]), (error) => /AUTH_RUNTIME_POLICY_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
+    blocked = false
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }, { index: 1, selected: false }] })
+    natives[1].page.bringToFront = front
+    const selected = await adapter.call(["tab-select", "1"])
+    assert.equal(natives[1].calls.filter((call) => call[0] === "bringToFront").length, 1)
+    await adapter.call(["click", inputRef(selected)])
+    assert.equal(natives[1].calls.filter((call) => call[0] === "click").length, 1, "the ref acts in the selected tab")
+    assert.equal(natives[0].calls.some((call) => call[0] === "click"), false)
+    natives[0].page.bringToFront = async () => { throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["tab-select", "0"]), (error) => /AUTH_TAB_ACTION_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: false }, { index: 1, selected: true }] }, "a tab that cannot come forward is not selected")
+    const kept = inputRef(await adapter.call(["snapshot"]))
+    assert.deepEqual(await adapter.call(["tab-close", "0"]), { closed: true })
+    assert.deepEqual(pages, [natives[1].page])
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }] })
+    await adapter.call(["click", kept])
+    assert.equal(natives[1].calls.filter((call) => call[0] === "click").length, 2, "closing another tab keeps this tab's refs")
+    for (const args of [["tab-close", "5"], ["tab-close", "-1"], ["tab-close", "x"]]) await assert.rejects(adapter.call(args), /AUTH_(TAB|ARGUMENTS)_REFUSED/u)
+  } finally { await adapter.close() }
+})
+
+test("screenshot saves the tab or one element in the private files folder, with password and one-time-code fields masked in every frame", async () => {
+  const root = await mkTempRoot("auth-screenshot-")
+  const native = framedDriver()
+  const adapter = adapterFor(native, root)
+  try {
+    const page = await adapter.call(["screenshot"])
+    assert.deepEqual(Object.keys(page), ["screenshot"])
+    assert.equal(path.dirname(page.screenshot), root)
+    assert.match(path.basename(page.screenshot), /^screenshot-[0-9a-f-]{36}\.png$/u)
+    assert.ok(fs.existsSync(page.screenshot))
+    const shot = native.calls.find((call) => call[0] === "page.screenshot")[1]
+    assert.equal(shot.fullPage, false)
+    assert.equal(shot.timeout, 5000)
+    assert.equal(shot.mask.length, native.page.frames().length, "every frame is masked")
+    for (const mask of shot.mask) assert.match(mask.selector, /input\[type=password\].*one-time-code/u)
+    await adapter.call(["screenshot", "--full"])
+    assert.equal(native.calls.filter((call) => call[0] === "page.screenshot")[1][1].fullPage, true)
+    const ref = inputRef(await adapter.call(["snapshot"]))
+    const element = await adapter.call(["screenshot", ref])
+    const call = native.calls.find((entry) => entry[0] === "element.screenshot")
+    assert.equal(call[1], 104)
+    assert.equal(call[2].path, element.screenshot)
+    assert.equal(call[2].mask.length, native.page.frames().length)
+    assert.ok(native.calls.some((entry) => entry[0] === "dispose" && entry[1] === 104), "the element handle is let go")
+    for (const args of [["screenshot", "--full", "--full"], ["screenshot", ref, "--full"], ["screenshot", "x"], ["screenshot", ref, ref], ["screenshot", "--path=/tmp/x.png"]]) {
+      await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u, JSON.stringify(args))
+    }
+    await assert.rejects(adapter.call(["screenshot", "e999"]), /AUTH_TARGET_REFUSED/u)
+    const files = fs.readdirSync(root).length
+    native.page.screenshot = async (options) => { fs.writeFileSync(options.path, "PARTIAL"); throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["screenshot"]), (error) => /AUTH_SCREENSHOT_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
+    assert.equal(fs.readdirSync(root).length, files, "a failed screenshot leaves no partial file")
+    native.page.screenshot = async () => { throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["screenshot"]), /AUTH_SCREENSHOT_FAILED/u, "nothing was written to remove")
+    const stale = inputRef(await adapter.call(["snapshot"]))
+    native.packet.strings.push("Delete everything")
+    native.packet.documents[0].nodes.attributes[3][3] = native.packet.strings.length - 1
+    await assert.rejects(adapter.call(["screenshot", stale]), /AUTH_SNAPSHOT_INVALIDATED/u, "an element that changed is not pictured")
+    assert.equal(fs.readdirSync(root).length, files)
+  } finally { await adapter.close() }
+})
+
+test("a frame the read cannot show stays empty and is counted; two captures claiming one frame show neither, and both are scrubbed", () => {
+  const { packet, outside } = outOfProcess()
+  const marked = (dom) => {
+    (function mark(node) { if (node.backendNodeId === 107) node.frameId = "oop"; (node.children || []).forEach(mark) })(dom.root)
+    return dom
+  }
+  const away = { packet: outside.packet, scope: auth.inspect(inspectedDOM(outside.packet).root), frameId: "oop" }
+  const read = (dom, frames) => {
+    let next = 0
+    return auth.prepare(packet, auth.inspect(dom.root), "main", () => ++next, frames)
+  }
+  const shown = read(marked(inspectedDOM(packet)), [away])
+  assert.equal(shown.frames, 0)
+  assert.ok(JSON.stringify(shown.tree).includes(OOP_TEXT))
+  for (const [dom, frames] of [
+    [marked(inspectedDOM(packet)), []],
+    [inspectedDOM(packet), [away]],
+    [marked(inspectedDOM(packet)), [away, { ...away, packet: structuredClone(away.packet) }]],
+  ]) {
+    const prepared = read(dom, frames)
+    const text = JSON.stringify(prepared.tree)
+    assert.equal(prepared.frames, 1)
+    assert.equal(text.includes(OOP_TEXT), false)
+    assert.equal(text.includes(PASSWORD), false)
+    assert.equal(text.includes(OOP_TYPED), frames.length === 0, "a frame's typed value is scrubbed whenever its capture was taken")
+  }
+  const missing = inspectedDOM(packet)
+  missing.root.children[0].children[0].children.splice(1, 1)
+  assert.equal(read(missing, [away]).frames, 1, "an owner the DOM read lacks has no frame to show")
+  assert.throws(() => read(marked(inspectedDOM(packet)), [{ ...away, frameId: undefined }]), /AUTH_FRAME_COVERAGE_REFUSED/u)
+})
+
+test("an out-of-process frame's session follows the frame: let go when it goes, reopened when it is back, and a session that cannot start leaves the frame empty", async () => {
+  const root = await mkTempRoot("auth-oopif-life-")
+  const { packet, outside } = outOfProcess()
+  const native = fakeDriver({ packet, outside })
+  native.oop.detach = async () => { native.calls.push(["oop.detach"]); throw new Error(PASSWORD) }
+  const adapter = adapterFor(native, root)
+  try {
+    assert.ok((await adapter.call(["snapshot"])).text.includes(OOP_TEXT))
+    const away = native.page.frames().at(-1)
+    native.page.emit("framedetached", away)
+    native.page.emit("framenavigated", native.page.mainFrame())
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(native.calls.filter((call) => call[0] === "oop.detach").length, 1)
+    assert.ok((await adapter.call(["snapshot"])).text.includes(OOP_TEXT))
+    assert.equal(native.calls.filter((call) => call[0] === "newCDPSession" && call[1] === "oop").length, 2)
+  } finally { await adapter.close() }
+  for (const detach of [async () => {}, async () => { throw new Error(PASSWORD) }]) {
+    const failing = outOfProcess()
+    failing.outside.hook = ({ method }) => { if (method === "DOM.enable") throw new Error(PASSWORD) }
+    const broken = fakeDriver(failing)
+    broken.oop.detach = async () => { broken.calls.push(["oop.detach"]); return detach() }
+    const other = adapterFor(broken, root)
+    try {
+      const result = await other.call(["snapshot"])
+      assert.equal(result.framesOmitted, 1)
+      noPassword(result)
+      assert.ok(broken.calls.some((call) => call[0] === "oop.detach"))
+      await other.call(["snapshot"])
+      assert.equal(broken.calls.filter((call) => call[0] === "newCDPSession" && call[1] === "oop").length, 1, "a frame without its own session is not asked again until it navigates")
+    } finally { await other.close() }
+  }
+  for (const [method, count] of [["DOM.enable", 1], ["Page.getFrameTree", 2]]) {
+    const policed = outOfProcess()
+    let blocked = false
+    policed.outside.hook = (call) => { if (call.method === method && call.count === count) blocked = true }
+    const native = fakeDriver(policed)
+    const adapter = auth.create(native.context, root, 5000, () => { if (blocked) throw new Error(PASSWORD) }, ONCE)
+    try {
+      if (count === 2) await adapter.call(["snapshot"])
+      await assert.rejects(adapter.call(["snapshot"]), (error) => /AUTH_RUNTIME_POLICY_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
+    } finally { await adapter.close() }
+  }
+})
+
+test("a ref in a child frame is refused when its owner, the frame or the browser's confirmation cannot be had", async () => {
+  for (const failure of ["owner", "frame", "confirm", "gone"]) {
+    const root = await mkTempRoot("auth-frame-bind-")
+    const native = framedDriver()
+    const send = native.cdp.send
+    let read = false
+    let documents = 0
+    native.cdp.send = async (method, params) => {
+      if (method === "DOM.querySelector" && failure !== "gone") throw new Error(PASSWORD)
+      // Each try reads the tab again, then asks for the document the ref was in, which is gone.
+      if (method === "DOM.getDocument" && read && failure === "gone" && documents++ % 2) return { root: { nodeId: 1, backendNodeId: -1 } }
+      return send(method, params)
+    }
+    const adapter = adapterFor(native, root)
+    try {
+      const result = await adapter.call(["snapshot"])
+      const field = all(all(result.snapshot).find((node) => node.role === "frame")).find((node) => node.role === "textbox")
+      read = true
+      const frame = native.page.mainFrame()
+      if (failure === "owner") frame.waitForSelector = async () => { throw new Error(PASSWORD) }
+      if (failure === "frame") native.handles.get(107).contentFrame = async () => { throw new Error(PASSWORD) }
+      await assert.rejects(adapter.call(["fill", field.ref, "literal"]), (error) =>
+        new RegExp({ confirm: "AUTH_ACTION_FAILED", gone: "AUTH_SNAPSHOT_INVALIDATED" }[failure] || "AUTH_TARGET_REFUSED", "u").test(error.message) && !error.message.includes(PASSWORD))
+      assert.equal(native.calls.some((call) => call[0] === "fill"), false)
+      if (failure !== "owner") assert.ok(native.calls.some((call) => call[0] === "dispose" && call[1] === 107), "the owner handle is let go")
+      if (failure === "confirm") assert.ok(native.calls.some((call) => call[0] === "dispose" && call[1] === 205), "the bound handle is let go")
+    } finally { await adapter.close() }
+  }
 })
