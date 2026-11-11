@@ -15,6 +15,20 @@ Agentic Engineering V2 is a way of working in which humans hand agents whole eng
 
 [![The public factory site: the three longest agent sessions in the store, with their merged pull requests](images/factory-site.png)](https://ourostack.github.io/factory/)
 
+## Direction: V3 (agreed 2026-11-10)
+
+V2 grew heavy. Desk is evolving toward V3 on `main`, one small merged change at a time; there is no separate V3 to switch to. Where a section below conflicts with these principles, the principles show where Desk is heading, and section 9 still says what runs today.
+
+1. **Many people and many agents.** Desk serves individuals, groups working together on Crew, and agents; agents are users too.
+2. **One contract, two signals.** A conversation settles intent and a measurable definition of done. After release, the agent works in silence except "ready for you" and "done". An agent that needs a human mid-task points to a gap in the conversation, not in the execution.
+3. **Proof at the altitude of the claim.** Screenshots of primary sources, not generated graphics. How it was done is available on request, never required.
+4. **Two boundaries.** Nothing irreversibly destructive, and no contacting other people without approval. Within them, agents decide from intent.
+5. **Rich context, justified overhead.** Give agents enough context. Every always-on instruction, hook, rule and guardrail earns its place by measurement, or goes; restrictions that bind an agent's hands are usually overhead.
+6. **Restraint.** The best code is the code never written, and deleting most of our tooling counts as a win.
+7. **Trunk-based.** Ship the smallest verifiable increment to `main`. In desk and workspace repositories everything is on `main`, and worktrees and pull requests exist only for parallel work and synchronisation. Product repositories keep their own gates; where a repository allows merging without further sign-off, merge. No milestones and no undo machinery.
+8. **Homes come from meaning, not rules.** Say clearly what each kind of thing is, and let people and agents choose where it lives. Most tasks are a folder with only a `task.md`.
+9. **Always-on context is small and says what system this is,** and where its reasons live: this document.
+
 ## 1. Why V2 exists
 
 An agent can produce plausible local progress while still failing the actual job. It starts from the wrong source, splits one outcome across competing records, stops at a command that printed success, delegates without a bounded return, or treats a passing proxy as proof that an installed or rendered result works. Humans compensate by supervising: narrating steps, re-briefing every session, carrying context between tools, reading every line of every diff. The agent becomes a typewriter that needs supervising, and the human becomes the bottleneck twice over.
