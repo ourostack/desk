@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.91 — 2026-11-11
+
+Session sync now repairs one stuck state by itself before it pulls. A `git pull --rebase --autostash` can finish replaying its commits, conflict while putting its autostash back, and stop before Git removes `.git/rebase-merge/`, leaving only the `autostash` file there. Git then treats the checkout as mid-rebase, and every later sync refused to pull. When the marker holds only that file, the file names a real commit, and every unmerged or changed tracked path is one the autostash touched, sync keeps the autostash in the stash list (`git stash store`, unless it is already there), restores the unmerged paths from `HEAD`, and ends the leftover rebase with `git rebase --quit`, which moves neither `HEAD`, the index nor the working tree. Nothing is reset and no stash is dropped; any other state is left alone and reported as before. Boot and `desk_status` say what happened in one sentence: an earlier pull had stopped before finishing, and the local change it held is kept as the named stash entry.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.90 — 2026-11-11
 
 A task card without a `repos` field no longer counts as corrupted. It means the task touches no code repository, the same as `repos: []`, so a plain hand-written card stays healthy and session start stops reporting Desk as degraded because of it. A `repos` value that is present but not a list is still reported, now as "`repos` is not a list".
