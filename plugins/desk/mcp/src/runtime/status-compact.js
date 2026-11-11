@@ -23,7 +23,7 @@ function stateWord(payload) {
 
 // The wait a tool call allows a running admission before it refuses with `admitting`.
 const STARTING_WAIT = `${GATE_WAIT_MS / 1000} s`
-const STARTING_FIX = `desk_status and desk_skill answer at once. Every other Desk tool waits up to ${STARTING_WAIT} for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall, desk_similar) can take longer to catch up. If startup is still running after ${STARTING_WAIT}, the call is refused with code admitting; retry it then.`
+const STARTING_FIX = `desk_status and desk_skill answer at once. Every other Desk tool waits up to ${STARTING_WAIT} for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall) can take longer to catch up. If startup is still running after ${STARTING_WAIT}, the call is refused with code admitting; retry it then.`
 // The admission steps (setPhase / onPhase names) in words an agent can pass on.
 const LOADING = "loading Desk"
 const STEP_WORDS = {

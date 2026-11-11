@@ -10,7 +10,6 @@ import { rebuildIndex } from "../indexer/index.js"
 import { createDiscoverCache, useForNextDiscover } from "../indexer/discover.js"
 import { deskPluginRoot } from "../package-metadata.js"
 import { indexedSearch, indexedTimeline, makeSnippet, passesScope } from "../tools/search.js"
-import { indexedThread } from "../tools/thread.js"
 import { loadEmbedder, MODEL } from "./embedder.js"
 import { openVectorStore } from "./vectors.js"
 import { removeOldIndex } from "./old-index.js"
@@ -88,7 +87,6 @@ export const SEARCH_WORDING = Object.freeze({
   modelFailed: (reason) => `Meaning-based search could not load its model (${reason}); exact-word search is ready, and Desk tries again shortly.`,
   recallPreparing: (pending, total) => `${pending} of ${total} desk sections are still being prepared for meaning-based search, so exact-word matches are included.`,
   recallGettingReady: "Meaning-based search is getting ready, so these results match exact words.",
-  similarNotReady: "This document is not prepared for meaning-based search yet; try again shortly.",
   oldIndexRemoved: (bytes) => `Desk removed its old search index (${bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`}), which this version no longer uses.`,
 })
 
@@ -287,7 +285,6 @@ export function createSearchEngine(options) {
   async function lexical(request) {
     try {
       await current()
-      if (request.kind === "thread") return await indexedThread({ deskRoot, db, input: request })
       const backend = request.kind === "timeline" ? indexedTimeline : indexedSearch
       return await backend({ deskRoot, db, input: request, opts: { now: request.now } })
     } catch (error) {
@@ -309,11 +306,11 @@ export function createSearchEngine(options) {
   }
 
   // The best-scoring section per document, best documents first.
-  function rankByMeaning(vector, rows, scope, limit, skipDoc = null) {
+  function rankByMeaning(vector, rows, scope, limit) {
     const best = new Map()
     for (const row of rows) {
       const section = store.vectors.get(row.text_hash)
-      if (section === undefined || row.doc_id === skipDoc || !passesScope(row, scope, "all")) continue
+      if (section === undefined || !passesScope(row, scope, "all")) continue
       let score = 0
       for (let i = 0; i < vector.length; i++) score += vector[i] * section[i]
       if (!(best.get(row.doc_id)?.score >= score)) {
@@ -352,26 +349,6 @@ export function createSearchEngine(options) {
     return { topic, results, search_mode: "meaning_and_exact_words", note: SEARCH_WORDING.recallPreparing(pending, total) }
   }
 
-  async function similar(request) {
-    const seed = String(request.path ?? "").trim()
-    if (!seed) return { error: "invalid_input", note: "`path` is required" }
-    const limit = Number.isInteger(request.limit) && request.limit > 0 ? Math.min(request.limit, 50) : DEFAULT_LIMIT
-    const loading = modelWithin(modelWaitMs)
-    await current()
-    await loading
-    embedInBackground()
-    const doc = db.prepare("SELECT id FROM docs WHERE path = ?").get(seed)
-    if (doc === undefined) return { error: "not_found", note: `path not in index: ${seed}` }
-    const rows = sections()
-    const own = rows.filter((row) => row.doc_id === doc.id).map((row) => store?.vectors.get(row.text_hash))
-    if (model === null || own.length === 0 || own.some((vector) => vector === undefined)) {
-      return { seed, results: [], note: SEARCH_WORDING.similarNotReady }
-    }
-    const centroid = new Float32Array(own[0].length)
-    for (const vector of own) for (let i = 0; i < centroid.length; i++) centroid[i] += vector[i] / own.length
-    return { seed, results: rankByMeaning(centroid, rows, request.scope, limit, doc.id) }
-  }
-
   function searchStatus() {
     if (indexFailure !== null) {
       return {
@@ -405,7 +382,7 @@ export function createSearchEngine(options) {
     // What the search tools call.
     lexical,
     async semantic(request) {
-      return request.kind === "similar" ? similar(request) : recall(request)
+      return recall(request)
     },
     async reindex() {
       markChanged()

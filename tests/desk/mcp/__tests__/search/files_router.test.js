@@ -5,7 +5,7 @@ import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
 
 const STARTING = "Desk search is still starting; try again in a few seconds."
 
-test("before the session's search engine starts, searches read the files and the rest say search is starting", async () => {
+test("before the session's search engine starts, searches read the files and reindex says search is starting", async () => {
   const deskRoot = await mkTempDeskRoot()
   await writeFile(deskRoot, "food/task-b/task.md", "# Kitchen\n\nA soup recipe.\n")
   const router = searchRouter(null)
@@ -18,9 +18,6 @@ test("before the session's search engine starts, searches read the files and the
     topic: "soup", results: ["food/task-b/task.md"], search_mode: "exact_words",
     note: "Meaning-based search is getting ready, so these results match exact words.",
   })
-  assert.deepEqual(await router.semantic({ deskRoot, path: "food/task-b/task.md", kind: "similar" }), { seed: "food/task-b/task.md", results: [], note: STARTING })
-  assert.deepEqual(await router.semantic({ deskRoot, kind: "similar" }), { seed: null, results: [], note: STARTING })
-  assert.deepEqual(await router.lexical({ deskRoot, start_path: "food/task-b/task.md", kind: "thread" }), { status: "error", code: "search_starting", message: STARTING })
   assert.deepEqual(await router.reindex({ deskRoot }), { status: "error", code: "search_starting", message: STARTING })
 })
 

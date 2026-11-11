@@ -731,7 +731,7 @@ test("head_sampler_withheld_callback_authoritative_transition", async (t) => {
 test("tool requirements: status, doctor, reads, search and writes", () => {
   assert.equal(toolRequirement("desk_status"), "status")
   assert.equal(toolRequirement("desk_doctor"), "doctor")
-  for (const name of ["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"]) assert.equal(toolRequirement(name), "read")
+  for (const name of ["desk_search", "desk_recall", "desk_timeline"]) assert.equal(toolRequirement(name), "read")
   assert.equal(toolRequirement("desk_reindex"), "search")
   for (const name of ["task_create", "track_rename", "friction_add", "lesson_add", "desk_save", "note_leave", "note_ack"]) assert.equal(toolRequirement(name), "write")
   const readable = { runtimeServer: {}, root: {} }

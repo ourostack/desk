@@ -32,9 +32,7 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "desk_work_ledger",
   "desk_search",
   "desk_recall",
-  "desk_similar",
   "desk_timeline",
-  "desk_thread",
   "desk_reindex",
   "desk_status",
   "desk_doctor",
@@ -143,19 +141,6 @@ test("server.callTool surfaces tool errors as isError with structured body", asy
   const body = parseResult(res)
   assert.equal(body.status, "error")
   assert.match(body.message, /does not exist/)
-})
-
-test("server.callTool routes desk_thread to the real implementation", async () => {
-  const root = await mkTempDeskRoot()
-  const res = await callTool({
-    deskRoot: root,
-    name: "desk_thread",
-    input: { start_path: "nope/does/not/exist.md" },
-  })
-  // No isError: before the session's search engine starts, desk_thread says search is starting.
-  const body = parseResult(res)
-  assert.equal(body.status, "error")
-  assert.equal(body.code, "search_starting")
 })
 
 test("server.callTool rejects unknown tool names", async () => {

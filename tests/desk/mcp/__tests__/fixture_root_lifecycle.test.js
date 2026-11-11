@@ -30,7 +30,6 @@ const FIXTURE_OWNERS = [
   ["__tests__/indexer/discover.test.js", "desk-discover-"],
   ["__tests__/indexer/person_discover.test.js", "desk-person-discover-"],
   ["__tests__/indexer/shared_landscape_discover.test.js", "desk-shared-discover-"],
-  ["__tests__/tools/thread.test.js", "desk-thread-test-"],
   ["__tests__/tools/person_write_prefix.test.js", "desk-write-outside-"],
   ["__tests__/db/init.test.js", "desk-init-"],
   ["__tests__/util/path_containment.test.js", "desk-containment-"],

@@ -718,10 +718,6 @@ async function deskTools(ctx, world, session, shared, options) {
     const timeline = await call("desk_timeline", { limit: 20 })
     assert(!timeline.isError && resultPaths(timeline).length > 0, `desk_timeline: ${timeline.text.slice(0, 300)}`)
   })
-  await check(ctx, "desk_thread.walks_or_says_not_indexed", "search", async () => {
-    const thread = await call("desk_thread", { start_path: "search-quality/rank-recent-cards-higher/task.md" })
-    assert(!thread.isError || /not_indexed/u.test(thread.text), `desk_thread: ${thread.text.slice(0, 300)}`)
-  })
   await check(ctx, "desk_reindex.converges", "search", async () => {
     const reindex = await call("desk_reindex", {}, 45000)
     assert(!reindex.isError, `desk_reindex: ${reindex.text.slice(0, 300)}`)
@@ -742,12 +738,6 @@ async function deskTools(ctx, world, session, shared, options) {
     const status = await call("desk_status", { detail: true })
     assert(status.text.includes("Search is ready."), `desk_status does not say "Search is ready." once meaning-based search works: ${status.text.slice(0, 300)}`)
   })
-  await check(ctx, "desk_similar.finds_neighbours", "search", async () => {
-    const similar = await call("desk_similar", { path: "garden-schedule/water-the-tomatoes/gardening.md" })
-    assert(!similar.isError, `desk_similar: ${similar.text.slice(0, 300)}`)
-    assert(!resultPaths(similar).includes("garden-schedule/water-the-tomatoes/gardening.md"), "desk_similar returned the seed itself")
-    assert(resultPaths(similar).length > 0, `desk_similar returned nothing: ${similar.text.slice(0, 200)}`)
-  })
 
   // Plain errors for bad input.
   await check(ctx, "errors.plain_messages", "errors", async () => {
@@ -755,7 +745,6 @@ async function deskTools(ctx, world, session, shared, options) {
     assertPlainError(await call("task_create", { track: "search-quality" }), "missing fields")
     assertPlainError(await call("task_update", { track: "search-quality", slug: "no-such-task-here", note: "x" }), "unknown task")
     assertPlainError(await call("track_create", { slug: "misc", title: "Misc", scope: "everything" }), "catch-all track")
-    assertPlainError(await call("desk_similar", { path: "no/such/file.md" }), "unknown path")
     assertPlainError(await call("no_such_tool", {}), "unknown tool")
   })
 

@@ -20,7 +20,7 @@ const MAX_LIMIT = 50
 const SNIPPET_MAX_CHARS = 280
 
 // Every field each search tool reads off `input` — not in the exported
-// `desk_search`/`desk_recall`/`desk_similar`/`desk_timeline` themselves
+// `desk_search`/`desk_recall`/`desk_timeline` themselves
 // (they spread `...input` into the query router unread) but in the paired
 // `indexed*` function below that actually destructures it. Kept next to
 // this module so a field added to one of those reads is a field added here
@@ -28,7 +28,6 @@ const SNIPPET_MAX_CHARS = 280
 // against each tool's declared schema in tool-schemas.js.
 export const DESK_SEARCH_FIELDS = ["query", "limit", "filters", "scope"]
 export const DESK_RECALL_FIELDS = ["topic", "limit", "scope"]
-export const DESK_SIMILAR_FIELDS = ["path", "limit", "scope"]
 export const DESK_TIMELINE_FIELDS = ["from", "to", "query", "limit", "scope"]
 /**
  * Read `<deskRoot>/_meta/featured.md` and return the first track slug listed
@@ -186,7 +185,7 @@ function buildFtsQuery(query) {
  * `scope` values:
  *   "active"   — is_archived = 0 (default for desk_search)
  *   "archived" — is_archived = 1
- *   "all"      — no filter (default for desk_recall, desk_similar, desk_timeline)
+ *   "all"      — no filter (default for desk_recall, desk_timeline)
  *
  * If the caller passes an unrecognized value, falls back to the toolDefault.
  *
@@ -468,17 +467,6 @@ export async function indexedSearch({ deskRoot, input, opts, db }) {
 export async function desk_recall({ deskRoot, input, opts, search, queryRouter, signal }) {
   return (queryRouter ?? searchRouter(search)).semantic({
     ...input, deskRoot, opts, signal, kind: "recall",
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Tool: desk_similar
-// ---------------------------------------------------------------------------
-
-// desk_similar — "more like this": the documents nearest the average of the seed document's section vectors.
-export async function desk_similar({ deskRoot, input, opts, search, queryRouter, signal }) {
-  return (queryRouter ?? searchRouter(search)).semantic({
-    ...input, deskRoot, opts, signal, kind: "similar",
   })
 }
 

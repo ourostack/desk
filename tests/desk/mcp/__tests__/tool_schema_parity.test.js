@@ -19,8 +19,8 @@
 // false positives/negatives — direct destructuring
 // (`const { track, slug } = values`), a loop over a module-local optional-
 // fields array, a field read three call-frames away inside a query-router-
-// dispatched `indexed*` helper (desk_search, desk_recall, desk_similar,
-// desk_timeline, desk_thread), and one tool (`desk_doctor`) whose top-level
+// dispatched `indexed*` helper (desk_search, desk_recall, desk_timeline),
+// and one tool (`desk_doctor`) whose top-level
 // fields (`format`, `repair`) are actually read by its session-layer
 // dispatcher (`runtime/desk-session.js`), not by the module `server.js`
 // registers for it (`tools/doctor.js`, which only ever sees `{ format }`).
@@ -50,10 +50,8 @@ import { DESK_SAVE_FIELDS } from "../../../../plugins/desk/mcp/src/tools/desk-sa
 import {
   DESK_SEARCH_FIELDS,
   DESK_RECALL_FIELDS,
-  DESK_SIMILAR_FIELDS,
   DESK_TIMELINE_FIELDS,
 } from "../../../../plugins/desk/mcp/src/tools/search.js"
-import { DESK_THREAD_FIELDS } from "../../../../plugins/desk/mcp/src/tools/thread.js"
 import { DESK_REINDEX_FIELDS } from "../../../../plugins/desk/mcp/src/tools/reindex.js"
 import { DESK_STATUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/status.js"
 import { DESK_DOCTOR_FIELDS } from "../../../../plugins/desk/mcp/src/runtime/desk-session.js"
@@ -77,9 +75,7 @@ const HANDLER_FIELDS = {
   note_ack: NOTE_ACK_FIELDS,
   desk_search: DESK_SEARCH_FIELDS,
   desk_recall: DESK_RECALL_FIELDS,
-  desk_similar: DESK_SIMILAR_FIELDS,
   desk_timeline: DESK_TIMELINE_FIELDS,
-  desk_thread: DESK_THREAD_FIELDS,
   desk_reindex: DESK_REINDEX_FIELDS,
   desk_status: DESK_STATUS_FIELDS,
   desk_skill: DESK_SKILL_FIELDS,

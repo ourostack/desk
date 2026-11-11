@@ -243,7 +243,7 @@ test("desk_status does not say ready while admission is still running", async (t
   const first = compactStatus({ status: "admitting", state: "admitting", admission: { summary: "Desk is starting: the handshake is complete and admission is running in the background.", blockers: [], starting: true, phase: "loading_runtime", phase_since: since } })
   assert.equal(first.state, "admitting")
   assert.equal(first.summary, "Desk is still starting (loading Desk, 3 s so far). Call desk_status again in about 10 s.")
-  assert.equal(first.fix, "desk_status and desk_skill answer at once. Every other Desk tool waits up to 10 s for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall, desk_similar) can take longer to catch up. If startup is still running after 10 s, the call is refused with code admitting; retry it then.")
+  assert.equal(first.fix, "desk_status and desk_skill answer at once. Every other Desk tool waits up to 10 s for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall) can take longer to catch up. If startup is still running after 10 s, the call is refused with code admitting; retry it then.")
   assert.ok(!("detail_pending" in first), "only a ready desk is called ready")
   // Each step is named in plain words, or not at all.
   const step = (phase, extra = {}) => compactStatus({ status: "admitting", admission: { starting: true, phase, ...extra } }).summary
