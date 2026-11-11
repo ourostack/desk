@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.87 — 2026-11-11
+
+Desk now ships the `core-meeting-capture` skill ([`skills/core-meeting-capture`](skills/core-meeting-capture/SKILL.md)), the generic engine for source-backed meeting recaps and transcript-guided visual evidence. It moved unchanged from `ourostack/ouroboros-skills`, which is being retired. CIT's `cit-meeting-capture` and MS Desk's `pulling-meeting-recaps` require it and both depend on Desk, so they now get it from the plugin they already install instead of a separate library. Its eval suite, `evals/core-meeting-capture.json`, its synthetic diagram fixture and its model-choice source-contract test came along and run in `Validate skills`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.86 — 2026-11-11
 
 **Both READMEs install Desk the way [SETUP](../../SETUP.md#copilot-cli) does.** Their `agency plugin install` command had no cache flags, so Agency kept its copy of Desk for a day and a release reached new sessions up to a day late. On the operator's two Macs, a fresh session an hour after a release still got the release before it. The command now adds `--cache-policy auto --cache-ttl 0`, as SETUP already did: each new session fetches the latest `main` in the background, so a release loads at the next session.
