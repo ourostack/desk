@@ -21,7 +21,7 @@ export const VERSION_FAILURE_TTL_MS = 10 * 60 * 1000
 export const VERSION_CACHE_FILE = "latest-version.json"
 const VERSION_CHECK_SWITCH = "DESK_BOOT_VERSION_CHECK"
 
-export const AGENCY_CACHE_COMMAND = 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@main"'
+export const AGENCY_CACHE_COMMAND = 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release"'
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/u
 

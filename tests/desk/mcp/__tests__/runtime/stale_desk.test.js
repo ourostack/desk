@@ -70,7 +70,7 @@ test("the refresh step names the right command for each host", () => {
   const copilot = refreshStep("copilot")
   assert.match(copilot, /copilot plugin update desk/u)
   assert.ok(copilot.includes(AGENCY_CACHE_COMMAND))
-  assert.equal(AGENCY_CACHE_COMMAND, 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@main"')
+  assert.equal(AGENCY_CACHE_COMMAND, 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release"')
   assert.match(refreshStep("unknown"), /update the Desk plugin/u)
 })
 

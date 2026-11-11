@@ -53,19 +53,23 @@ export function isAgencySession({ env, pluginRoot }) {
 }
 
 /**
- * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the `ourostack/desk` plugin on `@main` for
- * this session's engine (`AGENCY_ENGINE`, else the agent host: Claude under Agency has its own `claude:` entries), whose cached
- * copy has the running version. Anything else is null.
+ * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the `ourostack/desk` plugin on `@release`
+ * (or `@main`, for an install from before the release channel) for this session's engine (`AGENCY_ENGINE`, else the agent
+ * host: Claude under Agency has its own `claude:` entries), whose cached copy has the running version. Anything else is null.
  */
 export function deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
   try {
     const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
     if (engine !== "copilot" && engine !== "claude") return null
-    const spec = `${engine}:github:ourostack/desk:plugins/desk@main`
     const cacheDir = path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache")
-    const entry = (JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {})[spec]
-    if (!text(entry?.dir_name)) return null
-    return JSON.parse(readFile(path.join(cacheDir, "entries", entry.dir_name, "plugin.json"))).version === running ? spec : null
+    const entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
+    for (const channel of ["release", "main"]) {
+      const spec = `${engine}:github:ourostack/desk:plugins/desk@${channel}`
+      const entry = entries[spec]
+      if (!text(entry?.dir_name)) continue
+      if (JSON.parse(readFile(path.join(cacheDir, "entries", entry.dir_name, "plugin.json"))).version === running) return spec
+    }
+    return null
   } catch {
     return null
   }

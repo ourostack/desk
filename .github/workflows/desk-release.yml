@@ -259,14 +259,19 @@ jobs:
             git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
             export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/github-known-hosts -o StrictHostKeyChecking=yes"
           fi
+          # A stable release also moves the release channel, which consumers that must not run merged-but-unreleased Desk
+          # changes track (github:ourostack/desk:plugins/desk@release). One atomic push moves both, so neither runs ahead.
+          refspecs=("$SHA:refs/heads/main")
+          version="$(git show "$SHA:plugins/desk/plugin.json" | sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then refspecs+=("$SHA:refs/heads/release"); fi
           credential="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)"
           echo "::add-mask::$credential"
           set +e
-          result="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" git -c core.hooksPath=/dev/null push --porcelain --no-verify origin "$SHA:refs/heads/main" 2> "$RUNNER_TEMP/push-error.txt")"
+          result="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" git -c core.hooksPath=/dev/null push --atomic --porcelain --no-verify origin "${refspecs[@]}" 2> "$RUNNER_TEMP/push-error.txt")"
           code=$?
           set -e
           if [ "$code" = 0 ]; then
-            echo "Released $SUMMARY." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Released $SUMMARY${refspecs[1]:+ and moved the release channel to it}." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # --porcelain prints one stable status line per ref: "!", the refspec, then "[rejected] (fetch first)" or
@@ -277,7 +282,7 @@ jobs:
             echo "main moved while this release was pushed, so the push was refused; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "::error::The release push was refused: $result $(cat "$RUNNER_TEMP/push-error.txt"). If main now refuses this push, check the ruleset's bypass list and the DESK_RELEASE_DEPLOY_KEY secret."
+          echo "::error::The release push was refused: $result $(cat "$RUNNER_TEMP/push-error.txt"). If main or release now refuses this push, check the rulesets' bypass lists and the DESK_RELEASE_DEPLOY_KEY secret."
           exit 1
 
   # Marking is a catch-up, not a one-shot: every merged pull request on main that lacks the `released` label and has a release

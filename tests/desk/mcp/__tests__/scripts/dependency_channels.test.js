@@ -35,7 +35,7 @@ test("this repository's plugin dependencies track release channels", () => {
 test("dependencies may name a release channel or no ref at all", () => {
   for (const spec of [
     "github:ourostack/desk:plugins/superpowers@main",
-    "github:ourostack/desk:plugins/desk",
+    "github:ourostack/desk:plugins/desk@release",
     "github:example-org/example-mcp:.",
     "github:someone/else",
     "npm:left-pad",
@@ -47,15 +47,26 @@ test("dependencies may name a release channel or no ref at all", () => {
 
 test("exact commits, forks, other branches and malformed specs are rejected", () => {
   // Sample pinned references: the checker must reject them, so they appear here only as negative cases.
-  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@d89126223a4e08b07b8e4e8d738c15b92a6c597f"), /pins exact commit/u)
+  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@d89126223a4e08b07b8e4e8d738c15b92a6c597f"), /pins exact commit .*track a release channel \(release\)/u)
   assert.match(checker.dependencyProblem("github:example-org/example-overlay:plugins/example-overlay@4597a49"), /pins exact commit/u)
   assert.match(checker.dependencyProblem("github:arimendelow/desk:plugins/desk@main"), /points at a fork \(arimendelow\)/u)
-  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@user/ari/feature"), /not a release channel/u)
+  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@user/ari/feature"), /ships through releases, so track release/u)
   assert.match(checker.dependencyProblem("github:not-a-repo"), /is not a github:/u)
   assert.deepEqual(checker.parseGithubDependency("github:o/r"), { owner: "o", repo: "r", path: "", ref: null })
 })
 
-test("main is the only release channel and ouroboros-skills coordinates have moved", () => {
+test("Desk itself is released through the release channel; its other plugins and other repositories track main", () => {
+  assert.deepEqual(checker.PLUGIN_CHANNELS, { "ourostack/desk:plugins/desk": "release" })
+  assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/desk@release"), null)
+  // main also carries merged, unreleased Desk changes, and no ref means main.
+  assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/desk@main"), "tracks main; this plugin ships through releases, so track release")
+  assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/desk"), "tracks the default branch; this plugin ships through releases, so track release")
+  assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/superpowers@release"), "tracks release, which only plugins that ship through releases use; track main")
+  assert.equal(checker.dependencyProblem("github:someone/else:plugins/x@release"), "tracks release, which only plugins that ship through releases use; track main")
+  assert.equal(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@main"), "moved to ourostack/desk; use github:ourostack/desk:plugins/desk@release")
+})
+
+test("main is the release channel for everything but Desk itself and ouroboros-skills coordinates have moved", () => {
   assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/plain-language@main"), null)
   assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/plain-language@v2-alpha"), /not a release channel/u)
   assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@v2-alpha"), /moved to ourostack\/desk/u)
@@ -63,7 +74,7 @@ test("main is the only release channel and ouroboros-skills coordinates have mov
   assert.match(checker.dependencyProblem("github:arimendelow/ouroboros-skills:plugins/desk@main"), /moved to ourostack\/desk/u)
   assert.equal(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/crew@v2-alpha"), "moved to ourostack/desk; use github:ourostack/desk:plugins/crew@main")
   assert.equal(checker.dependencyProblem("github:ourostack/ouroboros-skills@v2-alpha"), "moved to ourostack/desk; use github:ourostack/desk@main")
-  assert.deepEqual(checker.RELEASE_CHANNELS, ["main"])
+  assert.deepEqual(checker.RELEASE_CHANNELS, ["main", "release"])
 })
 
 test("repositories named like built-in object properties are ordinary repositories", () => {
@@ -75,13 +86,13 @@ test("repositories named like built-in object properties are ordinary repositori
 
 test("the checker reports every offending manifest entry", () => {
   withPlugins({
-    good: { dependencies: ["github:ourostack/desk:plugins/desk@main"] },
+    good: { dependencies: ["github:ourostack/desk:plugins/desk@release"] },
     pinned: { dependencies: ["github:ourostack/desk:plugins/desk@0123456789abcdef"] },
     empty: {},
     nomanifest: null,
   }, (root) => {
     assert.deepEqual(checker.checkDependencyChannels({ repoRoot: root }), [
-      "plugins/pinned/agency.json: github:ourostack/desk:plugins/desk@0123456789abcdef pins exact commit 0123456789abcdef; track a release channel (main) instead",
+      "plugins/pinned/agency.json: github:ourostack/desk:plugins/desk@0123456789abcdef pins exact commit 0123456789abcdef; track a release channel (release) instead",
     ])
     const logs = []
     assert.equal(checker.runCli({ repoRoot: root, log: (line) => logs.push(line), error: (line) => logs.push(line) }), 1)
