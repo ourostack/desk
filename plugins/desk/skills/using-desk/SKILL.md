@@ -31,7 +31,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Coaching the collaboration
 
-When the collaboration slips (steps handed over one at a time, micromanagement, a one-shot request with no alignment, the human acting as glue, the same correction twice, so record it with lesson_add), say once "let's step back and reset how we're working" with a concrete adjustment; it is never a recurring gate and never widens authority.
+When the collaboration slips (`interaction-style` §10 lists the signs; the same correction twice goes to lesson_add), say once "let's step back and reset how we're working" with a concrete adjustment; it is never a recurring gate and never widens authority.
 
 ## Authority
 

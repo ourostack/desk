@@ -1,0 +1,1 @@
+`using-desk`'s "Coaching the collaboration" keeps the reset line ("let's step back and reset how we're working", once, with a concrete adjustment, never a recurring gate) and points to [`interaction-style`](skills/interaction-style/SKILL.md) §10 for the list of signs, which already held them in full. The always-on text drops from 341 to 258 bytes.
