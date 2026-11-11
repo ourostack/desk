@@ -16,6 +16,12 @@ Run `node scripts/skill-evals.cjs validate`, `node scripts/skill-evals.cjs finge
 
 Add scenarios from observed regressions, not to inflate counts.
 
+## Core meeting capture
+
+`core-meeting-capture.json` exercises receipt-only publication, useful recording stills, excluded private screens, unknown multipart clocks, and absent, unavailable or irrelevant video. Its inputs are synthetic. Run fresh-context no-guidance controls before guided samples; manually inspect each output for invented decisions, progress, pixels and completion. Simulated adapter plans prove instruction-following only, not actual media retrieval or visual inspection.
+
+The absent-price-catalogue case uses a real synthetic PNG, `fixtures/core-meeting-capture-diagram.png`. Its external run must actually supply that approved raster to an available economical capable visual model. Exact price remains unknown; it is not an inspection prerequisite. The source-contract regression `scripts/test-core-meeting-capture-model-choice.cjs` runs inside `node scripts/test-skill-evals.cjs`; CI still does not run a model.
+
 ## Engineering V2 preview
 
 The [experimental outcome ledger](engineering-v2-results.md) records the initial comparisons and both completed method rounds, including failed delivery qualification, invalid judgments and actual-consumption limits. It is not a source-current behavioral receipt for the published fixture variant.

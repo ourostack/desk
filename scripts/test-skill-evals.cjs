@@ -759,6 +759,7 @@ try {
     assert.equal(JSON.parse(repeated.stdout).results.length, 2);
   }
 
+  require("./test-core-meeting-capture-model-choice.cjs");
   console.log("Skill eval tests passed.");
 } finally {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
