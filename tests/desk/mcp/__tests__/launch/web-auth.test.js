@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
 import { mkTempRoot } from "../_temp_roots.js"
-import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
+import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
 const auth = require("../../../../../plugins/desk/mcp/web-auth.cjs")
@@ -1560,7 +1560,7 @@ test("keys typed at a node inside a rich-text editor go to its editing host, cho
   const root = await mkTempRoot("auth-editor-")
   const native = fakeDriver({ packet: editorPacket() })
   browserNames(native, (selector) => /div:nth-of-type\(1\)$/u.test(selector) ? 104 : /p:nth-of-type\(1\)$/u.test(selector) ? 106 : 0)
-  native.handles.get(104).evaluate = async (fn, arg) => fn({ isContentEditable: true, innerText: "typed text" }, arg)
+  native.handles.get(104).evaluate = async (fn, arg) => fn(pageNode(native.focus, native.handles.get(104), { tagName: "DIV", isContentEditable: true, innerText: "typed text" }), arg)
   const adapter = adapterFor(native, root)
   const paragraphRef = (snapshot) => snapshot.text.match(/- generic \[ref=(\w+)\]\n\s*$/u)?.[1] ?? snapshot.text.match(/\[ref=(\w+)\]/gu).at(-1).match(/e\d+/u)[0]
   try {
@@ -1568,8 +1568,10 @@ test("keys typed at a node inside a rich-text editor go to its editing host, cho
     assert.match(snapshot.text, /- textbox \[ref=e\d+\]/u, "the host is a textbox")
     const result = await adapter.call(["type", paragraphRef(snapshot), "typed text"])
     assert.deepEqual(result.typed, { verified: true })
-    assert.ok(native.calls.some((call) => call[0] === "keyboard.type" && call[1] === "typed text"))
-    assert.deepEqual(native.calls.filter((call) => ["focus", "keyboard.type"].includes(call[0])).map((call) => call[1]), [104, "typed text"], "the keys go to the host it focused")
+    assert.deepEqual(native.calls.filter((call) => call[0] === "focus").map((call) => call[1]), [104], "it focuses the host")
+    const keys = native.calls.filter((call) => call[0] === "keys")
+    assert.ok(keys.every((call) => call[1] === 104), "the keys go to the host it focused")
+    assert.equal(keys.map((call) => call[2]).join(""), "typed text")
     assert.match(native.calls.filter((call) => call[0] === "waitForSelector").at(-1)[1], /div:nth-of-type\(1\)$/u, "bound at the host")
     assert.ok(native.calls.some((call) => call[0] === "cdp" && call[1] === "DOM.querySelector"), "the browser confirms the host")
     snapshot = await adapter.call(["snapshot"])
@@ -2356,35 +2358,90 @@ test("screenshot masks an out-of-process frame's fields in that frame", async ()
   } finally { await adapter.close() }
 })
 
-test("type gives a target that takes keys only a moment after focus (a remote desktop's canvas) time to settle, so no character is lost", async () => {
-  const root = await mkTempRoot("auth-type-settle-")
-  const packet = nativeSnapshot({ value: "", type: "text" })
-  const native = fakeDriver({ packet })
-  const field = native.handles.get(104)
-  const type = field.type
-  let ready = false
-  field.focus = async () => { native.calls.push(["focus", 104]); ready = false; native.focused = field }
-  // Keys that arrive before the target settles are dropped, as the remote desktop dropped the first characters.
-  field.type = async (text) => type(ready ? text : text.slice(13))
-  native.page.waitForTimeout = async (ms) => { native.calls.push(["waitForTimeout", ms]); ready = true }
-  native.page.keyboard.type = async (text) => { native.calls.push(["keyboard.type", text]); await native.focused.type(text) }
+test("screenshot never pictures an out-of-process frame it could not read: a closed shadow or a failed read refuses, and a frame with no way in is masked whole by its owner", async () => {
+  const root = await mkTempRoot("auth-screenshot-oopif-coverage-")
+  for (const [failure, code] of [["closed", /AUTH_SHADOW_COVERAGE_REFUSED/u], ["read", /AUTH_FRAME_COVERAGE_REFUSED/u]]) {
+    const { packet, outside } = outOfProcess()
+    const native = fakeDriver({ packet, outside })
+    const send = native.oop.send
+    let broken = false
+    native.oop.send = async (method, params) => {
+      if (broken && failure === "read" && method === "DOMSnapshot.captureSnapshot") throw new Error(PASSWORD)
+      const result = await send(method, params)
+      if (broken && failure === "closed" && method === "DOM.getDocument") {
+        const body = result.root.children[0].children[0]
+        body.shadowRoots = [{ nodeType: 11, nodeName: "#document-fragment", backendNodeId: 399, shadowRootType: "closed", children: body.children.splice(0) }]
+      }
+      return result
+    }
+    const adapter = adapterFor(native, root)
+    try {
+      assert.ok((await adapter.call(["snapshot"])).text.includes(OOP_TEXT))
+      broken = true
+      const files = fs.readdirSync(root).length
+      await assert.rejects(adapter.call(["screenshot"]), (error) => code.test(error.message) && !error.message.includes(PASSWORD) && !error.message.includes("[\"screenshot\"] shows"))
+      assert.equal(native.calls.some((call) => call[0] === "page.screenshot"), false, `no picture past a ${failure} frame`)
+      assert.equal(fs.readdirSync(root).length, files, "and no file")
+    } finally { await adapter.close() }
+  }
+  const blind = outOfProcess()
+  blind.outside.hook = ({ method }) => { if (method === "DOM.enable") throw new Error(PASSWORD) }
+  const native = fakeDriver(blind)
   const adapter = adapterFor(native, root)
   try {
-    const ref = inputRef(await adapter.call(["snapshot"]))
-    const command = "Write-Output desk679-type-ok; Get-Date"
-    const result = await adapter.call(["type", ref, command])
-    assert.equal(packet.strings[packet.documents[0].nodes.inputValue.value[0]], command, "every character arrives")
-    assert.deepEqual(result.typed, { verified: true })
-    assert.deepEqual(native.calls.filter((call) => ["focus", "waitForTimeout", "keyboard.type"].includes(call[0])).map((call) => call[0]),
-      ["focus", "waitForTimeout", "keyboard.type"])
-    assert.ok(native.calls.find((call) => call[0] === "waitForTimeout")[1] > 0)
-    let blocked = false
-    const policed = auth.create(native.context, root, 5000, () => { if (blocked) throw new Error(PASSWORD) }, ONCE)
-    try {
-      const again = inputRef(await policed.call(["snapshot"]))
-      field.focus = async () => { blocked = true }
-      await assert.rejects(policed.call(["type", again, "x"]), (error) => /AUTH_RUNTIME_POLICY_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
-      assert.equal(native.calls.filter((call) => call[0] === "keyboard.type").length, 1, "no keys after the policy refuses")
-    } finally { await policed.close() }
+    const result = await adapter.call(["screenshot"])
+    assert.ok(fs.existsSync(result.screenshot))
+    const masks = native.calls.find((call) => call[0] === "page.screenshot")[1].mask
+    assert.ok(masks.some((mask) => mask.frame === 0 && mask.through.length === 0 && mask.selector === "css=html:nth-of-type(1) > body:nth-of-type(1) > iframe:nth-of-type(1)"),
+      "the owner of a frame with no session is masked whole")
   } finally { await adapter.close() }
+})
+
+test("type sends each key only while its target holds the focus: focus taken at once is taken back once, and focus taken again or while typing stops it, so the stealer gets no key", async () => {
+  const root = await mkTempRoot("auth-type-focus-")
+  // The live page: the target's focus handler starts a timer that moves focus to another field (an autofocus search
+  // box, a chat composer) at once or a few keys in. The stealer must never get a key.
+  for (const [atFocus, afterKeys, expected, held] of [[0, Infinity, null, "STEALTEST123"], [1, Infinity, null, "STEALTEST123"], [Infinity, Infinity, /AUTH_FOCUS_MOVED/u, ""], [0, 3, /AUTH_FOCUS_MOVED/u, "STE"]]) {
+    const native = fakeDriver({ packet: nativeSnapshot({ value: "", type: "text" }) })
+    const field = native.handles.get(104)
+    const stealer = native.handles.get(103)
+    const focus = field.focus
+    let focused = 0
+    let sent = 0
+    field.focus = async () => { await focus(); if (focused++ < atFocus) native.focus.on = stealer }
+    const type = native.page.keyboard.type
+    native.page.keyboard.type = async (text) => { await type(text); if (++sent === afterKeys) native.focus.on = stealer }
+    const adapter = adapterFor(native, root)
+    try {
+      const ref = inputRef(await adapter.call(["snapshot"]))
+      if (expected) await assert.rejects(adapter.call(["type", ref, "STEALTEST123"]), (error) => expected.test(error.message))
+      else assert.deepEqual((await adapter.call(["type", ref, "STEALTEST123"])).typed, { verified: true })
+      const keys = native.calls.filter((call) => call[0] === "keys")
+      assert.equal(keys.filter((call) => call[1] === 103).length, 0, "the stealer gets no key")
+      assert.equal(keys.map((call) => call[2]).join(""), held, "the target gets every key sent")
+    } finally { await adapter.close() }
+  }
+  // A document without the window's focus gets no keys, and only an exact true is a verdict.
+  for (const setup of [(native) => { native.focus.window = false }, (native) => { native.handles.get(104).evaluate = async () => "true" }]) {
+    const native = fakeDriver({ packet: nativeSnapshot({ value: "", type: "text" }) })
+    setup(native)
+    const adapter = adapterFor(native, root)
+    try {
+      await assert.rejects(adapter.call(["type", inputRef(await adapter.call(["snapshot"])), "x"]), /AUTH_FOCUS_MOVED/u)
+      assert.equal(native.calls.some((call) => call[0] === "keyboard.type"), false)
+    } finally { await adapter.close() }
+  }
+  // Focus inside an open shadow counts for its host and for the shadow's own field, and nowhere else.
+  const doc = { hasFocus: () => true }
+  const element = (tagName, rootHost) => ({ tagName, ownerDocument: doc, contains: () => false, getRootNode: () => ({ host: rootHost }) })
+  const host = element("X-EDITOR")
+  const inner = element("INPUT", host)
+  const other = element("INPUT")
+  host.shadowRoot = { activeElement: inner }
+  doc.activeElement = host
+  assert.equal(auth.FOCUSED(host), true)
+  assert.equal(auth.FOCUSED(inner), true)
+  assert.equal(auth.FOCUSED(other), false)
+  doc.hasFocus = () => false
+  assert.equal(auth.FOCUSED(inner), false, "a document without the window's focus gets no keys")
 })

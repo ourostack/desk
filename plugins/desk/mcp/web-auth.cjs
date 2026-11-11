@@ -36,6 +36,16 @@ var HOLDS = function (node, input) {
   var current = flat(node.isContentEditable || typeof node.value !== "string" ? node.innerText : node.value);
   return input[1] === "fill" ? current === flat(input[0]) : current.indexOf(flat(input[0])) !== -1;
 };
+// Runs in the page: whether keys typed now reach the node (it, or an element inside it, has its document's focus and
+// that document has the window's).
+var FOCUSED = function (node) {
+  var doc = node.ownerDocument;
+  var active = doc.activeElement;
+  while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+  var inside = false;
+  for (var at = active; at && !inside; at = at.getRootNode().host) inside = at === node || node.contains(at);
+  return doc.hasFocus() && inside;
+};
 var EMBEDDED = new Set(["IFRAME", "FRAME", "FENCEDFRAME", "PORTAL", "OBJECT", "EMBED"]);
 var UNTYPED = new Set(["hidden", "submit", "button", "reset", "image"]);
 // Shorter values in fields nobody types into are page codes ("US", "0", "USD"), never a typed value's copy.
@@ -50,8 +60,6 @@ var ARITY = {
 };
 // A ref is bound this many times when the page keeps moving it between the read and the browser's confirmation.
 var BIND_ATTEMPTS = 3;
-// How long a focused target is given to start taking keys before `type` sends them.
-var TYPE_SETTLE_MS = 250;
 // What a screenshot never shows, as a snapshot never shows it: every input, textarea and editable region. The browser
 // paints a box over each in every frame (its CSS engine reaches into open shadows), including any that appear while
 // the picture is taken; the read before the picture adds what markup alone does not say (CSS-editable regions and
@@ -71,7 +79,8 @@ var HINTS = {
   AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
   AUTH_SNAPSHOT_INVALIDATED: "The page replaced that element, or navigated, since it was read. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"].",
   AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, open the frame's own page with goto.",
-  AUTH_SHADOW_COVERAGE_REFUSED: CHANGING + " If it repeats, this part of the page cannot be read in mine; [\"screenshot\"] shows it.",
+  AUTH_SHADOW_COVERAGE_REFUSED: "Part of this page (or of one of its frames) is in a closed shadow root, which mine can neither read nor picture, so neither snapshot nor screenshot can show it. If the page was still loading, run [\"wait\",\"2\"] and try again; otherwise open the frame's own page with goto, or use another way to reach what you need.",
+  AUTH_FOCUS_MOVED: "Something else on the page took the keyboard focus, so typing stopped before the next key; the field may hold part of the text. " + SNAPSHOT_AGAIN + " Check the field, then type into its ref again.",
   AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
   AUTH_SCREENSHOT_FAILED: "Run [\"wait\",\"2\"], then try again; for one part of the page, pass a ref from a snapshot.",
   AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
@@ -304,11 +313,13 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   }
   var targets = [];
   var frames = 0;
-  // The outermost element of each opaque region, in every capture: what a screenshot must cover.
+  // The outermost element of each opaque region, in every capture: what a screenshot must cover. A frame whose content
+  // was not read (its own read failed, or the browser gave no way in) is covered whole by its owner.
   var masks = [];
   [main].concat(reads).forEach(function (read) {
     read.rows.forEach(function (row) {
-      if (row.type === 1 && row.opaque && !row.excluded && !(row.parent && row.parent.opaque)) masks.push({ key: read.key, id: row.id });
+      var unread = row.frame && !row.content;
+      if (row.type === 1 && (row.opaque || unread) && !row.excluded && !(row.parent && row.parent.opaque)) masks.push({ key: read.key, id: row.id });
     });
   });
   function render(row) {
@@ -779,7 +790,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   }
   // Out-of-process child frames (another site's player, chat or sign-in) have their own sessions. Each is read the
   // way the tab is; one that cannot be read now (it navigated or went) shows as an empty frame and the rest still reads.
-  async function readOutside(reader) {
+  // A screenshot reads `strict`: it shows the frame, so a frame read that fails (a closed shadow) refuses the picture.
+  async function readOutside(reader, strict) {
     var main = reader.page.mainFrame();
     var found = [];
     var frames = reader.page.frames();
@@ -811,6 +823,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       } catch (error) {
         if (knownFailure(error) && safeFailure(error).code === "AUTH_RUNTIME_POLICY_REFUSED") throw error;
         forgetFrame(reader, frame);
+        if (strict) throw knownFailure(error) ? error : fail("AUTH_FRAME_COVERAGE_REFUSED");
       }
     }
     return found;
@@ -993,7 +1006,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   async function opaqueRegions(reader) {
     var before = await qualify(reader);
     var packet = await send(reader, "DOMSnapshot.captureSnapshot", { computedStyles: STYLES.slice() });
-    var outside = await readOutside(reader);
+    var outside = await readOutside(reader, true);
     var prepared;
     var counter = 0;
     try {
@@ -1202,13 +1215,22 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           checkRuntime();
           var method = command === "select" ? "selectOption" : command;
           if (command === "type") {
-            // Some targets (a remote desktop's canvas) take keys only a moment after they get focus, and dropped the
-            // first characters when typing followed focus at once; so focus, let it settle, then type.
-            await bound.handle.focus();
-            checkRuntime();
-            await page.waitForTimeout(TYPE_SETTLE_MS);
-            checkRuntime();
-            await page.keyboard.type(args[2]);
+            // Keys go wherever focus is, and a page can move it (an autofocus box, a timer after focus): the target must
+            // hold it before each key. Focus taken before the first is taken back once; taken again, or taken while
+            // typing, stops the typing with nothing more sent.
+            for (var tries = 0; ; tries++) {
+              await bound.handle.focus();
+              checkRuntime();
+              if ((await bound.handle.evaluate(FOCUSED)) === true) break;
+              checkRuntime();
+              requireTrue(tries < 1, "AUTH_FOCUS_MOVED");
+            }
+            var keys = Array.from(args[2]);
+            for (var at = 0; at < keys.length; at++) {
+              if (at) requireTrue((await bound.handle.evaluate(FOCUSED)) === true, "AUTH_FOCUS_MOVED");
+              checkRuntime();
+              await page.keyboard.type(keys[at]);
+            }
           } else if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
           else await bound.handle[method]({ timeout: timeoutMs });
           checkRuntime();
@@ -1284,4 +1306,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(HINTS) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(HINTS) };
