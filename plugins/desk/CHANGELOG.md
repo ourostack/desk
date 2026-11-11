@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.86 — 2026-11-11
+
+**Both READMEs install Desk the way [SETUP](../../SETUP.md#copilot-cli) does.** Their `agency plugin install` command had no cache flags, so Agency kept its copy of Desk for a day and a release reached new sessions up to a day late. On the operator's two Macs, a fresh session an hour after a release still got the release before it. The command now adds `--cache-policy auto --cache-ttl 0`, as SETUP already did: each new session fetches the latest `main` in the background, so a release loads at the next session.
+
+**The RFC states where Desk is heading.** A new "Direction: V3" section, before section 1 of the [RFC](docs/agentic-engineering-v2-rfc.md), lists the nine principles agreed on 2026-11-10: many people and many agents; one contract and two signals; proof at the altitude of the claim; two boundaries; rich context with justified overhead; restraint; trunk-based delivery; homes from meaning, not rules; and small always-on context that says what system this is. Desk evolves toward them on `main` in small merged changes, with no separate V3 to switch to. Section 9 still says what runs today.
+
+**A session working in the desk itself gets the operator's standing grants once, not twice.** Copilot already loads the `AGENTS.md` at the root of the repository a session works in, so when that repository is the desk, session start no longer adds its own copy of the `## Standing authority` section. A session in any other repository still gets the copy right after the startup line ([`interaction-style`](skills/interaction-style/SKILL.md#standing-authority)). On the operator's desk this takes session start's context from 11,248 to 9,296 bytes.
+
+**`directory-structure` says most tasks are only `task.md`.** Its floor plan showed a repo workspace with dated `planning.md` and `doing.md` iteration folders under every task, as if every job needed them. It now says the work runs from the card, and a repo workspace and iteration folder appear only when a task genuinely needs a written plan or a log too long for the card. That matches what [`task-lifecycle`](skills/task-lifecycle/SKILL.md) (clear tasks need no doing document) and [`using-superpowers-with-desk`](skills/using-superpowers-with-desk/SKILL.md) (a plan only when one is genuinely needed) already said.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.85 — 2026-11-11
 
 **`using-desk` now opens by saying what system the agent is in.** Its first line names Desk and points at the RFC on the `Desk RFC:` line, to read before changing how Desk works or explaining it. Before, the only pointer was the foundation's last section, which scoped the RFC to explaining Desk to people "not at every startup". An agent redesigning Desk itself went searching for the RFC it was standing in.
