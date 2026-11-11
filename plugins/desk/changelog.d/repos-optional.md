@@ -1,0 +1,1 @@
+A task card without a `repos` field no longer counts as corrupted. It means the task touches no code repository, the same as `repos: []`, so a plain hand-written card stays healthy and session start stops reporting Desk as degraded because of it. A `repos` value that is present but not a list is still reported, now as "`repos` is not a list".
