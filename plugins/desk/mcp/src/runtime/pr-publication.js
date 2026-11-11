@@ -43,7 +43,7 @@ function repository(remote) {
 // `required` is the published floor and must succeed; `ruled` comes from the base branch's rules and protection, which GitHub
 // satisfies with any passing completion. Every other reported check must also finish passing, so a repository's own
 // validation is never skipped because the policy did not name it.
-function checkState(checks, required, observed, ruled = []) {
+function checkState(checks, required, observed, ruled) {
   for (const check of checks) observed.set(check.id, check.name)
   const bad = checks.find((check) => ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"].includes(check.state))
   if (bad) throw new Error(`PR check ${bad.name} failed (${bad.state})`)
