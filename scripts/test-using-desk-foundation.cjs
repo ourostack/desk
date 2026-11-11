@@ -334,6 +334,13 @@ function main() {
   }
 
   // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
+  // Principle 2 agreed with Ari on 2026-11-10: after go, silence except "ready" (usable, here's where, I'm continuing) and "done".
+  assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation names the ready signal", [
+    "Besides those returns, after go say only \"ready\" and \"done\"",
+    "`Ready: <what>, at <where>. I'm continuing.`",
+    "primary-source screenshot",
+    "never hold it for CI",
+  ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
     "Done is a delivery, not an acceptance.",
     "Record the answer later with task_signoff, never in this turn.",
