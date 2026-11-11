@@ -52,7 +52,9 @@ export async function worktree(f, branch = "topic") {
   let start
   try {
     await once(child, "spawn")
-    start = await readProcessStart(child.pid)
+    // A busy Windows runner can hit Get-CimInstance's cap and return null; tidy then refuses before the rule under test.
+    for (let attempt = 0; attempt < 3 && !start; attempt += 1) start = await readProcessStart(child.pid)
+    if (!start) throw new Error("fixture could not read its writer's start time")
   } finally {
     child.kill()
     if (child.exitCode === null && child.signalCode === null) await once(child, "exit")
