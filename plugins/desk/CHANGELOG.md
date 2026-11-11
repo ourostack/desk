@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.85 — 2026-11-11
+
+**`using-desk` now opens by saying what system the agent is in.** Its first line names Desk and points at the RFC on the `Desk RFC:` line, to read before changing how Desk works or explaining it. Before, the only pointer was the foundation's last section, which scoped the RFC to explaining Desk to people "not at every startup". An agent redesigning Desk itself went searching for the RFC it was standing in.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.84 — 2026-11-10
 
 ### Fixed
