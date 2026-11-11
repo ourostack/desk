@@ -51,6 +51,7 @@ import {
   selectCompatibleNode,
 } from "./src/runtime/node-selection.js"
 import { claudeBindingPath } from "./src/util/paths.js"
+import { applyPublicationMode, publicationArgs } from "./src/runtime/publication-mode.js"
 
 export {
   resolveStartupActivationConfigPath,
@@ -112,6 +113,8 @@ export function parseArgs(argv) {
       args.degraded = argv[++i]
     } else if (argv[i] === "--degraded-reason" && argv[i + 1]) {
       args.degradedReason = argv[++i]
+    } else if (argv[i] === "--publication" && argv[i + 1]) {
+      args.publication = argv[++i]
     }
   }
   return args
@@ -187,6 +190,7 @@ export async function main({
     })
   }
   const args = parseArgs(argv)
+  applyPublicationMode(args, env)
   // An overlay that owns root resolution (for example a crew launcher that
   // maps identity to a shared workspace) passes --onboarding when it could not
   // resolve a root. Desk then goes straight to setup mode on that path rather
@@ -277,7 +281,7 @@ export async function main({
     if (hostedRoot === null) return
     const failed = (error) => stderr.write(`[desk-mcp] hosted desk sync failed to start: ${describeError(error)}\n`)
     try {
-      const child = spawnDetached(process.execPath, [path.join(mcpRoot, "scripts", "session-sync.js"), "--root", hostedRoot], {
+      const child = spawnDetached(process.execPath, [path.join(mcpRoot, "scripts", "session-sync.js"), "--root", hostedRoot, ...publicationArgs(env)], {
         cwd: hostedRoot,
         detached: true,
         stdio: "ignore",

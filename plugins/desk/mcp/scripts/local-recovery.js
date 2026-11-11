@@ -9,7 +9,7 @@ import { redactCredentialLikeText } from "../src/util/redact.js"
 import { TOOL_COMMIT_ENV } from "../src/desk/card-commit-guard.js"
 
 const OPERATIONS = new Set(["task_update", "task_create", "task_archive", "desk_save"])
-const FLAGS = new Set(["--root", "--operation", "--input-file", "--person", "--activation-config", "--state-branch"])
+const FLAGS = new Set(["--root", "--operation", "--input-file", "--person", "--activation-config", "--state-branch", "--publication"])
 const BOOTSTRAP = fileURLToPath(new URL("../bootstrap.cjs", import.meta.url))
 
 function failure(code) {
@@ -26,6 +26,7 @@ function argumentsFor(argv) {
     options[flag] = argv[i + 1]
   }
   if (!options["--root"] || !OPERATIONS.has(options["--operation"])) throw failure("invalid_arguments")
+  if (options["--publication"] !== undefined && options["--publication"] !== "deferred") throw failure("invalid_arguments")
   return options
 }
 
@@ -210,7 +211,7 @@ export async function runRecovery({
     report.requestedRoot = root
     if (env[TOOL_COMMIT_ENV] !== undefined) throw failure("commit_override_refused")
     const serverArgs = ["--root", root]
-    for (const flag of ["--person", "--activation-config", "--state-branch"]) {
+    for (const flag of ["--person", "--activation-config", "--state-branch", "--publication"]) {
       if (options[flag]) serverArgs.push(flag, options[flag])
     }
     if (options["--state-branch"]) {
@@ -307,7 +308,7 @@ export async function runRecovery({
       : report.git.headBefore !== null && report.git.headAfter !== null
         ? report.git.headBefore !== report.git.headAfter ? "observed" : "not_observed"
         : "unknown"
-    report.effects.push = status.sync === "no remote configured" ? "not_applicable" : "pending"
+    report.effects.push = status.sync === "no remote configured" ? "not_applicable" : options["--publication"] === "deferred" ? "deferred" : "pending"
     const commitExpected = ["updated", "created", "archived", "committed"].includes(result.status)
     if (report.effects.commit === "failed" || report.effects.push === "pending" ||
         (commitExpected && report.effects.commit !== "observed")) {

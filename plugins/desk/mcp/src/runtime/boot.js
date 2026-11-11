@@ -96,6 +96,7 @@ import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries
 import { noteSignoffListed } from "./signoff-listed.js"
 import { consentMentioned } from "./consent-mentioned.js"
 import { resolveDeskStateDir } from "./last-start.js"
+import { applyPublicationMode } from "./publication-mode.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -1697,6 +1698,7 @@ export function parseBootArgs(argv) {
  * tests) and always exits 0 — a boot script must never block session start.
  */
 export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
+  applyPublicationMode({}, env)
   const { taskQuery, json, taskOnly } = parseBootArgs(argv)
   let result
   try {

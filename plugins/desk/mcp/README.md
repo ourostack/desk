@@ -22,7 +22,7 @@ DESK=~/<your-workspace> node ./index.js
 
 ## Validated local recovery after a confirmed transport mismatch
 
-Use this command only after the agent has confirmed a requested/actual desk mismatch, refused the misrouted mutation, and established the intended existing desk. A missing-card error alone is not a mismatch. Permission, validation, containment and genuinely missing-card refusals remain refusals; this command is not an override or a machine-binding repair. [Issue #301](https://github.com/ourostack/desk/issues/301) records a motivating observed mismatch, not a selection bug fixed by this transport.
+Use this command only after the agent has confirmed a requested/actual desk mismatch, refused the misrouted mutation, and established the intended existing desk. It also writes a card in an existing checkout that no session binds, such as a publisher's own clone, when the caller publishes the commit itself: add `--publication deferred`. A missing-card error alone is not a mismatch. Permission, validation, containment and genuinely missing-card refusals remain refusals; this command is not an override or a machine-binding repair. [Issue #301](https://github.com/ourostack/desk/issues/301) records a motivating observed mismatch, not a selection bug fixed by this transport.
 
 From the installed plugin's `mcp` directory, with Node meeting this package's engines floor:
 
@@ -37,6 +37,8 @@ The JSON file holds the ordinary tool arguments, for example `{"track":"ops","sl
 
 The client starts our ordinary `bootstrap.cjs` as an owned stdio child, then uses standard MCP `initialize`, `tools/list` and `tools/call` requests. The bootstrap retains our existing Node selection and dependency-pack handling. The complete `index.js` front door, shared admission, authority/person/state-branch gates, card validation, journal and exact-path commit/push handlers run unchanged. No global installation, current-session MCP restart, manual binding, alternate validator or raw-handler call is needed.
 
+`--publication deferred` passes the same option to the owned server, which then commits each write but never schedules a push. Only that launch argument defers publication; a `DESK_PUBLICATION` variable inherited from a shell is cleared. The report gives `effects.push: "deferred"` and exit `0` once the commit is observed. The commit stays local until the caller pushes it through its own route; the server's other effects, admission, authority, card validation and the card guard are unchanged.
+
 Pass `--activation-config` and `--person` only for the existing, authorized launch context; the runtime still decides authority. `--state-branch` is accepted only when it matches the branch already declared in that activation context. It cannot replace that declaration. An inherited card-guard commit override is refused. No cwd-derived workspace is substituted. The explicit root must already exist and resolve to a directory; missing or inaccessible roots never fall back or trigger setup.
 
 Before dispatch, the client reads detailed `desk_status` in its newly owned server, compares its actual root to the requested root's resolved real path, and checks the reported write scope. A root mismatch refuses before the operation. Pending status is read again within the 60-second preflight budget. The dispatched mutation then has up to 60 seconds of its own, counted from when it is sent, and the whole run is capped at 100 seconds, so the mutation always has at least 40 seconds and the command prints its report before a 120-second command limit, such as Claude Code's default, can stop it. Cached detail is usable only when its timestamp belongs to this newly owned server session; older or undated cached detail refuses. A cached pre-admission scope that does not match is read again, never overridden; a current scope mismatch refuses. `preflight` retains the current/cached distinction, timestamp and scope. This does not call old cached detail in the misrouted host fresh. The mutation is sent at most once; its runtime authority gates remain active.
@@ -45,7 +47,7 @@ The command writes one local JSON report and exits:
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | The tool reported completion, no pending push is claimed, and any expected Git commit was observed through a HEAD change. This is not a project's code-delivery claim. |
+| `0` | The tool reported completion, no pending push is claimed (with `--publication deferred`, the push is reported `deferred` and left to the caller), and any expected Git commit was observed through a HEAD change. This is not a project's code-delivery claim. |
 | `1` | No mutation was dispatched: input, root, admission, scope or transport preflight refused. |
 | `2` | Partial or unknown effects: tool/parse/transport failure after dispatch, missing commit evidence, `commit_failed`, `push_pending`, or uncertain child shutdown. |
 
