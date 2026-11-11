@@ -261,6 +261,135 @@ function originUrl(root, spawnGit, timeoutMs) {
 }
 
 
+// ---------------------------------------------------------------------------
+// The one stuck state sync repairs by itself before pulling: a `git pull --rebase --autostash` replayed its commits,
+// then re-applying its autostash conflicted, and git stopped before it finished removing `rebase-merge/`, leaving only
+// the `autostash` file there. Git then calls the checkout mid-rebase, so every later pull refuses. The local change is
+// kept in the stash list first, so nothing is lost; any state that does not match exactly is left alone.
+// ---------------------------------------------------------------------------
+
+export const STALE_AUTOSTASH_REBASE = "stale_autostash_rebase"
+const STALE_AUTOSTASH_MESSAGE = "autostash Desk preserved from an interrupted pull"
+// Any other operation or lock in the git directory means the state is not the stuck one: nothing is repaired.
+const OTHER_GIT_MARKERS = ["rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "sequencer", "index.lock"]
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u
+
+/** The plain sentence boot and `desk_status` use for the repair. */
+export function staleAutostashSentence({ stash, commit }) {
+  return `An earlier pull had stopped before finishing; the local change it held is kept as ${stash} (commit ${commit.slice(0, 12)}).`
+}
+
+function nulSeparated(result) {
+  if (result.status !== 0 || typeof result.stdout !== "string") return null
+  return result.stdout.split("\0").filter((entry) => entry !== "")
+}
+
+// Every tracked path `git status` reports as staged, modified or unmerged, both sides of a rename included.
+function changedTrackedPaths(root, spawnGit, timeoutMs) {
+  const entries = nulSeparated(run(spawnGit, root, ["status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames"], timeoutMs))
+  if (entries === null) return null
+  const paths = []
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]
+    paths.push(entry.slice(3))
+    if (entry[0] === "R" || entry[0] === "C") {
+      index += 1
+      if (index < entries.length) paths.push(entries[index])
+    }
+  }
+  return paths
+}
+
+// `stash@{n}` for the stash entry whose commit is `sha`, `null` when there is none, `undefined` when unreadable.
+function stashRefFor(root, spawnGit, timeoutMs, sha) {
+  const result = run(spawnGit, root, ["stash", "list", "--format=%H"], timeoutMs)
+  if (result.status !== 0 || typeof result.stdout !== "string") return undefined
+  const index = result.stdout.split("\n").map((line) => line.trim()).indexOf(sha)
+  return index === -1 ? null : `stash@{${index}}`
+}
+
+// The stuck state's autostash SHA and its unmerged paths, or null when anything differs from it at all.
+async function staleAutostashState(root, spawnGit, timeoutMs) {
+  const gitDirResult = run(spawnGit, root, ["rev-parse", "--git-dir"], timeoutMs)
+  if (gitDirResult.status !== 0 || typeof gitDirResult.stdout !== "string" || gitDirResult.stdout.trim() === "") return null
+  const gitDir = path.resolve(root, gitDirResult.stdout.trim())
+  const marker = path.join(gitDir, "rebase-merge")
+  let entries
+  try {
+    entries = await fs.readdir(marker)
+  } catch {
+    return null
+  }
+  if (entries.length !== 1 || entries[0] !== "autostash") return null
+  for (const other of OTHER_GIT_MARKERS) if (await pathExists(path.join(gitDir, other))) return null
+  let sha
+  try {
+    sha = (await fs.readFile(path.join(marker, "autostash"), "utf8")).trim()
+  } catch {
+    return null
+  }
+  if (!OBJECT_ID.test(sha)) return null
+  if (run(spawnGit, root, ["cat-file", "-e", `${sha}^{commit}`], timeoutMs).status !== 0) return null
+  // The interrupted pull had finished replaying: HEAD is back on its branch.
+  if (run(spawnGit, root, ["symbolic-ref", "-q", "HEAD"], timeoutMs).status !== 0) return null
+  const touched = nulSeparated(run(spawnGit, root, ["diff", "--name-only", "-z", "--no-renames", `${sha}^1`, sha], timeoutMs))
+  if (touched === null) return null
+  const autostashPaths = new Set(touched)
+  const unmergedList = nulSeparated(run(spawnGit, root, ["diff", "--name-only", "-z", "--diff-filter=U"], timeoutMs))
+  if (unmergedList === null) return null
+  const unmerged = [...new Set(unmergedList)]
+  // No unmerged path is the same state one step on (a repair whose quit failed after its checkout): only once the
+  // autostash is already in the stash list.
+  if (unmerged.length === 0 && typeof stashRefFor(root, spawnGit, timeoutMs, sha) !== "string") return null
+  if (!unmerged.every((relative) => autostashPaths.has(relative))) return null
+  const changed = changedTrackedPaths(root, spawnGit, timeoutMs)
+  if (changed === null || !changed.every((relative) => autostashPaths.has(relative))) return null
+  // `git checkout HEAD -- <path>` needs each path in HEAD.
+  for (const relative of unmerged) {
+    if (run(spawnGit, root, ["cat-file", "-e", `HEAD:${relative}`], timeoutMs).status !== 0) return null
+  }
+  return { marker, sha, unmerged }
+}
+
+/**
+ * Repairs the stale-autostash rebase state, and only that state: keeps the autostash in the stash list (`git stash
+ * store`, unless it is already there), restores each unmerged path from HEAD (the stash holds the local version), then
+ * ends the leftover rebase with `git rebase --quit`, which moves neither HEAD, the index nor the working tree.
+ * `{ stash, commit, paths }` when repaired, otherwise null. Never resets, never drops a stash, never throws.
+ */
+export async function repairStaleAutostashRebase({ root, spawnGit = spawnSync, timeoutMs = GIT_TIMEOUT_MS }) {
+  try {
+    const state = await staleAutostashState(root, spawnGit, timeoutMs)
+    if (state === null) return null
+    const { marker, sha, unmerged } = state
+    let stash = stashRefFor(root, spawnGit, timeoutMs, sha)
+    if (stash === undefined) return null
+    if (stash === null) {
+      if (run(spawnGit, root, ["stash", "store", "-m", STALE_AUTOSTASH_MESSAGE, sha], timeoutMs).status !== 0) return null
+      stash = stashRefFor(root, spawnGit, timeoutMs, sha)
+      if (typeof stash !== "string") return null
+    }
+    if (unmerged.length > 0 && run(spawnGit, root, ["--literal-pathspecs", "checkout", "HEAD", "--", ...unmerged], timeoutMs).status !== 0) return null
+    // `git rebase --quit` would store the autostash file's commit in the stash list once more; it is already there.
+    const autostashFile = path.join(marker, "autostash")
+    await fs.unlink(autostashFile)
+    if (run(spawnGit, root, ["rebase", "--quit"], timeoutMs).status !== 0 || await pathExists(marker)) {
+      // Put the marker back as it was, so a later sync can still recognise and repair this state.
+      if (await pathExists(marker)) await fs.writeFile(autostashFile, `${sha}\n`)
+      return null
+    }
+    return { stash, commit: sha, paths: unmerged }
+  } catch {
+    return null
+  }
+}
+
+function withRepair(result, repair) {
+  if (repair === null) return result
+  return { ...result, repaired: STALE_AUTOSTASH_REBASE, repairedStash: repair.stash, repairedCommit: repair.commit, repairedPaths: repair.paths,
+    repairedNote: staleAutostashSentence(repair) }
+}
+
 // Causes that stop delivery too: no push is started for them.
 const OFFLINE = new Set(["unreachable", "auth_failed"])
 
@@ -322,6 +451,11 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * and the remote is not known to be unreachable or refusing this machine, the detached push worker is started to
  * deliver them from a clean copy (runtime/deliver.js), and the result says so in `unpushed: { count, delivering,
  * reason, paths }`, `reason` being the last recorded push failure, if any. `scheduleDelivery` is a test seam.
+ *
+ * Before pulling, the one stuck state `repairStaleAutostashRebase` recognises is repaired; the result then also
+ * carries `repaired: "stale_autostash_rebase"`, `repairedStash` (the stash entry holding the local change),
+ * `repairedCommit`, `repairedPaths` and `repairedNote` (one plain sentence saying what was done), whatever the pull
+ * itself did.
  */
 export async function syncWorkspace(options) {
   const result = await runSync(options)
@@ -360,6 +494,11 @@ async function runSync({
 
   if (remaining() <= 0) return deadlineExceeded([])
 
+  const repair = await repairStaleAutostashRebase({ root, spawnGit, timeoutMs: budgetedTimeout() })
+  return withRepair(await pullSequence({ root, env, spawnGit, spawnPull, fileProblem, remaining, budgetedTimeout, deadlineExceeded }), repair)
+}
+
+async function pullSequence({ root, env, spawnGit, spawnPull, fileProblem, remaining, budgetedTimeout, deadlineExceeded }) {
   const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
   const first = await pull(root, spawnPull, budgetedTimeout())
   if (first.status === 0) {
@@ -432,6 +571,9 @@ export async function runSessionSyncCli({ argv = process.argv.slice(2), env = pr
     return 0
   }
   const result = await syncFn({ root, env })
+  if (result.repaired === STALE_AUTOSTASH_REBASE) {
+    io.stdout.write(`session-sync: ${result.repairedNote}\n`)
+  }
   if (result.state === "unresolved") {
     io.stdout.write(`${result.diagnostic}\n`)
   } else if (result.state === "quarantined") {

@@ -1049,6 +1049,23 @@ test("bootOnce: unresolved sync degrades and requires direct verification, quara
   assert.ok(quarantinedNoPaths.instructions.some((line) => line.includes("Sync moved untracked files out of the pull's way")))
 })
 
+test("bootOnce: a stuck checkout the sync repaired before pulling is said in one sentence", async () => {
+  const root = await mkDeskWorkspace()
+  const { gh, jq } = okPrereqRunners()
+  const factoryStatusFn = () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] })
+  const note = "An earlier pull had stopped before finishing; the local change it held is kept as stash@{0} (commit 0123456789ab)."
+  const repaired = { state: "synced", repaired: "stale_autostash_rebase", repairedStash: "stash@{0}", repairedCommit: "0123456789ab".padEnd(40, "0"), repairedPaths: ["seed.md"], repairedNote: note }
+  const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn, syncFn: async () => repaired })
+  assert.equal(result.status, "ready")
+  const line = result.instructions.find((instruction) => instruction.startsWith("Sync repaired the desk"))
+  assert.ok(line, JSON.stringify(result.instructions))
+  assert.ok(line.includes(note) && line.includes(root))
+  assert.ok(formatBootText(result).includes(note), "the printed boot says it")
+
+  const plain = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn, syncFn: async () => ({ state: "synced" }) })
+  assert.equal(plain.instructions.some((instruction) => instruction.startsWith("Sync repaired")), false)
+})
+
 test("boot result lists every moved path", async () => {
   const root = await mkDeskWorkspace()
   const { gh, jq } = okPrereqRunners()
