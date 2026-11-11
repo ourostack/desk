@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash);
 
 -- ---------------------------------------------------------------------------
 -- refs_graph: directed edges between docs (e.g., task.md → its planning.md,
--- doing.md → its task.md). Powers desk_thread (provenance walk) in Unit 6.
+-- doing.md → its task.md), refreshed by the indexer.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS refs_graph (
   src_doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,

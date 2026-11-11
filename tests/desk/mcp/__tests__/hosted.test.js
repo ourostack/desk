@@ -34,7 +34,7 @@ test("hostedRefusal refuses the listed tools with the exact reason and leaves th
     tool: "improvement_next",
     reason: "A claimed improvement card needs a coding harness to work it; a hosted chat claim would only hold the card.",
   })
-  for (const name of ["desk_recall", "desk_similar"]) assert.equal(hostedRefusal(name, {}, hosted).reason, "Hosted Desk has no embedding endpoint; use desk_search.")
+  for (const name of ["desk_recall"]) assert.equal(hostedRefusal(name, {}, hosted).reason, "Hosted Desk has no embedding endpoint; use desk_search.")
   assert.equal(hostedRefusal("task_update", {}, hosted), null)
   assert.equal(hostedRefusal("improvement_next", {}, {}), null, "an ordinary session is never refused")
   assert.equal(hostedRefusal("desk_recall", {}, { DESK_HOSTED: "0" }), null)

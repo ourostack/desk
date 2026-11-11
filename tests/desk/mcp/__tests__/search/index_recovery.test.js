@@ -127,13 +127,13 @@ test("GivenDeniedOrUnknownFailure_WhenSearchRuns_ItDoesNotFallBack", async (t) =
 
 test("GivenIndexFailure_WhenRequestNeedsUnsupportedSemantics_ItDoesNotFallBack", async (t) => {
   const { deskRoot, engine, router, fail } = await fixture(t)
-  for (const kind of ["thread", "unsupported"]) {
+  {
     const error = fail("SQLITE_IOERR")
-    await assert.rejects(router.lexical({ deskRoot, kind, query: "seedword", start_path: "work/one/task.md" }), actual => actual === error)
+    await assert.rejects(router.lexical({ deskRoot, kind: "unsupported", query: "seedword" }), actual => actual === error)
   }
-  for (const request of [{ kind: "similar", path: "work/one/task.md" }, { kind: "recall", topic: "seedword" }]) {
+  {
     const error = fail("SQLITE_IOERR")
-    await assert.rejects(engine.semantic(request), actual => actual === error)
+    await assert.rejects(engine.semantic({ kind: "recall", topic: "seedword" }), actual => actual === error)
   }
   const error = fail("SQLITE_IOERR")
   await assert.rejects(engine.reindex(), actual => actual === error)

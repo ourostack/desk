@@ -175,9 +175,7 @@ const MCP_TOOL_NAMES = Object.freeze([
   "desk_save",
   "desk_search",
   "desk_recall",
-  "desk_similar",
   "desk_timeline",
-  "desk_thread",
   "desk_reindex",
 ]);
 

@@ -21,12 +21,10 @@ export const TOOL_NAMES = [
   // Teammate notes (Crew)
   "note_leave",
   "note_ack",
-  // Search (Units 5 + 6)
+  // Search
   "desk_search",
   "desk_recall",
-  "desk_similar",
   "desk_timeline",
-  "desk_thread",
   // Index management
   "desk_reindex",
   // Health/status
@@ -73,12 +71,8 @@ export const TOOL_DESCRIPTIONS = {
     "Hybrid lexical+semantic search across desk. Filters: track, status, kind, since, until. Returns ranked chunks with score_breakdown. Soft-fails to FTS-only when Ollama is unreachable. `scope` (optional): 'active' (default), 'archived', or 'all' — desk_search defaults to active because day-to-day signal beats archive noise; pass 'all' to search history too.",
   desk_recall:
     "Loose recall — `do I remember anything about X`. Ranks every desk Markdown file by meaning and by exact words together, so a document strong on both comes first; until the built-in model is ready it answers with exact words and says so. Returns top matches deduped by doc. `scope` (optional): 'active', 'archived', or 'all' (default) — desk_recall IS the historical lookback tool, so it searches everything by default; pass 'active' to scope to current work only.",
-  desk_similar:
-    "Find docs similar to a given path via centroid of the seed doc's chunk embeddings. Returns ranked similar docs excluding the seed itself. `scope` (optional): 'active', 'archived', or 'all' (default) — similarity has no time/status semantic so the full corpus is searched by default.",
   desk_timeline:
     "Temporal query — filter docs by updated_at window, optionally combined with FTS+semantic. Without `query`: chronological listing. With `query`: hybrid ranking inside the window, ordered by updated_at DESC. `scope` (optional): 'active', 'archived', or 'all' (default) — the window already temporally scopes; archive items in-window are legitimate entries.",
-  desk_thread:
-    "Provenance walk via refs_graph: BFS along planning/doing/feedback/iteration edges from a starting doc. Returns an ordered chain {path, kind, ref_kind, hop_distance, why_connected, updated_at}. Inputs: start_path (required), depth (optional, default 4), direction (optional: forward|backward|both, default both). Always walks across active + archive — refs don't respect archive boundaries. Errors with not_indexed when start_path isn't in the index.",
   desk_reindex:
     "Re-read the desk into this session's search engine and wait until exact-word search is current. `force` is accepted for compatibility and changes nothing. Returns `action: \"reindexed\"` with the search engine's status, or an error with code `search_starting` while the search engine has not started yet.",
   desk_skill:

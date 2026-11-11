@@ -1,6 +1,6 @@
 // desk MCP server registration.
 //
-// Registers every tool in tool-names.js as stdio MCP handlers. Units 3 + 5 + 6 wire every
+// Registers every tool in tool-names.js as stdio MCP handlers. Units 3 + 5 wire every
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
@@ -8,8 +8,7 @@
 //   - M4-2 (cheap moves): task_move, track_rename
 //   - M4-6 Part 2: desk_save (commits hand-written files the same way every
 //     other write tool commits its own)
-//   - Unit 5: desk_search, desk_recall, desk_similar, desk_timeline
-//   - Unit 6: desk_thread (refs_graph provenance walk)
+//   - Unit 5: desk_search, desk_recall, desk_timeline
 //   - Index mgmt: desk_reindex (re-reads the desk into this session's search engine)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
 //
@@ -47,10 +46,8 @@ import { note_ack, note_leave } from "./tools/note.js"
 import {
   desk_search,
   desk_recall,
-  desk_similar,
   desk_timeline,
 } from "./tools/search.js"
-import { desk_thread } from "./tools/thread.js"
 import { deskSkill } from "./runtime/skills.js"
 import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
@@ -81,9 +78,7 @@ export const TOOL_IMPLS = {
   note_ack,
   desk_search,
   desk_recall,
-  desk_similar,
   desk_timeline,
-  desk_thread,
   desk_reindex,
   desk_status,
   desk_doctor: doctorRuntime,

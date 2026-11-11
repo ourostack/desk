@@ -34,9 +34,7 @@ const EXPECTED_TOOLS = [
   // Search (Units 4-6)
   "desk_search",
   "desk_recall",
-  "desk_similar",
   "desk_timeline",
-  "desk_thread",
   // Index management
   "desk_reindex",
   // Health/status

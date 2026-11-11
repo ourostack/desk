@@ -347,7 +347,6 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     },
   }, ["query"]),
   desk_recall: schema({ topic: text("What to recall."), limit: LIMIT, scope: SCOPE }, ["topic"]),
-  desk_similar: schema({ path: text("The seed document's path relative to the desk root."), limit: LIMIT, scope: SCOPE }, ["path"]),
   desk_timeline: schema({
     from: text("Start of the updated_at window (ISO 8601)."),
     to: text("End of the updated_at window (ISO 8601)."),
@@ -355,11 +354,6 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     limit: LIMIT,
     scope: SCOPE,
   }),
-  desk_thread: schema({
-    start_path: text("The starting document's path relative to the desk root."),
-    depth: integer("Maximum hop distance; defaults to 4."),
-    direction: { type: "string", enum: ["forward", "backward", "both"], description: "Which edges to follow; defaults to both." },
-  }, ["start_path"]),
   desk_reindex: schema({ force: flag("Accepted for compatibility; it changes nothing.") }),
   desk_status: schema({
     detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),

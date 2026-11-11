@@ -50,11 +50,10 @@ test("before the model is ready, recall answers with exact words and says meanin
   assert.equal(result.note, SEARCH_WORDING.recallGettingReady)
   assert.deepEqual(result.results.map((r) => [r.path, r.match]), [["food/task-b/task.md", "exact_words"]])
   assert.deepEqual(engine.searchStatus(), { state: "getting_ready", message: SEARCH_WORDING.gettingReady, sections_total: 2, sections_ready: 0, model: "minishlab/potion-base-8M@bf8b0566" })
-  assert.deepEqual(await engine.semantic({ kind: "similar", path: "cars/task-a/task.md" }), { seed: "cars/task-a/task.md", results: [], note: SEARCH_WORDING.similarNotReady })
   release(null)
 })
 
-test("once embedded, recall and similar rank by meaning, and status says search is ready", async (t) => {
+test("once embedded, recall ranks by meaning, and status says search is ready", async (t) => {
   const deskRoot = await desk({
     "cars/task-a/task.md": CAR,
     "cars/task-c/task.md": `${CAR}\n## More\n\nThe automobile again.\n`,
@@ -77,13 +76,8 @@ test("once embedded, recall and similar rank by meaning, and status says search 
   const active = await engine.semantic({ kind: "recall", topic: "flowers", scope: "active", limit: 0 })
   assert.equal(active.results[0].path, "garden/task-d/task.md")
   assert.ok(!active.results.some((r) => r.path.includes("_archive")))
-  const similar = await engine.semantic({ kind: "similar", path: "cars/task-a/task.md", limit: 1 })
-  assert.deepEqual(similar.results.map((r) => r.path), ["cars/task-c/task.md"])
-  assert.deepEqual(await engine.semantic({ kind: "similar", path: " " }), { error: "invalid_input", note: "`path` is required" })
-  assert.deepEqual(await engine.semantic({ kind: "similar", path: "nope.md" }), { error: "not_found", note: "path not in index: nope.md" })
   assert.deepEqual(await engine.semantic({ kind: "recall", topic: "  " }), { topic: "", results: [], note: "empty topic" })
   assert.deepEqual(await engine.semantic({ kind: "recall" }), { topic: "", results: [], note: "empty topic" })
-  assert.deepEqual(await engine.semantic({ kind: "similar" }), { error: "invalid_input", note: "`path` is required" })
 })
 
 test("an edit embeds only the changed section, and vectors survive a restart", async (t) => {
@@ -125,7 +119,7 @@ test("while sections are being prepared, recall adds exact-word matches and says
   assert.equal(new Set(recall.results.map((r) => r.path)).size, recall.results.length)
 })
 
-test("exact-word search, timeline and thread read the in-memory index and leave out meaning-search fields", async (t) => {
+test("exact-word search and timeline read the in-memory index and leave out meaning-search fields", async (t) => {
   const deskRoot = await desk({ "cars/task-a/task.md": CAR, "food/task-b/task.md": `${SOUP}\nSee [car](../../cars/task-a/task.md).\n` })
   const engine = engineFor(t, deskRoot, { semantic: "unsupported" })
   const search = await engine.lexical({ kind: "lexical", query: "soup" })
@@ -134,8 +128,6 @@ test("exact-word search, timeline and thread read the in-memory index and leave 
   const timeline = await engine.lexical({ kind: "timeline", query: "car" })
   assert.equal(timeline.semantic_unavailable, undefined)
   assert.ok(timeline.results.length >= 1)
-  const thread = await engine.lexical({ kind: "thread", start_path: "food/task-b/task.md" })
-  assert.equal(thread.start.path, "food/task-b/task.md")
   // With meaning-based search off there is no vector store: recall answers with exact words.
   assert.equal((await engine.semantic({ kind: "recall", topic: "soup" })).search_mode, "exact_words")
   assert.deepEqual(engine.searchStatus(), { state: "exact_words_only", message: "Meaning-based search is off for this desk; exact-word search is ready." })

@@ -21,7 +21,6 @@ const NO_EMBEDDINGS = "Hosted Desk has no embedding endpoint; use desk_search."
 export const HOSTED_UNAVAILABLE = Object.freeze({
   improvement_next: "A claimed improvement card needs a coding harness to work it; a hosted chat claim would only hold the card.",
   desk_recall: NO_EMBEDDINGS,
-  desk_similar: NO_EMBEDDINGS,
 })
 
 // Skills whose body needs a shell, git, gh or the plugin's own scripts: a hosted chat has none of them.
@@ -46,7 +45,7 @@ export function hostedRefusal(name, input, env) {
   return reason === undefined ? null : { status: "refused", code: "hosted_unavailable", tool: name, reason }
 }
 
-const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_status", "desk_skill"])
+const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_timeline", "desk_status", "desk_skill"])
 // Tools that can remove or overwrite what was there: archive and move relocate a task, rename a track rewrites its path, and desk_save replaces files.
 const DESTRUCTIVE = new Set(["task_archive", "task_move", "track_rename", "desk_save"])
 

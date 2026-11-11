@@ -97,14 +97,14 @@ test("tool calls answer synchronously or later, errors become isError results, a
       if (name === "desk_status") return { content: [{ type: "text", text: "sync" }] }
       if (name === "desk_search") return new Promise((resolve) => { release = resolve })
       if (name === "desk_recall") return Promise.reject(new Error("async failure"))
-      if (name === "desk_similar") return Promise.reject("not an error")
+      if (name === "desk_timeline") return Promise.reject("not an error")
       throw new Error("sync failure")
     },
   })
   send({ id: 1, method: "tools/call", params: { name: "desk_status" } })
   send({ id: 2, method: "tools/call", params: { name: "desk_search", arguments: { query: "x" } } })
   send({ id: 3, method: "tools/call", params: { name: "desk_recall" } })
-  send({ id: 4, method: "tools/call", params: { name: "desk_similar" } })
+  send({ id: 4, method: "tools/call", params: { name: "desk_timeline" } })
   send({ id: 5, method: "tools/call", params: {} })
   input.end()
   await tick()

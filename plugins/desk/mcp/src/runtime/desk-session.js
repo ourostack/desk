@@ -4,7 +4,7 @@
 //
 // Each tool needs part of that context:
 // - desk_status and desk_doctor always answer, and each desk_status retries admission when Desk is not ready;
-// - reads (search, recall, similar, timeline, thread) need the runtime and a root; before the search engine has started, exact-word search and timeline read the files directly;
+// - reads (search, recall, timeline) need the runtime and a root; before the search engine has started, exact-word search and timeline read the files directly;
 // - desk_reindex also needs the search engine;
 // - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never wait for the search engine: a write tells it which files changed when it has started, and its file watcher or first read picks the change up otherwise.
 // A tool whose needs are not met answers `{ status: "degraded", code, fix }` with a fix the agent can act on in this session, and a tool that throws answers the same way instead of failing the call.
@@ -30,7 +30,7 @@ import { removeReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { EXACT } from "../util/file-identity.js"
 
-const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
+const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_timeline"])
 // Resolver sources, weakest first, in the shared resolver's order (util/paths.js). The host's project folder, when it is a desk,
 // outranks the saved binding and $DESK; a bare launch folder (`hint`, reported as "host-project" too) stays below them, so losing an
 // association never reselects it. Neither kind of folder replaces another of its kind.
