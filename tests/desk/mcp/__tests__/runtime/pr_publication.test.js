@@ -36,9 +36,16 @@ function fixture(options = {}) {
   const spawnGit = (command, args) => {
     assert.equal(command, "gh")
     calls.push(["gh", ...args])
-    const operation = args[0] === "api" ? args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses" : "checks" : args[1]
+    const operation = args[0] === "api" ? args.includes("PUT") ? "merge" : args.some((arg) => arg.includes("/status?")) ? "statuses"
+      : args.some((arg) => arg.includes("/rules/branches/")) ? "rules" : args.some((arg) => /\/branches\/[^/]+$/u.test(arg)) ? "branch" : "checks" : args[1]
     if (options.fail === operation) return { status: options.timeout ? null : 1, stderr: "made-up-private-credential" }
     if (options.invalidJson === operation) return { status: 0, stdout: "not JSON" }
+    if (operation === "rules") {
+      assert.ok(args.includes(`repos/example/workspace/rules/branches/${encodeURIComponent(options.pr?.baseRefName ?? "main")}?per_page=100`))
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"))
+      return ok(options.rules ?? [[]])
+    }
+    if (operation === "branch") return ok(options.branch ?? { protected: false, protection: { enabled: false, required_status_checks: { contexts: [], checks: [] } } })
     if (operation === "list") return ok(options.list ?? (options.noReadback || !created && options.create ? [] : [pr]))
     if (operation === "create") { created = true; return { status: 0, stdout: pr.url } }
     if (operation === "view") {
@@ -281,4 +288,56 @@ test("the production clock waits once for a pending check before exact-head publ
   const f = fixture({ views: [pending, ready] })
   delete f.request.clock
   assert.equal(publishPullRequest(f.request).receipt.merge, merged)
+})
+
+const ruleset = (...contexts) => [[{ type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: contexts.map((context) => ({ context, integration_id: 1 })) } }]]
+const protectedBranch = (...contexts) => ({ protected: true, protection: { enabled: true, required_status_checks: { contexts, checks: [] } } })
+const run = (name, conclusion) => conclusion === undefined ? { name, status: "IN_PROGRESS" } : { name, status: "COMPLETED", conclusion }
+
+test("a reported check the policy does not name blocks the merge while it is pending or failing", () => {
+  const pending = fixture({ pr: { statusCheckRollup: [success, run("repository-validation")] } })
+  assert.throws(() => publishPullRequest(pending.request), /still missing or pending: repository-validation/u)
+  assert.ok(!pending.calls.some((call) => call.includes("PUT")))
+  const failing = fixture({ pr: { statusCheckRollup: [success, { context: "repository-validation", state: "FAILURE" }] } })
+  assert.throws(() => publishPullRequest(failing.request), /PR check repository-validation failed \(FAILURE\)/u)
+  assert.ok(!failing.calls.some((call) => call.includes("PUT")))
+})
+
+test("a check the base branch's rules or protection require blocks the merge until it is reported", () => {
+  for (const options of [{ rules: ruleset("ci-gate") }, { branch: protectedBranch("ci-gate") }]) {
+    const f = fixture(options)
+    assert.throws(() => publishPullRequest(f.request), /still missing or pending: ci-gate/u)
+    assert.ok(!f.calls.some((call) => call.includes("PUT")))
+  }
+})
+
+test("every reported check passing, with branch-required checks present, merges the exact head", () => {
+  const checks = [success, run("ci-gate", "SUCCESS"), run("path-filtered", "SKIPPED"), { context: "legacy-required", state: "SUCCESS" }, run("extra", "SUCCESS")]
+  const later = fixture({ pr: { statusCheckRollup: [success] }, views: [{ ...fixture().pr, statusCheckRollup: [success] }, { ...fixture().pr, statusCheckRollup: checks }],
+    rules: ruleset("ci-gate", "path-filtered"), branch: protectedBranch("legacy-required") })
+  assert.equal(publishPullRequest(later.request).receipt.merge, merged)
+  assert.ok(later.calls.some((call) => call.includes(`sha=${head}`)))
+  const slashed = fixture({ pr: { baseRefName: "release/2026", statusCheckRollup: checks }, rules: ruleset("ci-gate") })
+  slashed.request.upstream = { ...slashed.request.upstream, merge: "refs/heads/release/2026" }
+  assert.equal(publishPullRequest(slashed.request).receipt.merge, merged)
+  assert.ok(slashed.calls.some((call) => call.includes("repos/example/workspace/branches/release%2F2026")))
+})
+
+test("an unreadable or malformed branch-rules read refuses clearly and never merges", () => {
+  const cases = [
+    { fail: "rules" }, { fail: "branch" }, { invalidJson: "rules" }, { fail: "rules", timeout: true },
+    { rules: {} }, { rules: [{}] }, { rules: [[null]] }, { rules: [[{ type: "required_status_checks" }]] },
+    { rules: [[{ type: "required_status_checks", parameters: { required_status_checks: [{ context: " " }] } }]] },
+    { branch: {} }, { branch: { protected: true, protection: { required_status_checks: { contexts: "ci-gate" } } } },
+    { branch: protectedBranch(null) }, { branch: { protected: true } }, { branch: { protected: true, protection: { enabled: false } } },
+  ]
+  for (const options of cases) {
+    const f = fixture(options)
+    assert.throws(() => publishPullRequest(f.request), (error) => {
+      assert.match(error.message, /Could not read the checks github\.example\/example\/workspace requires on main .*will not be merged.*Fix: gh pr checks/u)
+      assert.doesNotMatch(error.message, /made-up-private-credential/u)
+      return true
+    })
+    assert.ok(!f.calls.some((call) => call.includes("PUT")), JSON.stringify(options))
+  }
 })

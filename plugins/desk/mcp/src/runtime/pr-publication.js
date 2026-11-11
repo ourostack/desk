@@ -40,11 +40,15 @@ function repository(remote) {
   return { host, name, full: `${host}/${name}` }
 }
 
-function checkState(checks, required, observed) {
+// `required` is the published floor and must succeed; `ruled` comes from the base branch's rules and protection, which GitHub
+// satisfies with any passing completion. Every other reported check must also finish passing, so a repository's own
+// validation is never skipped because the policy did not name it.
+function checkState(checks, required, observed, ruled = []) {
   for (const check of checks) observed.set(check.id, check.name)
   const bad = checks.find((check) => ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"].includes(check.state))
   if (bad) throw new Error(`PR check ${bad.name} failed (${bad.state})`)
-  const waiting = required.filter((name) => !checks.some((check) => check.name === name && check.state === "SUCCESS"))
+  const waiting = [...required.filter((name) => !checks.some((check) => check.name === name && check.state === "SUCCESS")),
+    ...ruled.filter((name) => !checks.some((check) => check.name === name))]
   const missing = [...observed].filter(([id]) => !checks.some((check) => check.id === id)).map(([, name]) => name)
   return [...new Set([...waiting, ...missing, ...checks.filter((check) => !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.state)).map((check) => check.name)])]
 }
@@ -103,6 +107,32 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     })
     return [...statuses, ...runs]
   }
+  // An admin token's API merge bypasses branch protection, so the base branch's required checks are read and enforced here.
+  const loadRuledChecks = () => {
+    const ref = encodeURIComponent(base)
+    const unreadable = (detail) => new Error(`Could not read the checks ${repo.full} requires on ${base} (${detail}); the publication PR will not be merged without them`)
+    let pages, branch
+    try {
+      pages = gh(["api", "--hostname", repo.host, `repos/${repo.name}/rules/branches/${ref}?per_page=100`, "--paginate", "--slurp"])
+      branch = gh(["api", "--hostname", repo.host, `repos/${repo.name}/branches/${ref}`])
+    } catch (error) { throw unreadable(error.message) }
+    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw unreadable("branch rules were not a list")
+    const names = []
+    for (const rule of pages.flat()) {
+      if (typeof rule?.type !== "string") throw unreadable("a branch rule had no type")
+      if (rule.type !== "required_status_checks") continue
+      const listed = rule.parameters?.required_status_checks
+      if (!Array.isArray(listed) || listed.some((check) => typeof check?.context !== "string" || check.context.trim() === "")) throw unreadable("a required-checks rule had no check names")
+      names.push(...listed.map((check) => check.context))
+    }
+    if (typeof branch?.protected !== "boolean") throw unreadable("branch protection was not reported")
+    const contexts = branch.protection?.required_status_checks?.contexts
+    if (branch.protected) {
+      if (!Array.isArray(contexts) || contexts.some((name) => typeof name !== "string" || name.trim() === "")) throw unreadable("protected-branch checks were not a list of names")
+      names.push(...contexts)
+    }
+    return [...new Set(names)]
+  }
   const pushed = git(["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`], 60_000)
   if (pushed.status !== 0) throw new Error(`The contribution branch push was refused by its hook or remote; the upstream branch was not pushed. Fix: git push ${commandArgument(upstream.remote)} ${commandArgument(`${head}:refs/heads/${branch}`)} to read its admission diagnostic`)
   let pr = list()
@@ -122,6 +152,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
   try {
     verify(pr)
     const observed = new Map()
+    const ruled = pr.state === "MERGED" ? [] : loadRuledChecks()
     if (pr.state !== "MERGED") for (const check of loadChecks()) observed.set(check.id, check.name)
     const deadline = clock.now() + WAIT_MS
     for (;;) {
@@ -129,7 +160,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       verify(pr)
       if (pr.state === "MERGED") break
       if (pr.baseRefOid !== onto) throw new Error("The publication base advanced; retry to qualify a fresh candidate")
-      const waiting = checkState(loadChecks(), policy.required_checks, observed)
+      const waiting = checkState(loadChecks(), policy.required_checks, observed, ruled)
       if (waiting.length === 0) {
         const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
           "-f", `sha=${head}`, "-f", "merge_method=merge"])

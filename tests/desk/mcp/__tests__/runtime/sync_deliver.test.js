@@ -183,7 +183,10 @@ function publicationServer(shared, { failed = false, missing = false } = {}) {
     } else if (args.includes(`repos/example/workspace/commits/${head}/check-runs?filter=latest&per_page=100`)) {
       assert.ok(args.includes("--paginate") && args.includes("--slurp"))
       response = [{ check_runs: missing ? [] : [{ id: 4242, name: "workspace-policy", status: "completed", conclusion: failed ? "failure" : "success" }] }]
-    }
+    } else if (args.includes("repos/example/workspace/rules/branches/main?per_page=100")) {
+      assert.ok(args.includes("--paginate") && args.includes("--slurp"))
+      response = [[]]
+    } else if (args.includes("repos/example/workspace/branches/main")) response = { protected: false }
     else if (args.includes("PUT")) {
       merges.push(head)
       bare(shared.origin, ["update-ref", "refs/heads/main", head])
