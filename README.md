@@ -26,7 +26,7 @@ claude plugin marketplace add ourostack/desk && claude plugin install desk@ouros
 Copilot CLI, through [Agency](https://aka.ms/agency) (Microsoft-internal; then start Copilot with `agency copilot`):
 
 ```sh
-agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot
+agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot --cache-policy auto --cache-ttl 0
 ```
 
 Desk brings Superpowers (an engineering method) and Plain Language (a prose policy) with it.
