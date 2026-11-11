@@ -3,7 +3,7 @@
 // schedule a push sets the mode from its own arguments, so a variable inherited from a shell can never silently stop an
 // ordinary session's pushes; a deferred server hands the mode to the children it starts as an argument.
 export const PUBLICATION_ENV = "DESK_PUBLICATION"
-export const PUBLICATION_DEFERRED = "deferred"
+const PUBLICATION_DEFERRED = "deferred"
 
 export function applyPublicationMode(args, env) {
   if (args.publication === PUBLICATION_DEFERRED) env[PUBLICATION_ENV] = PUBLICATION_DEFERRED
