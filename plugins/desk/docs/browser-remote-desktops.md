@@ -38,6 +38,11 @@ The remote screen is a canvas. A read shows it as a `textbox`, usually next to t
 
 `type` focuses the target, checks it still has the focus before every key and stops with `AUTH_FOCUS_MOVED` if something else takes it. The field may then hold part of the text. Read again, check what landed and type again.
 
+`AUTH_FOCUS_MOVED` also comes up, by design, in two common cases. Keep the focus check on and handle them like this:
+
+- **The ref is the session's image, not its textbox.** The image can't hold focus. Read again and use the `textbox` ref next to it.
+- **A code split across several boxes** (one box per character or group) moves focus to the next box by itself. Fill each box on its own: read, `["fill", "<box ref>", "<that box's part>"]`, then read again before the next box. Never type the whole code into the first box.
+
 ## 5. Check the result in a screenshot
 
 On a canvas, `type` returns `"typed": { "verified": false }`, because Desk can't read characters back from pixels. Don't report typing as verified, and don't take the canvas's own text as proof. The proof is a `["screenshot"]` that shows the nonce echoed and the date printed.
@@ -47,6 +52,10 @@ Screenshots mask every input, textarea and editable region, so the canvas's inpu
 ## 6. Finish
 
 `browser_context` `{ "action": "close", "contextId": "<id>" }`. Closing deletes the private copy. Sign out of the remote session first if the person asked for that. Leaving it connected keeps the remote session running.
+
+## Next: a coding agent in the remote session
+
+With a PowerShell window open, the person can set up a coding agent there by following that tool's own install guide. For GitHub Copilot CLI that's [Installing GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli). It needs the Node.js version that guide names inside the remote session, which is separate from the Node.js that runs Desk on the agent's own machine. Installing software on the remote machine needs the person's go-ahead. Sign-ins there (`/login`, `gh auth login`) are the person's: when one shows a device code, give it to them and let them finish it in their own browser. Never carry a token or a second factor across.
 
 ## When it stops
 
