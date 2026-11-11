@@ -1,0 +1,1 @@
+The desk tidy no longer says a refused git command is "not an obstacle to route around". It says how to finish safely: keep the protection, move through `track_rename` or `task_move`, finish the rest and name the move still waiting (#623).
