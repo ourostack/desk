@@ -13,10 +13,10 @@ const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "copilot-start-")))
 test.after(() => rmSync(ROOT, { recursive: true, force: true }))
 
-function start(input, name) {
+function start(input, name, extraEnv = {}) {
   const home = path.join(ROOT, name)
   mkdirSync(home, { recursive: true })
-  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH }
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH, ...extraEnv }
   const result = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { input: JSON.stringify(input), env, encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
   return { env, context: JSON.parse(result.stdout).additionalContext }
@@ -116,16 +116,35 @@ test("the first prompt of a session gets the boot direction as context, in eithe
   assert.deepEqual(prompt("sess-prompt-first"), {}, "sessionStart after the claim does not re-arm the pointer")
 })
 
-test("the desk's Standing authority section follows the startup line, so a session has the operator's grants before any host default", () => {
-  const desk = path.join(ROOT, "granting-desk")
+function grantingDesk(name) {
+  const desk = path.join(ROOT, name)
   mkdirSync(path.join(desk, "_meta"), { recursive: true })
   mkdirSync(path.join(desk, "_archive"), { recursive: true })
+  mkdirSync(path.join(desk, ".git"), { recursive: true })
   writeFileSync(path.join(desk, "AGENTS.md"), "# Desk\n\n## Standing authority\n\n- **Commit, push and open pull requests without asking.** Source: the operator, 2026-11-09.\n\n## Other\n\n- not a grant\n")
-  const { context } = start({ sessionId: "sess-grant", cwd: desk, source: "new" }, "grant")
+  return desk
+}
+
+test("the desk's Standing authority section follows the startup line in a session working in another repository, so it has the operator's grants before any host default", () => {
+  const desk = grantingDesk("granting-desk")
+  const repo = path.join(ROOT, "other-repo")
+  mkdirSync(path.join(repo, ".git"), { recursive: true })
+  const { context } = start({ sessionId: "sess-grant", cwd: repo, source: "new" }, "grant", { DESK: desk })
   const line = context.indexOf("Desk standing authority:")
   assert.ok(line > context.indexOf("Desk startup:") && line < context.indexOf("Unless started with"), "the grants sit right after the startup line")
   assert.match(context, /Commit, push and open pull requests without asking\./u)
   assert.doesNotMatch(context, /not a grant/u)
+})
+
+test("a session working in the desk's own repository gets no second copy of the grants, because the host already loads that AGENTS.md", () => {
+  const desk = grantingDesk("home-desk")
+  assert.doesNotMatch(start({ sessionId: "sess-home", cwd: desk, source: "new" }, "home").context, /Desk standing authority:/u)
+  const inner = path.join(desk, "a-track", "a-task")
+  mkdirSync(inner, { recursive: true })
+  assert.doesNotMatch(start({ sessionId: "sess-inner", cwd: inner, source: "new" }, "inner", { DESK: desk }).context, /Desk standing authority:/u)
+  const nested = path.join(desk, "a-track", "a-clone")
+  mkdirSync(path.join(nested, ".git"), { recursive: true })
+  assert.match(start({ sessionId: "sess-nested", cwd: nested, source: "new" }, "nested", { DESK: desk }).context, /Desk standing authority:/u, "a separate repository inside the desk folder still gets the grants")
 })
 
 test("a desk with no Standing authority section adds no grant line", () => {

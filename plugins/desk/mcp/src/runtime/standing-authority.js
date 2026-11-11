@@ -1,5 +1,5 @@
-// The operator's standing authority, as Copilot's session start shows it in every session the desk homes, whatever
-// repository the session works in. A grant lives under a `## Standing authority` heading in the desk's AGENTS.md (in a
+// The operator's standing authority, as Copilot's session start shows it in every session the desk homes that works
+// outside the desk's own repository (inside it, Copilot already loads the desk's AGENTS.md). A grant lives under a `## Standing authority` heading in the desk's AGENTS.md (in a
 // Crew workspace, the person's own `desks/<alias>/AGENTS.md`), and session start copies that section into the session's
 // context, because a host default such as "commit only when the user explicitly asks" gives way only to guidance the
 // session actually has, and boot's full AGENTS.md print can land in a file the agent never opens.

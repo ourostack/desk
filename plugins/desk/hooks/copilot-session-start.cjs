@@ -95,6 +95,24 @@ async function nativeMemoryLine() {
   }
 }
 
+// Copilot already loads the AGENTS.md at the root of the repository a session works in, so a session working in the desk
+// itself (or in a folder of the desk's own repository) has the grants from the host, and a second copy only spends context.
+function hostLoadsDeskAgentsFile(sessionFolder, root) {
+  try {
+    const deskRoot = fs.realpathSync(root);
+    let folder = fs.realpathSync(sessionFolder);
+    while (folder !== deskRoot) {
+      if (fs.existsSync(path.join(folder, ".git"))) return false;
+      const parent = path.dirname(folder);
+      if (parent === folder) return false;
+      folder = parent;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // The standing-authority line for the desk this session binds (mcp/src/runtime/standing-authority.js): `deskOnly` from a
 // solo desk's AGENTS.md, and `withPerson()`, which in a Crew workspace reads the person's own desk, resolved without a
 // network call. Never throws.
@@ -110,7 +128,7 @@ async function standingAuthorityLines(sessionFolder) {
     // A Crew workspace's root AGENTS.md is the team's and grants nothing: there only the person's own desk counts.
     const { crewWorkspace } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "desk", "crew-roster.js")).href);
     const crew = crewWorkspace(root).crew === true;
-    const deskOnly = crew ? "" : standingAuthorityLine({ root });
+    const deskOnly = crew || hostLoadsDeskAgentsFile(sessionFolder, root) ? "" : standingAuthorityLine({ root });
     const withPerson = async () => {
       if (!crew) return deskOnly;
       try {
