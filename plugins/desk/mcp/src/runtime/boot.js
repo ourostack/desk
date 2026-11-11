@@ -397,9 +397,10 @@ export function cardProblems(data, { nested = true } = {}) {
     const unparseable = value instanceof Date ? Number.isNaN(value.getTime()) : typeof value === "string" && Number.isNaN(Date.parse(value))
     if (unparseable) problems.push(`\`${field}\` is not a parseable timestamp`)
   }
-  if (nested && !corrupted.has("repos")) {
+  // A card with no `repos` field touches no code repository, the same as `repos: []`: plain hand-written cards stay healthy.
+  if (nested && !corrupted.has("repos") && data.repos !== undefined) {
     if (!Array.isArray(data.repos)) {
-      problems.push("`repos` is missing or not a list")
+      problems.push("`repos` is not a list")
     } else {
       data.repos.forEach((entry, index) => {
         if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {

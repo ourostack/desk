@@ -434,13 +434,19 @@ test("cardProblems: frontmatter that is not a YAML mapping", () => {
   assert.deepEqual(cardProblems("nope"), ["frontmatter did not parse as a YAML mapping"])
 })
 
-test("cardProblems: an empty object is missing every required field and repos", () => {
+test("cardProblems: an empty object is missing every required field, and a missing repos is no problem", () => {
   const problems = cardProblems({})
-  assert.equal(problems.length, 6)
+  assert.equal(problems.length, 5)
   for (const field of ["title", "status", "created", "updated", "track"]) {
     assert.ok(problems.some((message) => message.includes(`\`${field}\``)), field)
   }
-  assert.ok(problems.includes("`repos` is missing or not a list"))
+  assert.ok(!problems.some((message) => message.includes("`repos`")))
+})
+
+test("cardProblems: a card without a repos field is healthy, like repos: []", () => {
+  assert.deepEqual(cardProblems({
+    title: "Example", status: "processing", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", track: "example",
+  }), [])
 })
 
 test("cardProblems: a numeric-string-keyed object where a list was expected names the field once, without a duplicate 'missing' message", () => {
@@ -1320,7 +1326,7 @@ test("cardProblems: unquoted timestamps (parsed as Dates) are valid; an invalid 
 test("cardProblems: with nested:false (no gray-matter), repos is not judged", () => {
   const card = { schema_version: 1, title: "T", status: "processing", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", track: "t", repos: null }
   assert.deepEqual(cardProblems(card, { nested: false }), [])
-  assert.deepEqual(cardProblems(card), ["`repos` is missing or not a list"])
+  assert.deepEqual(cardProblems(card), ["`repos` is not a list"])
 })
 
 test("card validation reads a card with unquoted timestamps and a repos list as healthy, end to end", async () => {
