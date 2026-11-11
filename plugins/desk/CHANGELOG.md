@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.89 — 2026-11-11
+
+`using-desk` now names the "ready" signal from Desk's V3 direction (the RFC's "delegation is one contract and two signals"): besides the returns it already allows, after go an agent says only "ready" and "done". When part of the outcome is usable, it says `Ready: <what>, at <where>. I'm continuing.` once, with a screenshot of the primary source, and keeps working instead of holding the message for CI. Done keeps its existing delivery format.
+
+Desk MCP no longer offers `desk_similar` (documents like a given one) or `desk_thread` (the walk from a task to its planning, doing and feedback documents). Across 146 Copilot sessions in 14 days neither was called once, and no Desk skill or agent names either, yet every session that loads Desk MCP paid for their descriptions: the tool list shrinks from 26 tools and 66,629 bytes to 24 tools and 64,780 bytes. Use `desk_recall` for meaning-based search and `desk_search` or `desk_timeline` for the rest. The search index keeps its links table, which the indexer still fills; nothing in a desk's data changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.88 — 2026-11-11
 
 `using-desk`'s "Coaching the collaboration" keeps the reset line ("let's step back and reset how we're working", once, with a concrete adjustment, never a recurring gate) and points to [`interaction-style`](skills/interaction-style/SKILL.md) §10 for the list of signs, which already held them in full. The always-on text drops from 341 to 258 bytes.
