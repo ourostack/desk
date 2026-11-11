@@ -20,9 +20,12 @@ import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, wri
 import * as os from "node:os"
 import * as path from "node:path"
 import { appendRepairLog, resolveDeskStateDir } from "./last-start.js"
-import { behindText } from "./stale-desk.js"
+import { behindText, channelLabel } from "./stale-desk.js"
+import { deriveAgencySpec, isAgencySession } from "./desk-channel.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
+
+export { deriveAgencySpec, isAgencySession }
 
 export const REFRESH_TIMEOUT_MS = 8000
 export const REFRESH_TTL_MS = 60 * 60 * 1000
@@ -34,47 +37,6 @@ export const REFRESH_SWITCH = "DESK_BOOT_AUTO_REFRESH"
 // Only plain spec and plugin names ever reach a command line.
 const SAFE_ARG = /^[A-Za-z0-9._@:/+-]+$/u
 
-function text(value) {
-  return typeof value === "string" && value.trim() !== ""
-}
-
-function agencyPluginsDir({ pluginRoot, homeDir }) {
-  // A session copy lives at <agency data>/plugins/sessions/agency-plugin-*/desk, so the cache is its sibling.
-  const parts = path.resolve(pluginRoot).split(path.sep)
-  const at = parts.lastIndexOf("sessions")
-  if (at > 0 && parts[at - 1] === "plugins" && /^agency-/u.test(parts[at + 1] ?? "")) return parts.slice(0, at).join(path.sep)
-  return path.join(homeDir, ".local", "agency", "plugins")
-}
-
-/** True when this session was launched through Agency: it sets `AGENCY_ENGINE` and `AGENCY_SESSION_ID`, and runs plugins from a session copy under `plugins/sessions/agency-plugin-*`. */
-export function isAgencySession({ env, pluginRoot }) {
-  if (text(env.AGENCY_ENGINE) || text(env.AGENCY_SESSION_ID)) return true
-  return /[\\/]plugins[\\/]sessions[\\/]agency-plugin-[^\\/]+[\\/]/u.test(`${path.resolve(pluginRoot)}${path.sep}`)
-}
-
-/**
- * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the `ourostack/desk` plugin on `@release`
- * (or `@main`, for an install from before the release channel) for this session's engine (`AGENCY_ENGINE`, else the agent
- * host: Claude under Agency has its own `claude:` entries), whose cached copy has the running version. Anything else is null.
- */
-export function deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
-  try {
-    const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
-    if (engine !== "copilot" && engine !== "claude") return null
-    const cacheDir = path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache")
-    const entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
-    for (const channel of ["release", "main"]) {
-      const spec = `${engine}:github:ourostack/desk:plugins/desk@${channel}`
-      const entry = entries[spec]
-      if (!text(entry?.dir_name)) continue
-      if (JSON.parse(readFile(path.join(cacheDir, "entries", entry.dir_name, "plugin.json"))).version === running) return spec
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
 /** The marketplace a Claude Code install of Desk came from: `<home>/plugins/cache/<marketplace>/<plugin>/<version>`. */
 export function claudeMarketplace({ pluginRoot, name = "desk" }) {
   const parts = path.resolve(pluginRoot).split(path.sep)
@@ -85,7 +47,7 @@ export function claudeMarketplace({ pluginRoot, name = "desk" }) {
 
 /** True when `pluginRoot` is inside Copilot's installed-plugins directory (`$COPILOT_HOME`, else `~/.copilot`), not a `--plugin-dir` or a dev checkout. */
 export function copilotInstalled({ env, pluginRoot, homeDir }) {
-  const base = path.resolve(text(env.COPILOT_HOME) ? env.COPILOT_HOME : path.join(homeDir, ".copilot"), "installed-plugins")
+  const base = path.resolve(typeof env.COPILOT_HOME === "string" && env.COPILOT_HOME.trim() !== "" ? env.COPILOT_HOME : path.join(homeDir, ".copilot"), "installed-plugins")
   const relative = path.relative(base, path.resolve(pluginRoot))
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
@@ -181,7 +143,7 @@ export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir,
 
 /** The finding's line for a refresh that has started: what boot reports, in place of the manual step. */
 export function startedLine(finding, plan) {
-  return `Desk ${finding.running} is ${behindText(finding.behind)} main (${finding.latest}); ${plan.doing} in the background, so a new session will run ${finding.latest}.`
+  return `Desk ${finding.running} is ${behindText(finding.behind)} ${channelLabel(finding.channel)} (${finding.latest}); ${plan.doing} in the background, so a new session will run ${finding.latest}.`
 }
 
 // Creates the claim, or reports that another boot holds a live one. A claim older than REFRESH_CLAIM_STALE_MS belongs to a runner

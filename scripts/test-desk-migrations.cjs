@@ -409,7 +409,8 @@ function withSandbox(options, body) {
 
 const OLD_BINDING = '{"schema_version":1,"desk":{"root":"/tmp/old-desk"}}\n';
 const V2 = (name, ref = "v2-alpha") => `github:ourostack/ouroboros-skills:plugins/${name}@${ref}`;
-const MOVED = (name) => `github:ourostack/desk:plugins/${name}@main`;
+// Desk itself moves to its release channel; its companions track main.
+const MOVED = (name) => `github:ourostack/desk:plugins/${name}@${name === "desk" ? "release" : "main"}`;
 const toml = (coordinates) => coordinates.map((coordinate) => `[[plugins.default]]\nplugin = "${coordinate}"\n`).join("\n");
 const V1_LINES = [
   "github:ourostack/ouroboros-skills:plugins/desk@main",
@@ -471,7 +472,7 @@ test("a V2 Claude and Agency user with no V1 plugins moves completely and loses 
     assert.equal(read(`${sandbox.toml}.bak`), USER_BAK, "the user's own agency.toml.bak is untouched");
 
     assert.equal(first.shown, [
-      `Agency: ${sandbox.toml} now tracks github:ourostack/desk:plugins/<name>@main for crew desk plain-language superpowers. The original file is kept as ${sandbox.toml}.pre-ourostack-desk.`,
+      `Agency: ${sandbox.toml} now tracks github:ourostack/desk:plugins/desk@release for desk and github:ourostack/desk:plugins/<name>@main for crew plain-language superpowers. The original file is kept as ${sandbox.toml}.pre-ourostack-desk.`,
       "Its other ourostack/ouroboros-skills entries stay as they are.",
       "Claude Code: crew@ourostack, superpowers@ourostack, plain-language@ourostack, desk@ourostack now run from the ourostack marketplace (ourostack/desk), with automatic updates on.",
       "Your desk binding carried over to the new install.",
@@ -702,6 +703,23 @@ test("an Agency move is not blocked on a machine with Claude Code but no jq and 
     assert.equal(read(sandbox.toml), NEW_TOML);
     assert.deepEqual(mutatingCalls(sandbox), []);
     assert.doesNotMatch(result.shown, /Claude Code/u);
+  });
+});
+
+test("the Agency report names only the coordinates that moved: Desk alone, or only its companions", () => {
+  const blocks = moveMigration();
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), ...V1_LINES]) }, (sandbox) => {
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("desk"), ...V1_LINES]));
+    assert.match(result.shown, /^Agency: \S+ now tracks github:ourostack\/desk:plugins\/desk@release for desk\. /u);
+  });
+  withSandbox({ claude: false, agencyToml: toml([V2("crew"), V2("superpowers")]) }, (sandbox) => {
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("crew"), MOVED("superpowers")]));
+    assert.match(result.shown, /^Agency: \S+ now tracks github:ourostack\/desk:plugins\/<name>@main for crew superpowers\. /u);
+    assert.doesNotMatch(result.shown, /@release/u);
   });
 });
 

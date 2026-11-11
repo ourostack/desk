@@ -7,8 +7,8 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import {
-  AGENCY_CACHE_COMMAND,
-  LATEST_PLUGIN_URL,
+  agencyCacheCommand,
+  latestPluginUrl,
   VERSION_CACHE_FILE,
   VERSION_CACHE_TTL_MS,
   VERSION_FAILURE_TTL_MS,
@@ -67,11 +67,21 @@ test("releases behind is counted only on one alpha line", () => {
 
 test("the refresh step names the right command for each host", () => {
   assert.match(refreshStep("claude"), /\/plugin/u)
-  const copilot = refreshStep("copilot")
-  assert.match(copilot, /copilot plugin update desk/u)
-  assert.ok(copilot.includes(AGENCY_CACHE_COMMAND))
-  assert.equal(AGENCY_CACHE_COMMAND, 'agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release"')
+  assert.equal(refreshStep("copilot"), "run copilot plugin update desk, then start a new session")
   assert.match(refreshStep("unknown"), /update the Desk plugin/u)
+  // Under Agency the command names the exact spec the session was loaded from, so each channel gets its own.
+  const release = "copilot:github:ourostack/desk:plugins/desk@release"
+  const main = "copilot:github:ourostack/desk:plugins/desk@main"
+  assert.equal(agencyCacheCommand(release), `agency plugin cache remove "${release}"`)
+  assert.equal(refreshStep("copilot", { agency: true, spec: release }), `run agency plugin cache remove "${release}", then start a new session`)
+  assert.equal(refreshStep("claude", { agency: true, spec: main }), `run agency plugin cache remove "${main}", then start a new session`)
+  assert.doesNotMatch(refreshStep("copilot", { agency: true, spec: main }), /@release/u)
+  // An Agency session whose spec is unknown is told how to find it, not handed a guess.
+  const unknown = refreshStep("copilot", { agency: true })
+  assert.match(unknown, /agency plugin cache list/u)
+  assert.doesNotMatch(unknown, /@(release|main)/u)
+  assert.equal(latestPluginUrl("release"), "https://raw.githubusercontent.com/ourostack/desk/release/plugins/desk/plugin.json")
+  assert.equal(latestPluginUrl("main"), "https://raw.githubusercontent.com/ourostack/desk/main/plugins/desk/plugin.json")
 })
 
 test("the finding is one line, with a count when reliable and just behind otherwise", () => {
@@ -83,7 +93,10 @@ test("the finding is one line, with a count when reliable and just behind otherw
   assert.match(staleDeskFinding({ running: "3.2.0-alpha.171", latest: "3.2.0-alpha.172", agentHost: "claude" }).line, /is 1 release behind main/u)
   const vague = staleDeskFinding({ running: "3.2.0-alpha.153", latest: "3.3.0", agentHost: "copilot" })
   assert.equal(vague.behind, null)
-  assert.match(vague.line, /^Desk 3\.2\.0-alpha\.153 is behind main \(3\.3\.0\); run copilot plugin update desk, or, if Agency launched this session, run agency plugin cache remove /u)
+  assert.equal(vague.line, "Desk 3.2.0-alpha.153 is behind main (3.3.0); run copilot plugin update desk, then start a new session.")
+  const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true, spec: "copilot:github:ourostack/desk:plugins/desk@release" })
+  assert.equal(release.channel, "release")
+  assert.equal(release.line, 'Desk 3.2.92 is behind the release channel (3.2.93); run agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release", then start a new session.')
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.172", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.173", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
 })
@@ -94,7 +107,7 @@ test("a running version behind the stubbed latest is reported, and the request c
   const found = await checkStaleDesk({ env: {}, pluginRoot, stateDir, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) })
   assert.equal(found.behind, 19)
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].url, LATEST_PLUGIN_URL)
+  assert.equal(calls[0].url, latestPluginUrl("main"))
   assert.equal(calls[0].init.headers, undefined)
   assert.equal(calls[0].init.credentials, "omit")
 })
@@ -266,7 +279,7 @@ test("the state directory comes from the environment when none is given, and an 
 
 test("a cached version that is not semver, or a plugin.json whose version is not, is ignored", async () => {
   const { pluginRoot, stateDir } = await fixture("3.2.0-alpha.153")
-  writeFileSync(path.join(stateDir, VERSION_CACHE_FILE), JSON.stringify({ checked_at: new Date().toISOString(), latest: "banana" }))
+  writeFileSync(path.join(stateDir, VERSION_CACHE_FILE), JSON.stringify({ checked_at: new Date().toISOString(), channel: "main", latest: "banana" }))
   const calls = []
   assert.equal((await checkStaleDesk({ env: {}, pluginRoot, stateDir, agentHost: "claude", fetchFn: answering("3.2.0-alpha.172", calls) })).behind, 19)
   assert.equal(calls.length, 1)
@@ -287,4 +300,83 @@ test("a remote version is capped at 64 characters, 4 KB of body and safe integer
   assert.equal(await run(JSON.stringify({ version: "3.2.0-alpha.99999999999999999999" })), null)
   assert.equal(parseVersion("9007199254740991.0.0").core[0], Number.MAX_SAFE_INTEGER)
   assert.equal(parseVersion("9007199254740992.0.0"), null)
+})
+
+// An Agency data directory: a cache index naming the given specs, each cached copy at `version`, and this session's copy of
+// Desk (with its own plugin.json at `running`) under plugins/sessions, where Agency runs it from.
+async function agencyInstall({ running, specs }) {
+  const home = await mkTempRoot("desk-stale-agency-")
+  const plugins = path.join(home, ".local", "agency", "plugins")
+  const entries = {}
+  for (const [index, [spec, version]] of Object.entries(specs).entries()) {
+    const dir = path.join(plugins, "cache", "entries", `e${index}`)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify({ name: "desk", version }))
+    entries[spec] = { dir_name: `e${index}` }
+  }
+  await fs.writeFile(path.join(plugins, "cache", "cache_index.json"), JSON.stringify({ entries }))
+  const pluginRoot = path.join(plugins, "sessions", "agency-plugin-abc.p1", "desk")
+  await fs.mkdir(pluginRoot, { recursive: true })
+  await fs.writeFile(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", version: running }))
+  return { home, pluginRoot, stateDir: await mkTempRoot("desk-stale-state-") }
+}
+
+// What each branch holds: `release` the newest stable release, `main` a release candidate it will not ship as is.
+const byBranch = (branches, calls = []) => async (url, init) => {
+  calls.push({ url, init })
+  const branch = /ourostack\/desk\/([^/]+)\/plugins/u.exec(url)[1]
+  return { ok: true, text: async () => JSON.stringify({ name: "desk", version: branches[branch] }) }
+}
+
+const RELEASE = "copilot:github:ourostack/desk:plugins/desk@release"
+const MAIN = "copilot:github:ourostack/desk:plugins/desk@main"
+
+test("a release install is compared with the release branch, so a release candidate on main is not a stale warning", async () => {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.93", specs: { [RELEASE]: "3.2.93" } })
+  const calls = []
+  const branches = { release: "3.2.93", main: "3.3.0-rc.1" }
+  assert.equal(await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch(branches, calls) }), null)
+  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("release")])
+  // Behind the release branch, it is told so, with the release spec's own refresh.
+  const behind = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.92" } })
+  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: behind.pluginRoot, stateDir: behind.stateDir, homeDir: behind.home, agentHost: "copilot", fetchFn: byBranch(branches) })
+  assert.equal(found.channel, "release")
+  assert.equal(found.latest, "3.2.93")
+  assert.equal(found.refresh, `run agency plugin cache remove "${RELEASE}", then start a new session`)
+})
+
+test("a legacy main install is compared with main and is never given the release command", async () => {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.92", specs: { [MAIN]: "3.2.92" } })
+  const calls = []
+  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls) })
+  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("main")])
+  assert.equal(found.channel, "main")
+  assert.equal(found.latest, "3.3.0-rc.1")
+  assert.equal(found.line, `Desk 3.2.92 is behind main (3.3.0-rc.1); run agency plugin cache remove "${MAIN}", then start a new session.`)
+  assert.doesNotMatch(found.line, /@release/u)
+})
+
+test("an Agency session whose spec is not found compares with release and names no spec", async () => {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.90" } })
+  const calls = []
+  const found = await checkStaleDesk({ env: {}, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls) })
+  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("release")])
+  assert.equal(found.channel, "release")
+  assert.match(found.refresh, /agency plugin cache list/u)
+  assert.doesNotMatch(found.refresh, /@(release|main)/u)
+})
+
+test("a cached answer counts only for the channel it was fetched for", async () => {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.93", specs: { [RELEASE]: "3.2.93" } })
+  // An answer from main, and one from before channels, are both fetched again for a release install.
+  for (const cached of [{ channel: "main", latest: "3.3.0-rc.1" }, { latest: "3.3.0-rc.1" }]) {
+    writeFileSync(path.join(stateDir, VERSION_CACHE_FILE), JSON.stringify({ schema_version: 1, checked_at: new Date().toISOString(), ...cached }))
+    const calls = []
+    assert.equal(await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls) }), null)
+    assert.equal(calls.length, 1)
+    assert.equal(JSON.parse(readFileSync(path.join(stateDir, VERSION_CACHE_FILE), "utf8")).channel, "release")
+  }
+  const calls = []
+  await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93" }, calls) })
+  assert.equal(calls.length, 0, "the release answer is reused for the release channel")
 })
