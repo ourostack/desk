@@ -1608,7 +1608,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["fast-honest-ci", /Download CI output from the operator's own repositories without asking/u],
     ["using-desk", /run sign-in flows yourself; never type a password or paste a secret/u],
     ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
-    ["using-desk", /bounded known repairs or approved source work, not unsolicited repair children or PRs/u],
+    ["desk-problem", /Do not spawn a repair child, take an improvement card, edit tooling source or open a repair PR unless that repair is explicitly in this task's scope/u],
     ["interaction-style", /### Status leads with what the operator would feel\n\nA status or progress answer opens with how the work would feel to the operator if they used it today: what is broken first, each with its measured number against its bar[\s\S]+"On track" means they will enjoy it[\s\S]+Activity \(pull requests merged, CI runs, lanes busy\) is not progress unless a felt number moved[\s\S]+ask it first, plainly, one at a time/u],
     ["interaction-style", /The operator supplies judgment, not hands: never hand them a step, chore, install, sign-in, deploy or check to run, not even one click to approve[\s\S]+A child that cannot finish a step names the exact blocking screen or error to its coordinator, never to the person[\s\S]+never in advance on the guess that one will appear/u],
     ["work-orchestration", /\*\*Profile before choosing a fix\.\*\*[\s\S]+CI is the merge gate, not the workbench/u],
