@@ -113,6 +113,15 @@ function through(d, owners) {
   return { frameLocator: (selector) => through(d, [...owners, selector]), locator: (selector) => ({ frame: d, through: owners, selector }) }
 }
 
+// A node as page functions see it. Its document's active element is the node when `focus.on` is its handle, another
+// element when focus is elsewhere; `focus.window === false` means the document does not have the window's focus.
+export function pageNode(focus, handle, props) {
+  const node = { isContentEditable: false, innerText: "", ...props, contains: (other) => other === node, getRootNode: () => ({}) }
+  const elsewhere = { getRootNode: () => ({}) }
+  node.ownerDocument = { activeElement: focus.on === handle ? node : focus.on ? elsewhere : null, hasFocus: () => focus.window !== false }
+  return node
+}
+
 function fakeFrames(packet, calls, frameOf, focus) {
   const handles = new Map()
   const frames = packet.documents.map((document, d) => {
@@ -141,14 +150,21 @@ function fakeFrames(packet, calls, frameOf, focus) {
           }
         }
       }
-      // Read-back runs the page function on the control's current value.
+      // Page functions run on a page-like node: the control's current value, and its document's focus.
       handle.evaluate = async (fn, arg) => {
         calls.push(["evaluate", id])
         const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
-        return fn({ isContentEditable: false, value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]], innerText: "" }, arg)
+        return fn(pageNode(focus, handle, { tagName: packet.strings[table.nodeName[table.backendNodeId.indexOf(id)]], value: position === -1 ? undefined : packet.strings[table.inputValue.value[position]] }), arg)
       }
-      // Keys typed after focus go to the focused element, as page.keyboard sends them.
+      // Keys typed after focus go to the focused element, as page.keyboard sends them, and add to what it holds.
       handle.focus = async () => { calls.push(["focus", id]); focus.on = handle }
+      handle.receive = async (text) => {
+        calls.push(["keys", id, text])
+        const position = table.inputValue.index.indexOf(table.backendNodeId.indexOf(id))
+        if (position === -1) return
+        packet.strings.push((packet.strings[table.inputValue.value[position]] ?? "") + text)
+        table.inputValue.value[position] = packet.strings.length - 1
+      }
       handle.screenshot = async (options) => { calls.push(["element.screenshot", id, options]); fs.writeFileSync(options.path, "FAKE_PNG") }
       handle.contentFrame = async () => {
         const owner = table.contentDocumentIndex.index.indexOf(table.backendNodeId.indexOf(id))
@@ -190,10 +206,9 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   for (const method of ["goto", "goBack", "goForward", "reload", "setViewportSize", "close", "bringToFront"]) {
     page[method] = async (...args) => { calls.push([method, ...args]) }
   }
-  page.waitForTimeout = async (ms) => { calls.push(["waitForTimeout", ms]) }
   page.keyboard = {
     press: async (...args) => { calls.push(["keyboard.press", ...args]) },
-    type: async (text) => { calls.push(["keyboard.type", text]); if (focus.on) await focus.on.type(text) },
+    type: async (text) => { calls.push(["keyboard.type", text]); if (focus.on) await focus.on.receive(text) },
   }
   page.screenshot = async (options) => { calls.push(["page.screenshot", options]); fs.writeFileSync(options.path, "FAKE_PNG") }
   page.mouse = { wheel: async (...args) => calls.push(["wheel", ...args]) }
@@ -242,7 +257,7 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
       },
     },
   }
-  return { driver, calls, context, page, cdp, oop, handles, packet }
+  return { driver, calls, context, page, cdp, oop, handles, packet, focus }
 }
 
 export function editingSnapshot(mode = "read-write") {
