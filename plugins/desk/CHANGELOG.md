@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.90 — 2026-11-11
+
+A task card without a `repos` field no longer counts as corrupted. It means the task touches no code repository, the same as `repos: []`, so a plain hand-written card stays healthy and session start stops reporting Desk as degraded because of it. A `repos` value that is present but not a list is still reported, now as "`repos` is not a list".
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.89 — 2026-11-11
 
 `using-desk` now names the "ready" signal from Desk's V3 direction (the RFC's "delegation is one contract and two signals"): besides the returns it already allows, after go an agent says only "ready" and "done". When part of the outcome is usable, it says `Ready: <what>, at <where>. I'm continuing.` once, with a screenshot of the primary source, and keeps working instead of holding the message for CI. Done keeps its existing delivery format.
