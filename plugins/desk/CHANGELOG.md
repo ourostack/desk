@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.88 — 2026-11-11
+
+`using-desk`'s "Coaching the collaboration" keeps the reset line ("let's step back and reset how we're working", once, with a concrete adjustment, never a recurring gate) and points to [`interaction-style`](skills/interaction-style/SKILL.md) §10 for the list of signs, which already held them in full. The always-on text drops from 341 to 258 bytes.
+
+`using-desk`'s "Own the stack" section is now one plain instruction and a pointer: when tooling gets in the way, keep your task's authority, work around it with ordinary tools, never past a safeguard or permission denial, and start no unrequested repair work. [`desk-problem`](skills/desk-problem/SKILL.md) already held each clause in its procedure, so the always-on text drops from 309 to 208 bytes with no rule lost. The operator-rule contract now pins the no-unsolicited-repair rule in `desk-problem`, its owner.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.87 — 2026-11-11
 
 Desk now ships the `core-meeting-capture` skill ([`skills/core-meeting-capture`](skills/core-meeting-capture/SKILL.md)), the generic engine for source-backed meeting recaps and transcript-guided visual evidence. It moved unchanged from `ourostack/ouroboros-skills`, which is being retired. CIT's `cit-meeting-capture` and MS Desk's `pulling-meeting-recaps` require it and both depend on Desk, so they now get it from the plugin they already install instead of a separate library. Its eval suite, `evals/core-meeting-capture.json`, its synthetic diagram fixture and its model-choice source-contract test came along and run in `Validate skills`.
