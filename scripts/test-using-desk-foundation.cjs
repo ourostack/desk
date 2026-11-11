@@ -398,19 +398,17 @@ function main() {
   ]);
 
   assertSectionConcepts(section(skill, "Coaching the collaboration"), [
-    /steps handed over one at a time/iu,
-    /micromanag/iu,
-    /one-shot request/iu,
-    /glue/iu,
-    /same correction twice/iu,
+    /`interaction-style` §10 lists the signs/u,
+    /same correction twice goes to lesson_add/u,
     /let's step back and reset how we're working/u,
     /concrete adjustment/iu,
     /once/iu,
     /never a recurring gate and never widens authority/u,
-    /same correction twice, so record it with lesson_add/u,
   ]);
-  // The rest of the coaching rule moved to interaction-style to make room in the foundation (SessionStart size budget).
+  // The coaching signs and the rest of the rule live in interaction-style §10; the foundation keeps the reset line and a pointer.
   for (const phrase of [
+    "## 10. Coaching the collaboration",
+    "steps handed over one at a time; micromanagement or hovering; a one-shot request with no alignment; the human acting as glue",
     "work pulled back mid-flight by either side",
     "the same correction twice, which means context is missing: record it with `lesson_add`",
     "never becomes a recurring gate or widens your authority",
