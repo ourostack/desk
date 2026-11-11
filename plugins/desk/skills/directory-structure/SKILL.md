@@ -1,6 +1,6 @@
 ---
 name: directory-structure
-description: The `$DESK/` layout (tracks, tasks, reserved `_` folders, naming, where planning and doing docs go). Use when creating, placing, renaming or moving a track, task or doc, or tidying a disorganized desk.
+description: The `$DESK/` layout (tracks, tasks, reserved `_` folders, naming, where a plan or log goes when a task needs one). Use when creating, placing, renaming or moving a track, task or doc, or tidying a disorganized desk.
 ---
 
 # Directory structure
@@ -31,7 +31,7 @@ $DESK/
     <task-name>/                        # one directory per task within the track
       task.md                           # task card (see task-card-format)
       _iterations/                      # iterations of a task with no repositories (repos: []), same <YYYY-MM-DD>-<slug>/ shape as below
-      <repo-name>/                      # workspace per repo the task touches (matches task.md repos[].name)
+      <repo-name>/                      # only when the task needs a plan or log beyond its card (matches task.md repos[].name)
         <YYYY-MM-DD>-<slug>/            # one iteration directory (e.g. 2026-04-13-initial-impl)
           planning.md                   # per-iteration planning doc
           doing.md                      # per-iteration doing doc
@@ -46,6 +46,8 @@ $DESK/
   _archive/                             # archived tracks
     <track-name>/                       # moved here when all tasks in the track are terminal
 ```
+
+Most tasks are a folder with only `task.md`: the work runs from the card and its progress is recorded there (`task-lifecycle`: clear tasks need no doing document). A repo workspace and an iteration directory appear only when a task genuinely needs a written plan or a log too long for the card (`using-superpowers-with-desk`); never create them as ceremony.
 
 ### iteration-directory rules
 
@@ -100,7 +102,7 @@ The one-time tidy (the `02-tidy-desk` Desk migration) brings an existing desk in
 
 `schema_version` is the file's format, `tidy_version` is the version of the tidy that ran, and `tidied_at` is when it was recorded (ISO 8601). The migration runs only when `desk_doctor` reports findings other than stale tasks and the file does not record `tidy_version: 1` or later. After that, keep the desk tidy as you go.
 
-## planning doc scope determines location
+## where a plan goes, when one is needed
 
 - **cross-repo plans** → `<track>/_planning/`
 - **single-repo plans** → inside the per-iteration directory: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md`
