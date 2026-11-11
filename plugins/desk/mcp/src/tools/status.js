@@ -35,9 +35,11 @@ async function syncStatus({ deskRoot, env, signal }) {
   const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
     ? { last_pull: recorded.last_pull }
     : {}
+  // What the last sync repaired before pulling (a stuck checkout it fixed), so the agent can say so in one line.
+  const lastRepair = recorded?.last_repair ? { last_repair: recorded.last_repair } : {}
   if (recorded?.blocked) {
     return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], unpushed: recorded.unpushed ?? null,
-      ...(recorded.reason === "publication_blocked" ? { error: recorded.error ?? null, publication: recorded.publication ?? null } : {}), ...lastPull }
+      ...(recorded.reason === "publication_blocked" ? { error: recorded.error ?? null, publication: recorded.publication ?? null } : {}), ...lastPull, ...lastRepair }
   }
   const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
@@ -47,6 +49,7 @@ async function syncStatus({ deskRoot, env, signal }) {
     last_push_at: recorded?.last_push_at ?? null,
     ...(recorded?.publication ? { publication: recorded.publication } : {}),
     ...lastPull,
+    ...lastRepair,
   }
 }
 

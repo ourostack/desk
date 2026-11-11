@@ -328,7 +328,9 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
  * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
  * `degraded`. A synced outcome clears the record; so does a later successful push. A pull that really happened also
  * records `last_success_at`, which boot shows as "local desk is as of": FETCH_HEAD cannot say that, because a failed
- * fetch touches it too. A desk with nothing to sync against records no success time. Best effort, never throws.
+ * fetch touches it too. A desk with nothing to sync against records no success time. A sync that repaired a stuck
+ * checkout before pulling records that as `last_repair`, with its plain sentence, for `desk_status` to repeat; the next
+ * sync clears it. Best effort, never throws.
  */
 export function recordPullOutcome({ root, env, result }) {
   try {
@@ -337,6 +339,10 @@ export function recordPullOutcome({ root, env, result }) {
     updateSyncStatus(root, env, {
       last_pull: failed ? { state: "unresolved", reason: result.reason ?? null, cause: result.cause ?? null, at } : null,
       ...(failed || result?.nothingToSync ? {} : { last_success_at: at }),
+      // What this sync repaired before pulling, if anything; a later sync that repaired nothing clears it.
+      last_repair: typeof result?.repaired === "string"
+        ? { kind: result.repaired, stash: result.repairedStash, commit: result.repairedCommit, note: result.repairedNote, at }
+        : undefined,
     })
   } catch {
     // The record is a convenience for the next reader, never a reason to fail a sync.
