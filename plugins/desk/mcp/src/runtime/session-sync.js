@@ -35,6 +35,7 @@ import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, re
 import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { applyPublicationMode } from "./publication-mode.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
@@ -565,6 +566,7 @@ function parseSessionSyncArgs(argv) {
  */
 export async function runSessionSyncCli({ argv = process.argv.slice(2), env = process.env, io = process, syncFn = syncWorkspace } = {}) {
   const options = parseSessionSyncArgs(argv)
+  applyPublicationMode({ publication: options.get("publication") }, env)
   const root = options.get("root") ?? env.DESK
   if (typeof root !== "string" || root === "") {
     io.stderr.write("session-sync.js: --root <path> (or the DESK env var) is required\n")

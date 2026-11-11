@@ -157,6 +157,49 @@ test("a configured remote is pending, not blanket success", async () => {
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
 })
 
+// The server runs on the real process environment, as it does under bootstrap.cjs, so the tools' own push scheduling
+// sees the mode. The run without the option is the control: it proves the real worker pushes here.
+for (const deferred of [false, true]) {
+  test(`${deferred ? "deferred publication commits and leaves the remote alone" : "without deferral the same write reaches the remote"}`, async () => {
+    const root = fixture()
+    const remote = `${root}-remote`
+    const init = spawnSync("git", ["init", "--bare", "-b", "main", remote], { encoding: "utf8", timeout: 5000 })
+    assert.equal(init.status, 0, init.stderr)
+    git(root, "remote", "add", "origin", remote)
+    git(root, "push", "--quiet", "-u", "origin", "main")
+    const before = git(root, "--git-dir", remote, "rev-parse", "refs/heads/main")
+    let serverEnv
+    try {
+      const result = await recover(root, update, deferred ? ["--publication", "deferred"] : [], (options) => {
+        if (deferred) assert.deepEqual(options.argv.slice(-2), ["--publication", "deferred"])
+        serverEnv = process.env
+        return launch({ ...options, env: process.env })
+      })
+      assert.equal(result.report.effects.commit, "observed", JSON.stringify(result.report))
+      assert.equal(result.report.effects.push, deferred ? "deferred" : "pending")
+      assert.equal(result.exitCode, deferred ? 0 : 2)
+      assert.equal(serverEnv.DESK_PUBLICATION, deferred ? "deferred" : undefined)
+      const committed = git(root, "rev-parse", "HEAD")
+      assert.notEqual(committed, before)
+      let landed = before
+      for (let waited = 0; waited < 15_000 && landed === before; waited += 250) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        if (deferred && waited >= 6000) break
+        landed = git(root, "--git-dir", remote, "rev-parse", "refs/heads/main")
+      }
+      assert.equal(landed, deferred ? before : committed)
+    } finally {
+      delete process.env.DESK_PUBLICATION
+    }
+  })
+}
+
+test("an unknown publication mode refuses before launch", async () => {
+  const root = fixture()
+  const result = await recover(root, update, ["--publication", "later"], async () => assert.fail("no launch"))
+  assert.equal(result.report.code, "invalid_arguments")
+})
+
 test("state-branch options cannot override undeclared branch policy", async () => {
   const root = fixture()
   const head = git(root, "rev-parse", "HEAD")
