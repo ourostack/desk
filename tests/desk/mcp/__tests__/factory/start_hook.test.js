@@ -172,6 +172,23 @@ test("the real elapsed time of each check is charged, so a total spent by blocki
   assert.equal(ran, false)
 })
 
+test("a check timer that fires before the clock reaches the total still spends it, so the next check is skipped", async (t) => {
+  // Node's timers run on libuv's cached loop time, so one can fire a little before performance.now() reaches its budget.
+  useVirtualClock(t)
+  const recorded = []
+  const line = await runBootChecks({
+    ...quiet,
+    totalBudgetMs: 20,
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+    checks: [
+      check("first", (ctx) => { block(ctx.budgetMs - 1.5); return new Promise(() => {}) }, 1000),
+      check("second", async () => ({ line: "never" })),
+    ],
+  })
+  assert.equal(line, "")
+  assert.deepEqual(recorded.map((entry) => entry.reason), ["budget", "total_budget"])
+})
+
 test("the total budget caps every check, and checks after it are skipped", async () => {
   const recorded = []
   const budgets = []
