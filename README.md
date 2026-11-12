@@ -13,7 +13,7 @@
 
 [ouroboros.bot/desk](https://ouroboros.bot/desk/) · [The factory](https://ourostack.github.io/factory/) · [More from Ouro](https://github.com/ourostack)
 
-**Status:** alpha. `main` is the release channel, and installed copies update from it.
+**Status:** alpha. Desk ships through releases: the `release` branch holds the newest stable release, and installed copies of Desk update from it. `main` also carries merged changes that are not released yet.
 
 **To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
 
@@ -26,7 +26,7 @@ claude plugin marketplace add ourostack/desk && claude plugin install desk@ouros
 Copilot CLI, through [Agency](https://aka.ms/agency) (Microsoft-internal; then start Copilot with `agency copilot`):
 
 ```sh
-agency plugin install github:ourostack/desk:plugins/desk@main --engine copilot --cache-policy auto --cache-ttl 0
+agency plugin install github:ourostack/desk:plugins/desk@release --engine copilot --cache-policy auto --cache-ttl 0
 ```
 
 Desk brings Superpowers (an engineering method) and Plain Language (a prose policy) with it.
@@ -57,8 +57,11 @@ The `ourostack` marketplace in this repository ships four plugins:
 Agency and other hosts that resolve plugins from Git use these coordinates:
 
 ```text
+github:ourostack/desk:plugins/desk@release
 github:ourostack/desk:plugins/<name>@main
 ```
+
+Desk itself tracks `release`; Superpowers, Plain Language and Crew track `main`, where their merges deliver them.
 
 ## Repository layout
 
@@ -101,9 +104,9 @@ If publication is blocked, the save stays local or on its contribution branch, n
 <details>
 <summary>For maintainers: how releasing works</summary>
 
-Hosts pick up changes differently: Agency re-resolves the branch, while Claude Code updates only when a plugin's version string changes. Every change to a plugin's files therefore ships as a new version, named the same in every manifest and in the marketplace entry. CI enforces this with `node scripts/check-release-integrity.cjs`, and `node scripts/check-dependency-channels.cjs` keeps plugin dependencies on the `main` channel instead of exact commits.
+Hosts pick up changes differently: Agency re-resolves the branch, while Claude Code updates only when a plugin's version string changes. Every change to a plugin's files therefore ships as a new version, named the same in every manifest and in the marketplace entry. CI enforces this with `node scripts/check-release-integrity.cjs`, and `node scripts/check-dependency-channels.cjs` keeps plugin dependencies on release channels instead of exact commits: Desk itself on `release`, every other plugin on `main`.
 
-Desk releases from `main`. A pull request that changes Desk adds a changelog fragment under [`plugins/desk/changelog.d/`](plugins/desk/changelog.d/README.md) and does not touch Desk's version or the head of its changelog, so parallel pull requests do not conflict. After the merge, the [Desk release workflow](.github/workflows/desk-release.yml) takes the next version on every release surface, folds the fragments into `plugins/desk/CHANGELOG.md` and commits the release to `main`. It checks that release commit before pushing it (release integrity, skill, docs, host-manifest, generated-artifact and contract validation, and the release, activation, artifact, docs and script tests), because a push made with the workflow token starts no CI. The job that installs dependencies and runs those checks holds only a read token; a separate job, which runs no npm or repository script, verifies that the checked commit changes only release surfaces and fragments and pushes that exact commit with Git hooks disabled. After a release is pushed, a fourth job comments `Released in Desk <version>` on every pull request the release carries and adds a `released` label; Desk's done-gate refuses to close a task on a pull request whose changes [`.desk/delivery.json`](.desk/delivery.json) says are delivered by a release until that label is there. The other plugins still bump their own version in the pull request that changes them, which is how Claude Code receives them, so a merge delivers them and the policy does not gate them.
+Desk releases from `main`. A pull request that changes Desk adds a changelog fragment under [`plugins/desk/changelog.d/`](plugins/desk/changelog.d/README.md) and does not touch Desk's version or the head of its changelog, so parallel pull requests do not conflict. After the merge, the [Desk release workflow](.github/workflows/desk-release.yml) takes the next version on every release surface, folds the fragments into `plugins/desk/CHANGELOG.md` and commits the release to `main`; a stable release moves the `release` branch to that same commit in the same push, so Agency installs of `plugins/desk@release` never run a merged change before its release. It checks that release commit before pushing it (release integrity, skill, docs, host-manifest, generated-artifact and contract validation, and the release, activation, artifact, docs and script tests), because a push made with the workflow token starts no CI. The job that installs dependencies and runs those checks holds only a read token; a separate job, which runs no npm or repository script, verifies that the checked commit changes only release surfaces and fragments and pushes that exact commit with Git hooks disabled. After a release is pushed, a fourth job comments `Released in Desk <version>` on every pull request the release carries and adds a `released` label; Desk's done-gate refuses to close a task on a pull request whose changes [`.desk/delivery.json`](.desk/delivery.json) says are delivered by a release until that label is there. The other plugins still bump their own version in the pull request that changes them, which is how Claude Code receives them, so a merge delivers them and the policy does not gate them.
 
 </details>
 

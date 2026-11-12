@@ -54,6 +54,13 @@ if [ -f "$T" ] && grep -Eq "$V2_COORD" "$T"; then
   if grep -q "ourostack/ouroboros-skills:plugins/" "$T"; then
     say "Its other ourostack/ouroboros-skills entries stay as they are."
   fi
+  # Desk itself then takes the 03-desk-release-channel step at once: to @release where nothing else in its list brings Desk,
+  # out of the way where something does, and unchanged while that cannot be told. Without node, 03 does it at the next start.
+  channel="${DESK_PLUGIN_ROOT:-}/mcp/scripts/agency-desk-channel.js"
+  if command -v node >/dev/null 2>&1 && [ -f "$channel" ]; then
+    stepped="$(node "$channel" --migrate 2>&1 || true)"
+    [ -z "$stepped" ] || say "$stepped"
+  fi
 fi
 
 # Claude Code: move only a V2 install, meaning desk@ouroboros-skills from a marketplace that tracks v2-alpha.

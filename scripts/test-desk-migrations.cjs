@@ -205,7 +205,7 @@ function parseMigration(file) {
 }
 
 // Tools the migration blocks and the fake use, for sandboxes with a restricted PATH.
-const BLOCK_TOOLS = ["bash", "sh", "grep", "sed", "awk", "cp", "cat", "rm", "mv", "mkdir", "mktemp", "dirname", "head", "jq", "git", "sort", "paste", "tr", "touch"];
+const BLOCK_TOOLS = ["bash", "sh", "grep", "sed", "awk", "cp", "cat", "rm", "mv", "mkdir", "mktemp", "dirname", "head", "jq", "git", "sort", "paste", "tr", "touch", "node"];
 
 function makeSandbox({
   installed = [],
@@ -281,6 +281,8 @@ function makeSandbox({
     HOME: home,
     CLAUDE_CONFIG_DIR: cfg,
     AGENCY_TOML: sandbox.toml,
+    // No Desk plugin root unless a test gives one: then Migrate also takes the 03-desk-release-channel step.
+    DESK_PLUGIN_ROOT: "",
     FAKE_CLAUDE_LOG: sandbox.log,
     FAKE_CLAUDE_STATE: sandbox.state,
     FAKE_CLAUDE_FAIL: "",
@@ -702,6 +704,55 @@ test("an Agency move is not blocked on a machine with Claude Code but no jq and 
     assert.equal(read(sandbox.toml), NEW_TOML);
     assert.deepEqual(mutatingCalls(sandbox), []);
     assert.doesNotMatch(result.shown, /Claude Code/u);
+  });
+});
+
+// Agency's cache beside the sandbox agency.toml: each spec's cached agency.json lists the given dependencies.
+function seedAgencyCache(sandbox, manifests) {
+  const cache = path.join(path.dirname(sandbox.toml), "plugins", "cache");
+  const entries = {};
+  Object.entries(manifests).forEach(([spec, dependencies], index) => {
+    const dir = path.join(cache, "entries", `m${index}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "plugin.json"), "{}");
+    fs.writeFileSync(path.join(dir, "agency.json"), JSON.stringify({ dependencies }));
+    entries[`copilot:${spec}`] = { dir_name: `m${index}` };
+  });
+  fs.writeFileSync(path.join(cache, "cache_index.json"), JSON.stringify({ entries }));
+}
+
+test("the Agency move then takes Desk's release-channel step: release alone, out of the way behind CIT's MS Desk, held when unknown", () => {
+  const blocks = moveMigration();
+  const CIT = "github:gim-home/CIT-tooling:plugins/cit@main";
+  const MS = "github:shared-internal-tools/ms-desk:plugins/ms-desk@main";
+  const RELEASE = "github:ourostack/desk:plugins/desk@release";
+  const companions = { [MOVED("superpowers")]: [], [MOVED("crew")]: [] };
+  // Desk with only its companions: straight to the release channel.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), V2("superpowers"), V2("crew")]) }, (sandbox) => {
+    seedAgencyCache(sandbox, companions);
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([RELEASE, MOVED("superpowers"), MOVED("crew")]), result.shown + result.migrate.stderr);
+    assert.match(result.shown, /plugins\.default now selects github:ourostack\/desk:plugins\/desk@release/u);
+  });
+  // Beside CIT, which brings MS Desk, which still brings Desk on main: the explicit entry gives way, never a second Desk.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), V2("superpowers"), CIT]) }, (sandbox) => {
+    seedAgencyCache(sandbox, { ...companions, [CIT]: [MS, MOVED("superpowers")], [MS]: [MOVED("desk"), MOVED("superpowers")] });
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("superpowers"), CIT]));
+    assert.doesNotMatch(read(sandbox.toml), /@release/u);
+  });
+  // CIT cached but MS Desk not: the entry stays on main and the report says why.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), CIT]) }, (sandbox) => {
+    seedAgencyCache(sandbox, { [CIT]: [MS] });
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("desk"), CIT]));
+    assert.match(result.shown, /left as it is: .*not cached: github:shared-internal-tools\/ms-desk/u);
   });
 });
 

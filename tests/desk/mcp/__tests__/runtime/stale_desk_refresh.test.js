@@ -15,13 +15,12 @@ import {
   REFRESH_TTL_MS,
   claudeMarketplace,
   copilotInstalled,
-  deriveAgencySpec,
-  isAgencySession,
   planStaleRefresh,
   refreshPlan,
   startStaleRefresh,
   startedLine,
 } from "../../../../../plugins/desk/mcp/src/runtime/stale-desk-refresh.js"
+import { deriveAgencySpec, isAgencySession } from "../../../../../plugins/desk/mcp/src/runtime/desk-channel.js"
 
 const SPEC = "copilot:github:ourostack/desk:plugins/desk@main"
 const CLAUDE_SPEC = "claude:github:ourostack/desk:plugins/desk@main"
@@ -78,6 +77,12 @@ test("the Agency spec is the pinned ourostack/desk plugin on main for the sessio
     const odd = await agency({ index: { [key]: { dir_name: "ddd" } } })
     assert.equal(deriveAgencySpec({ env: {}, agentHost: "copilot", pluginRoot: odd.pluginRoot, running: "3.2.0-alpha.153", homeDir: odd.home }), null, key)
   }
+  // The release channel is preferred; a session from before it still finds its @main copy.
+  const RELEASE_SPEC = "copilot:github:ourostack/desk:plugins/desk@release"
+  const both = await agency({ index: { [RELEASE_SPEC]: { dir_name: "aaa" }, [SPEC]: { dir_name: "ddd" } } })
+  assert.equal(deriveAgencySpec({ env: {}, agentHost: "copilot", pluginRoot: both.pluginRoot, running: "3.2.0-alpha.153", homeDir: both.home }), RELEASE_SPEC)
+  const releaseOther = await agency({ index: { [RELEASE_SPEC]: { dir_name: "missing" }, [SPEC]: { dir_name: "aaa" } } })
+  assert.equal(deriveAgencySpec({ env: {}, agentHost: "copilot", pluginRoot: releaseOther.pluginRoot, running: "3.2.0-alpha.153", homeDir: releaseOther.home }), null, "an unreadable release copy is an error, not a reason to guess")
   const none = await agency({ index: {} })
   assert.equal(deriveAgencySpec({ env: {}, agentHost: "copilot", pluginRoot: none.pluginRoot, running: "3.2.0-alpha.153", homeDir: none.home }), null)
   await fs.writeFile(path.join(none.home, ".local", "agency", "plugins", "cache", "cache_index.json"), JSON.stringify({}))
@@ -115,6 +120,8 @@ test("the started line says what was started and the new version", () => {
   const plan = refreshPlan({ env: {}, pluginRoot: CLAUDE_ROOT, agentHost: "claude", running: "x", homeDir: "/h" })
   assert.equal(startedLine(finding(), plan), "Desk 3.2.0-alpha.153 is 19 releases behind main (3.2.0-alpha.172); running claude plugin update desk@ourostack in the background, so a new session will run 3.2.0-alpha.172.")
   assert.equal(startedLine({ ...finding(), behind: null }, { doing: "refreshing the Agency plugin cache" }), "Desk 3.2.0-alpha.153 is behind main (3.2.0-alpha.172); refreshing the Agency plugin cache in the background, so a new session will run 3.2.0-alpha.172.")
+  const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true, spec: "copilot:github:ourostack/desk:plugins/desk@release" })
+  assert.equal(startedLine(release, { doing: "refreshing the Agency plugin cache" }), "Desk 3.2.92 is behind the release channel (3.2.93); refreshing the Agency plugin cache in the background, so a new session will run 3.2.93.")
 })
 
 async function ctx(over = {}) {
@@ -270,7 +277,7 @@ test("current Desk, a Copilot dev checkout and an underivable host start nothing
   await runBootCli({ argv: ["--json"], env: {}, io: dev, bootFn: stale("copilot"), refreshOptions: { ...refreshOptions, pluginRoot: "/Users/me/code/desk/plugins/desk" } })
   const json = JSON.parse(dev.chunks[0])
   assert.equal(json.stale_desk.auto_refresh, "unavailable")
-  assert.match(json.stale_desk.line, /run copilot plugin update desk, or, if Agency launched this session/u)
+  assert.match(json.stale_desk.line, /run copilot plugin update desk, then start a new session/u)
   assert.equal(calls.length, 0)
   assert.equal(existsSync(path.join(stateDir, REFRESH_STAMP_FILE)), false)
 })
