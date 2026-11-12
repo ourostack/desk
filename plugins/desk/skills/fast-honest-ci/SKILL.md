@@ -42,7 +42,7 @@ CI should cost as little wall clock and money as it can while proving the same t
 - Workflows that are required checks need the `merge_group` trigger, or the queue waits on checks that never start ([merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)).
 - **Size build concurrency to the runner pool.** It limits how many `merge_group` builds run at once (1 to 100). Entries building at once, times jobs per run, plus pull request traffic, should fit under the plan's concurrent-job limit. Merge limits batch merges; they don't combine builds.
 - **Don't test the same commit twice.** When the queue fast-forwards the branch to a commit its group already tested, the push run can skip the suite.
-- **A drop is a red run:** find its cause before queueing again. Never re-queue automatically.
+- **A drop is a red run:** read its failure first. A known or likely flake may be re-run once, with the run link stated in the pull request; then fix the cause. Never close a pull request or discard work because a check failed.
 - **Keep generated files out of commits,** or queue entries that regenerate the same file conflict and drop.
 
 ## 5. The budget guard
@@ -51,7 +51,7 @@ A final job needs every other job and writes each job's minutes to the step summ
 
 ## 6. A red check
 
-- **Cause before any re-run.** Read the exact failure and the log around it, name the two things racing, make the bad order happen every time, then fix it where the truth is decided. Flakes are common, not rare: at Google, 84% of observed pass-to-fail transitions involved a flaky test ([flaky tests at Google](https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html)), and each one hides real breakage until it has a cause.
+- **Read the failure, then fix its cause.** Read the exact failure and the log around it, name the two things racing, make the bad order happen every time, then fix it where the truth is decided. Flakes are common, not rare: at Google, 84% of observed pass-to-fail transitions involved a flaky test ([flaky tests at Google](https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html)), and each one hides real breakage until it has a cause.
 - **Three outcomes:** a test bug, fixed with probe counts that fail without the fix and pass with it; a product bug, where you stop, tell its owner and fix the product with a regression test; or a known failure whose signature (its exact message) is already filed with an owner, which may get one re-run, recorded on the run or pull request. GitHub's own service failing while every test passed is filed the same way.
 - **Never** loosen a gate, lengthen a timeout, take fewer samples, retry automatically, or skip or quarantine a test without an open issue and owner. A bounded, logged retry in product code against a busy OS resource is behaviour, not a test re-run.
 - **Revert on evidence, not suspicion.** Probe the suspect change first.

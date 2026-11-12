@@ -45,7 +45,7 @@ If material resequencing becomes necessary, record the observed waste pattern, t
 
 Desk owns task and iteration state and archive transitions. The agreed endpoint determines whether verification ends at an intentional alpha/PR-only branch or includes authorized merge, release/install, consuming-surface smoke and cleanup. Superpowers finish options cannot silently change that endpoint.
 
-Invoke `superpowers:requesting-code-review` once at the diff boundary with the candidate branch and the relevant evidence, and record the head it reviewed as evidence. Record every finding disposition, keep one Superpowers implementation owner, run one bounded correction wave, and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
+Invoke `superpowers:requesting-code-review` once at the diff boundary with the candidate branch and the relevant evidence, and record the head it reviewed as evidence. Record every finding disposition, keep one Superpowers implementation owner, keep correcting until the candidate is green or a concrete blocker is named (a correction round has no fixed limit), and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
 
 ## Hosts and machines are agents' work
 
@@ -78,7 +78,7 @@ Ready is exactly step 2's definition: pending nodes with all dependencies accept
 
 Dispatch every non-conflicting ready node through pristine Superpowers skills, in its own worktree for a code repository: `superpowers:using-git-worktrees` gives each dispatched node its own isolated worktree so no two ready nodes share a writer; `superpowers:dispatching-parallel-agents` fans genuinely independent, non-conflicting nodes out; `superpowers:subagent-driven-development` and `superpowers:executing-plans` carry out one dispatched node's own implement/fix loop; `superpowers:verification-before-completion` runs before any acceptance. One coherent task's implement/fix loop stays sequential; independent non-conflicting nodes may run concurrently in stable table order.
 
-A candidate is accepted only after spec/targeted proof and a completed finding disposition from `superpowers:requesting-code-review` against the candidate branch, with the head it reviewed recorded as evidence. The same Superpowers implementation owner handles one bounded correction wave and the affected re-review; never open a second fix loop beside that owner's loop.
+A candidate is accepted only after spec/targeted proof and a completed finding disposition from `superpowers:requesting-code-review` against the candidate branch, with the head it reviewed recorded as evidence. The same Superpowers implementation owner keeps correcting until the candidate is green or a concrete blocker is named, then handles the affected re-review. Never close or abandon finished work because of a correction round count.
 
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
