@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.97 — 2026-11-12
+
+The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 67 bytes smaller. "Source and channels" no longer restates how a desk commits; [`git-hygiene`](skills/git-hygiene/SKILL.md) already states it (commit your own paths to `main`, and use a branch only to coordinate writers working at the same time), and the foundation now points there. The section keeps the code-repository flow through a worktree and pull request, and "Never pin a commit; a hash is evidence only.": pressure runs without either sentence pushed a hotfix straight to `main` and offered a pin moved forward by a job.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.96 — 2026-11-12
 
 The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 517 bytes smaller. "Alignment, then ownership" keeps its protocol: alignment before go, ownership after it, the gates that return control, and saying what you need when the human leaves. The rules for how to ask now live only in [`interaction-style`](skills/interaction-style/SKILL.md) §6, and the foundation points there. Three sentences moved there word for word: ask only for irreducible human input, and no jargon menus, reapproval or imagined future gates, to "Ask only when blocked"; use permitted noninteractive tools to avoid host prompt traps, to "No phantom limits". §6 already owned why forms are refused, batching decisions, valid stops and staying in a conversation the human opens.
