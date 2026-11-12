@@ -21,7 +21,7 @@ import * as path from "node:path"
 
 export const MAIN_SPEC = "github:ourostack/desk:plugins/desk@main"
 export const RELEASE_SPEC = "github:ourostack/desk:plugins/desk@release"
-export const ENGINES = ["claude", "copilot"]
+const ENGINES = ["claude", "copilot"]
 export const BACKUP_SUFFIX = ".pre-desk-release"
 const DESK_DEPENDENCY = /^github:ourostack\/desk:plugins\/desk@/u
 // A cache entry's folder name: one path segment, never `.` or `..`.

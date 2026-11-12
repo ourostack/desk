@@ -25,8 +25,6 @@ import { deriveAgencySpec, isAgencySession } from "./desk-channel.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 
-export { deriveAgencySpec, isAgencySession }
-
 export const REFRESH_TIMEOUT_MS = 8000
 export const REFRESH_TTL_MS = 60 * 60 * 1000
 export const REFRESH_CLAIM_STALE_MS = 30 * 1000

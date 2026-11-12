@@ -15,13 +15,12 @@ import {
   REFRESH_TTL_MS,
   claudeMarketplace,
   copilotInstalled,
-  deriveAgencySpec,
-  isAgencySession,
   planStaleRefresh,
   refreshPlan,
   startStaleRefresh,
   startedLine,
 } from "../../../../../plugins/desk/mcp/src/runtime/stale-desk-refresh.js"
+import { deriveAgencySpec, isAgencySession } from "../../../../../plugins/desk/mcp/src/runtime/desk-channel.js"
 
 const SPEC = "copilot:github:ourostack/desk:plugins/desk@main"
 const CLAUDE_SPEC = "claude:github:ourostack/desk:plugins/desk@main"
