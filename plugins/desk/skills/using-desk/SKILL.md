@@ -61,7 +61,7 @@ Before the first write, verify the checkout matches the task's recorded source. 
 
 ## Durable context and attribution
 
-Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"); secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). You own the desk's organization: tidy it and say so in one line (`interaction-style` §2). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
+Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`). Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). You own the desk's organization: tidy it and say so in one line (`interaction-style` §2). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
 
 ## Requirements that arrive during execution
 
