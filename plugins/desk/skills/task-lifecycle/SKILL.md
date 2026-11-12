@@ -58,7 +58,7 @@ Honesty is the point. When the operator refuses a delivery, your reason is compa
 
 ## One job is one task
 
-A job is one outcome, and it is recorded as exactly one task for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task is `done` and archived; `start-task` says how to reopen it. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
+A job is one outcome, one durable task. When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work. That one task holds the job for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task is `done` and archived; `start-task` says how to reopen it. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
 
 `desk_doctor` reports `duplicate_job` when two live task cards reference the same pull request. Fold them into one: keep the task that holds the most history, move the other's iteration folders under it with Git, and archive the emptied card, under the tidying rules in `interaction-style` section 2.
 

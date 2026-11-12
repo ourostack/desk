@@ -258,7 +258,7 @@ const ownedRules = [
   [/Long-lived work, bounded processes/u, "session-resumption"],
   [/Delivery has an owner|cleanup_pending/u, "task-lifecycle"],
   [/Friction is about how worker operated|Mark friction items landed/u, "friction-management"],
-  [/harness-local memory/u, "using-desk \"Durable context and attribution\""],
+  [/harness-local memory/u, "interaction-style \"Host commands that duplicate the desk\""],
   [/announce parallel work/u, "interaction-style"],
   [/self-modify agent permissions/u, "using-desk \"Authority\" and preflight-actions"],
   [/Authorization follows verb/u, "using-desk \"Authority\""],
@@ -684,9 +684,10 @@ contract("no skill tells the agent to propose a name or wait for naming confirma
   }
   assert.deepEqual(offenders, []);
 });
-contract("using-desk carries the organization sentence exactly once", () => {
+contract("interaction-style carries the organization sentence exactly once", () => {
   const sentence = "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.";
-  assert.equal(text("plugins/desk/skills/using-desk/SKILL.md").split(sentence).length - 1, 1);
+  assert.equal(text("plugins/desk/skills/interaction-style/SKILL.md").split(sentence).length - 1, 1);
+  assert.match(text("plugins/desk/skills/using-desk/SKILL.md"), /You own the desk's organization: tidy it and say so in one line \(`interaction-style` §2\)/u);
 });
 contract("track-card-format owns the scope line and says it drives routing", () => {
   const skill = text("plugins/desk/skills/track-card-format/SKILL.md");
@@ -1642,8 +1643,8 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["content-routing", /Fold new context into existing docs when possible/u],
     ["content-routing", /Tools for agents are designed by their user: the agent[\s\S]+"what would I want to use, and what would confuse me\?"[\s\S]+conversation partner, not the customer/u],
     // Rules the skills already stated; pinned so the desk's own instruction file can drop its copy.
-    ["using-desk", /task state and reusable artifacts live on `main` in the desk/u],
-    ["using-desk", /Instructions, preferences, task state and reusable artifacts live on `main` in the desk\. Only secrets, credentials, raw private transcripts and customer data stay outside Git/u],
+    ["interaction-style", /task state and reusable artifacts live on `main` in the desk/u],
+    ["interaction-style", /Instructions, preferences, task state and reusable artifacts live on `main` in the desk\. Only secrets, credentials, raw private transcripts and customer data stay outside Git/u],
     ["using-desk", /In a desk, commit and push to `main`; use a branch only to coordinate concurrent writers/u],
     ["git-hygiene", /## Never leave state behind\n\nBefore the session ends, persist task-owned changes/u],
     ["friction-management", /appending new entries during real use/u],

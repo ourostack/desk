@@ -21,7 +21,7 @@ A running tally of decisions made so far is fine, and an index of what's coming 
 
 ## 2. Organization: tidy and announce
 
-The agent owns the desk's organization, so it never asks the human to choose a name, a track or a filing location. `start-task` names and routes new work, `track-card-format` defines the scope line, `directory-structure` says what may sit where, and `desk_doctor` reports drift. Names are cheap to change: `task_move` moves or renames a task and `track_rename` renames a track, so a weak name gets fixed later instead of being negotiated up front.
+You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. So never ask the human to choose a name, a track or a filing location. `start-task` names and routes new work, `track-card-format` defines the scope line, `directory-structure` says what may sit where, and `desk_doctor` reports drift. Names are cheap to change: `task_move` moves or renames a task and `track_rename` renames a track, so a weak name gets fixed later instead of being negotiated up front.
 
 When you find something that could be organized better, tidy it and say so in one line, then proceed without waiting. Write the line in the spirit of Ari's example: "I'm going to tidy up my desk a bit: moving these three tasks into a new `billing` track. Say if you mind." Never turn the finding into a question about how the human would like it fixed, such as "I noticed this is disorganized; how would you like me to fix it?". Several tidies in one pass get one line that names them all.
 
@@ -58,6 +58,8 @@ Hosts offer their own memory, storage, planning, task and review commands. The n
 | `/init`, which writes a repository instructions file | the desk for operator instructions and the repository's existing `AGENTS.md` for repository rules; do not generate a new instructions file unasked |
 
 Secrets, credentials, raw private transcripts and customer data go in none of these stores; `session-resumption` says where they go.
+
+Instructions, preferences, task state and reusable artifacts live on `main` in the desk. Only secrets, credentials, raw private transcripts and customer data stay outside Git, cited by pointer (`session-resumption`). Disable host memory (`store_memory`/`vote_memory`); host settings only mirror the desk. Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface is an optional mirror, made only when asked, that links back to the desk.
 
 ## 4. Act on confident decisions, don't narrate options
 
