@@ -37,7 +37,7 @@ When the collaboration slips (`interaction-style` §10 lists the signs; the same
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their contribution path. Access is not ownership. An explicit instruction not to write overrides every capture habit. Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Deploy and run sign-in flows yourself; never type a password or paste a secret, or open side-route sign-ins (`az`, `open <url>`); only a password, MFA or consent screen you hit is the human's; merge when confident wherever the repository lets you, and never report completion with the PR open.
+Authority follows the human's verb and the surface's owner; an explicit instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state").
 
 ## Waste judgment
 
