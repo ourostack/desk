@@ -378,32 +378,33 @@ function main() {
   assert.match(section(skill, "Waste judgment"), /side quests in their own lanes;/u);
   assert.match(section(skill, "Waste judgment"), /Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
+  // The Alignment section keeps its protocol and gates; the how-to-ask rules it used to repeat live in interaction-style §6
+  // (pressure-tested 2026-11-12).
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [
-    /state the outcome, assumptions/iu,
-    /completion checks/iu,
-    /explicit go/iu,
-    /own routine choices and safe scoped work to done/iu,
-    /safe scoped work to done.*while questions wait/iu,
-    /gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
-    /recommended decisions and completion checks together/iu,
+    /Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go/u,
     /bounded requests need one confirming sentence/iu,
-    // Cold dry runs, 2026-10-12: "Frontload before they leave" did not make the agent say what it needed, or that it needed nothing, when the human left.
-    /When they say they're leaving, open with your needs, even if none/u,
-    /When the human opens conversation, stay; start nothing new on that topic until they close it or say go; approved background work may continue \(`interaction-style`\)/u,
-    /size and time aren't stop reasons/iu,
-    /group later decisions/iu,
     /Use normal chat, never structured-question tools or forms/u,
-    /forms disrupt conversation \(HX\)/iu,
-    /obscure whether judgment, permission or execution is needed \(AX\)/u,
-    /own routine choices/iu,
-    /No jargon menus, reapproval or imagined future gates/u,
-    /safe scoped work.*after corrections or apologies/u,
-    /Return only for blockers, human requests or gates/u,
-    /Ask only for irreducible human input after explaining plain meaning, recommendation and concrete consequence/u,
-    /Obey stops/u,
-    /Use permitted noninteractive tools to avoid host prompt traps/u,
-    /never bypass safeguards or self-authorize/u,
+    /own routine choices and safe scoped work to done after corrections or apologies and while questions wait/u,
+    /Return only for blockers, human requests or gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
+    /Grants lift only named gates/u,
+    // Cold dry runs, 2026-10-12, and the 2026-11-12 cut: without this line, agents told of the human leaving did not say they needed nothing.
+    /When they say they're leaving, open with your needs, even if none/u,
+    /`interaction-style` §6/u,
   ]);
+  for (const phrase of [
+    "No jargon menus, reapproval or imagined future gates.",
+    "Ask only for irreducible human input after explaining plain meaning, recommendation and concrete consequence.",
+    "Use permitted noninteractive tools to avoid host prompt traps; never bypass safeguards or self-authorize.",
+    "because they interrupt conversation, constrain input and obscure whether judgment, permission or execution is needed",
+    "The reply to \"I'm stepping away\" opens with that list",
+    "When you need nothing, the reply opens with one line that says so",
+    "gather everything that needs them into one sitting",
+    "Context size, elapsed time",
+    "an explicit stop from the operator",
+    "When the human opens a conversation (a question, an idea, \"let's talk\"), stay in it",
+  ]) {
+    assert.ok(owned("interaction-style").includes(phrase), `interaction-style must carry the rule the foundation points to: ${phrase}`);
+  }
 
   assertSectionConcepts(section(skill, "Coaching the collaboration"), [
     /`interaction-style` §10 lists the signs/u,
