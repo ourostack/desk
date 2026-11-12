@@ -4,4 +4,4 @@
 // modules. See src/runtime/agency-desk-channel.js.
 import { runAgencyDeskChannelCli } from "../src/runtime/agency-desk-channel.js"
 
-process.exitCode = runAgencyDeskChannelCli({ argv: process.argv.slice(2), env: process.env, io: process })
+process.exitCode = await runAgencyDeskChannelCli({ argv: process.argv.slice(2), env: process.env, io: process })

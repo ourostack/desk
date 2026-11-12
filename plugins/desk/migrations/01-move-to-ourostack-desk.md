@@ -46,19 +46,20 @@ if [ -f "$T" ] && grep -Eq "$V2_COORD" "$T"; then
   names="$(grep -Eo "$V2_COORD" "$T" | sed -E 's#^.*:plugins/([a-z-]+)@.*$#\1#' | sort -u | paste -sd ' ' -)"
   [ -e "$T.pre-ourostack-desk" ] || cp "$T" "$T.pre-ourostack-desk"
   tmp="$(mktemp)"
-  # Desk itself moves to its release channel; Superpowers, Plain Language and Crew track main, where their merges deliver them.
-  sed -E -e "s#github:ourostack/ouroboros-skills:plugins/desk@v2-alpha([^A-Za-z0-9._/-]|\$)#github:ourostack/desk:plugins/desk@release\\1#g" \
-    -e "s#$V2_COORD#github:ourostack/desk:plugins/\\1@main\\2#g" "$T" > "$tmp"
+  sed -E "s#$V2_COORD#github:ourostack/desk:plugins/\\1@main\\2#g" "$T" > "$tmp"
   # Write back into the existing file so a symlinked agency.toml stays a symlink.
   cat "$tmp" > "$T"
   rm -f "$tmp"
-  others="$(printf '%s\n' $names | grep -vx desk | paste -sd ' ' - || true)"
-  moved=""
-  case " $names " in *" desk "*) moved="github:ourostack/desk:plugins/desk@release for desk" ;; esac
-  if [ -n "$others" ]; then moved="${moved:+$moved and }github:ourostack/desk:plugins/<name>@main for ${others}"; fi
-  say "Agency: $T now tracks ${moved}. The original file is kept as $T.pre-ourostack-desk."
+  say "Agency: $T now tracks github:ourostack/desk:plugins/<name>@main for ${names}. The original file is kept as $T.pre-ourostack-desk."
   if grep -q "ourostack/ouroboros-skills:plugins/" "$T"; then
     say "Its other ourostack/ouroboros-skills entries stay as they are."
+  fi
+  # Desk itself then takes the 03-desk-release-channel step at once: to @release where nothing else in its list brings Desk,
+  # out of the way where something does, and unchanged while that cannot be told. Without node, 03 does it at the next start.
+  channel="${DESK_PLUGIN_ROOT:-}/mcp/scripts/agency-desk-channel.js"
+  if command -v node >/dev/null 2>&1 && [ -f "$channel" ]; then
+    stepped="$(node "$channel" --migrate 2>&1 || true)"
+    [ -z "$stepped" ] || say "$stepped"
   fi
 fi
 

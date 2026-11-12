@@ -2,20 +2,24 @@
 // that agency.toml is rewritten in place, once backed up, without a session ever selecting Desk under two specs.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, promises as fsPromises, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { readMigrations } from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
+import { holdLock } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import {
   BACKUP_SUFFIX,
   MAIN_SPEC,
   RELEASE_SPEC,
+  LOCK_SUFFIX,
   apply,
   cachedDependencies,
   plan,
+  reachesDesk,
   readBlocks,
+  replaceIfUnchanged,
   runAgencyDeskChannelCli,
 } from "../../../../../plugins/desk/mcp/src/runtime/agency-desk-channel.js"
 
@@ -54,30 +58,37 @@ const io = () => {
   return { out, io: { stdout: { write: (text) => { out.stdout += text } }, stderr: { write: (text) => { out.stderr += text } } } }
 }
 
-function run(argv, fixture) {
+async function run(argv, fixture) {
   const sink = io()
-  const status = runAgencyDeskChannelCli({ argv, env: { AGENCY_TOML: fixture.file }, io: sink.io })
+  const status = await runAgencyDeskChannelCli({ argv, env: { AGENCY_TOML: fixture.file }, io: sink.io })
   return { status, ...sink.out }
 }
 
-// The graph each engine would load from one plugin list: the Desk specs it selects, explicitly or through a declared dependency.
-function deskSpecs(text, cacheDir, engine) {
+// The Desk specs one engine would load from a plugin list: every Desk spec reachable from its entries through the whole cached
+// dependency graph (CIT -> MS Desk -> Desk), as Agency resolves it. `manifests` stands in for the cache when given.
+function deskSpecs(text, cacheDir, engine, manifests = null) {
+  const dependenciesOf = (spec) => (manifests !== null && spec in manifests ? manifests[spec] : cachedDependencies(cacheDir, spec))
   const specs = new Set()
+  const walk = (spec, seen) => {
+    if (seen.has(spec)) return
+    seen.add(spec)
+    if (spec.startsWith("github:ourostack/desk:plugins/desk@")) return void specs.add(spec)
+    for (const next of dependenciesOf(spec) ?? []) walk(next, seen)
+  }
   for (const block of readBlocks(text.split("\n")).filter((b) => b.table === "plugins.default" && b.plugin !== null)) {
-    if (block.engines !== null && !block.engines.includes(engine)) continue
-    if (block.plugin.startsWith("github:ourostack/desk:plugins/desk@")) specs.add(block.plugin)
-    for (const dependency of cachedDependencies(cacheDir, block.plugin) ?? []) if (dependency.startsWith("github:ourostack/desk:plugins/desk@")) specs.add(dependency)
+    if (block.engines === null || block.engines.includes(engine)) walk(block.plugin, new Set())
   }
   return [...specs].sort()
 }
 
 test("the machine as it is today: Desk on main for every engine, MS Desk and CIT bringing it on Copilot", async () => {
   const toml = [entry(SUPERPOWERS), entry(CREW), entry(MS_DESK, copilotOnly), entry(CIT, copilotOnly), entry(MAIN_SPEC), "[profiles.pinned.plugins]\n", "[[profiles.pinned.plugins.default]]\nplugin = \"github:ourostack/desk:plugins/desk@b997bfec\"\n"].join("\n")
-  const fixture = await agencyHome(toml, { [SUPERPOWERS]: null, [CREW]: null, [MS_DESK]: [MAIN_SPEC, SUPERPOWERS], [CIT]: [MS_DESK, MAIN_SPEC] })
+  // Published CIT (c740129d) declares MS Desk and no Desk; MS Desk declares Desk on main until it moves to the release channel.
+  const fixture = await agencyHome(toml, { [SUPERPOWERS]: null, [CREW]: null, [MS_DESK]: [MAIN_SPEC, SUPERPOWERS], [CIT]: [MS_DESK, SUPERPOWERS, CREW] })
   assert.deepEqual(deskSpecs(toml, fixture.cacheDir, "copilot"), [MAIN_SPEC])
 
-  assert.equal(run(["--detect"], fixture).status, 0)
-  const moved = run(["--migrate"], fixture)
+  assert.equal((await run(["--detect"], fixture)).status, 0)
+  const moved = await run(["--migrate"], fixture)
   assert.equal(moved.status, 0)
   assert.match(moved.stdout, /plugins\.default now selects github:ourostack\/desk:plugins\/desk@release for claude; another plugin there brings Desk on the other engines\. The original file is kept as .*agency\.toml\.pre-desk-release\.\n$/u)
   const after = readFileSync(fixture.file, "utf8")
@@ -88,46 +99,106 @@ test("the machine as it is today: Desk on main for every engine, MS Desk and CIT
   assert.deepEqual(deskSpecs(after, fixture.cacheDir, "copilot"), [MAIN_SPEC])
   assert.deepEqual(deskSpecs(after, fixture.cacheDir, "claude"), [RELEASE_SPEC])
   // Once MS Desk and CIT declare the release channel, Copilot loads one Desk again, on release.
-  const released = await agencyHome(after, { [MS_DESK]: [RELEASE_SPEC], [CIT]: [MS_DESK, RELEASE_SPEC] })
-  assert.deepEqual(deskSpecs(after, released.cacheDir, "copilot"), [RELEASE_SPEC])
-  assert.equal(run(["--detect"], fixture).status, 1, "nothing is left to move")
+  assert.deepEqual(deskSpecs(after, fixture.cacheDir, "copilot", { [MS_DESK]: [RELEASE_SPEC], [CIT]: [MS_DESK] }), [RELEASE_SPEC])
+  assert.deepEqual(deskSpecs(after, fixture.cacheDir, "copilot", { [MS_DESK]: [RELEASE_SPEC], [CIT]: [MS_DESK, RELEASE_SPEC] }), [RELEASE_SPEC], "CIT's restored direct Desk on release adds no root")
+  assert.equal((await run(["--detect"], fixture)).status, 1, "nothing is left to move")
+})
+
+test("CIT alone, which brings Desk only through MS Desk, makes the explicit entry give way, never a second Desk", async () => {
+  const toml = [entry(CIT, copilotOnly), entry(MAIN_SPEC, copilotOnly)].join("\n")
+  const fixture = await agencyHome(toml, { [CIT]: [MS_DESK, SUPERPOWERS], [MS_DESK]: [MAIN_SPEC, SUPERPOWERS], [SUPERPOWERS]: null })
+  assert.deepEqual(deskSpecs(toml, fixture.cacheDir, "copilot"), [MAIN_SPEC])
+  assert.match((await run(["--migrate"], fixture)).stdout, /removed the plugins\.default entry/u)
+  const after = readFileSync(fixture.file, "utf8")
+  assert.equal(after, entry(CIT, copilotOnly))
+  assert.deepEqual(deskSpecs(after, fixture.cacheDir, "copilot"), [MAIN_SPEC], "the same one Desk, now through CIT and MS Desk")
+  assert.deepEqual(deskSpecs(after, fixture.cacheDir, "copilot", { [MS_DESK]: [RELEASE_SPEC] }), [RELEASE_SPEC], "and one Desk once MS Desk declares release")
+
+  // An MS Desk that is not cached under CIT holds the entry unchanged.
+  const partial = await agencyHome(toml, { [CIT]: [MS_DESK] })
+  const held = await run(["--detect"], partial)
+  assert.equal(held.status, 1)
+  assert.match(held.stdout, /^held: .*github:gim-home\/CIT-tooling:plugins\/cit@main \(not cached: github:shared-internal-tools\/ms-desk:plugins\/ms-desk@main\)/u)
+  await run(["--migrate"], partial)
+  assert.equal(readFileSync(partial.file, "utf8"), toml)
+})
+
+test("the graph walk is cycle-safe and reports every uncached spec it reaches", () => {
+  const graph = { a: ["b"], b: ["a", "c"], c: null, d: ["e"], e: [MAIN_SPEC, "a"] }
+  assert.deepEqual(reachesDesk("a", (spec) => graph[spec]), { desk: false, missing: ["c"] })
+  assert.deepEqual(reachesDesk("d", (spec) => graph[spec]), { desk: true, missing: ["c"] })
+  assert.deepEqual(reachesDesk(RELEASE_SPEC, () => { throw new Error("a Desk spec is not expanded") }), { desk: true, missing: [] })
+})
+
+test("the file is replaced only under the lock and only if nobody changed it meanwhile", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const backup = `${fixture.file}${BACKUP_SUFFIX}`
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup, holdLock }
+  // Another session holds the lock: nothing is written, and the command says so and fails.
+  mkdirSync(`${fixture.file}${LOCK_SUFFIX}/other`, { recursive: true })
+  assert.equal(await replaceIfUnchanged({ ...args, lockWaitMs: 30 }), "busy")
+  const busy = io()
+  assert.equal(await runAgencyDeskChannelCli({ argv: ["--migrate"], env: { AGENCY_TOML: fixture.file }, io: busy.io, replace: (a) => replaceIfUnchanged({ ...a, lockWaitMs: 30 }) }), 1)
+  assert.match(busy.out.stdout, /was not changed: another Desk session is moving it now/u)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  spawnSync("rm", ["-r", `${fixture.file}${LOCK_SUFFIX}`])
+  // Changed before the lock was taken, or while the new file was being prepared: nothing written, no temporary file left.
+  assert.equal(await replaceIfUnchanged({ ...args, seen: "something else\n" }), "changed")
+  let reads = 0
+  const racing = { ...fsPromises, readFile: async (file, encoding) => (reads++ === 0 ? entry(MAIN_SPEC) : `${entry(MAIN_SPEC)}# added by Agency\n`) }
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: racing }), "changed")
+  const changed = io()
+  assert.equal(await runAgencyDeskChannelCli({ argv: ["--migrate"], env: { AGENCY_TOML: fixture.file }, io: changed.io, replace: async () => "changed" }), 1)
+  assert.match(changed.out.stdout, /was not changed: it changed while this ran/u)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+  // A failed backup other than "already there" stops the write and leaves no temporary file.
+  const failing = { ...fsPromises, writeFile: async (file, data, options) => (file === backup ? Promise.reject(Object.assign(new Error("disk full"), { code: "ENOSPC" })) : fsPromises.writeFile(file, data, options)) }
+  await assert.rejects(replaceIfUnchanged({ ...args, fsp: failing }), /disk full/u)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+  // Unchanged: replaced whole, with the file's own mode, and the lock is gone afterwards.
+  assert.equal(await replaceIfUnchanged(args), "written")
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(RELEASE_SPEC))
+  assert.equal(readFileSync(backup, "utf8"), entry(MAIN_SPEC))
+  assert.equal(existsSync(`${fixture.file}${LOCK_SUFFIX}`), false)
 })
 
 test("Desk alone moves to release; an entry another plugin covers on every engine gives way", async () => {
   const alone = await agencyHome([entry(SUPERPOWERS), entry(MAIN_SPEC, copilotOnly)].join("\n"), { [SUPERPOWERS]: null })
-  run(["--migrate"], alone)
+  await run(["--migrate"], alone)
   assert.equal(readFileSync(alone.file, "utf8"), [entry(SUPERPOWERS), entry(RELEASE_SPEC, copilotOnly)].join("\n"))
 
   const covered = await agencyHome([entry(MAIN_SPEC, copilotOnly), entry(MS_DESK, copilotOnly)].join("\n"), { [MS_DESK]: [MAIN_SPEC] })
-  const removed = run(["--migrate"], covered)
+  const removed = await run(["--migrate"], covered)
   assert.match(removed.stdout, /removed the plugins\.default entry for github:ourostack\/desk:plugins\/desk@main/u)
   assert.equal(readFileSync(covered.file, "utf8"), entry(MS_DESK, copilotOnly))
   assert.deepEqual(deskSpecs(readFileSync(covered.file, "utf8"), covered.cacheDir, "copilot"), [MAIN_SPEC])
 
   // An explicit release entry beside it covers it too.
   const both = await agencyHome([entry(MAIN_SPEC), entry(RELEASE_SPEC)].join("\n"))
-  run(["--migrate"], both)
+  await run(["--migrate"], both)
   assert.equal(readFileSync(both.file, "utf8"), entry(RELEASE_SPEC))
 })
 
 test("an entry waits while a plugin that might bring Desk is not cached, or names engines this cannot read", async () => {
   const uncached = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK)].join("\n"))
-  const detect = run(["--detect"], uncached)
+  const detect = await run(["--detect"], uncached)
   assert.equal(detect.status, 1)
   assert.match(detect.stdout, /^held: in plugins\.default, Desk cannot yet tell on which engines github:shared-internal-tools\/ms-desk:plugins\/ms-desk@main brings Desk/u)
-  const migrate = run(["--migrate"], uncached)
+  const migrate = await run(["--migrate"], uncached)
   assert.equal(migrate.status, 0)
   assert.match(migrate.stdout, /^Agency: left as it is: in plugins\.default/u)
   assert.equal(readFileSync(uncached.file, "utf8"), [entry(MAIN_SPEC), entry(MS_DESK)].join("\n"))
 
   const odd = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK, 'engines = ["codex"]\n')].join("\n"), { [MS_DESK]: [MAIN_SPEC] })
-  assert.equal(run(["--detect"], odd).status, 1)
+  assert.equal((await run(["--detect"], odd)).status, 1)
   // A plugin with unreadable engines that does not bring Desk changes nothing.
   const plain = await agencyHome([entry(MAIN_SPEC), entry(CREW, "engines = [\n")].join("\n"), { [CREW]: null })
-  assert.equal(run(["--detect"], plain).status, 0)
+  assert.equal((await run(["--detect"], plain)).status, 0)
 
   const target = await agencyHome(entry(MAIN_SPEC, 'engines = ["copilot",\n'))
-  assert.match(run(["--detect"], target).stdout, /has an engines value this migration cannot read/u)
+  assert.match((await run(["--detect"], target)).stdout, /has an engines value this migration cannot read/u)
 })
 
 test("only the same list and overlapping engines count, and each list is its own", async () => {
@@ -181,28 +252,28 @@ test("cached dependencies come only from a readable cached copy", async () => {
 
 test("the command: usage, a missing agency.toml, the home default, one backup and a symlink kept a symlink", async () => {
   const sink = io()
-  assert.equal(runAgencyDeskChannelCli({ argv: [], env: {}, io: sink.io }), 2)
+  assert.equal(await runAgencyDeskChannelCli({ argv: [], env: {}, io: sink.io }), 2)
   assert.match(sink.out.stderr, /^usage:/u)
   const missing = { file: path.join(await mkTempRoot("desk-agency-none-"), "agency.toml") }
-  assert.equal(run(["--detect"], missing).status, 1)
-  assert.equal(run(["--migrate"], missing).status, 0)
-  assert.equal(run(["--migrate"], (await agencyHome(entry(CREW)))).stdout, "")
+  assert.equal((await run(["--detect"], missing)).status, 1)
+  assert.equal((await run(["--migrate"], missing)).status, 0)
+  assert.equal((await run(["--migrate"], (await agencyHome(entry(CREW))))).stdout, "")
 
   const fixture = await agencyHome(entry(MAIN_SPEC))
-  assert.equal(runAgencyDeskChannelCli({ argv: ["--detect"], env: { AGENCY_TOML: "" }, io: io().io, homeDir: fixture.home }), 0)
+  assert.equal(await runAgencyDeskChannelCli({ argv: ["--detect"], env: { AGENCY_TOML: "" }, io: io().io, homeDir: fixture.home }), 0)
 
   // agency.toml kept elsewhere and linked in: the link stays and its target changes; an earlier backup is never overwritten.
   const real = path.join(await mkTempRoot("desk-agency-dotfiles-"), "agency.toml")
   writeFileSync(real, entry(MAIN_SPEC))
+  writeFileSync(`${real}${BACKUP_SUFFIX}`, "the first backup\n")
   const linked = await agencyHome("")
-  writeFileSync(`${linked.file}${BACKUP_SUFFIX}`, "the first backup\n")
   const link = linked.file
   spawnSync("rm", [link])
   symlinkSync(real, link)
-  assert.equal(run(["--migrate"], { file: link }).status, 0)
+  assert.equal((await run(["--migrate"], { file: link })).status, 0)
   assert.ok(lstatSync(link).isSymbolicLink())
   assert.equal(readFileSync(real, "utf8"), entry(RELEASE_SPEC))
-  assert.equal(readFileSync(`${link}${BACKUP_SUFFIX}`, "utf8"), "the first backup\n")
+  assert.equal(readFileSync(`${real}${BACKUP_SUFFIX}`, "utf8"), "the first backup\n")
 })
 
 test("the 03 migration is safe, needs no restart, and runs through scripts/migrations.js", async () => {

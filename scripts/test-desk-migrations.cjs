@@ -205,7 +205,7 @@ function parseMigration(file) {
 }
 
 // Tools the migration blocks and the fake use, for sandboxes with a restricted PATH.
-const BLOCK_TOOLS = ["bash", "sh", "grep", "sed", "awk", "cp", "cat", "rm", "mv", "mkdir", "mktemp", "dirname", "head", "jq", "git", "sort", "paste", "tr", "touch"];
+const BLOCK_TOOLS = ["bash", "sh", "grep", "sed", "awk", "cp", "cat", "rm", "mv", "mkdir", "mktemp", "dirname", "head", "jq", "git", "sort", "paste", "tr", "touch", "node"];
 
 function makeSandbox({
   installed = [],
@@ -281,6 +281,8 @@ function makeSandbox({
     HOME: home,
     CLAUDE_CONFIG_DIR: cfg,
     AGENCY_TOML: sandbox.toml,
+    // No Desk plugin root unless a test gives one: then Migrate also takes the 03-desk-release-channel step.
+    DESK_PLUGIN_ROOT: "",
     FAKE_CLAUDE_LOG: sandbox.log,
     FAKE_CLAUDE_STATE: sandbox.state,
     FAKE_CLAUDE_FAIL: "",
@@ -409,8 +411,7 @@ function withSandbox(options, body) {
 
 const OLD_BINDING = '{"schema_version":1,"desk":{"root":"/tmp/old-desk"}}\n';
 const V2 = (name, ref = "v2-alpha") => `github:ourostack/ouroboros-skills:plugins/${name}@${ref}`;
-// Desk itself moves to its release channel; its companions track main.
-const MOVED = (name) => `github:ourostack/desk:plugins/${name}@${name === "desk" ? "release" : "main"}`;
+const MOVED = (name) => `github:ourostack/desk:plugins/${name}@main`;
 const toml = (coordinates) => coordinates.map((coordinate) => `[[plugins.default]]\nplugin = "${coordinate}"\n`).join("\n");
 const V1_LINES = [
   "github:ourostack/ouroboros-skills:plugins/desk@main",
@@ -472,7 +473,7 @@ test("a V2 Claude and Agency user with no V1 plugins moves completely and loses 
     assert.equal(read(`${sandbox.toml}.bak`), USER_BAK, "the user's own agency.toml.bak is untouched");
 
     assert.equal(first.shown, [
-      `Agency: ${sandbox.toml} now tracks github:ourostack/desk:plugins/desk@release for desk and github:ourostack/desk:plugins/<name>@main for crew plain-language superpowers. The original file is kept as ${sandbox.toml}.pre-ourostack-desk.`,
+      `Agency: ${sandbox.toml} now tracks github:ourostack/desk:plugins/<name>@main for crew desk plain-language superpowers. The original file is kept as ${sandbox.toml}.pre-ourostack-desk.`,
       "Its other ourostack/ouroboros-skills entries stay as they are.",
       "Claude Code: crew@ourostack, superpowers@ourostack, plain-language@ourostack, desk@ourostack now run from the ourostack marketplace (ourostack/desk), with automatic updates on.",
       "Your desk binding carried over to the new install.",
@@ -706,20 +707,52 @@ test("an Agency move is not blocked on a machine with Claude Code but no jq and 
   });
 });
 
-test("the Agency report names only the coordinates that moved: Desk alone, or only its companions", () => {
-  const blocks = moveMigration();
-  withSandbox({ claude: false, agencyToml: toml([V2("desk"), ...V1_LINES]) }, (sandbox) => {
-    const result = drive(sandbox, blocks);
-    assert.equal(result.migrate.status, 0, result.migrate.stderr);
-    assert.equal(read(sandbox.toml), toml([MOVED("desk"), ...V1_LINES]));
-    assert.match(result.shown, /^Agency: \S+ now tracks github:ourostack\/desk:plugins\/desk@release for desk\. /u);
+// Agency's cache beside the sandbox agency.toml: each spec's cached agency.json lists the given dependencies.
+function seedAgencyCache(sandbox, manifests) {
+  const cache = path.join(path.dirname(sandbox.toml), "plugins", "cache");
+  const entries = {};
+  Object.entries(manifests).forEach(([spec, dependencies], index) => {
+    const dir = path.join(cache, "entries", `m${index}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "plugin.json"), "{}");
+    fs.writeFileSync(path.join(dir, "agency.json"), JSON.stringify({ dependencies }));
+    entries[`copilot:${spec}`] = { dir_name: `m${index}` };
   });
-  withSandbox({ claude: false, agencyToml: toml([V2("crew"), V2("superpowers")]) }, (sandbox) => {
+  fs.writeFileSync(path.join(cache, "cache_index.json"), JSON.stringify({ entries }));
+}
+
+test("the Agency move then takes Desk's release-channel step: release alone, out of the way behind CIT's MS Desk, held when unknown", () => {
+  const blocks = moveMigration();
+  const CIT = "github:gim-home/CIT-tooling:plugins/cit@main";
+  const MS = "github:shared-internal-tools/ms-desk:plugins/ms-desk@main";
+  const RELEASE = "github:ourostack/desk:plugins/desk@release";
+  const companions = { [MOVED("superpowers")]: [], [MOVED("crew")]: [] };
+  // Desk with only its companions: straight to the release channel.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), V2("superpowers"), V2("crew")]) }, (sandbox) => {
+    seedAgencyCache(sandbox, companions);
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
     const result = drive(sandbox, blocks);
     assert.equal(result.migrate.status, 0, result.migrate.stderr);
-    assert.equal(read(sandbox.toml), toml([MOVED("crew"), MOVED("superpowers")]));
-    assert.match(result.shown, /^Agency: \S+ now tracks github:ourostack\/desk:plugins\/<name>@main for crew superpowers\. /u);
-    assert.doesNotMatch(result.shown, /@release/u);
+    assert.equal(read(sandbox.toml), toml([RELEASE, MOVED("superpowers"), MOVED("crew")]), result.shown + result.migrate.stderr);
+    assert.match(result.shown, /plugins\.default now selects github:ourostack\/desk:plugins\/desk@release/u);
+  });
+  // Beside CIT, which brings MS Desk, which still brings Desk on main: the explicit entry gives way, never a second Desk.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), V2("superpowers"), CIT]) }, (sandbox) => {
+    seedAgencyCache(sandbox, { ...companions, [CIT]: [MS, MOVED("superpowers")], [MS]: [MOVED("desk"), MOVED("superpowers")] });
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("superpowers"), CIT]));
+    assert.doesNotMatch(read(sandbox.toml), /@release/u);
+  });
+  // CIT cached but MS Desk not: the entry stays on main and the report says why.
+  withSandbox({ claude: false, agencyToml: toml([V2("desk"), CIT]) }, (sandbox) => {
+    seedAgencyCache(sandbox, { [CIT]: [MS] });
+    sandbox.env.DESK_PLUGIN_ROOT = deskRoot;
+    const result = drive(sandbox, blocks);
+    assert.equal(result.migrate.status, 0, result.migrate.stderr);
+    assert.equal(read(sandbox.toml), toml([MOVED("desk"), CIT]));
+    assert.match(result.shown, /left as it is: .*not cached: github:shared-internal-tools\/ms-desk/u);
   });
 });
 
