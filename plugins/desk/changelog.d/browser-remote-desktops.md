@@ -1,1 +1,0 @@
-New [remote desktop guide](docs/browser-remote-desktops.md): how an agent drives a cloud PC's web client with `browser: "mine"`. It covers renewing refs after `AUTH_SNAPSHOT_INVALIDATED`, connecting, typing a real PowerShell command into the remote canvas, and checking it in a screenshot, since canvas typing reports `verified: false`.
