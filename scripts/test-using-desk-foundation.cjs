@@ -373,7 +373,8 @@ function main() {
     "counts-only telemetry",
     "Relay no unmeasured plan, cause or date.",
   ]);
-  assert.match(section(skill, "Authority"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's;/u);
+  assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state"\)/u);
+  assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
   assert.match(section(skill, "Waste judgment"), /side quests in their own lanes;/u);
   assert.match(section(skill, "Waste judgment"), /Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
@@ -428,15 +429,23 @@ function main() {
     assert.ok(owned("interaction-style").includes(phrase), `interaction-style must carry the rule moved out of the foundation: ${phrase}`);
   }
 
+  // The Authority section is a trigger (pressure-tested 2026-11-11); its sentences live word for word in the skills it names.
   assertSectionConcepts(section(skill, "Authority"), [
     /human's verb/iu,
-    /investigate and review cover gathering evidence only/iu,
-    /ship/iu,
-    /Access is not ownership/u,
     /explicit instruction not to write overrides/iu,
-    /never widen your own permissions/iu,
-    /`preflight-actions`/u,
+    /`interaction-style` "Authorization is scope"/u,
+    /Never widen your own permissions \(`preflight-actions`\)/u,
+    /Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship\./u,
   ]);
+  for (const phrase of [
+    "Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their contribution path.",
+    "open side-route sign-ins (`az`, `open <url>`)",
+  ]) {
+    assert.ok(owned("interaction-style").includes(phrase), `interaction-style must carry the rule moved out of the foundation: ${phrase}`);
+  }
+  assert.ok(owned("preflight-actions").includes("## Access is not ownership"), "preflight-actions must own access-is-not-ownership");
+  assert.ok(owned("preflight-actions").includes("the agent never edits its own permissions"), "preflight-actions must own the permission-widening rule");
+  assert.ok(owned("work-orchestration").includes("If a repository will let you merge, merge when confident") && owned("work-orchestration").includes("never report completion while the PR remains open"), "work-orchestration must own merging and the open-PR rule");
 
   assertSectionConcepts(section(skill, "Waste judgment"), [
     /Before and during work, check that each step adds justifiable, necessary, non-duplicative value/u,
