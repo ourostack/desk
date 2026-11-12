@@ -43,6 +43,7 @@ const args = process.argv.slice(2)
 fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify({ args, cwd: process.cwd() }) + "\\n")
 const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI_MODE || ""
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
+if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
@@ -1233,6 +1234,15 @@ test("browser_command runs only page commands, refuses options that switch sessi
   assert.match(text(await impatient.call("browser_command", { contextId: impatientId, args: ["eval", "sleep"] })), /longer than 2 seconds/u)
   await impatient.closeAll()
   await controller.closeAll()
+})
+
+test("a start that hangs past its budget says it timed out", async () => {
+  const { options, tmp } = await setup({ mode: "open-hang" })
+  const controller = web.createController({ ...options, openMs: 1000 })
+  const hung = await controller.call("browser_context", { action: "open", browser: "fresh" })
+  assert.equal(hung.isError, true)
+  assert.equal(text(hung), "The browser did not start within 1 seconds and was stopped. Try again, or use a fresh browser.")
+  assert.deepEqual(fs.readdirSync(tmp), [])
 })
 
 test("an unexpected error is reported as such", async () => {

@@ -450,6 +450,7 @@ function open(s, kind) {
       return result;
     });
   }).then(function (result) {
+    if (result.timedOut) throw plain("The browser did not start within " + s.openMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + (result.text ? " Details: " + result.text.slice(-1500) : ""));
     if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
     var opened = {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
