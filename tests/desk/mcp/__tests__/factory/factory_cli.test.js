@@ -8,7 +8,7 @@ import assert from "node:assert/strict"
 import { AsyncLocalStorage, createHook } from "node:async_hooks"
 import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
-import { cpSync, existsSync, mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdtempSync, promises as fs, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { setImmediate as nextTurn } from "node:timers/promises"
@@ -43,6 +43,7 @@ import { indexJob } from "./_index_helper.js"
 import { consentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/consent-mentioned.js"
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { osEnv } from "../_os_env.js"
+import { removeTree } from "../_remove_tree.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
@@ -107,7 +108,9 @@ async function scratch(run) {
       hook.disable()
       owner.disable()
     }
-    rmSync(base, { recursive: true, force: true })
+    // A copied gh.exe can stay held for a moment after its process handle is gone; the synchronous
+    // removal does not retry a Windows access-denied (_remove_tree.js), so EPERM failed main once (#758).
+    await removeTree(base)
   }
 }
 
