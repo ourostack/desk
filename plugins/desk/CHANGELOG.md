@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.96 — 2026-11-12
+
+The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 517 bytes smaller. "Alignment, then ownership" keeps its protocol: alignment before go, ownership after it, the gates that return control, and saying what you need when the human leaves. The rules for how to ask now live only in [`interaction-style`](skills/interaction-style/SKILL.md) §6, and the foundation points there. Three sentences moved there word for word: ask only for irreducible human input, and no jargon menus, reapproval or imagined future gates, to "Ask only when blocked"; use permitted noninteractive tools to avoid host prompt traps, to "No phantom limits". §6 already owned why forms are refused, batching decisions, valid stops and staying in a conversation the human opens.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.95 — 2026-11-12
 
 The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 277 bytes smaller: "Authority" is now a trigger that points to the skills that own each rule. Two sentences moved word for word to [`interaction-style`](skills/interaction-style/SKILL.md): which verbs cover evidence and which cover changes, to "The verb is the boundary"; running deploys and sign-ins yourself, never a password, a secret or a side-route sign-in, to "Fix the tooling". [`preflight-actions`](skills/preflight-actions/SKILL.md) already owned access versus ownership, and [`work-orchestration`](skills/work-orchestration/SKILL.md) already owned merging and the open-PR rule. The trigger keeps the rules agents broke without them in pressure tests: never widen your own permissions, and product and engineering calls are yours to decide and record.
