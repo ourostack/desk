@@ -44,6 +44,7 @@ fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify({ args, cwd:
 const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI_MODE || ""
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
+if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waiting for the browser\\n"); setTimeout(() => {}, 10000) }
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
@@ -1243,6 +1244,10 @@ test("a start that hangs past its budget says it timed out", async () => {
   assert.equal(hung.isError, true)
   assert.equal(text(hung), "The browser did not start within 1 seconds and was stopped. Try again, or use a fresh browser.")
   assert.deepEqual(fs.readdirSync(tmp), [])
+  const loud = await setup({ mode: "open-hang-loud" })
+  const talker = web.createController({ ...loud.options, openMs: 1000 })
+  assert.equal(text(await talker.call("browser_context", { action: "open", browser: "fresh" })), "The browser did not start within 1 seconds and was stopped. Try again, or use a fresh browser. Details: Waiting for the browser")
+  assert.deepEqual(fs.readdirSync(loud.tmp), [])
 })
 
 test("an unexpected error is reported as such", async () => {
