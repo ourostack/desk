@@ -273,7 +273,7 @@ test("work-orchestration's source contract names every required ready-set and re
     "stable table order",
     "candidate branch",
     "finding disposition",
-    "bounded correction",
+    "keeps correcting until the candidate is green",
     "affected re-review",
     "same Superpowers implementation owner",
   ]
@@ -295,7 +295,7 @@ test("work-orchestration ships the exact eight-step ready-set algorithm verbatim
 })
 
 test("work-orchestration keeps correction and affected re-review with the implementation owner", () => {
-  assert.match(orchestration, /bounded correction/iu)
+  assert.match(orchestration, /keeps correcting until the candidate is green/iu)
   assert.match(orchestration, /affected re-review/iu)
   assert.match(orchestration, /same Superpowers implementation owner/iu)
   assert.doesNotMatch(orchestration, excludedProviderPattern)
