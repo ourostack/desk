@@ -499,7 +499,9 @@ async function runBootChecks(options = {}) {
   const env = options.env ?? process.env;
   if (isHeadless(env)) return "";
   const registryDeadline = performance.now() + totalBudgetMs;
-  const remaining = () => registryDeadline - performance.now();
+  // A check's own timer firing proves its budget elapsed, even when performance.now() reads a little earlier: Node's timers run on libuv's cached loop time.
+  let charged = -Infinity;
+  const remaining = () => registryDeadline - Math.max(performance.now(), charged);
   const shared = {};
   const lines = [];
   const repairs = [];
@@ -558,9 +560,10 @@ async function runBootChecks(options = {}) {
       Promise.resolve()
         .then(() => check.run({ ...options, env, budgetMs: budget, deadline, signal: cancellation.signal, shared }))
         .then((value) => ({ value }), (error) => (error?.code === "boot_check_budget" ? { overrun: true } : { failed: true, error })),
-      new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true }); }),
+      new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true, timer: true }); }),
     ]);
     clearTimeout(timer);
+    if (outcome.timer) charged = Math.max(charged, deadline);
     // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
     const elapsed = performance.now() - checkStarted;
     if (outcome.overrun || elapsed > budget) cancellation.abort();
