@@ -1,1 +1,0 @@
-When a boot check uses up the session-start total budget, the checks after it are now always skipped. Before, a timer that fired a moment early could leave a sliver of budget, so the next check started anyway and was cut off ([#767](https://github.com/ourostack/desk/issues/767)).

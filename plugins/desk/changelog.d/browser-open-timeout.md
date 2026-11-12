@@ -1,1 +1,0 @@
-When a fresh browser hangs while starting, `browser_context` now says it did not start within its time limit and was stopped, instead of "The browser did not start" followed by empty details ([#763](https://github.com/ourostack/desk/issues/763)).

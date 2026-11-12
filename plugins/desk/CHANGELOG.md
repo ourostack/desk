@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.98 — 2026-11-12
+
+When a boot check uses up the session-start total budget, the checks after it are now always skipped. Before, a timer that fired a moment early could leave a sliver of budget, so the next check started anyway and was cut off ([#767](https://github.com/ourostack/desk/issues/767)).
+
+When a fresh browser hangs while starting, `browser_context` now says it did not start within its time limit and was stopped, instead of "The browser did not start" followed by empty details ([#763](https://github.com/ourostack/desk/issues/763)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.97 — 2026-11-12
 
 The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 67 bytes smaller. "Source and channels" no longer restates how a desk commits; [`git-hygiene`](skills/git-hygiene/SKILL.md) already states it (commit your own paths to `main`, and use a branch only to coordinate writers working at the same time), and the foundation now points there. The section keeps the code-repository flow through a worktree and pull request, and "Never pin a commit; a hash is evidence only.": pressure runs without either sentence pushed a hotfix straight to `main` and offered a pin moved forward by a job.
