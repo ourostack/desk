@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.95 — 2026-11-12
+
+The always-on [`using-desk`](skills/using-desk/SKILL.md) foundation is 277 bytes smaller: "Authority" is now a trigger that points to the skills that own each rule. Two sentences moved word for word to [`interaction-style`](skills/interaction-style/SKILL.md): which verbs cover evidence and which cover changes, to "The verb is the boundary"; running deploys and sign-ins yourself, never a password, a secret or a side-route sign-in, to "Fix the tooling". [`preflight-actions`](skills/preflight-actions/SKILL.md) already owned access versus ownership, and [`work-orchestration`](skills/work-orchestration/SKILL.md) already owned merging and the open-PR rule. The trigger keeps the rules agents broke without them in pressure tests: never widen your own permissions, and product and engineering calls are yours to decide and record.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.94 — 2026-11-12
 
 New [remote desktop guide](docs/browser-remote-desktops.md): how an agent drives a cloud PC's web client with `browser: "mine"`. It covers renewing refs after `AUTH_SNAPSHOT_INVALIDATED`, connecting, typing a real PowerShell command into the remote canvas, and checking it in a screenshot, since canvas typing reports `verified: false`.
