@@ -249,7 +249,7 @@ const ownedRules = [
   [/Selected engineering lifecycle/u, "using-desk \"Engineering work\""],
   [/Prereqs first/u, "session-start"],
   [/Desk MCP health guard/u, "session-start"],
-  [/One decision group per message/u, "using-desk \"Alignment, then ownership\""],
+  [/One decision group per message/u, "interaction-style §1"],
   [/Slugs are permanent/u, "nothing: the agent names from the outcome (start-task)"],
   [/tidy up my desk/iu, "interaction-style"],
   [/Cite every factual claim/u, "using-desk and evidence-discipline"],
