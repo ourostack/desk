@@ -464,14 +464,24 @@ function main() {
     /`superpowers:requesting-code-review`/u,
   ]);
 
-  assertSectionConcepts(section(skill, "Source and channels"), [
-    /recorded source/iu,
-    /changes reach the channel, the branch consumers track, through the normal flow/u,
-    /branch from it in a worktree and merge back through a pull request/u,
-    /In a desk, commit and push to `main`/u,
-    /Never pin a commit; a hash is evidence only/u,
-    /`git-hygiene` holds the procedure/u,
+  // Source and channels keeps the code-repository flow and the no-pin rule: cutting either failed pressure on 2026-11-12
+  // (a hotfix pushed straight to main; a pin "moved forward by a job"). The desk-commit rule moved to git-hygiene.
+  assertSectionPhrases(section(skill, "Source and channels"), "using-desk Source and channels", [
+    "Before the first write, verify the checkout matches the task's recorded source.",
+    "In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request.",
+    "Never pin a commit; a hash is evidence only.",
+    "`git-hygiene` holds the procedure, desk commits included.",
   ]);
+  for (const phrase of [
+    "The task's recorded source is its channel, the branch consumers track: before the first write or worktree, verify the checkout is on that channel or a task branch from it",
+    "A commit hash is evidence only: record the head you saw, and never pin work, a review or a handoff to it.",
+    "**Do each unit of work in a git worktree off `main`**",
+    "In a desk, commit your own paths to `main`",
+    "use a branch only to coordinate writers working at the same time",
+    "Dependencies between plugins (`agency.json`, plugin manifests, bundle declarations) track their release channel branch",
+  ]) {
+    assert.ok(owned("git-hygiene").includes(phrase), `git-hygiene must carry the rule the foundation points to: ${phrase}`);
+  }
 
   assertSectionPhrases(section(skill, "Durable context and attribution"), "using-desk Durable context and attribution", [
     "Durable state lives on `main` in the desk, never in a host's memory or folders",
