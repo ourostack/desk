@@ -429,6 +429,8 @@ test("snapshot time consumes the same wall-clock boot deadline", async (t) => {
   const allowances = []
   const output = await line(f, {
     totalBudgetMs: 300, checkBudgets: { "unsaved-work": 100 },
+    // The check answers at once, so only the snapshots spend time; a real Git read can outlast the check's real 100 ms timer on a slow runner, and that time is charged too.
+    unsavedWorkGit: async () => ({ ok: false }),
     spawnGit: (_command, args, options) => {
       if (args.includes("rev-parse")) return { status: 0, stdout: "true\n" }
       const allowance = Math.min(180, options.timeout)
