@@ -189,6 +189,18 @@ test("disappearing observed checks cannot authorize a merge, including checks se
   }
 })
 
+test("a required check no one ever reported names the commit and the writer-side run it needs", () => {
+  const f = fixture({ pr: { ...fixture().pr, statusCheckRollup: [] }, statusPages: [[{ statuses: [] }]], checkPages: [[{ check_runs: [] }]] })
+  assert.throws(() => publishPullRequest(f.request), (error) => {
+    assert.match(error.message, /still missing or pending: workspace-policy\. Never reported on a{40}: workspace-policy\./u)
+    assert.match(error.message, new RegExp(`run it on branch desk/publish/${head}`, "u"))
+    return true
+  })
+  assert.ok(!f.calls.some((call) => call.includes("PUT")))
+  const pending = fixture({ pr: { ...fixture().pr, statusCheckRollup: [{ name: "workspace-policy", status: "IN_PROGRESS" }] } })
+  assert.throws(() => publishPullRequest(pending.request), (error) => /still missing or pending: workspace-policy\. Fix:/u.test(error.message) && !/Never reported/u.test(error.message))
+})
+
 test("observed job identities stay pending when another job with the same name succeeds", () => {
   const pending = { name: "same-name", detailsUrl: "https://github.example/jobs/1", status: "IN_PROGRESS" }
   const replacement = { ...pending, detailsUrl: "https://github.example/jobs/2", status: "COMPLETED", conclusion: "SUCCESS" }

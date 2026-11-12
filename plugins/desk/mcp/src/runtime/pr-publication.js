@@ -160,7 +160,8 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
       verify(pr)
       if (pr.state === "MERGED") break
       if (pr.baseRefOid !== onto) throw new Error("The publication base advanced; retry to qualify a fresh candidate")
-      const waiting = checkState(loadChecks(), policy.required_checks, observed, ruled)
+      const reported = loadChecks()
+      const waiting = checkState(reported, policy.required_checks, observed, ruled)
       if (waiting.length === 0) {
         const merged = gh(["api", "--hostname", repo.host, "--method", "PUT", `repos/${repo.name}/pulls/${pr.number}/merge`,
           "-f", `sha=${head}`, "-f", "merge_method=merge"])
@@ -168,7 +169,10 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
         receipt.merge = merged.sha
         break
       }
-      if (clock.now() >= deadline) throw new Error(`PR checks still missing or pending: ${waiting.join(", ")}`)
+      if (clock.now() >= deadline) {
+        const unreported = policy.required_checks.filter((name) => !reported.some((check) => check.name === name))
+        throw new Error(`PR checks still missing or pending: ${waiting.join(", ")}${unreported.length === 0 ? "" : `. Never reported on ${head}: ${unreported.join(", ")}. GitHub Actions will not supply a check that is only posted by running it against this exact commit (for example CIT's cit-check, which runs on a writer's machine); run it on branch ${branch}`}`)
+      }
       clock.sleep(Math.min(5000, deadline - clock.now()))
     }
     const fetched = git(["fetch", "--quiet", "--no-tags", upstream.remote, `+${upstream.merge}:${upstream.tracking}`], 60_000)
