@@ -57,7 +57,7 @@ Use `desk:start-task`, then `desk:using-superpowers-with-desk`. Use `superpowers
 
 ## Source and channels
 
-Before the first write, verify the checkout matches the task's recorded source. In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request. In a desk, commit and push to `main`; use a branch only to coordinate concurrent writers. Never pin a commit; a hash is evidence only. `git-hygiene` holds the procedure.
+Before the first write, verify the checkout matches the task's recorded source. In a code repository, changes reach the channel, the branch consumers track, through the normal flow: branch from it in a worktree and merge back through a pull request. Never pin a commit; a hash is evidence only. `git-hygiene` holds the procedure, desk commits included.
 
 ## Durable context and attribution
 

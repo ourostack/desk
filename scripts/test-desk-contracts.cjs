@@ -1645,7 +1645,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     // Rules the skills already stated; pinned so the desk's own instruction file can drop its copy.
     ["interaction-style", /task state and reusable artifacts live on `main` in the desk/u],
     ["interaction-style", /Instructions, preferences, task state and reusable artifacts live on `main` in the desk\. Only secrets, credentials, raw private transcripts and customer data stay outside Git/u],
-    ["using-desk", /In a desk, commit and push to `main`; use a branch only to coordinate concurrent writers/u],
+    ["git-hygiene", /In a desk, commit your own paths to `main`[\s\S]+use a branch only to coordinate writers working at the same time/u],
     ["git-hygiene", /## Never leave state behind\n\nBefore the session ends, persist task-owned changes/u],
     ["friction-management", /appending new entries during real use/u],
     ["directory-structure", /the desk lives at `\$DESK\/` \(shorthand for the desk's absolute path/u],
