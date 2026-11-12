@@ -61,7 +61,7 @@ Before the first write, verify the checkout matches the task's recorded source. 
 
 ## Durable context and attribution
 
-Instructions, preferences, task state and reusable artifacts live on `main` in the desk. Only secrets, credentials, raw private transcripts and customer data stay outside Git, cited by pointer (`session-resumption`). Disable host memory (`store_memory`/`vote_memory`); host settings only mirror the desk. Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface is an optional mirror, made only when asked, that links back to the desk. A job is one outcome, one durable task. When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work. You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
+Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"); secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). You own the desk's organization: tidy it and say so in one line (`interaction-style` §2). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
 
 ## Requirements that arrive during execution
 

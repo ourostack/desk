@@ -464,19 +464,27 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Durable context and attribution"), "using-desk Durable context and attribution", [
-    "live on `main` in the desk",
-    "Only secrets, credentials, raw private transcripts and customer data stay outside Git",
-    "(`session-resumption`)",
-    "Disable host memory (`store_memory`/`vote_memory`)",
-    "host settings only mirror the desk",
-    "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
-    "is an optional mirror, made only when asked, that links back to the desk",
-    "one durable task",
-    "When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work.",
-    "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.",
+    "Durable state lives on `main` in the desk, never in a host's memory or folders",
+    "(`interaction-style` \"Host commands that duplicate the desk\")",
+    "secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`)",
+    "One outcome is one task, declared with task_focus (`task-lifecycle`)",
+    "You own the desk's organization: tidy it and say so in one line (`interaction-style` §2)",
     "Never add AI attribution",
     "`Co-Authored-By` trailers",
   ]);
+
+  // The section's rules moved word for word to the skills that own them (2026-11-11); the foundation keeps the trigger.
+  for (const [name, phrase] of [
+    ["interaction-style", "Instructions, preferences, task state and reusable artifacts live on `main` in the desk."],
+    ["interaction-style", "Disable host memory (`store_memory`/`vote_memory`); host settings only mirror the desk."],
+    ["interaction-style", "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface is an optional mirror, made only when asked, that links back to the desk."],
+    ["interaction-style", "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking."],
+    ["task-lifecycle", "A job is one outcome, one durable task. When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work."],
+    ["session-resumption", "stays outside Git"],
+    ["git-hygiene", "Co-Authored-By"],
+  ]) {
+    assert.ok(read(path.join(pluginRoot, "skills", name, "SKILL.md")).includes(phrase), `${name} must carry the moved rule: ${phrase}`);
+  }
 
   assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
     "Every factual claim to a human or an agent",
@@ -599,7 +607,7 @@ function main() {
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
   // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
-  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it. The aim-at-what-the-human-feels paragraph in Human and agent and its clauses in Authority and Waste judgment (2026-11-09) paid for themselves by moving sentences the owning skills already carry word for word: the peer-handoff rule and the model choice to `work-orchestration`, the CI-download grant to `fast-honest-ci`, and the child sign-off duplicate to Delivery and sign-off; "no second lifecycle policy" and "folds returned evidence into the same task" went too, since `task-lifecycle` and `work-orchestration` own both.
+  // sentence in "Child agents" (2026-09-29), then from 8000 to 8150 bytes for the two declared-focus sentences (2026-10-05), which the factory's binding rests on; then from 8150 to 8600 bytes for the delivery and sign-off section (2026-10-05), whose sentences the sign-off record rests on; then down to 8000 bytes (round AJ): the whole SessionStart context has to stay under Claude Code's 10,000-character limit, and `start_hook.test.js` holds it to 9,500 with long paths, so a further addition has to justify its size and make room by moving a procedure to the skill that owns it. The aim-at-what-the-human-feels paragraph in Human and agent and its clauses in Authority and Waste judgment (2026-11-09) paid for themselves by moving sentences the owning skills already carry word for word: the peer-handoff rule and the model choice to `work-orchestration`, the CI-download grant to `fast-honest-ci`, and the child sign-off duplicate to Delivery and sign-off; "no second lifecycle policy" and "folds returned evidence into the same task" went too, since `task-lifecycle` and `work-orchestration` own both. "Durable context and attribution" shrank to a trigger line (2026-11-11): its uncovered sentences moved word for word to `interaction-style` and `task-lifecycle`, and the rest were already stated in `session-resumption`, `interaction-style` and `git-hygiene`.
   const skillBytes = Buffer.byteLength(skill, "utf8");
   assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
