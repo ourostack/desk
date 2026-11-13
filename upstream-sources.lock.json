@@ -104,13 +104,23 @@
     {
       "id": "ourostack-ouro-ui-ax",
       "repository": "ourostack/ouro-ui",
-      "commit": "267ce6bbf88dec38c103e5a71c3dc6ebe301790c",
+      "commit": "2d008f4e1cfca944bf68cbda059576e52ded833a",
       "license": "MIT",
       "files": [
         {
           "sourcePath": "LICENSE",
           "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/LICENSE",
           "sha256": "6515c640c8b25cea05a476e6c5e325a3d9699f16e83a72048b32ecae08fdc4ab"
+        },
+        {
+          "sourcePath": "registry/ouro/ax/dev-commands.ts",
+          "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/dev-commands.ts",
+          "sha256": "911d0d56d47f7feb0d64eb96367c29369bd82a7fa925568e8dacda7a4454e09f"
+        },
+        {
+          "sourcePath": "registry/ouro/ax/exit-codes.ts",
+          "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/exit-codes.ts",
+          "sha256": "b6a6cc62877e7125f17846f9aa0861e3f849fa20cff3e52d4e44391562780d7c"
         },
         {
           "sourcePath": "registry/ouro/ax/precise-copy.ts",
@@ -121,6 +131,11 @@
           "sourcePath": "registry/ouro/ax/problem.ts",
           "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/problem.ts",
           "sha256": "bc417ebe5528544eb112b89042708dfd7a4cb2b9f4cb459dc8b104dd64f7449b"
+        },
+        {
+          "sourcePath": "registry/ouro/ax/surfaces.ts",
+          "generatedPath": "plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/surfaces.ts",
+          "sha256": "b8929125f579eb78627a0de0245e5dc312e28654791052e3b98b99c34a92ad01"
         }
       ]
     }
