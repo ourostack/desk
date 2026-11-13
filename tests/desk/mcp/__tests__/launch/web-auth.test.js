@@ -2926,3 +2926,102 @@ test("type sends each key only while its target holds the focus: focus taken at 
   doc.hasFocus = () => false
   assert.equal(auth.FOCUSED(inner), false, "a document without the window's focus gets no keys")
 })
+
+// ---- links that open a desktop app first ----
+
+test("a Teams link opens in its web form, with the link's query and fragment kept, and other links are left as given", () => {
+  const form = (url) => auth.webFormOf(url)
+  assert.equal(form("https://teams.microsoft.com/l/chat/0/0?users=a%40b.test"), "https://teams.microsoft.com/l/chat/0/0?users=a%40b.test&webjoin=true")
+  assert.equal(form("https://teams.cloud.microsoft/l/message/1/2#part"), "https://teams.cloud.microsoft/l/message/1/2?webjoin=true#part")
+  assert.equal(form("https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fchat%2F0%2F0%3Fusers%3Da&type=chat"),
+    "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fchat%2F0%2F0%3Fusers%3Da%26webjoin%3Dtrue&type=chat", "a launcher address gets the flag inside its link")
+  for (const same of ["https://teams.microsoft.com/l/chat/0/0?webjoin=false", "https://teams.microsoft.com/v2/", "https://example.test/l/chat/0/0", "msteams:/l/chat/0/0", "not a url"]) {
+    assert.equal(form(same), same)
+  }
+  const own = [{ hosts: ["app.example.test"], path: /^\/open\//u, query: { web: "1", lang: "en" } }]
+  assert.equal(auth.webFormOf("https://app.example.test/open/x?a=1", own), "https://app.example.test/open/x?a=1&web=1&lang=en", "the rules are data")
+})
+
+test("goto opens a Teams link at its web form", async () => {
+  const native = fakeDriver()
+  const adapter = adapterFor(native, await mkTempRoot("auth-web-form-"))
+  try {
+    await adapter.call(["goto", "https://teams.microsoft.com/l/chat/0/0?users=a%40b.test"])
+    await adapter.call(["goto", "https://app.example.test/work"])
+    assert.deepEqual(native.calls.filter((call) => call[0] === "goto").map((call) => call[1]),
+      ["https://teams.microsoft.com/l/chat/0/0?users=a%40b.test&webjoin=true", "https://app.example.test/work"])
+  } finally { await adapter.close() }
+})
+
+test("an aborted app launch, for any scheme, is named as the cause; the hint offers the web path and an explicit app route, never a fresh browser", async () => {
+  for (const [launch, scheme] of [["msteams:/l/chat/0/0?x=SECRET_QUERY", "msteams"], ["zoommtg://zoom.us/join?confno=SECRET_QUERY", "zoommtg"], ["mailto:someone@example.test", "mailto"]]) {
+    const native = fakeDriver()
+    const adapter = adapterFor(native, await mkTempRoot("auth-app-launch-"), WAIT_OUT_MS)
+    try {
+      native.page.emit("request", requestOn(native, "https://launch.example.test/prompt", { type: "document", main: true }))
+      const attempt = requestOn(native, launch, { type: "document", errorText: "net::ERR_ABORTED" })
+      native.page.emit("request", attempt)
+      native.page.emit("requestfailed", attempt)
+      const missing = await adapter.call(["wait", "never shows"])
+      assert.equal(missing.diagnosis.externalScheme, scheme)
+      assert.deepEqual(missing.diagnosis.network.failed, [{ host: scheme, type: "document", code: "aborted" }])
+      assert.match(missing.hint, new RegExp(`Probably the page tried to open an app through its ${scheme}: link; desk-web blocks every app launch`, "u"))
+      assert.match(missing.hint, /"Use the web app instead".*opening an app needs its own explicit route/u)
+      assert.doesNotMatch(missing.hint, /fresh|desktop app|network requests/u)
+      assert.equal(JSON.stringify([missing.diagnosis, missing.hint]).includes("SECRET_QUERY"), false)
+    } finally { await adapter.close() }
+  }
+})
+
+test("an aborted browser-internal address, or an app launch the page has since left, is not named as an app launch", async () => {
+  const native = fakeDriver()
+  const adapter = adapterFor(native, await mkTempRoot("auth-app-launch-left-"), WAIT_OUT_MS)
+  try {
+    const internal = requestOn(native, "data:text/html,x", { type: "document", errorText: "net::ERR_ABORTED" })
+    native.page.emit("request", internal)
+    native.page.emit("requestfailed", internal)
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, undefined)
+
+    const launch = requestOn(native, "msteams:/l/chat/0/0", { type: "document", errorText: "net::ERR_ABORTED" })
+    native.page.emit("request", launch)
+    native.page.emit("requestfailed", launch)
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, "msteams")
+    native.page.emit("request", requestOn(native, "https://app.example.test/work", { type: "document", main: true }))
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, undefined, "a later page load clears it")
+  } finally { await adapter.close() }
+})
+
+// A real Chromium against a local page that mimics a desktop-app launcher (set DESK_TEST_PLAYWRIGHT_CORE to a playwright-core folder).
+test("a launcher that tries several app schemes stays on its prompt, and its web form reaches the web page", { skip: process.env.DESK_TEST_PLAYWRIGHT_CORE ? false : "needs DESK_TEST_PLAYWRIGHT_CORE", timeout: 120000 }, async () => {
+  const http = await import("node:http")
+  const playwright = require(process.env.DESK_TEST_PLAYWRIGHT_CORE)
+  const prompt = `<title>Join</title><h1>Join</h1><button>Use the web app instead</button><script>
+    var link = new URLSearchParams(location.search).get("url") || ""
+    if (/[?&]webjoin=true/.test(link)) location.replace("/web")
+    else { setTimeout(function () { location.href = "msteams:/l/chat/0/0" }, 20)
+      var frame = document.createElement("iframe"); frame.src = "zoommtg://zoom.us/join"; document.body.appendChild(frame) }</script>`
+  const server = http.createServer((request, response) => {
+    if (request.url.startsWith("/l/")) { response.statusCode = 302; response.setHeader("location", "/launcher.html?url=" + encodeURIComponent("/_#" + request.url)); return response.end() }
+    response.setHeader("content-type", "text/html")
+    response.end(request.url.startsWith("/web") ? "<title>web</title><h1>Opened in the browser</h1>" : prompt)
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const root = await mkTempRoot("auth-launcher-real-")
+  const context = await playwright.chromium.launchPersistentContext(path.join(root, "profile"), { headless: true })
+  const link = `http://127.0.0.1:${server.address().port}/l/chat/0/0?users=a`
+  try {
+    const plain = auth.create(context, root, 15000, () => {}, { webForms: [] })
+    await plain.call(["goto", link])
+    const stuck = await plain.call(["wait", "Opened in the browser"])
+    assert.equal(stuck.waited.found, false)
+    assert.equal(stuck.diagnosis.externalScheme === "msteams" || stuck.diagnosis.externalScheme === "zoommtg", true)
+    assert.match(stuck.hint, /desk-web blocks every app launch/u)
+    const forms = [{ hosts: ["127.0.0.1"], path: /^\/l\//u, query: { webjoin: "true" } }]
+    const web = auth.create(context, root, 15000, () => {}, { webForms: forms })
+    await web.call(["goto", link])
+    assert.equal((await web.call(["wait", "Opened in the browser"])).waited.found, true)
+  } finally {
+    await context.close()
+    server.close()
+  }
+})
