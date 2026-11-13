@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_create } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
-import { notCommitted } from "./_route_around.js"
+import { assertNextFirst, notCommitted } from "./_route_around.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -367,6 +367,7 @@ test("task_create reports a commit failure without losing the write", async () =
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assertNextFirst(result)
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 

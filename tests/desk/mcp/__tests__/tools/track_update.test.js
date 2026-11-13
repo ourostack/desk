@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process"
 import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
-import { notCommitted } from "./_route_around.js"
+import { assertNextFirst, notCommitted } from "./_route_around.js"
 
 const SCOPE = "billing disputes and refund flows; not payroll"
 
@@ -323,6 +323,7 @@ test("track_update reports a commit failure without losing the write", async () 
   const { data } = await readFront(path.join(root, "billing-disputes", "track.md"))
   assert.equal(data.status, "closed")
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assertNextFirst(result)
   assert.deepEqual(calls, [], "a push is never scheduled when the commit itself failed")
 })
 

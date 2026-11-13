@@ -12,7 +12,7 @@ import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 import { DONE_EVIDENCE, SCOPE, assertNoCandidateLeak, commitAll, gitLog, gitStatus, initGit, lastCommitMessage, mkTrack, tasksTableBody, trackBody } from "./_move_fixture.js"
-import { notCommitted } from "./_route_around.js"
+import { assertNextFirst, notCommitted } from "./_route_around.js"
 
 // ── task_move: unarchive (M4-5) ──────────────────────────────────────────────
 
@@ -721,6 +721,7 @@ test("track_rename reports a commit failure without losing the rename", async ()
   assert.equal(result.to, "new-track", "the rename itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
+  assertNextFirst(result)
 })
 
 test("track_rename commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {

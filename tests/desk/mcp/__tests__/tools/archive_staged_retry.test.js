@@ -43,6 +43,8 @@ async function timedOutArchive({ track = true, trackContent = trackBefore, commi
     assert.match(result.commit.reason, /pre-commit hook was cut off/u)
     assert.equal(result.publication.status, "pending")
     assert.ok(result.route_around, "an archive that is not published carries route_around")
+    assert.equal(Object.keys(result)[0], "next", "the archive's pending answer opens with the next step")
+    assert.match(result.next, /run route_around\.steps now, in order/u)
   }
   f.index = git(f.root, "ls-files", "-s")
   return f

@@ -24,7 +24,7 @@ import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
 import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
-import { commitFailure, commitRoute } from "../util/route-around.js"
+import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { operationAnswer } from "../util/cas-commit.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { admitContent, assertCleanContentTarget } from "../desk/content-home.js"
@@ -196,7 +196,11 @@ function tidyTrailer(message) {
   return trimmed.split("\n").at(-1).trim() === TIDY_TRAILER ? trimmed : `${trimmed}\n\n${TIDY_TRAILER}`
 }
 
-export async function desk_save({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function desk_save(args) {
+  return withNext(await saveDesk(args))
+}
+
+async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (values.paths === undefined && values.files === undefined) {
     throw new Error("desk_save: pass `paths` (a non-empty array of path strings), `files`, or both")

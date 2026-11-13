@@ -14,7 +14,7 @@ import {
 import { deskRelativePath, resolveWriteTarget } from "../util/paths.js"
 import { objectInput } from "../util/object-input.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
-import { commitFailure, commitRoute } from "../util/route-around.js"
+import { commitFailure, commitRoute, withNext } from "../util/route-around.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import {
   validateTrackName,
@@ -157,7 +157,7 @@ export async function track_create({ deskRoot, input, person = null, search, spa
   search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
-  return result
+  return withNext(result)
 }
 
 /**
@@ -239,5 +239,5 @@ export async function track_update({ deskRoot, input, person = null, search, spa
   search?.noteChange(relPath(deskRoot, filePath))
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
-  return result
+  return withNext(result)
 }

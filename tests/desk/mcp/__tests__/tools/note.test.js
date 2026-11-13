@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process"
 import { note_ack, note_leave, localIso, noteFileName } from "../../../../../plugins/desk/mcp/src/tools/note.js"
 import { parseNote, renderNote } from "../../../../../plugins/desk/mcp/src/runtime/inbox.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { notCommitted } from "./_route_around.js"
+import { assertNextFirst, notCommitted } from "./_route_around.js"
 
 const URL = "https://github.com/acme/cit"
 const PR = `${URL}/pull/9`
@@ -200,6 +200,8 @@ test("note_leave leaves the pull request open, and says the note is not delivere
   assert.equal(branches(ws.bare), result.branch)
   assert.deepEqual(result.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
   assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
+  assert.equal(Object.keys(result)[0], "next", "the answer opens with the next step")
+  assert.match(result.next, /^The change is on disk but not committed or on the remote yet: run route_around\.steps now, in order/u)
 })
 
 test("note_leave's failure says how to finish it by hand, with a read-back: the pull request it opened, else the same note again", async () => {
@@ -305,6 +307,7 @@ test("note_ack writes but does not commit when it cannot, and says why", async (
   const spawnGit = (cmd, args, options) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "hook said no" } : spawnSync(cmd, args, options))
   const refused = await run(failing, { spawnGit })
   assert.deepEqual([refused.committed, notCommitted(refused.commit)], [false, { status: "failed", reason: "hook said no" }])
+  assertNextFirst(refused)
   assert.match(refused.message, /not committed \(the commit failed: hook said no; route_around finishes it\)/u)
 })
 

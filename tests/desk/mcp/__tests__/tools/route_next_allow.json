@@ -1,0 +1,88 @@
+[
+  {
+    "file": "_card-commit.js",
+    "match": "staged.stderr, route_around: commitRoute({ root: dir, paths: names",
+    "reason": "stageAndCommitFiles' stage failure; note_ack carries it under commit and withNext leads its answer"
+  },
+  {
+    "file": "_card-commit.js",
+    "match": "commit: \"stage_failed\", left_alone: 0,",
+    "reason": "writeCardCommitted's route; its callers (improvement.js withCommit, friction.js openCard) lead their answers with next"
+  },
+  {
+    "file": "_card-commit.js",
+    "match": "commit: \"deferred\"",
+    "reason": "writeCardCommitted's route; its callers (improvement.js withCommit, friction.js openCard) lead their answers with next"
+  },
+  {
+    "file": "_card-commit.js",
+    "match": "commit: \"stage_failed\", left_alone: leftAlone",
+    "reason": "writeCardCommitted's route; its callers (improvement.js withCommit, friction.js openCard) lead their answers with next"
+  },
+  {
+    "file": "_card-commit.js",
+    "match": "commit: code, left_alone",
+    "reason": "writeCardCommitted's route; its callers (improvement.js withCommit, friction.js openCard) lead their answers with next"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "if (!staged.ok) return { status: \"failed\", reason: staged.stderr, route_around: admittedRoute",
+    "reason": "archive publication route; task_archive wraps its pending answer with withNext (task.js)"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "staged archive differs from the admitted bytes",
+    "reason": "archive publication route; task_archive wraps its pending answer with withNext (task.js)"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "Git metadata staging failed\", route_around: admittedRoute",
+    "reason": "archive publication route; task_archive wraps its pending answer with withNext (task.js)"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "the admitted Git mode/type metadata could not be staged",
+    "reason": "archive publication route; task_archive wraps its pending answer with withNext (task.js)"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "archived card changed during its report patch",
+    "reason": "archive publication route; task_archive wraps its pending answer with withNext (task.js)"
+  },
+  {
+    "file": "desk-save.js",
+    "match": "return { status: \"failed\", reason, route_around: commitRoute({ root: deskRoot, paths: rels",
+    "reason": "notCommitted's route sits under commit; desk_save's export leads its answer with withNext"
+  },
+  {
+    "file": "lesson.js",
+    "match": "...(opened ? {} : { route_around: notOpenedRoute(",
+    "reason": "the unopened card's route; addDesk leads its answer with withNext"
+  },
+  {
+    "file": "shared-write.js",
+    "match": "return { status: \"pr_open\", reason: state.mergeStateStatus",
+    "reason": "pull request route; note_leave and lesson_add's team write lead their answers with withNext"
+  },
+  {
+    "file": "task.js",
+    "match": "if (!staged.ok) return { status: \"failed\", reason: staged.stderr, route_around: commitRoute({ root: dir, paths, message",
+    "reason": "stageAndCommitCard's stage failure; task_create and task_update carry it under commit and lead with next"
+  },
+  {
+    "file": "task.js",
+    "match": "route_around: routeAround,",
+    "reason": "archivePendingAnswer's route; each task_archive caller wraps the answer with withNext"
+  },
+  {
+    "file": "task.js",
+    "match": "reason: CONFLICTED_CARD_REASON, route_around: conflictedCardRoute",
+    "reason": "task_update's conflicted-card commit route, which task_update leads with next (#887)"
+  },
+  {
+    "file": "track.js",
+    "match": "if (!staged.ok) return { status: \"failed\", reason: staged.stderr, route_around: commitRoute({ root: dir, paths: [basename]",
+    "reason": "stageAndCommitTrackCard's stage failure; track_create and track_update carry it under commit and lead with withNext"
+  }
+]
+

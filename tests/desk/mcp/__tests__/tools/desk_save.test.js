@@ -265,7 +265,9 @@ test("desk_save reports a failure when git cannot list the staged changes before
   await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8")
   const spawnGit = (cmd, args, opts) => (args.includes("-M") ? { status: 1, stdout: "", stderr: "diff boom" } : spawnSync(cmd, args, opts))
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save" }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual({ ...result, commit: notCommitted(result.commit) }, { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } })
+  const { next, ...answer } = result
+  assert.match(next, /^The change is on disk but not committed, and Desk will not finish it from here: read back with commit\.route_around\.steps step 1/u)
+  assert.deepEqual({ ...answer, commit: notCommitted(answer.commit) }, { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } })
   assert.equal(commitCount(root), 0)
 })
 

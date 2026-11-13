@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
-import { notCommitted } from "./_route_around.js"
+import { assertNextFirst, notCommitted } from "./_route_around.js"
 
 const SCOPE = "europe trip planning and bookings; not day-to-day expenses"
 
@@ -312,6 +312,7 @@ test("track_create reports a commit failure without losing the write", async () 
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "track.md")))
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assertNextFirst(result)
   assert.deepEqual(calls, [], "a push is never scheduled when the commit itself failed")
 })
 

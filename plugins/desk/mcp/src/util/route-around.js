@@ -176,6 +176,16 @@ export function unfinishedNext(route, where) {
   return `The change is on disk but not committed or on the remote yet: run ${where}.steps now, in order, then read back the remote.`
 }
 
+/**
+ * The answer with its `next` sentence as its first key, when the answer carries a route: its own `route_around`, else its
+ * `commit`'s (#623). An answer with neither comes back unchanged.
+ */
+export function withNext(answer) {
+  if (answer.route_around) return { next: unfinishedNext(answer.route_around, "route_around"), ...answer }
+  if (answer.commit?.route_around) return { next: unfinishedNext(answer.commit.route_around, "commit.route_around"), ...answer }
+  return answer
+}
+
 /** Desk's record of a card change it could not finish, or null when the state folder cannot be written (the route is then held). */
 function recordCapture({ root, paths, message, capture }) {
   try {

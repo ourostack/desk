@@ -23,7 +23,7 @@ import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 import { DONE_EVIDENCE, SCOPE, assertNoCandidateLeak, commitAll, gitLog, gitStatus, initGit, lastCommitMessage, mkTrack, tasksTableBody, trackBody } from "./_move_fixture.js"
-import { notCommitted, routedPaths } from "./_route_around.js"
+import { assertNextFirst, notCommitted, routedPaths } from "./_route_around.js"
 
 test("task_move renames a task within the same track (Git desk) and renames its tasks-table row", async () => {
   const root = await mkTempDeskRoot()
@@ -860,6 +860,7 @@ test("task_move reports a commit failure without losing the move", async () => {
   assert.equal(result.to, path.posix.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "nothing was committed: git commit-tree failed: commit boom" })
+  assertNextFirst(result)
   assert.deepEqual(routedPaths(result.commit.route_around), ["main-track/old-name", "main-track/new-name", "main-track/new-name/task.md", "main-track/track.md"])
 })
 
