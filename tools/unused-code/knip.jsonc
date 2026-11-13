@@ -62,11 +62,6 @@
       "project": ["*.cjs", "lib/*.cjs"],
       "includeEntryExports": true
     },
-    "plugins/plain-language/hooks": {
-      "entry": ["inject.cjs"],
-      "project": ["*.cjs"],
-      "includeEntryExports": true
-    },
     "plugins/superpowers/skills": {
       "entry": [
         // Each script is run by a skill's instructions, or served by one of them (helper.js is the page script that server.cjs serves).

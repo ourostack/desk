@@ -43,7 +43,7 @@
         },
         "plain-language": {
           "path": "../plain-language",
-          "version": "0.2.10",
+          "version": "0.2.11",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         }

@@ -26,7 +26,7 @@ try {
   }
   writeFileSync(join(copy, "package.json"), `${JSON.stringify({ name: "desk-repository", private: true })}\n`)
   // knip reads a workspace from its package.json, and the hook and skill-script folders have none.
-  for (const folder of ["plugins/desk/hooks", "plugins/plain-language/hooks", "plugins/superpowers/skills"]) {
+  for (const folder of ["plugins/desk/hooks", "plugins/superpowers/skills"]) {
     writeFileSync(join(copy, folder, "package.json"), `${JSON.stringify({ name: `desk-unused-code-${folder.replaceAll("/", "-")}`, private: true })}\n`)
   }
   const knip = join(here, "node_modules", "knip", "bin", "knip.js")

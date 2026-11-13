@@ -437,10 +437,10 @@ async function sessionStartHooks(ctx, world, shared) {
     // Claude Code shows only a 2 KB preview of context past 10,000 characters; both hosts get the same budget.
     assert(context.length <= 10000, `the Desk session start context is ${context.length} characters, over the 10,000 a host shows in full`)
   })
-  await check(ctx, "hook.session_start.dependencies_inject", "hooks", () => {
+  await check(ctx, "hook.session_start.plain_language_silent", "hooks", () => {
     const plain = Object.entries(outputs.outputs).find(([key]) => key.startsWith("plain-language#"))
     const superpowers = Object.entries(outputs.outputs).find(([key]) => key.startsWith("superpowers#"))
-    assert(plain && /plain/iu.test(hookContext(plain[1].stdout)), "plain-language gave no Plain Language context")
+    assert(!plain, "plain-language still injects its contract at session start")
     assert(superpowers && /superpowers/iu.test(hookContext(superpowers[1].stdout) || superpowers[1].stdout), "superpowers gave no context")
   })
   if (world.host === "copilot") {
@@ -452,15 +452,6 @@ async function sessionStartHooks(ctx, world, shared) {
       const again = await runEvent(world, EVENTS.copilot.prompt, { prompt: "and again" }, ["desk"])
       assertHookOk(again["desk#0"], "second prompt")
       assert(hookContext(again["desk#0"].stdout) === "", `a later prompt repeated the boot direction: ${again["desk#0"].stdout.slice(0, 200)}`)
-    })
-  }
-  if (EVENTS[world.host].subagent) {
-    await check(ctx, "hook.subagent_start.plain_language", "hooks", async () => {
-      const out = await runEvent(world, EVENTS[world.host].subagent, { agent_type: "general-purpose" }, ["plain-language"])
-      const entry = Object.values(out)[0]
-      assert(entry, "no SubagentStart hook is registered")
-      assertHookOk(entry, "SubagentStart")
-      assert(/plain/iu.test(hookContext(entry.stdout)), "the subagent got no Plain Language context")
     })
   }
 }

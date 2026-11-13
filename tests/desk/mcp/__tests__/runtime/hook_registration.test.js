@@ -76,11 +76,6 @@ test("no shipped Desk file reads a test seam, and no hook requires or imports a 
   }
 })
 
-test("the plain-language hook the unused-code check lists is the one its registration files name", () => {
-  const hooks = registered(["plugins", "plain-language", "hooks", "hooks.json"], ["plugins", "plain-language", "hooks", "copilot-hooks.json"])
-  assert.deepEqual([...hooks].sort(), [...knip.workspaces["plugins/plain-language/hooks"].entry].sort())
-})
-
 // On Windows a bare `bash` resolves through PATH, and a standard user can have the WSL relay bash.exe first with no distro installed, where it exits 1. Every registered Desk hook command is Node, so none depends on which shell comes first.
 // The session-start commands first check, in the host's own shell, that a `node` is on PATH, and otherwise source hooks/node-missing.sh (or print the PowerShell literal) to say what to install; they still start no other shell.
 const NODE_GUARD = /^if command -v node >\/dev\/null 2>&1; then node "[^"]+"(?: "[^"]+")*; else desk_host=(?:claude|copilot); \. "[^"]+\/hooks\/node-missing\.sh"; fi$/u
