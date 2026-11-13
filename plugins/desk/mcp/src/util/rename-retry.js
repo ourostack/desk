@@ -31,20 +31,29 @@ export function renameWithRetry(source, destination, { rename = renameSync, slee
   }
 }
 
-/** The same retries as renameWithRetry, waiting without blocking the event loop. */
-export async function renameWithRetryAsync(source, destination, { rename = renameAsync, sleep = delay, platform = process.platform } = {}) {
+/**
+ * The same retries as renameWithRetry, waiting without blocking the event loop. `beforeRetry(error)` runs after each wait and
+ * before the next attempt; if it throws, the retries stop and its error is thrown unchanged.
+ */
+export async function renameWithRetryAsync(source, destination, { rename = renameAsync, sleep = delay, platform = process.platform, beforeRetry = () => {} } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await rename(source, destination)
       return
     } catch (error) {
       await sleep(retryWait(error, attempt, platform))
+      await beforeRetry(error)
     }
   }
 }
 
+/** True for the codes Windows gives while another process holds the file open. */
+export function isTransientError(error) {
+  return TRANSIENT.has(error?.code)
+}
+
 // How long to wait before the next attempt; throws `error` when it is not one to retry.
 function retryWait(error, attempt, platform) {
-  if (platform !== "win32" || !TRANSIENT.has(error.code) || attempt >= ATTEMPTS) throw error
+  if (platform !== "win32" || !isTransientError(error) || attempt >= ATTEMPTS) throw error
   return Math.min(STEP_MS * attempt, CAP_MS)
 }

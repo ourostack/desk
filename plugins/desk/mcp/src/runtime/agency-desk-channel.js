@@ -22,7 +22,7 @@ import { promises as fs, readFileSync, realpathSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
-import { renameWithRetryAsync } from "../util/rename-retry.js"
+import { isTransientError, renameWithRetryAsync } from "../util/rename-retry.js"
 
 export const MAIN_SPEC = "github:ourostack/desk:plugins/desk@main"
 export const RELEASE_SPEC = "github:ourostack/desk:plugins/desk@release"
@@ -255,17 +255,32 @@ function describe({ block, action, engines }) {
 }
 
 export const LOCK_SUFFIX = ".desk-migration.lock"
+// Thrown inside replaceIfUnchanged when agency.toml changed while its rename was being retried.
+const CHANGED = Symbol("agency.toml changed before the swap")
 
 /**
  * Writes `next` over the agency.toml at `target` (the resolved file, so a symlink to it stays a symlink) only if it still
  * holds `seen`: under Desk's directory lock beside it, through a temporary file in the same folder renamed into place, so
  * no reader ever sees half a file. Returns "written", "changed" (someone else changed it; nothing written) or "busy".
+ * Without Agency taking this lock, a write that lands between the final read and a single successful rename (two system calls) can't be detected by Desk.
  */
-export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitMs = 500, fsp = fs, holdLock }) {
+export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitMs = 500, fsp = fs, rename = (from, to) => fsp.rename(from, to), sleep, platform, holdLock }) {
   const outcome = await holdLock(`${target}${LOCK_SUFFIX}`, { lockWaitMs }, async () => {
     if ((await fsp.readFile(target, "utf8")) !== seen) return "changed"
     const mode = (await fsp.stat(target)).mode & 0o777
     const temp = `${target}.desk-${process.pid}-${randomBytes(4).toString("hex")}.tmp`
+    // Windows can refuse the rename while Agency has the file open, and each retry is a new window: before every retry the
+    // target must still hold `seen`. A read that fails only because the file is busy is not a change.
+    const beforeRetry = async () => {
+      let now
+      try {
+        now = await fsp.readFile(target, "utf8")
+      } catch (error) {
+        if (isTransientError(error)) return
+        throw CHANGED
+      }
+      if (now !== seen) throw CHANGED
+    }
     try {
       await fsp.writeFile(temp, next, { flag: "wx", mode })
       // The backup is the file as it was before the first move, and is never overwritten.
@@ -274,7 +289,12 @@ export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitM
       })
       // Read again right before the swap: a write that landed while the new file was being prepared is never lost.
       if ((await fsp.readFile(target, "utf8")) !== seen) return "changed"
-      await renameWithRetryAsync(temp, target)
+      try {
+        await renameWithRetryAsync(temp, target, { rename, sleep, platform, beforeRetry })
+      } catch (error) {
+        if (error === CHANGED) return "changed"
+        throw error
+      }
       return "written"
     } finally {
       await fsp.rm(temp, { force: true })
