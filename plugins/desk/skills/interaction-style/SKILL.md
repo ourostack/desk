@@ -216,6 +216,8 @@ A duration, cost or scope number in response prose follows `evidence-discipline`
 
 Commit messages, PR descriptions, work-item bodies and comments, code comments, friction entries, card bodies and skill content follow Plain Language's length and style rules, not this section's phrase bans or reply structure.
 
+Name files, folders and pages for the person who opens them: no opaque names such as `m2.ts` (Ari, 2026-11-11 12:18 PT: "stop it with jargony things and opaque names like "m2.ts" ... make all file names clear and delightful"). Where a tool fixes a name, such as a lockfile, keep that exact name.
+
 ## 8. Remote substrate boundary
 
 When the operator is on a remote substrate (a VM over RDP, an SSH session, a container shell, a dev box or sandbox) and you are about to dictate a sequence of per-user setup commands for them to type (`gh auth login`, `git clone`, installs, plugin bootstraps), stop: that makes the operator your keyboard. Tell them instead to launch the host's agent runtime inside the substrate, where an agent has the user's PATH, keyring, sign-in caches and shell, and inherits the same authorization (§6). Three or more commands for the operator to type into the substrate is the signal. Drive the steps through the operator only when the substrate cannot run an agent (say so), when it is a single command, or when the operator asked to be walked through for learning.

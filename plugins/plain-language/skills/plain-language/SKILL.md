@@ -80,7 +80,6 @@ Use a reader-facing name before an internal identifier. Every first mention that
 - Never make the reader decode an identifier such as `T17`, `Q08`, a commit hash, a branch name, an acronym, or a tool-internal label to understand the status, impact, or next action.
 - In a human-facing table, make the reader-facing name the primary column and put the exact identifier in a separate column only when it helps.
 - Keep an included identifier exact. Explain it; do not rename or paraphrase the identifier itself.
-- Name files, folders and pages for the person who opens them: no opaque names such as `m2.ts` (Ari, 2026-11-11 12:18 PT: "stop it with jargony things and opaque names like "m2.ts" ... make all file names clear and delightful"). Where a tool fixes a name, such as a lockfile, keep that exact name.
 
 ## Make the answer usable
 
