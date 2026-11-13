@@ -8,6 +8,12 @@ node <desk>/plugins/desk/mcp/scripts/drains.js ack ...   # report a wake's deliv
 node <desk>/plugins/desk/mcp/scripts/drains.js status    # one health line per drain, no poll
 ```
 
+## A runner that needs no checkout
+
+Every `drains.js` command (`poll`, `status`; `ack` skips it) first refreshes `drains/run.mjs` in the state folder below. It is a copy of [drains-launcher.mjs](../mcp/scripts/drains-launcher.mjs), so the file at that stable path always matches the Desk that wrote it, and a new machine gets it from its first `drains.js status`. The command's JSON names the installed path and its SHA-256 under `launcher`. A runner calls `node <state>/ouroboros-skills/desk/drains/run.mjs poll` instead of a path inside a Desk checkout.
+
+The launcher finds the newest `ourostack/desk` `plugins/desk@release` entry in Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`, then `entries/<dir_name>/mcp/scripts/drains.js`) and runs it with the same arguments. If that cannot be resolved, it runs the last path that worked (`last-good-script`) and logs one line to stderr and `resolve.log`; with no last good path it exits 1.
+
 ## Config and state
 
 Both live in Desk's state folder, `$XDG_STATE_HOME/ouroboros-skills/desk/drains/` (else `~/.local/state/…`), on the machine that runs the poll. The config names real repositories and sessions, so it is never committed. `--config` and `--state` point the command elsewhere.
