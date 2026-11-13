@@ -120,6 +120,8 @@ test("boot does not print a desk AGENTS.md a Copilot host already loaded from th
   assert.match(formatBootText(claude), /Team rule\./u)
   assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: { path: path.join(root, "gone", "AGENTS.md") } }), false, "a path that cannot be resolved prints the file")
   assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: null }), false)
+  const blank = formatBootText(sampleResult({ agents_md: { path: "/work/desk/AGENTS.md", text: "\n \n", truncated: false, bytes: 3, shownBytes: 3 }, agents_md_in_host_instructions: true }))
+  assert.match(blank, /Your host already loaded this file into your instructions, so it is not printed again here\./u, "a file with no text has no first line to name")
 })
 
 test("boot carries the shelf of lessons beside the person's AGENTS.md, or the desk's own on a solo desk", async () => {
