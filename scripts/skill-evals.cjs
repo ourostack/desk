@@ -601,7 +601,7 @@ function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
 }
 
 function usage() {
-  return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | record <suite-file> --result <harness-result.json|-> | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
+  return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
 }
 
 function main(args) {
@@ -611,7 +611,8 @@ function main(args) {
     console.log(JSON.stringify(revisionCommand(args.slice(1))));
     return;
   }
-  if (command === "record" && first && second === "--result" && extra && args.length === 4) {
+  if (command === "record") {
+    if (!first || second !== "--result" || !extra || args.length !== 4) fail("usage: node scripts/skill-evals.cjs record <suite-file> --result <harness-result.json|->");
     const result = recordReceipt(first, extra);
     console.log(`Recorded ${result.receipt}: ${result.cases} case(s), ${result.checks} check(s); commit it with the fingerprint change.`);
     return;
