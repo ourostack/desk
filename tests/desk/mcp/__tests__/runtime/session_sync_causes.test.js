@@ -83,7 +83,7 @@ test("a genuine conflict keeps the conflict cause, the conflicted paths and the 
   assert.equal(result.cause, "conflict")
   assert.deepEqual(result.conflicted, ["seed.md"])
   assert.equal(result.remote, origin)
-  assert.match(result.diagnostic, /`git status`/u)
+  assert.match(result.diagnostic, /status` to see what is in the way/u)
   assert.doesNotMatch(result.diagnostic, /will read clean/u)
 })
 
@@ -93,11 +93,11 @@ for (const [name, failure, cause, tell] of [
   ["a network timeout reported by spawnSync", { status: null, error: { code: "ETIMEDOUT" }, stderr: "" }, "deadline", /ran out of time/u],
   ["a killed git process", { status: null, signal: "SIGTERM", stderr: "" }, "deadline", /ran out of time/u],
   ["an unknown SSH host key", { status: 128, stderr: "Host key verification failed.\nfatal: Could not read from remote repository.\n" }, "auth_failed", /refused this host's credentials/u],
-  ["a local permission error", { status: 128, stderr: "fatal: unable to access '/home/u/.config/git/config': Permission denied\n" }, "other", /`git status`/u],
+  ["a local permission error", { status: 128, stderr: "fatal: unable to access '/home/u/.config/git/config': Permission denied\n" }, "other", /status` to see what is in the way/u],
   ["an HTTPS URL that cannot be reached", { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443\n" }, "unreachable", /could not be reached/u],
   ["a DNS failure", { status: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com\n" }, "unreachable", /could not be reached/u],
-  ["a diverged history", { status: 1, stderr: "hint: You have divergent branches\nfatal: Need to specify how to reconcile divergent branches.\n" }, "diverged", /`git status`/u],
-  ["an unknown failure", { status: 1, stderr: "something new and strange\n" }, "other", /`git status`/u],
+  ["a diverged history", { status: 1, stderr: "hint: You have divergent branches\nfatal: Need to specify how to reconcile divergent branches.\n" }, "diverged", /status` to see what is in the way/u],
+  ["an unknown failure", { status: 1, stderr: "something new and strange\n" }, "other", /status` to see what is in the way/u],
 ]) {
   test(`a pull that fails with ${name} is classified ${cause}, and the URL shown never carries credentials`, async () => {
     const { root } = await mkOriginWithClone()
@@ -163,7 +163,7 @@ for (const [name, failure, cause, files] of [
     const result = await syncWorkspace({ scheduleDelivery: noDelivery, root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull(failure) })
     assert.equal(result.state, "unresolved")
     assert.equal(result.cause, cause)
-    assert.match(result.diagnostic, /Desk problem: session-sync/u)
+    assert.match(result.diagnostic, /^desk: sync: /u)
     if (files) assert.equal(filed.reason, `pull_rebase_failed:${cause}`)
     else assert.equal(filed, null)
   })

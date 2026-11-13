@@ -288,7 +288,8 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     signal: text("When about is \"system\": the rollups measure the friction moves, when known."),
     evidence_jobs: list("When about is \"system\": factory job ids that show the friction, when known."),
     file_card: flag("Also file the store's kaizen issue for the \"system\" friction now, instead of leaving it to the loop's mirror step. Only valid when about is \"system\"."),
-  }, ["body"]),
+    error_code: text("Reports a Desk failure: the code its message gave in its friction_add call, such as desk_push_blocked. Records the failure's message and stack, the Desk version, host, desk path and recent sync status on the desk, as system friction. Then `body` and `title` are optional."),
+  }, []),
   lesson_add: schema({
     scope: {
       type: "string",

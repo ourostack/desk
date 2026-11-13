@@ -215,11 +215,11 @@ test("a refused pull tells the agent the probable cause, how to look further, ho
   const result = await syncWorkspace({ root, env: process.env, spawnGit: refused, spawnPull: refused, scheduleDelivery: () => {}, fileProblem: () => {} })
 
   assert.equal(result.cause, "auth_failed")
-  const tell = result.diagnostic.split("\n").find((line) => line.startsWith("  tell: ")).slice("  tell: ".length)
-  assert.match(tell, /^desk: sync: the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach https:\/\/github\.com\/arimendelow_microsoft\/desk\.git; /u)
+  const tell = result.diagnostic
+  assert.match(tell, /^desk: sync: the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach https:\/\/github\.com\/arimendelow_microsoft\/desk\.git \(/u)
   assert.match(tell, /local work continues and Desk retries with every write/u)
   assert.match(tell, /run `git -C \S+ ls-remote origin`/u)
-  assert.match(tell, /file this with its evidence run `node \S+file-desk-problem\.js'? --mechanism session-sync --reason '[^']*Repository not found[^']*' --host \S+`/u)
+  assert.match(tell, /to file a bug with its evidence, call friction_add with \{"error_code":"session_sync_unresolved"\}/u)
   assert.match(tell, / Fix: gh auth login --hostname github\.com\.$/u)
 })
 
@@ -237,5 +237,5 @@ test("a refused pull on a branch that tracks a remote other than origin still na
   const result = await syncWorkspace({ root, env: process.env, spawnGit: refused, spawnPull: refused, scheduleDelivery: () => {}, fileProblem: () => {} })
 
   assert.equal(result.cause, "auth_failed")
-  assert.match(result.diagnostic, /can reach the desk's remote; /u)
+  assert.match(result.diagnostic, /can reach the desk's remote \(/u)
 })

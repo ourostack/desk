@@ -62,6 +62,7 @@ import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-
 import { renameWithRetry } from "../util/rename-retry.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { createGitReader } from "./git-read-worker.js"
+import { deskFailure } from "./desk-failure.js"
 import { publicationRecovery } from "./pr-publication.js"
 import { publicationDeferred } from "./publication-mode.js"
 import { deliveryIsPublication } from "../util/main-publish.js"
@@ -670,16 +671,21 @@ export function deskPushNote({ root, env = process.env, spawnGit = spawnSync, no
     // A stale record with nothing actually left local says nothing: the next push clears it.
     if (left === 0) return { desk_note: note }
     const why = blockedWords(recorded.reason, Array.isArray(recorded.paths) ? recorded.paths : [])
-    if (recorded.reason === "publication_blocked") return {
-      desk_note: `Desk committed this locally, but it has not merged into the shared upstream. ${recorded.error ?? why}`,
-      desk_unpushed: left,
-      desk_push_blocked: recorded.reason,
-      desk_publication: recorded.publication ?? null,
-    }
+    const publication = recorded.reason === "publication_blocked"
+    const desk_note = deskFailure({
+      code: "desk_push_blocked",
+      thing: "push",
+      probably: publication
+        ? `Desk committed this locally, but it has not merged into the shared upstream: ${recorded.error ?? why}`
+        : `Desk committed this, but it is not on the remote yet: the last push failed because ${why}, so ${left} local Desk commit(s) are only on this machine`,
+      look: "call desk_status and read its sync section",
+      keepWorking: "Desk retries with every write and at session start, so keep working; until desk_status shows sync not blocked, say this is saved locally, not pushed, and run no git for it",
+    })
     return {
-      desk_note: `Desk committed this, but it is NOT on the remote yet: the last push failed because ${why}, so ${left} local Desk commit(s) are only on this machine. Desk retries with every write and at session start; until desk_status shows sync not blocked, say this is saved locally, not pushed, and run no git for it.`,
+      desk_note,
       desk_unpushed: left,
       desk_push_blocked: recorded.reason ?? null,
+      ...(publication ? { desk_publication: recorded.publication ?? null } : {}),
     }
   } catch {
     return { desk_note: note }

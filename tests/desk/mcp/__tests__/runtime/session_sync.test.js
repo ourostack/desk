@@ -318,10 +318,8 @@ test("a genuine tracked-file conflict with no untracked paths is unresolved, fil
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
-  assert.match(result.diagnostic, /^Desk problem: session-sync — session-start pull did not resolve$/mu)
-  assert.match(result.diagnostic, /pull_rebase_failed\)/u)
-  assert.match(result.diagnostic, /conflicted: seed\.md/u)
-  assert.match(result.diagnostic, /filing in background/u)
+  assert.match(result.diagnostic, /^desk: sync: .*\(pull_rebase_failed; conflicted: seed\.md\)/u)
+  assert.match(result.diagnostic, /friction_add with \{"error_code":"session_sync_unresolved"\}/u)
 
   assert.deepEqual(filed, { root: cloneA, env, reason: "pull_rebase_failed:conflict", host: "unknown" })
   // The abort actually ran: no rebase left mid-flight, and the working tree is restored to
@@ -345,7 +343,7 @@ test("a quarantine retry that still fails is unresolved, reports the quarantined
 
   assert.equal(result.state, "unresolved")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.length === 1)
-  assert.match(result.diagnostic, /pull_rebase_failed_after_quarantine\)/u)
+  assert.match(result.diagnostic, /pull_rebase_failed_after_quarantine[;)]/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u)
   assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:conflict")
   assert.ok(!existsSync(path.join(cloneA, ".git", "rebase-merge")))
@@ -435,7 +433,7 @@ test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop
 
   assert.equal(result.state, "unresolved")
   assert.equal(result.quarantinedPaths, undefined)
-  assert.match(result.diagnostic, /autostash_pop_conflict\)/u)
+  assert.match(result.diagnostic, /autostash_pop_conflict[;)]/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u)
   assert.equal(filed.reason, "autostash_pop_conflict")
 
@@ -472,7 +470,7 @@ test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop c
 
   assert.equal(result.state, "unresolved")
   assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the original stray path was still quarantined before the retry ran")
-  assert.match(result.diagnostic, /autostash_pop_conflict_after_quarantine\)/u)
+  assert.match(result.diagnostic, /autostash_pop_conflict_after_quarantine[;)]/u)
   assert.match(result.diagnostic, /conflicted: seed\.md/u)
   assert.equal(filed.reason, "autostash_pop_conflict_after_quarantine")
 
