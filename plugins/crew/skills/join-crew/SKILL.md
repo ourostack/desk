@@ -14,7 +14,7 @@ node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone> --identity <
 node <Desk plugin folder>/mcp/scripts/crew.js join --repo <clone> --identity <login> --alias <alias> [--adopt-existing <reviewed-commit>] [--apply]
 ```
 
-`<Desk plugin folder>` is the plugin folder your `Desk startup:` line names. Each command prints one JSON result; tell the person its `message`.
+`<Desk plugin folder>` is the folder whose `mcp/scripts/session-boot.js` your `Desk startup:` line runs. Each command prints one JSON result; tell the person its `message`.
 
 ## Path 2 — migrate the Crew workspace, then activate members
 
