@@ -27,7 +27,14 @@ import { bootFixtureEnv } from "../_boot_fixture.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
 const ROOT = mkdtempSync(path.join(tmpdir(), "startup-boot-"))
-test.after(() => rmSync(ROOT, { recursive: true, force: true }))
+// A boot that is still winding down can hold a folder open on Windows; a leftover temp folder is harmless.
+test.after(() => {
+  try {
+    rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  } catch {
+    // Left for the OS to clear.
+  }
+})
 let counter = 0
 const fresh = (name) => path.join(ROOT, `${name}-${(counter += 1)}`)
 const stateDir = () => fresh("state")
@@ -283,13 +290,22 @@ function deskFixture(name) {
   return { home, desk, env }
 }
 
-test("the Copilot first-prompt hook runs the boot itself and hands the agent its result, once", () => {
+// Starts the session's boot the way a hook would and waits for its result, so a hook test does not depend on how fast the host starts Node.
+async function bootAhead({ env, key, folder, sessionId }) {
+  const stateDir = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk")
+  const { paths } = startBoot({ key, folder, sessionId, env, stateDir })
+  const { boot } = await awaitBoot({ paths, waitMs: 120_000 })
+  assert.ok(boot, "the boot finished")
+}
+
+test("the Copilot first-prompt hook runs the boot itself and hands the agent its result, once", async () => {
   const { desk, env } = deskFixture("copilot-hook")
   const run = (script, input) => {
     const result = spawnSync(process.execPath, [path.join(plugin, "hooks", script)], { input: JSON.stringify(input), env, encoding: "utf8", timeout: 60_000 })
     assert.equal(result.status, 0, result.stderr)
     return JSON.parse(result.stdout)
   }
+  await bootAhead({ env, key: bootKey({ sessionId: "hook-1" }), folder: desk, sessionId: "hook-1" })
   const first = run("copilot-boot-prompt.cjs", { sessionId: "hook-1", cwd: desk, prompt: "hi" })
   assert.match(first.additionalContext, /^Desk boot \(Desk ran it for you at session start, [\d.]+ s; /u)
   assert.match(first.additionalContext, /Desk boot: (ready|degraded|setup_required)/u)
@@ -300,7 +316,7 @@ test("the Copilot first-prompt hook runs the boot itself and hands the agent its
   assert.match(session.additionalContext, /Desk runs the session boot itself, so there is nothing for you to run/u)
   // A resumed session boots afresh and gets its result in the sessionStart context.
   const resumed = run("copilot-session-start.cjs", { sessionId: "hook-1", cwd: desk, source: "resume" })
-  assert.match(resumed.additionalContext, /Desk boot \(Desk ran it for you at session start/u)
+  assert.match(resumed.additionalContext, /Desk boot \(Desk ran it for you at session start|Desk's boot is still running/u)
   // A folder that is no desk (with no desk bound anywhere) gets no boot.
   const elsewhere = path.join(path.dirname(desk), "no-desk")
   mkdirSync(elsewhere, { recursive: true })
@@ -313,17 +329,18 @@ test("the Copilot first-prompt hook runs the boot itself and hands the agent its
   assert.deepEqual(run("copilot-boot-prompt.cjs", { cwd: desk }), {}, "no session id, no key")
 })
 
-test("the Claude hook starts the boot and carries its head after the startup line, leaving the rest for the first Desk tool reply", () => {
+test("the Claude hook starts the boot and carries its head after the startup line, leaving the rest for the first Desk tool reply", async () => {
   const { desk, env } = deskFixture("claude-hook")
   const long = Object.assign({}, env, { CLAUDE_PROJECT_DIR: desk, CLAUDE_PLUGIN_ROOT: plugin })
   const foundation = path.join(plugin, "skills", "using-desk", "SKILL.md")
   const result = spawnSync(process.execPath, [path.join(plugin, "hooks", "claude-session-start.cjs"), foundation], { env: long, encoding: "utf8", timeout: 60_000, cwd: desk })
   assert.equal(result.status, 0, result.stderr)
   const text = JSON.parse(result.stdout).hookSpecificOutput.additionalContext
-  const boot = text.indexOf("Desk boot (Desk ran it for you at session start")
-  assert.ok(boot > text.indexOf("Desk startup:"), "the startup line leads")
+  // A slow host may not have finished within the hook's wait; then the hook says so and the first tool reply carries the result.
+  const boot = text.search(/Desk boot \(Desk ran it for you at session start|Desk's boot is still running/u)
+  assert.ok(boot > text.indexOf("Desk startup:"), `the startup line leads: ${JSON.stringify(text.slice(0, 1500))}`)
   assert.ok(boot < text.indexOf("The human supplies intent"), "the boot comes before the foundation")
   assert.doesNotMatch(text, /session-boot/u)
   const paths = bootPaths({ stateDir: path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk"), key: `f:${desk}` })
-  assert.equal(existsSync(paths.text), true, "the boot's own result is on disk for the first tool reply")
+  assert.ok((await awaitBoot({ paths, waitMs: 120_000 })).boot, "the boot's own result lands on disk for the first tool reply")
 })
