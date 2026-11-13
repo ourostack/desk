@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.102 — 2026-11-13
+
+The Windows ACL provider now has a teardown that the factory CLI tests call when their fixture ends, so the provider no longer holds each test for its 60-second idle timeout. Desk's behavior is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.101 — 2026-11-13
 
 ### Card writes from a worktree on a feature branch land on main
