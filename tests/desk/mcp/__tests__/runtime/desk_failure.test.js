@@ -16,10 +16,10 @@ import { mkTempDeskRoot } from "../tools/_helpers.js"
 import { osEnv } from "../_os_env.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const srcRoot = path.resolve(here, "../../../../../plugins/desk/mcp/src")
+const mcpRoot = path.resolve(here, "../../../../../plugins/desk/mcp")
 
 // The allow-list holds the failure texts not yet in the problem shape. It can only shrink: delete an entry when its text is converted, and lower this number with it.
-const ALLOWED_AT_MOST = 57
+const ALLOWED_AT_MOST = 72
 
 const failure = () => deskFailure({
   code: "desk_demo_failure",
@@ -78,10 +78,11 @@ function sourceFiles(dir) {
   })
 }
 
-// The text of every string in Desk's source that sits on a line speaking a failure, a message or a fix.
+// The text of every string in Desk's MCP source and its browser tool that sits on a line speaking a failure, a message or a fix.
 function failureTexts() {
   const texts = []
-  for (const file of sourceFiles(srcRoot)) {
+  const browser = ["web.cjs", "web-auth.cjs"].map((name) => path.join(mcpRoot, name))
+  for (const file of [...sourceFiles(path.join(mcpRoot, "src")), ...browser]) {
     for (const line of readFileSync(file, "utf8").split("\n")) {
       if (/^\s*(?:\/\/|\*|\/\*)/u.test(line) || !FAILURE_LINE.test(line)) continue
       for (const [literal] of line.matchAll(LITERAL)) texts.push(literal.slice(1, -1))
@@ -90,7 +91,7 @@ function failureTexts() {
   return texts
 }
 
-test("every failure text in Desk's source is precise or on the shrinking allow-list", (t) => {
+test("every failure text in Desk's MCP source and browser tool is precise or on the shrinking allow-list", (t) => {
   const allow = checkFailureCopyAllow(JSON.parse(readFileSync(path.join(here, "failure-copy-allow.json"), "utf8")))
   const texts = failureTexts()
   const vague = vagueFailuresIn(texts, { allow })

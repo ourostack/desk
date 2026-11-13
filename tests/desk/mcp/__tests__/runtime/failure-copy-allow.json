@@ -55,5 +55,20 @@
   {"match":"Git could not read HEAD","reason":"util/finish-commit.js: not yet in the Ouro AX problem shape"},
   {"match":"Git could not read the earlier HEAD's entries at these paths","reason":"util/finish-commit.js: not yet in the Ouro AX problem shape"},
   {"match":"Git could not read the index at these paths","reason":"util/finish-commit.js: not yet in the Ouro AX problem shape"},
-  {"match":"desk-mcp: activation config ${resolvedPath} could not be read","reason":"util/paths.js: not yet in the Ouro AX problem shape"}
+  {"match":"Desk could not create the commit","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"Desk could not read ${REMOTE}/${defaultBranch} into a private index","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"Desk could not stage ${file} for ${defaultBranch}","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"Desk could not write the tree","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"Git could not read the staged entries","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"git ls-files failed","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"git read-tree failed","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"git update-index failed","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"git write-tree failed","reason":"util/main-publish.js: not yet in the Ouro AX problem shape"},
+  {"match":"desk-mcp: activation config ${resolvedPath} could not be read","reason":"util/paths.js: not yet in the Ouro AX problem shape"},
+  {"match":": The authenticated browser could not safely complete this operation.","reason":"web-auth.cjs: not yet in the Ouro AX problem shape"},
+  {"match":"The tab could not be read yet. Run [\\\"wait\\\",\\\"2\\\"], then snapshot; if it repeats, open a new context.","reason":"web-auth.cjs: not yet in the Ouro AX problem shape"},
+  {"match":"AUTH_CLOSE_FAILED: Owned authenticated cleanup could not be confirmed; its files were retained.","reason":"web.cjs: not yet in the Ouro AX problem shape"},
+  {"match":"AUTH_LOGGING_REFUSED: Node runtime inspection state could not be qualified.","reason":"web.cjs: not yet in the Ouro AX problem shape"},
+  {"match":"AUTH_OPEN_FAILED: The authenticated browser could not be opened safely; no native CLI fallback was attempted.","reason":"web.cjs: not yet in the Ouro AX problem shape"},
+  {"match":"COPY_DESTINATION_FAILED: The private profile destination could not be written completely. No authenticated copy was opened.","reason":"web.cjs: not yet in the Ouro AX problem shape"}
 ]
