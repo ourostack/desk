@@ -264,6 +264,49 @@ test("forgets a closed issue's marker after a month", async () => {
   assert.deepEqual(w.state().seen, {})
 })
 
+const budget = (id, updated_at, body = "CI's critical path took 14 min", login = "automation[bot]") => ({ id, body, updated_at, user: { login } })
+
+test("a comment by an ignored author that matches the rule's pattern wakes nobody, new or edited, while any other comment by that author still does", async () => {
+  const quiet = { ...DRAIN, ignoreComments: [{ author: "Automation[bot]", match: "^CI's critical path took" }] }
+  const w = await world([issue(1, T(0))], { drain: quiet })
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  w.comments = async () => [budget(10, T(5))]
+  await w.poll()
+  w.issues[0] = issue(1, T(10))
+  w.comments = async () => [budget(10, T(10), "CI's critical path took 31 min"), budget(11, T(9))]
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  matches(w.state().seen["1"], seenAt(T(10)))
+  w.issues[0] = issue(1, T(15))
+  w.comments = async () => [budget(12, T(15), "Heads up: the release job is red")]
+  await w.poll()
+  assert.equal(w.sent.length, 1)
+})
+
+test("an ignore rule skips only its author and its pattern: the same text from someone else, and a body or author that does not fit, still wake", async () => {
+  const quiet = { ...DRAIN, ignoreComments: [{ author: "automation[bot]", match: "^CI's critical path took" }, { author: "chatty[bot]" }] }
+  for (const [name, comment] of [
+    ["the pattern's text from a person", budget(1, T(5), "CI's critical path took 14 min", "someone")],
+    ["the pattern's text from a comment with no author", { id: 1, body: "CI's critical path took 14 min", updated_at: T(5) }],
+    ["a body that merely contains the pattern's text", budget(1, T(5), "Re: CI's critical path took 14 min")],
+    ["a comment with no body from the pattern's author", { id: 1, updated_at: T(5), user: { login: "automation[bot]" } }],
+  ]) {
+    const w = await world([issue(1, T(0))], { drain: quiet })
+    await w.poll()
+    w.issues[0] = issue(1, T(5))
+    w.comments = async () => [comment]
+    await w.poll()
+    assert.equal(w.sent.length, 1, name)
+  }
+  const w = await world([issue(1, T(0))], { drain: quiet })
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  w.comments = async () => [budget(1, T(5), "anything at all", "Chatty[bot]"), { id: 2, updated_at: T(5), user: { login: "chatty[bot]" } }]
+  await w.poll()
+  assert.deepEqual(w.sent, [], "a rule with no pattern skips every comment by its author")
+})
+
 test("an ignored label, and the drain: prefix beside it, wake nobody; any other label still does", async () => {
   const lanes = { ...DRAIN, ignoredLabels: ["agent:drain"] }
   const w = await world([issue(1, T(0))], { drain: lanes })
@@ -526,8 +569,8 @@ test("status lines show last poll, open count, events waiting, last wake and las
 })
 
 test("the config is validated, never silently trimmed to fewer drains", () => {
-  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "] }, { repo: "c/d", session: "t" }] }), "config.json")
-  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"] }, { repo: "c/d", session: "t" }])
+  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "], ignoreComments: [{ author: " ci[bot] ", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }] }), "config.json")
+  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"], ignoreComments: [{ author: "ci[bot]", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }])
   for (const [entry, message] of [
     [null, "drains[0] is not an object"],
     [{ repo: "no-slash", session: "s" }, "drains[0].repo"],
@@ -538,6 +581,11 @@ test("the config is validated, never silently trimmed to fewer drains", () => {
     [{ repo: "a/b", session: "s", ignoredBodyTrailers: [3] }, "drains[0].ignoredBodyTrailers"],
     [{ repo: "a/b", session: "s", ignoredLabels: "agent:drain" }, "drains[0].ignoredLabels"],
     [{ repo: "a/b", session: "s", ignoredLabels: [" "] }, "drains[0].ignoredLabels"],
+    [{ repo: "a/b", session: "s", ignoreComments: "ci[bot]" }, "drains[0].ignoreComments is not a list"],
+    [{ repo: "a/b", session: "s", ignoreComments: [null] }, "drains[0].ignoreComments[0].author"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: " " }] }, "drains[0].ignoreComments[0].author"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: "ci[bot]", match: 3 }] }, "drains[0].ignoreComments[0].match is not a regular expression"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: "ci[bot]", match: "(" }] }, "drains[0].ignoreComments[0].match is not a valid regular expression"],
   ]) assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [entry] }), "config.json"), (error) => error.message.includes(message), message)
   assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: "s" }, { repo: "a/b", session: "t" }] }), "config.json"), /listed twice/u)
   assert.throws(() => parseDrainConfig("{", "config.json"), /not valid JSON/u)

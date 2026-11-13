@@ -22,7 +22,7 @@ Both live in Desk's state folder, `$XDG_STATE_HOME/ouroboros-skills/desk/drains/
 
 ```json
 { "drains": [
-  { "repo": "owner/name", "session": "<session id>", "account": "<gh login>", "ignoredBodyTrailers": ["Active-at"], "ignoredLabels": ["agent:drain"] }
+  { "repo": "owner/name", "session": "<session id>", "account": "<gh login>", "ignoredBodyTrailers": ["Active-at"], "ignoredLabels": ["agent:drain"], "ignoreComments": [{ "author": "some-bot[bot]", "match": "^Routine report" }] }
 ] }
 ```
 
@@ -37,6 +37,7 @@ An issue is news when something other than the drain changed it since the revisi
 - the drain's own status comment, matched by the `<!-- ouro-drain-status -->` marker and the polling account, including its edits;
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
+- comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
 - closes and assignments.
 
 ## Delivering a wake

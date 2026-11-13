@@ -72,6 +72,20 @@ function problem(code, thing, probably, look, fix) {
 const isText = (value) => typeof value === "string" && value.trim() !== ""
 const textList = (value) => Array.isArray(value) && value.every(isText)
 
+function checkIgnoreComments(rules, where, bad) {
+  if (!Array.isArray(rules)) throw bad(`${where} is not a list of {"author", "match"} rules`)
+  rules.forEach((rule, i) => {
+    if (rule === null || typeof rule !== "object" || !isText(rule.author)) throw bad(`${where}[${i}].author is not a comment author's login such as "some-bot[bot]"`)
+    if (rule.match === undefined) return
+    if (!isText(rule.match)) throw bad(`${where}[${i}].match is not a regular expression`)
+    try {
+      new RegExp(rule.match, "u")
+    } catch {
+      throw bad(`${where}[${i}].match is not a valid regular expression`)
+    }
+  })
+}
+
 /** The drains in a config file's text, validated. A bad entry is an error, not a silent drop: a dropped drain would stop watching its repository. */
 export function parseDrainConfig(raw, file) {
   const bad = (what) => problem("desk_drains_config_invalid", "drains config", `${file} ${what}, probably a hand edit`, "open the file and compare it with docs/issue-drains.md", "correct the entry and run the command again")
@@ -86,12 +100,13 @@ export function parseDrainConfig(raw, file) {
   const seen = new Set()
   return list.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw bad(`drains[${index}] is not an object`)
-    const { repo, session, account, ignoredBodyTrailers, ignoredLabels } = entry
+    const { repo, session, account, ignoredBodyTrailers, ignoredLabels, ignoreComments } = entry
     if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/u.test(repo)) throw bad(`drains[${index}].repo is not "owner/name"`)
     if (!isText(session)) throw bad(`drains[${index}].session is not a session id`)
     if (account !== undefined && !isText(account)) throw bad(`drains[${index}].account is not a GitHub login`)
     if (ignoredBodyTrailers !== undefined && (!textList(ignoredBodyTrailers) || ignoredBodyTrailers.some((key) => key.includes(":")))) throw bad(`drains[${index}].ignoredBodyTrailers is not a list of trailer keys such as "Active-at"`)
     if (ignoredLabels !== undefined && !textList(ignoredLabels)) throw bad(`drains[${index}].ignoredLabels is not a list of label names such as "agent:drain"`)
+    if (ignoreComments !== undefined) checkIgnoreComments(ignoreComments, `drains[${index}].ignoreComments`, bad)
     if (seen.has(repo)) throw bad(`drains[${index}].repo ${repo} is listed twice`)
     seen.add(repo)
     return {
@@ -100,6 +115,7 @@ export function parseDrainConfig(raw, file) {
       ...(account === undefined ? {} : { account: account.trim() }),
       ...(ignoredBodyTrailers === undefined ? {} : { ignoredBodyTrailers: ignoredBodyTrailers.map((key) => key.trim()) }),
       ...(ignoredLabels === undefined ? {} : { ignoredLabels: ignoredLabels.map((name) => name.trim()) }),
+      ...(ignoreComments === undefined ? {} : { ignoreComments: ignoreComments.map(({ author, match }) => ({ author: author.trim(), ...(match === undefined ? {} : { match }) })) }),
     }
   })
 }
@@ -211,6 +227,9 @@ const digestOf = (issue, keys) => createHash("sha1").update(`${issue.title}\n${b
 /** The drain's own status comment: the marker, written by the polling account. Its creation and every edit are skipped. */
 const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === login.toLowerCase() && Boolean(comment.body?.includes(DRAIN_STATUS_MARKER))
 
+/** A comment a drain's `ignoreComments` rule skips: written by the rule's author (case-insensitive) and, when the rule has a `match`, a body that matches it. */
+const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
+
 /** A reopen, or a change to a label that is neither in the drain's namespace nor on its ignored list. Closes, assignments and mentions are not news. */
 function newsEvent(event, ignoredLabels) {
   if (event.event === "reopened") return true
@@ -220,12 +239,12 @@ function newsEvent(event, ignoredLabels) {
 }
 
 /** Whether anyone but the drain changed the issue since `before`: a new issue, an edit, another comment, a reopen or a label outside the drain's own. */
-async function changedByOthers(api, repo, issue, before, digest, ignored, ignoredLabels) {
+async function changedByOthers(api, repo, issue, before, digest, ignored, ignoredLabels, ignoredComments) {
   if (!before) return true
   if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return true
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
-  if (comments.some((comment) => !ownStatus(comment, api.login))) return true
+  if (comments.some((comment) => !ownStatus(comment, api.login) && !ignoredComment(comment, ignoredComments))) return true
   const events = (await api.issueEvents(repo, issue.number)).filter((event) => event.created_at > since)
   return events.some((event) => newsEvent(event, ignoredLabels))
 }
@@ -239,6 +258,7 @@ export async function pollDrain(drain, states, { connect, now }) {
     const trailers = drain.ignoredBodyTrailers ?? []
     const ignored = trailers.join(",")
     const labels = (drain.ignoredLabels ?? []).map((name) => name.toLowerCase())
+    const quiet = (drain.ignoreComments ?? []).map(({ author, match }) => ({ author: author.toLowerCase(), match: match === undefined ? null : new RegExp(match, "u") }))
     const seen = {}
     const recorded = []
     for (const issue of issues) {
@@ -247,7 +267,7 @@ export async function pollDrain(drain, states, { connect, now }) {
       const digest = digestOf(issue, trailers)
       seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
       if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-      if (await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels)) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at })
+      if (await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at })
     }
     for (const [key, entry] of Object.entries(state.seen)) {
       const gone = seenIssue(entry)
