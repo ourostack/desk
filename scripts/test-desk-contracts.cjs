@@ -876,7 +876,7 @@ requires(
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
   "friction-management records system friction as a kaizen candidate the curator files, with no free text in a public store",
-  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+opens an improvement card by itself[\s\S]+no signoff[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate, and the tool itself sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+opens an improvement card by itself[\s\S]+no signoff[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
 );
 requires(
   "plugins/desk/skills/lesson-capture/SKILL.md",

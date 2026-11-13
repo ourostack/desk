@@ -15,7 +15,7 @@ Write only when the participant explicitly asks to record preview feedback. A co
 
 Keep their meaning and distinguish their own words from an agent-proposed summary. If a summary is needed, show it for confirmation before writing. Never add inferred effort, productivity, competence, or performance measurements. Do not attach logs, task contents, credentials, or unrelated conversation context.
 
-Never fall back to `friction_add`, a lesson, a task card, another participant's desk, a shared decisions directory, an issue, a channel, or a collector if the intended destination is unavailable. Report the actual failure; a substitute destination the participant did not choose is not their feedback.
+Never fall back to `friction_add`, a lesson, a task card, another participant's desk, a shared decisions directory, an issue, a channel, or a collector if the intended destination is unavailable. Feedback about Desk the participant also asks to raise upstream goes to an `ourostack/desk` issue on their explicit request, described as a pattern only (see `friction-management`); that is a choice they make, not a fallback, and this entry stays their record. Report the actual failure; a substitute destination the participant did not choose is not their feedback.
 
 ## Publish to their own desk
 
