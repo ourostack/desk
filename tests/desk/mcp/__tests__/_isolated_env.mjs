@@ -58,7 +58,8 @@ for (const [name, dir] of Object.entries(locations)) {
 // their own Copilot settings written by a hook a test spawns. The folder is not created, so a test that wants one makes it.
 process.env.COPILOT_HOME = path.join(home, ".copilot")
 // Desk commits only on the branch it expects (`main` unless the remote or the host says otherwise), so a fixture repository must start on `main`, whatever the machine's own default is.
-fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n")
+// Automatic maintenance would also start extra Git processes after most commits of a short-lived fixture repository, so it is off.
+fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n")
 // Windows profile discovery and PowerShell must not inherit the runner's real
 // AppData paths when the suite runs as its separate standard-user account.
 if (process.platform === "win32") {
