@@ -25,8 +25,9 @@ const assertAThenOnlyB = (f, message) => {
   assert.ok(f.connectedRoots.slice(1).every((root) => root === f.b), `${message}: ${JSON.stringify(f.connectedRoots)}`)
 }
 function git(root, ...args) {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 5000 })
-  assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.error?.code ?? result.signal ?? result.stderr}`)
+  // Fixture setup only: a git process on a loaded Windows runner can take well over 5 s (#614).
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 60_000 })
+  assert.equal(result.status, 0, `git ${args.join(" ")} (error: ${result.error?.code ?? "none"}, signal: ${result.signal ?? "none"}): ${result.stderr}`)
   return result.stdout.trim()
 }
 function desk(root, person = null) {
