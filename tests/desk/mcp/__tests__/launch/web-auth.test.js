@@ -301,6 +301,25 @@ test("only frame owners may own child documents, and the main document must come
   }
 })
 
+test("the page storage function lists, reads, writes, deletes and clears local or session storage", () => {
+  const store = () => { const items = new Map(); return { get length() { return items.size }, key: (index) => [...items.keys()][index], getItem: (key) => items.get(key) ?? null, setItem: (key, value) => items.set(key, value), removeItem: (key) => items.delete(key), clear: () => items.clear() } }
+  globalThis.window = { localStorage: store(), sessionStorage: store() }
+  try {
+    for (const kind of ["local", "session"]) {
+      assert.equal(auth.STORE([kind, "set", "k", "v"]), null)
+      assert.equal(auth.STORE([kind, "get", "k"]), "v")
+      assert.deepEqual(auth.STORE([kind, "list"]), { k: "v" })
+      auth.STORE([kind, "delete", "k"])
+      assert.equal(auth.STORE([kind, "get", "k"]), null)
+      auth.STORE([kind, "set", "a", "b"])
+      auth.STORE([kind, "clear"])
+      assert.deepEqual(auth.STORE([kind, "list"]), {})
+    }
+    auth.STORE(["local", "set", "only", "here"])
+    assert.deepEqual(auth.STORE(["session", "list"]), {})
+  } finally { delete globalThis.window }
+})
+
 test("actions pass literal data, scripts and the formerly refused commands run as given, and only unusable snapshot options are refused", async () => {
   const root = await mkTempRoot("auth-actions-")
   const native = fakeDriver()
@@ -320,7 +339,8 @@ test("actions pass literal data, scripts and the formerly refused commands run a
       native.calls.push(["page.evaluate", script, argument])
       return argument?.[0]?.script !== undefined ? { script: argument[0].script, argument: null } : { script: "storage", argument }
     }
-    native.page.once = (event, handler) => native.calls.push(["page.once", event, handler.length])
+    const dialogs = []
+    native.page.once = (event, handler) => { dialogs.push(handler); native.calls.push(["page.once", event]) }
     for (const method of ["down", "up"]) native.page.keyboard[method] = async (...args) => { native.calls.push([`keyboard.${method}`, ...args]) }
     for (const method of ["move", "down", "up"]) native.page.mouse[method] = async (...args) => { native.calls.push([`mouse.${method}`, ...args]) }
     const evaluated = await adapter.call(["eval", "() => document.title"])
@@ -332,9 +352,47 @@ test("actions pass literal data, scripts and the formerly refused commands run a
     await adapter.call(["keydown", "Shift"])
     await adapter.call(["keyup", "Shift"])
     await adapter.call(["mousemove", "5", "6"])
+    await adapter.call(["mousedown", "left"])
+    await adapter.call(["mouseup"])
     await adapter.call(["mousedown"])
     await adapter.call(["mouseup", "right"])
     await adapter.call(["dialog-accept", "yes"])
+    await adapter.call(["dialog-dismiss"])
+    const seen = []
+    dialogs[0]({ accept: async (text) => { seen.push(["accept", text]); throw new Error("already handled") } })
+    dialogs[1]({ dismiss: async () => { seen.push(["dismiss"]); throw new Error("already handled") } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(seen, [["accept", "yes"], ["dismiss"]])
+    native.page.emit("console", { type: () => "log", text: () => "plain" })
+    native.page.emit("console", { type: () => "warning", text: () => "careful" })
+    native.page.emit("console", { type: () => "error", text: () => "broken" })
+    native.page.emit("console", { type: () => "trace", text: () => "odd kind" })
+    assert.deepEqual((await adapter.call(["console"])).result.map((message) => message.text), ["plain", "careful", "broken", "odd kind"])
+    for (let at = 0; at < 200; at++) native.page.emit("console", { type: () => "log", text: () => `filler ${at}` })
+    const kept = (await adapter.call(["console"])).result
+    assert.equal(kept.length, 200, "the console keeps the last 200 messages")
+    assert.equal(kept[0].text, "filler 0")
+    assert.deepEqual((await adapter.call(["console", "warning"])).result, [], "the earlier ones have scrolled out")
+    native.page.emit("console", { type: () => "log", text: () => "plain" })
+    native.page.emit("console", { type: () => "warning", text: () => "careful" })
+    native.page.emit("console", { type: () => "error", text: () => "broken" })
+    native.page.emit("console", { type: () => "trace", text: () => "odd kind" })
+    assert.deepEqual((await adapter.call(["console", "warning"])).result.map((message) => message.text), ["careful", "broken", "odd kind"])
+    assert.deepEqual((await adapter.call(["console", "error"])).result.map((message) => message.text), ["broken", "odd kind"])
+    await assert.rejects(adapter.call(["console", "loud"]), /AUTH_ARGUMENTS_REFUSED/u)
+    const field = snapshot.snapshot.children[0].children[0].children[0].ref
+    assert.deepEqual((await adapter.call(["eval", "(el) => el.id", field])).result.script, "(el) => el.id", "a ref runs the function with its element")
+    native.handles.get(104).setInputFiles = async (files) => { native.calls.push(["setInputFiles", files]) }
+    await adapter.call(["upload", field, "/one.txt", "/two.txt"])
+    assert.deepEqual(native.calls.find((call) => call[0] === "setInputFiles")[1], ["/one.txt", "/two.txt"])
+    await assert.rejects(adapter.call(["eval", "() => 1", "nope"]), /AUTH_TARGET_REFUSED/u)
+    await assert.rejects(adapter.call(["eval", "() => 1", "e999"]), /AUTH_TARGET_REFUSED/u)
+    native.page.keyboard.down = async () => { throw new Error(PASSWORD) }
+    await assert.rejects(adapter.call(["keydown", "A"]), (error) => /AUTH_ACTION_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
+    const original = native.page.evaluateHandle
+    native.page.evaluateHandle = async () => { throw null }
+    await assert.rejects(adapter.call(["eval", "() => 1"]), /AUTH_SCRIPT_FAILED(?!.*The script said)/u)
+    native.page.evaluateHandle = original
     assert.deepEqual((await adapter.call(["localstorage-get", "key"])).result.argument.slice(0, 3), ["local", "get", "key"])
     await adapter.call(["sessionstorage-set", "k", "v"])
     await adapter.call(["goto", "file:///etc/hosts"])

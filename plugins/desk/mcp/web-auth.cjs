@@ -1695,11 +1695,11 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       else if (command === "run-code") value = await (new Function("return (" + args[1] + ")")())(page);
       else if (command === "console") {
         var levels = ["error", "warning", "info", "log", "debug"];
-        var floor = args[1] === undefined ? levels.length : levels.indexOf(args[1] === "warn" ? "warning" : args[1]);
+        var floor = args[1] === undefined ? levels.length - 1 : levels.indexOf(args[1]);
         requireTrue(floor !== -1, "AUTH_ARGUMENTS_REFUSED");
         value = recorderFor(page).messages.filter(function (message) {
-          var rank = levels.indexOf(message.type === "warn" ? "warning" : message.type);
-          return (rank === -1 ? levels.length - 1 : rank) <= Math.min(floor, levels.length - 1);
+          var rank = levels.indexOf(message.type);
+          return rank === -1 || rank <= floor;
         });
       }
       else if (command === "keydown") await page.keyboard.down(args[1]);
@@ -1914,4 +1914,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, STORE: STORE, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
