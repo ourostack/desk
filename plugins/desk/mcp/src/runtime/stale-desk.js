@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { deskVersion } from "../package-metadata.js"
-import { resolveDeskChannel } from "./desk-channel.js"
+import { cachedReleaseVersion, resolveDeskChannel } from "./desk-channel.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
@@ -113,15 +113,20 @@ export function staleDeskFinding({ running, latest, agentHost, channel = "main",
   if (order === null || order >= 0) return null
   const behind = releasesBehind(running, latest)
   const refresh = refreshStep(agentHost, { agency, spec })
-  return {
-    running,
-    latest,
-    behind,
-    channel,
-    refresh,
-    auto_refresh: null,
-    line: `Desk ${running} is ${behindText(behind)} ${channelLabel(channel)} (${latest}); ${refresh}.`,
-  }
+  const line =
+    channel === "release" && agency
+      ? releaseNotice({ running, latest })
+      : `Desk ${running} is ${behindText(behind)} ${channelLabel(channel)} (${latest}); ${refresh}.`
+  return { running, latest, behind, channel, refresh, auto_refresh: null, line }
+}
+
+/**
+ * The notice for an Agency install on the release channel: what is behind, why, how to keep working now, and how to pick up
+ * the release. A Copilot app folder keeps one Agency process, which loaded Desk when it started, so a restart is the only way
+ * a new session in it gets the release.
+ */
+export function releaseNotice({ running, latest }) {
+  return `Heads up: Desk ${running} is behind the release channel (${latest}). This folder's Copilot app process started before ${latest} was released, so new sessions in it keep ${running}. To keep working now, start a worktree session, or use the CLI with agency copilot. To pick up ${latest}, restart the Copilot app at a quiet moment.`
 }
 
 function readRunningVersion(pluginRoot) {
@@ -183,7 +188,13 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
   if (running === null) return null
   const dir = stateDir ?? resolveDeskStateDir({ env })
   const file = path.join(dir, VERSION_CACHE_FILE)
-  const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: homeDir ?? os.homedir(), readFile })
+  const home = homeDir ?? os.homedir()
+  const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
+  // Agency's cached release copy already names the release, so an Agency install on that channel asks no one.
+  if (agency && channel === "release") {
+    const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: home, readFile })
+    if (known !== null) return staleDeskFinding({ running, latest: known, agentHost, channel, agency, spec })
+  }
   let latest = readCache(file, now, channel)
   if (latest === undefined) {
     // The race is a second guard: a fetch that ignores the abort signal still cannot hold boot past the budget.

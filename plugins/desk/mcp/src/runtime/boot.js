@@ -1719,7 +1719,8 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
   const prepared = finding === null ? { state: "unavailable" } : planStaleRefresh(options)
   if (finding !== null) {
     const started = prepared.state === "ready"
-    result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started ? startedLine(finding, prepared.plan) : finding.line } }
+    // The release notice already says how to pick the release up, so a started refresh does not replace it.
+    result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started && finding.channel !== "release" ? startedLine(finding, prepared.plan) : finding.line } }
   }
   const { text_instructions: _textOnly, ...structured } = result
   io.stdout.write(json ? `${JSON.stringify(structured)}\n` : formatBootText(result))
