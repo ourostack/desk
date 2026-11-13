@@ -399,7 +399,7 @@ const OFFLINE = new Set(["unreachable", "auth_failed"])
 // Each cause's failure: what probably happened, how to look further, how to keep working and the fix. `git status` reads clean when the remote could not be asked.
 function syncFailure({ cause, root, remote, reason, conflicted }) {
   const git = (...args) => `\`git -C ${commandArgument(root)} ${args.join(" ")}\``
-  const delivery = "Desk delivers its local commits once it can, so never stash, rebase or reset the shared checkout for this"
+  const delivery = "Desk's own writes still publish from a clean copy of the remote, so keep working, and never stash, rebase or reset the shared checkout for this"
   const causes = {
     auth_failed: {
       probably: `the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach ${remote ?? "the desk's remote"}`,
