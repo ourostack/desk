@@ -10,6 +10,12 @@ export function notCommitted(commit) {
   return rest
 }
 
+// A result that carries a route opens with its `next` sentence (#623): the first key, saying what to do with the route first.
+export function assertNextFirst(answer) {
+  assert.equal(Object.keys(answer)[0], "next", "the answer opens with the next step")
+  assert.match(answer.next, /^The change is on disk but not committed/u)
+}
+
 // Every argv a step runs, one command per entry.
 export const argvsOf = (step) => [step.argv ?? []].flatMap((a) => (Array.isArray(a[0]) ? a : a.length ? [a] : []))
 

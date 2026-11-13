@@ -29,7 +29,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
-import { commitFailureWords, heldFileRouteFor } from "../util/route-around.js"
+import { commitFailureWords, heldFileRouteFor, unfinishedNext, withNext } from "../util/route-around.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { installedPlugins } from "./lesson-owners.js"
@@ -167,7 +167,7 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   if (topics.length > 0) result.shelved = { path: shelfWhere, topics }
   if (written.commit !== undefined) result.commit = written.commit
   if (routeAround !== null) result.route_around = routeAround
-  return result
+  return withNext(result)
 }
 
 // No card is open for a desk lesson: the same lesson_add call is made again once its cause is fixed, and its answer says whether the card is open now.
@@ -217,7 +217,8 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
     ...(opened ? {} : { route_around: notOpenedRoute(added, target, topic, body) }),
   }
   for (const field of ["improvement_key", "improvement_path", "commit", "improvement_commit", "improvement_route_around"]) if (added[field] !== undefined) result[field] = added[field]
-  return result
+  if (result.improvement_route_around !== undefined) return { next: unfinishedNext(result.improvement_route_around, "improvement_route_around"), ...result }
+  return withNext(result)
 }
 
 /**

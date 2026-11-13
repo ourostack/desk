@@ -427,6 +427,8 @@ test("team lesson's failure says how to finish it by hand, with a read-back: the
   const run = (extra) => addTeamLesson(lesson({ deskRoot: repo.base, repo: repo, gh: fakeGh(repo.bare).gh, ...extra }))
   const none = await run({ chooseAccount: async () => ({ result: "no_account_can_deliver" }) })
   assert.equal(none.status, "failed")
+  assert.equal(Object.keys(none)[0], "next", "the answer opens with the next step")
+  assert.match(none.next, /run route_around\.steps now, in order/u)
   assert.deepEqual(none.route_around.landed_when.argv, ["gh", "api", "-H", "Accept: application/vnd.github.raw", "repos/acme/cit/contents/AGENTS.md"])
   assert.equal(none.route_around.steps[1].tool, "lesson_add")
   assert.deepEqual(none.route_around.steps[1].arguments, { scope: "team", topic: "Build what was asked", body: "When someone asks for a List, build a List.", source: "Ari in the CIT channel, 2026-10-26", repo: path.resolve(git(repo.clone, ["rev-parse", "--show-toplevel"])) })

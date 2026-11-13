@@ -27,7 +27,7 @@ import {
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitIndexPaths, indexEntries } from "../util/git-stage.js"
-import { commitFailure } from "../util/route-around.js"
+import { commitFailure, withNext } from "../util/route-around.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -646,7 +646,7 @@ export async function task_move({ deskRoot, input, person = null, search, status
     const note = focusNote(statusContext)
     if (note !== undefined) result.focus_note = note
   }
-  return result
+  return withNext(result)
 }
 
 // ── track_rename ─────────────────────────────────────────────────────────
@@ -744,5 +744,5 @@ export async function track_rename({ deskRoot, input, person = null, search, spa
     mentions: mentions.map(shownPath),
   }
   if (commit) result.commit = commit
-  return result
+  return withNext(result)
 }

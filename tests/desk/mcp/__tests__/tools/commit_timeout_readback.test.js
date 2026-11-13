@@ -280,8 +280,11 @@ test("desk_save: a commit that timed out before landing keeps nothing_to_commit 
   const root = await repo()
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
   const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save notes" }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
-  const { route_around: route, ...commit } = result.commit
-  assert.deepEqual({ ...result, commit }, { status: "nothing_to_commit", commit: { status: "failed", reason: "timeout" } })
+  assert.deepEqual(Object.keys(result)[0], "next", "the answer opens with the next step")
+  const { next, ...answer } = result
+  assert.match(next, /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order, then read back the remote\.$/u)
+  const { route_around: route, ...commit } = answer.commit
+  assert.deepEqual({ ...answer, commit }, { status: "nothing_to_commit", commit: { status: "failed", reason: "timeout" } })
   assertRoute(route)
 })
 

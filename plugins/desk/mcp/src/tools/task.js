@@ -28,7 +28,7 @@ import {
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths, includeInCheckout, releaseFromCheckout } from "../util/git-stage.js"
-import { commitFailure, commitRoute, unfinishedNext } from "../util/route-around.js"
+import { commitFailure, commitRoute, unfinishedNext, withNext } from "../util/route-around.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -842,7 +842,7 @@ export async function task_create({ deskRoot, input, person = null, search, stat
     const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused: result.focused === true })
     if (proposal.code !== "missing_safe_label") result.session_label = proposal
   }
-  return result
+  return withNext(result)
 }
 
 // Sets the task's `State` in the track card's Tasks table when the card has one in the documented format and no one has
@@ -1471,16 +1471,16 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
     } else if (publication.status === "pending" || publication.status === "unknown") {
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication,
-        archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication })))
+      return withArchiveFocus(statusContext, { track, slug }, withNext(archivePendingAnswer(relPath(deskRoot, archivedFile), publication,
+        archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication }))))
     } else {
       const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, search, spawnGit, schedulePush })
-      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
+      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, withNext({
         ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
           refilled.publication ?? publicationOf(refilled.commit),
           refilled.commit.route_around ?? archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: publicationOf(refilled.commit) }),
           refilled.commit),
-      })
+      }))
       let pending = null
       try {
         pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
@@ -1581,9 +1581,9 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     } catch (error) {
       if (!relocated) throw error
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
+      return withArchiveFocus(statusContext, { track, slug }, withNext(archivePendingAnswer(relPath(deskRoot, archivedFile), {
         status: "unknown", reason: error.message,
-      }, archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: { status: "unknown" } })))
+      }, archiveRoute({ deskRoot, srcDir, archiveDir, track, slug, publication: { status: "unknown" } }))))
     }
     await withCreatedDirs(path.dirname(archiveDir), async () => {
       if (relocated) await prepared.atUse()
@@ -1665,8 +1665,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     if (published) schedulePush({ root: deskRoot })
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
     const result = commit
-      ? archivePendingAnswer(relPath(deskRoot, filePath), publicationOf(commit),
-        commit.route_around, commit)
+      ? withNext(archivePendingAnswer(relPath(deskRoot, filePath), publicationOf(commit),
+        commit.route_around, commit))
       : { status: "archived", path: relPath(deskRoot, filePath) }
     if (!commit) {
       if (delivered !== null) Object.assign(result, delivered)
