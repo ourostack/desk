@@ -300,7 +300,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
-  const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned })
+  const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
   const token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
   if (!token) throw new Error(`the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`)
   const get = async (route) => {
