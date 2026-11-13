@@ -1,6 +1,6 @@
 ---
 name: plain-language
-description: Use when writing anything a person will read, such as chat replies, status updates, handoffs, documents, pull request titles and bodies, reviews, issue comments or commit messages. Makes it easy for its reader to find, understand and use, without weakening facts, uncertainty, safety, precision, quotations or requested voice.
+description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages.
 ---
 
 # Plain Language

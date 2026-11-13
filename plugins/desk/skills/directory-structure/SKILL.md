@@ -1,6 +1,6 @@
 ---
 name: directory-structure
-description: The `$DESK/` layout (tracks, tasks, reserved `_` folders, naming, where a plan or log goes when a task needs one). Use when creating, placing, renaming or moving a track, task or doc, or tidying a disorganized desk.
+description: Use when creating, placing, renaming or moving a track, task or doc, or tidying a disorganized desk (the `$DESK/` layout).
 ---
 
 # Directory structure

@@ -1,6 +1,6 @@
 ---
 name: adopt-inflight-work
-description: Bring existing in-flight work (planning or doing docs, another agent's output) under the desk. Use when the operator says 'adopt this' or 'this is now yours', or chooses adoption at first-run bootstrap.
+description: Use when the operator says 'adopt this' or 'this is now yours', or chooses adoption at first-run bootstrap, to bring in-flight work under the desk.
 ---
 
 # Adopt in-flight work

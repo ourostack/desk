@@ -1,6 +1,6 @@
 ---
 name: join-crew
-description: Migrate a legacy Crew repository in place before existing-member activation, or join a new member to a current Epoch 2 Crew workspace with the crew script, ending with a short interview that adds them to the team roster. Preserve repository identity, history, member state, shared records, authority boundaries, and conflict-safe shared writes; never create a parallel migration repository. Installs the team's plugin from the workspace's tooling repository (dual-repo) or its plugins/ folder (monorepo). A repository that is not a Crew workspace yet goes to crew:start-crew.
+description: Use to join a new member to a Crew workspace or migrate a legacy Crew repository in place. A repository that is not a Crew workspace yet goes to `crew:start-crew`.
 ---
 
 # Join a crew workspace

@@ -1,6 +1,6 @@
 ---
 name: runtime-symptom-investigation
-description: Use when the operator reports a runtime symptom (an error, a regression, unexpected output, a slowdown), to investigate the running system before reading source. Not for implementation or design questions.
+description: Use when the operator reports a runtime symptom (error, regression, unexpected output, slowdown), to investigate the running system before reading source.
 ---
 
 # Runtime-symptom investigation

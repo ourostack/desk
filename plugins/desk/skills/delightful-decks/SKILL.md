@@ -1,6 +1,6 @@
 ---
 name: delightful-decks
-description: Make a presentation deck beautiful and engaging, one that surprises and delights, for a person who will present it live. Use when asked to make, redo or polish slides for a talk, meeting or demo, or when a deck is judged dull, wordy or cluttered. Not for turning a finished document into slides with a script; use a document-to-deck skill for that if one is installed.
+description: Use when asked to make, redo or polish slides for a talk, meeting or demo that someone will present live, or when a deck is judged dull, wordy or cluttered. Not for turning a document into slides.
 ---
 
 # Delightful decks

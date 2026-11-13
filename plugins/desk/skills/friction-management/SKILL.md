@@ -1,6 +1,6 @@
 ---
 name: friction-management
-description: Capture friction about how the agent worked or about Desk itself (which opens an improvement card), mark fixes landed and archive old entries. Task content goes on task cards; a Desk mechanism failing at its own job is `desk-problem`.
+description: Use to capture friction about how the agent worked or about Desk itself, mark fixes landed or archive old entries. A Desk mechanism failing is `desk-problem`.
 ---
 
 # Friction management

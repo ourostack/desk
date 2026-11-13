@@ -1,6 +1,6 @@
 ---
 name: doc-review-rigor
-description: Evaluate a document's substance by testing its claims against primary and team sources and separating fact, inference and decision. Use when asked to review a document's claims or poke holes in it. Not for code PRs.
+description: Use when asked to review a document's claims or poke holes in it, testing them against primary sources. Not for code PRs.
 ---
 
 # Doc review rigor
