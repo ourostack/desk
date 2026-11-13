@@ -1,5 +1,27 @@
 # desk plugin — changelog
 
+## 3.2.110 — 2026-11-13
+
+The boot instruction now says when to skip the boot. It applies to desk-backed work: tasks, cards, saves, sync and memory. If the operator or a coordinating parent says not to boot, or the assignment is bounded and read-only, the agent skips it and uses Desk's tools directly. The rule is in the session-start text, the per-prompt boot pointer, the setup-mode line, the fallbacks of both session-start hooks, and the child-agent paragraph of `using-desk`. Before, a child told "don't boot, use `desk_status` and desk-web" met an unconditional "run the boot before anything else, including your first reply" and stopped to ask which to follow.
+
+`desk_status` and desk-web need nothing the boot sets up: the server admits the desk itself, and desk-web never reads the desk. A new test starts both servers in a fresh desk with no boot, no boot claim and no session record.
+
+When a member explicitly asks an agent to change something on another member's desk, the agent now does it instead of refusing because the file is on someone else's desk. The request is the authorization; Git records who made the change and the pull request is visible to the owner. The agent says whose desk it touched, keeps the owner's unrelated changes and never overwrites concurrent work. A protected-write refusal from a Desk tool still binds: the agent uses a branch and pull request rather than changing the person or account it acts as. See [shared-desk-conventions](../../crew/skills/shared-desk-conventions/SKILL.md).
+
+The Crew `shared-initiative` skill now says when to suggest an initiative: when new work involves or seeks collaborators, or an existing personal task starts to. It also says how to move an existing task into one, using the existing `_shared/tracks/` home.
+
+desk-web's `mine` replies now tell an agent where it is, what its action did and what to do next.
+
+Every `goto`, `click`, `snapshot`, `find` and `wait` reply carries `page`: the tab's address (no query or fragment, and a path that looks like a token is hidden) and its title, with typed values redacted as in any snapshot. An action (`click`, `dblclick`, `hover`, `check`, `uncheck`, `select`, `press`) also says whether it navigated, changed the page in place, or left it as the agent's last read showed it, in `change` and a one-sentence `changeNote`. Clicking "Use the web app" a second time and getting the same page back now says "no navigation and no visible change" and points to another control, instead of leaving the agent to guess.
+
+A `wait` for text stops early, instead of sitting for up to a minute, once no request has started or ended and no line of the page has changed for 10 seconds. The reply carries `waited.stuck`, and the hint says the page finished loading without that text, so waiting longer will not help, and suggests `find` with a shorter phrase or a ref from `snapshot --interactive`.
+
+The not-ready hints for a `mine` context no longer suggest a fresh browser, another profile or the desktop app: the context holds the person's own sign-ins, so the hints say to reload, wait again or work from another page.
+
+`find` already matches every visible text leaf a snapshot shows (since the whitespace and split-text fix), which a real-browser check over a page of varied text confirmed, so it needed no change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.109 — 2026-11-13
 
 desk-web now blocks every "open in the desktop app" launch for every site and scheme, and opens Teams links in their web form. A Teams deep link used to stop on Teams' launcher page, which tried `msteams:`, was refused, and stayed on its prompt even after "Use the web app instead" was chosen. `goto` now adds the `webjoin=true` flag the launcher reads (to a `/l/` link, or inside a launcher address), so the launcher goes straight to the web app. The flag rules are a small data table in `web-auth.cjs`, so another launcher needs one entry, not new code, and the fresh browser uses the same table.
