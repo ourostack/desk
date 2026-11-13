@@ -1,6 +1,6 @@
 ---
 name: pr-self-review
-description: Thorough read-only review of your own PR when the operator asks for a self-review or polish pass. Findings feed the one Superpowers review cycle. Not a substitute for required reviewer approval.
+description: Use when the operator asks for a self-review or polish pass of your own PR. Read-only, and not a substitute for required reviewer approval.
 ---
 
 # pr-self-review

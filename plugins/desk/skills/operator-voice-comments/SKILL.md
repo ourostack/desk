@@ -1,6 +1,6 @@
 ---
 name: operator-voice-comments
-description: Invoke before anything is sent or scheduled in the operator's name (a chat message, email, calendar invitation, PR or work-item comment or description), when drafting in their voice, and when asked to humanize text or make it sound less AI-written. Owns the approval rule and the voice rules. Not for commit messages or your own replies.
+description: Invoke before anything is sent or scheduled in the operator's name (chat, email, calendar invitation, PR or work-item comment), when drafting in their voice, or when asked to humanize text. Not for commit messages or your own replies.
 ---
 
 # operator-voice-comments

@@ -1,6 +1,6 @@
 ---
 name: content-routing
-description: Decide where durable content belongs (product repo, the operator's desk, a generic plugin, an overlay, or a team's own tooling or shared workspace; foundation or triggered skill) before encoding product behavior, interfaces, installation contracts, defaults, compatibility promises, release rules, a lesson, a preference or a new skill. Not for placement inside a desk.
+description: Use before encoding product behavior, interfaces, installation contracts, defaults, compatibility promises, release rules, a lesson or a new skill, to decide where durable content belongs. Not for placement inside a desk.
 ---
 
 # Content routing — where does this belong?

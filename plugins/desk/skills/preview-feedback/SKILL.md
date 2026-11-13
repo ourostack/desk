@@ -1,6 +1,6 @@
 ---
 name: preview-feedback
-description: Record and publish a participant's qualitative feedback about the installed Desk as attributed Markdown in their own desk. Use only for preview feedback a participant explicitly offers, not ordinary task discussion, code review, telemetry, or automatic friction logging. There is no feedback MCP tool; preserved private records are never migrated into Git.
+description: Use only when a participant explicitly offers qualitative feedback about the installed Desk, to record it in their own desk. Not for task discussion, code review, telemetry or friction logging.
 ---
 
 # Preview feedback

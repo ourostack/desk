@@ -1,6 +1,6 @@
 ---
 name: start-task
-description: Start a task from the operator's description or from work you recognize as task-shaped. Names it, routes it to a track and writes the card without asking. Use for 'start a task', 'track this' or 'work on X'.
+description: Use for 'start a task', 'track this' or 'work on X', or when work is task-shaped; it names the task, routes it to a track and writes the card.
 ---
 
 # Start a task

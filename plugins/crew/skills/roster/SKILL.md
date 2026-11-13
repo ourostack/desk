@@ -1,6 +1,6 @@
 ---
 name: roster
-description: The team roster in a Crew workspace -- the people file that lists the team and everyone the team works with (contacts, partners, former members), with notes about each. Use when finding the roster, adding or updating someone's entry (including a member's own entry after joining), adding a contact or a note about a person, or answering "who is X" / "who knows Y" / "who do we talk to about Z" in a shared workspace. Not the desk list in `_meta/desks.md`, which only records who has joined and where their desk is.
+description: Use to find or update the Crew roster, add a contact or a note about a person, or answer "who is X" or "who knows Y". Not the desk list `_meta/desks.md`.
 ---
 
 # The team roster

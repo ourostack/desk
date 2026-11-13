@@ -1,6 +1,6 @@
 ---
 name: leave-note
-description: Use when one member's agent in a Crew workspace needs to tell another member something they should see at their next session start (a handoff, a heads-up that their work is affected, a relayed request), when session start lists notes from teammates, or when the operator has seen a note and it should be acknowledged. Covers note_leave and note_ack, when a note is the right path, relaying someone's thinking without writing in their voice, and that the whole workspace can read every note.
+description: Use when a member's agent must tell another member something for their next session start, when session start lists teammate notes, or to acknowledge a note the operator has seen.
 ---
 
 # Leave a teammate a note

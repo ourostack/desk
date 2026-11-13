@@ -1,6 +1,6 @@
 ---
 name: session-start-migrations
-description: Run the plugins' local-state migrations at session start (renamed folders, moved plugins, changed links), each with its safety check, and halt for a restart when one needs it. Used by `desk:session-start`.
+description: Used by `desk:session-start` to run local-state migrations, each with its safety check, and halt for a restart when one needs it.
 ---
 
 # Session-start migrations

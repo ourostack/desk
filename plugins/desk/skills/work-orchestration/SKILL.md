@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Align new work before go by batching every decision that needs the human, with recommendations, then bind authorized engineering work to Superpowers. Also when a material new requirement arrives mid-task. Also the default way to run any work, with independent streams in parallel, downstream fast-follow and early milestones.
+description: Use to align new work before go (batch every decision that needs the human), when a material requirement arrives mid-task, and as the default way to run work with independent streams in parallel.
 ---
 
 # Work orchestration

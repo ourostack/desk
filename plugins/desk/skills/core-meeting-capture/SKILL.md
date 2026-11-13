@@ -1,10 +1,6 @@
 ---
 name: core-meeting-capture
-description: >-
-  Use when capturing, refreshing or publishing a meeting, transcript, chat,
-  recording or meeting recap; when a capture README is only a receipt; or when
-  slides, diagrams, whiteboards or demos mentioned in a meeting need visual
-  evidence. Not for recording an ongoing livestream or generating illustrations.
+description: Use when capturing, refreshing or publishing a meeting, transcript or recap, or when slides, diagrams or demos in a meeting need visual evidence. Not for an ongoing livestream.
 ---
 
 # Core meeting capture

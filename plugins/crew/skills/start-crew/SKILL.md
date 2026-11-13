@@ -1,6 +1,6 @@
 ---
 name: start-crew
-description: Turn a new or existing team repository into a Crew shared workspace, as a dual-repo workspace (team context here, the team plugin in a separate tooling repository; preferred for new teams) or a monorepo (the plugin in this repository's plugins/ folder). Adds Crew's layout without deleting or moving anything, then guides moving placeholder content into it. Use when someone asks to set up, start or create a crew or team workspace, or when crew:join-crew or crew.js status says "This repository is not a Crew workspace yet". Not for joining a workspace that already exists (crew:join-crew).
+description: Use when asked to set up or start a crew or team workspace, or when status says the repository is not a Crew workspace yet. Not for joining an existing one (`crew:join-crew`).
 ---
 
 # Start a Crew workspace

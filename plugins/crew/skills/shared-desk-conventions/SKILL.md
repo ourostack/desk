@@ -1,6 +1,6 @@
 ---
 name: shared-desk-conventions
-description: Shared-workspace layout -- one git repo, N operators, `desks/<alias>/` per person, `_shared/{landscape,decisions}/` for team facts and agreed decisions; read-across / write-own; the facts-vs-perspectives-vs-decisions content taxonomy (every opinion attributed to its holder); and the invisible conflict-safe write protocol (own desk = direct push; shared path = branch → PR → merge-now, no human review; saved = merged on remote `main`). Invoke when working in a shared crew repo that has a `desks/` + `_shared/` layout, when deciding where a piece of content belongs (a fact vs an opinion vs an agreed decision) or where a correction goes so every teammate's agents get it (team lessons in the root `AGENTS.md`), when about to write to a path outside your own `desks/<alias>/` subtree, before saying work is saved, done or ready, or when two or more members prepare together for a meeting (one shared meeting folder for prep and capture, linked from each desk). The multi-person overlay for `desk:directory-structure`.
+description: Use when working in a shared Crew repo with `desks/` and `_shared/`, deciding where content belongs, writing outside your own `desks/<alias>/`, or before saying work is saved, done or ready.
 ---
 
 # Shared-desk conventions

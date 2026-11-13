@@ -1,6 +1,6 @@
 ---
 name: task-lifecycle
-description: The task state machine (states, valid transitions, the state-change protocol, one job as one task). Use when a task changes state, or to decide whether new work is a new task or another iteration.
+description: Use when a task changes state, or to decide whether new work is a new task or another iteration.
 ---
 
 # Task lifecycle

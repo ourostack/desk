@@ -1,6 +1,6 @@
 ---
 name: perspective-query
-description: Answer "what would `<person>` think about X / what's `<person>` working on / what's actually agreed vs just a fact" against a multi-person shared crew workspace -- read that person's `desks/<alias>/` and answer AS their view, labeled as theirs (never team gospel); read `_shared/decisions/` for what's agreed (honest "no team decision yet" when empty); read `_shared/landscape/` for team-neutral facts. Invoke when asked any perspective-shaped or status-shaped question about a teammate, when asked whether something is agreed/decided, or when asked to distinguish one person's stance from team fact. Operationalizes the facts-vs-perspectives-vs-decisions taxonomy from `shared-desk-conventions`. Requires a shared workspace with a `desks/` + `_shared/` layout.
+description: Use when asked what a teammate thinks or is working on, or whether something is agreed or decided, in a shared Crew workspace with `desks/` and `_shared/`.
 ---
 
 # Perspective query

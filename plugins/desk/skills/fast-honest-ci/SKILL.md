@@ -1,6 +1,6 @@
 ---
 name: fast-honest-ci
-description: Use when creating, changing or reviewing a CI workflow or merge queue, when CI is slow, queued, flaky, red or over its time budget, when Actions minutes or spend run out or a paid or larger runner is proposed, when asked to speed up, shard, cache, parallelize, path-filter, fail-fast or add a CI budget, when re-running a failed job, when owning the default branch's health, or when planning, batching or scheduling a release. Keeps CI as fast and cheap as it can be without hiding a failure. Not for one test's product logic; use systematic-debugging for that.
+description: Use when creating or reviewing a CI workflow or merge queue, when CI is slow, queued, flaky, red, over budget or out of Actions minutes, when re-running a failed job, owning the default branch's health or planning a release. Not for one test's product logic.
 ---
 
 # Fast, honest CI
