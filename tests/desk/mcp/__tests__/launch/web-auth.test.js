@@ -3,6 +3,8 @@ import { strict as assert } from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
+import { deskFailure } from "../../../../../plugins/desk/mcp/src/runtime/desk-failure.js"
+import { vagueFailuresIn } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/precise-copy.ts"
 import { mkTempRoot } from "../_temp_roots.js"
 import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
 
@@ -1822,11 +1824,38 @@ test("every refusal says what to do instead, and none points at eval or page scr
     await assert.rejects(adapter.call(["goto", "file:///etc"]), /AUTH_URL_REFUSED.*https/u)
   } finally { await adapter.close() }
   for (const code of auth.FAILURE_CODES) {
-    const message = auth.hintFor(code)
-    assert.ok(message && message.length > 20, code)
+    const message = auth.fail(code).message
+    assert.ok(message.startsWith(`${code}: desk-web: `), code)
+    assert.ok(message.includes(`; to file a bug with its evidence, call friction_add with {"error_code":"${code.toLowerCase()}"}; `), code)
     assert.equal(/\beval\b(?!.*never needed)/u.test(message), false, code)
   }
-  assert.ok(auth.hintFor("AUTH_SOMETHING_NEW").length > 20, "an unlisted code still gets the general advice")
+  assert.match(auth.fail("AUTH_SOMETHING_NEW").message, /^AUTH_SOMETHING_NEW: desk-web: browser command: .*; to look further, .*; to file a bug with its evidence/u, "an unlisted code still gets the general advice")
+})
+
+test("a timed-out command and a covered control say what probably happened, how to look further, the call that reports them, and how to keep working", () => {
+  const timeout = auth.fail("AUTH_TIMEOUT", true).message
+  assert.ok(timeout.includes("the command ran out of time"), "the probable cause")
+  assert.ok(timeout.includes(", and the action may have applied and its output was refused; "), "the probable cause, when the action may have applied")
+  assert.ok(timeout.includes("; to look further, open a new context with browser_context, then [\"snapshot\"]; "), "how to look further")
+  assert.ok(timeout.includes(`; to file a bug with its evidence, call friction_add with {"error_code":"auth_timeout"}; `), "the call that reports it")
+  assert.ok(timeout.endsWith("; start again from the page you were on; keep waits under a minute."), "how to keep working")
+  const covered = auth.fail("AUTH_ACTION_COVERED").message
+  assert.ok(covered.includes("is probably covering that control"), "the probable cause")
+  assert.ok(covered.includes("; to look further, run [\"find\",\"<text>\"] to see what covers it; "), "how to look further")
+  assert.ok(covered.includes(`; to file a bug with its evidence, call friction_add with {"error_code":"auth_action_covered"}; `), "the call that reports it")
+  assert.ok(covered.endsWith("; this context is still open; press [\"press\",\"Escape\"] or click what covers it, then act on a fresh ref from [\"snapshot\"]."), "how to keep working")
+  for (const message of [timeout, covered]) assert.deepEqual(vagueFailuresIn(message), [])
+})
+
+test("a browser failure line is the Ouro AX problem line that deskFailure writes, with desk-web as its tool", () => {
+  for (const [code, applied] of [["AUTH_TIMEOUT", true], ["AUTH_ACTION_COVERED", false], ["AUTH_CONTEXT_REFUSED", false]]) {
+    const { thing, probably, look, keepWorking } = auth.FAILURES[code]
+    const line = deskFailure({
+      code: code.toLowerCase(), thing, look, keepWorking,
+      probably: applied ? `${probably}, and the action may have applied and its output was refused` : probably
+    })
+    assert.equal(auth.fail(code, applied).message, `${code}: ${line.replace(/^desk:/u, "desk-web:")}`, code)
+  }
 })
 
 test("a small page that reads as an error gets reload advice; a large page that mentions one does not", async () => {
