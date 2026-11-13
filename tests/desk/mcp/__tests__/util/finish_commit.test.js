@@ -3,13 +3,15 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { finishCommit, runFinishCommitCli } from "../../../../../plugins/desk/mcp/src/util/finish-commit.js"
 import { commitIndexPaths, commitPaths, indexEntries } from "../../../../../plugins/desk/mcp/src/util/git-stage.js"
 import { commitFailure, commitFailureWords, commitRoute, heldFileRouteFor } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
+import { CAPTURE_DIR, readCaptureRecord, writeCaptureRecord } from "../../../../../plugins/desk/mcp/src/util/capture-record.js"
 import { installCardGuard, TOOL_COMMIT_ENV } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 
 const env = (() => { const { [TOOL_COMMIT_ENV]: _drop, ...rest } = process.env; return rest })()
@@ -865,4 +867,128 @@ test("a held file's route with no desk root given commits and publishes from the
 test("a commit that landed but HEAD no longer holds is worded as landed and not in effect, naming both commits", () => {
   const words = commitFailureWords({ status: "unknown", reason: "timeout", landed: { commit: "1".repeat(40), head: "2".repeat(40) } })
   assert.equal(words, `Desk's commit ${"1".repeat(12)} landed (timeout), but HEAD ${"2".repeat(12)} no longer holds it, so Desk cannot tell whether it is in effect; route_around reads it back and changes nothing on its own`)
+})
+
+// Desk's record of a card change it could not finish (capture-record.js). The card guard lets through only a commit made with its
+// marker, and a finish by record id is the only route that sets it: a hand-supplied capture still gets the guard's refusal.
+function recordedCard(root) {
+  for (const dir of ["_meta", "_archive", "greenhouse/watering-api"]) mkdirSync(path.join(root, dir), { recursive: true })
+  writeFileSync(path.join(root, "_meta", "keep.md"), "x\n")
+  writeFileSync(path.join(root, "greenhouse", "watering-api", "task.md"), "---\ntitle: x\nstatus: processing\n---\n\nbody\n")
+  git(root, ["add", "-A"])
+  git(root, ["commit", "-q", "-m", "seed"])
+  installCardGuard(root)
+  writeFileSync(path.join(root, "greenhouse", "watering-api", "task.md"), "---\ntitle: x\nstatus: processing\n---\n\nbody, edited by Desk\n")
+  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-captures-"))
+  const saved = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = stateHome
+  try {
+    const committed = capturedFailure(root, ["greenhouse/watering-api/task.md"], "card", refused)
+    const failure = commitFailure({ root, paths: ["greenhouse/watering-api/task.md"], message: "card", committed, card: "greenhouse/watering-api", deskRoot: root })
+    const finish = failure.route_around.steps[1].argv.slice(2)
+    return { finish, recorded: { ...env, XDG_STATE_HOME: stateHome }, records: path.join(stateHome, "ouroboros-skills", "desk", CAPTURE_DIR) }
+  } finally {
+    process.env.XDG_STATE_HOME = saved
+  }
+}
+
+const runRecorded = (argv, recorded) => {
+  let text = ""
+  const code = runFinishCommitCli(argv, { env: recorded.recorded, out: { write: (s) => { text += s } } })
+  return { code, answer: JSON.parse(text) }
+}
+
+const withArg = (argv, flag, value) => argv.map((arg, i) => (argv[i - 1] === flag ? value : arg))
+
+test("a recorded card change is finished by its id: the record supplies the change, the guard lets that commit through, and the record is removed", () => {
+  const root = repo()
+  const recorded = recordedCard(root)
+  assert.deepEqual(readdirSync(recorded.records), [`${recorded.finish[recorded.finish.indexOf("--capture-id") + 1]}.json`])
+  const check = recorded.finish.filter((arg) => arg !== "--commit")
+  assert.equal(runRecorded(check, recorded).code, 3, "the read says ready")
+  const done = runRecorded(recorded.finish, recorded)
+  assert.equal(done.code, 0, JSON.stringify(done.answer))
+  assert.equal(done.answer.state, "finished")
+  assert.equal(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim(), "greenhouse/watering-api/task.md")
+  assert.equal(git(root, ["status", "--porcelain"]), "")
+  assert.deepEqual(readdirSync(recorded.records), [], "the record is removed once its commit landed")
+})
+
+test("a recorded finish is held for another checkout, other paths, another message, or an id Desk did not issue, and changes nothing", () => {
+  const root = repo()
+  const recorded = recordedCard(root)
+  const head = git(root, ["rev-parse", "HEAD"])
+  const other = mkdtempSync(path.join(tmpdir(), "desk-other-"))
+  const variants = [
+    withArg(recorded.finish, "--root", other),
+    withArg(recorded.finish, "--path", "_meta/keep.md"),
+    withArg(recorded.finish, "--message", "another message"),
+    withArg(recorded.finish, "--capture-id", "00000000-0000-4000-8000-000000000000"),
+    withArg(recorded.finish, "--capture-id", "../escape"),
+  ]
+  for (const argv of variants) {
+    const answer = runRecorded(argv, recorded)
+    assert.equal(answer.code, 4, JSON.stringify(answer.answer))
+    assert.equal(answer.answer.state, "held")
+  }
+  assert.equal(git(root, ["rev-parse", "HEAD"]), head, "HEAD does not move")
+  assert.equal(readdirSync(recorded.records).length, 1, "the record stays")
+})
+
+test("a recorded finish is held when Desk's record of the change cannot be read or is malformed", () => {
+  const root = repo()
+  const recorded = recordedCard(root)
+  const file = path.join(recorded.records, readdirSync(recorded.records)[0])
+  writeFileSync(file, "{\"schema_version\":1}\n")
+  const answer = runRecorded(recorded.finish, recorded)
+  assert.equal(answer.code, 4)
+  assert.match(answer.answer.reason, /malformed/u)
+  assert.notEqual(git(root, ["status", "--porcelain"]), "", "nothing was committed")
+})
+
+test("a record older than a week is pruned when the next record is written, and the rest of the folder is left alone", () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "desk-captures-"))
+  const dir = path.join(stateDir, CAPTURE_DIR)
+  const capture = { before: "a".repeat(40), branch: "main", expected: [] }
+  const write = () => writeCaptureRecord({ stateDir, root: "/desk", paths: ["t/x.md"], message: "m", capture })
+  const old = write()
+  const recent = write()
+  const past = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+  utimesSync(path.join(dir, `${old}.json`), past, past)
+  mkdirSync(path.join(dir, "stuck.json"))
+  utimesSync(path.join(dir, "stuck.json"), past, past)
+  writeFileSync(path.join(dir, "notes.txt"), "kept\n")
+  const fresh = write()
+  assert.ok(readCaptureRecord({ stateDir, id: old }).error, "the old record is gone")
+  assert.equal(readCaptureRecord({ stateDir, id: recent }).record.id, recent, "a recent record stays")
+  assert.equal(readCaptureRecord({ stateDir, id: fresh }).record.id, fresh)
+  assert.equal(readFileSync(path.join(dir, "notes.txt"), "utf8"), "kept\n", "a file that is not a record is not touched")
+  assert.ok(existsSync(path.join(dir, "stuck.json")), "an entry Desk cannot remove is left in place, and pruning goes on")
+})
+
+test("Desk reads its record only when every field is well formed, and refuses anything else", () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "desk-captures-"))
+  const dir = path.join(stateDir, CAPTURE_DIR)
+  mkdirSync(dir, { recursive: true })
+  const id = randomUUID()
+  const good = { schema_version: 1, id, root: "/desk", paths: ["t/x.md"], message: "m", before: "a".repeat(40), branch: "main", expected: ["100644 abc\tt/x.md"], created: "2026-11-13T00:00:00.000Z" }
+  const withoutId = { ...good }
+  delete withoutId.id
+  const file = path.join(dir, `${id}.json`)
+  writeFileSync(file, JSON.stringify(good))
+  assert.equal(readCaptureRecord({ stateDir, id }).record.id, id)
+  const malformed = [null, "5", { ...good, schema_version: 2 }, { ...good, id: randomUUID() }, withoutId, { ...good, root: "" }, { ...good, paths: "t/x.md" }, { ...good, paths: [] }, { ...good, paths: [7] }, { ...good, message: 3 }, { ...good, before: "" }, { ...good, branch: "" }, { ...good, expected: "x" }, { ...good, expected: [""] }]
+  for (const value of malformed) {
+    writeFileSync(file, JSON.stringify(value))
+    assert.ok(readCaptureRecord({ stateDir, id }).error, JSON.stringify(value))
+  }
+  writeFileSync(file, "not json")
+  assert.match(readCaptureRecord({ stateDir, id }).error, /unreadable/u)
+})
+
+test("a card whose record cannot be written, and whose commit cannot be read back, says it cannot tell and only reads", () => {
+  const capture = { before: "a".repeat(40), branch: "main", expected: [] }
+  const route = commitRoute({ root: "/desk", paths: ["t/x.md"], message: "m", readback: "unknown", card: "t/x", capture })
+  assert.equal(route.held, true)
+  assert.match(route.summary, /^Desk cannot tell whether its commit of the card t\/x landed/u)
 })

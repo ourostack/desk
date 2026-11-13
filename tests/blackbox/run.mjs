@@ -4,7 +4,7 @@
 // drives every user-facing behavior against a throwaway Git desk, compares the two hosts and measures time and memory.
 // It never imports Desk's source, so a refactor that keeps behavior cannot break it. See README.md beside it.
 
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
@@ -756,6 +756,83 @@ async function deskTools(ctx, world, session, shared, options) {
     git(world.root, ["clone", "-q", world.remote, clone], env)
     assert(fs.existsSync(path.join(clone, "search-quality", "rank-recent-cards-higher", "planning.md")), "the remote clone lacks the saved planning doc")
     assert(fs.existsSync(path.join(clone, "garden-schedule", "track.md")), "the remote clone lacks the renamed track")
+  })
+  await timedOutTaskUpdate(ctx, world, session)
+}
+
+// ---- a timed-out write finished by its route_around ----
+
+// route_around's commands are argvs: one argv (strings) or a list of them. They run as given, with no shell.
+function argvsOf(field) {
+  return typeof field?.[0] === "string" ? [field] : field ?? []
+}
+
+function runArgv(argv, env) {
+  const answer = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", windowsHide: true, env })
+  assert(answer.error === undefined, `${argv[0]} did not run: ${answer.error?.message}`)
+  return { argv, status: answer.status, stdout: answer.stdout ?? "" }
+}
+
+/**
+ * A task_update whose card commit runs past its time budget (util/git-stage.js, 10 s) is finished by the route_around it returns,
+ * as an agent would: the slow hook is removed, then each step's argv runs in order until the route says to stop.
+ */
+async function timedOutTaskUpdate(ctx, world, session) {
+  const { desk, env } = world
+  const track = "search-quality"
+  const slug = "rank-recent-cards-higher"
+  const card = `${track}/${slug}/task.md`
+  const note = "Checked the recency boost against last week's searches."
+  const hooksDir = path.resolve(desk, git(desk, ["rev-parse", "--git-path", "hooks"], env))
+  await check(ctx, "task_update.timeout_finished_by_route_around", "tools", async () => {
+    // Desk's guard stays the pre-commit hook; a hook that was there before is chained after it (desk/card-commit-guard.js).
+    const guard = path.join(hooksDir, "pre-commit")
+    assert(fs.existsSync(guard) && fs.readFileSync(guard, "utf8").includes("desk-card-commit-guard"), "Desk's card guard is not the pre-commit hook, so the slow hook would not run beside it")
+    const slow = path.join(hooksDir, "pre-commit.desk-chained")
+    const headBefore = git(desk, ["rev-parse", "HEAD"], env)
+    fs.writeFileSync(slow, "#!/bin/sh\nsleep 11\n", { mode: 0o755 })
+    let timed
+    try {
+      timed = await session.call("task_update", { track, slug, note }, 60000)
+    } finally {
+      fs.rmSync(slow, { force: true })
+    }
+    assert(!timed.isError && timed.json?.status === "updated", `task_update did not record the note: ${timed.text.slice(0, 400)}`)
+    const commit = timed.json.commit
+    assert(commit && (commit.status === "failed" || commit.status === "unknown"), `the commit was not reported unfinished: ${JSON.stringify(commit ?? null).slice(0, 400)}`)
+    assert(commit.route_around && typeof commit.route_around === "object", `the unfinished commit carries no route_around: ${JSON.stringify(commit).slice(0, 400)}`)
+    assert(!/can't|cannot finish|not in effect/iu.test(timed.text) || commit.route_around, "the result says the change cannot be finished or is not in effect, with no route")
+    assert(git(desk, ["rev-parse", "HEAD"], env) === headBefore, "the timed-out commit moved HEAD before the route ran")
+
+    // Run the route as written, as an agent reads it: each step's argv in order; "Only if step N exited X" runs only when step N
+    // exited X; "On exit 4 (held) or 5 (unknown): stop" ends the run; "Stop here" ends it too.
+    const route = commit.route_around
+    const trace = []
+    const exits = []
+    for (const [index, step] of route.steps.entries()) {
+      if (/\bStop here\b/u.test(step.step)) break
+      const gate = /^Only if step (\d+) exited (\d+)/u.exec(step.step)
+      if (gate && exits[Number(gate[1])] !== Number(gate[2])) continue
+      if (index > 0 && /On exit 4 \(held\) or 5 \(unknown\): stop/u.test(route.steps[index - 1].step) && [4, 5].includes(exits[index])) break
+      assert(step.tool === undefined, `route step needs a Desk tool call, which this check does not follow: ${step.step.slice(0, 120)}`)
+      const ran = argvsOf(step.argv).map((argv) => runArgv(argv, env))
+      trace.push(...ran)
+      exits[index + 1] = ran.at(-1)?.status
+    }
+    const committedLocally = argvsOf(route.committed_locally_when.argv).map((argv) => runArgv(argv, env))
+    const finished = committedLocally.every((answer) => answer.status === 0)
+    const trail = JSON.stringify({ route: trace.map((t) => ({ status: t.status, out: t.stdout.slice(0, 300) })), committedLocally: committedLocally.map((t) => t.status) }).slice(0, 900)
+    assert(finished, `the route did not commit the card change; the tool reported ${commit.status} (${commit.reason}); the route stopped: ${trail}`)
+
+    const head = git(desk, ["rev-parse", "HEAD"], env)
+    assert(JSON.stringify(git(desk, ["show", "--name-only", "--format=", "HEAD"], env).split("\n").filter(Boolean)) === JSON.stringify([card]), `the commit changed more than ${card}`)
+    assert(git(desk, ["status", "--porcelain"], env) === "", "the desk was left with uncommitted changes")
+    assert(fs.readFileSync(path.join(desk, card), "utf8").includes(note), "the committed card lacks the progress note")
+    await waitFor(async () => {
+      let remoteHead = ""
+      try { remoteHead = git(world.root, ["--git-dir", world.remote, "rev-parse", "main"], env) } catch { /* not yet */ }
+      return { done: remoteHead === head, detail: { remoteHead, head } }
+    }, { timeoutMs: 60000, intervalMs: 500, label: "the route publishes the card commit to origin's main" })
   })
 }
 

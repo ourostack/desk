@@ -5,7 +5,13 @@
 // proof. A second session on the same desk then quotes the lesson from its own session start: the lesson's body carries a
 // secret the second prompt does not, so only a session start that printed the lesson can give it back.
 //
-//   node tests/blackbox/real-hosts.mjs [--hosts copilot,claude] [--out <dir>] [--copilot-user <gh user>]
+//   node tests/blackbox/real-hosts.mjs [--hosts copilot,claude] [--out <dir>] [--copilot-user <gh user>] [--scenario lessons|progress-note] [--plugin local:<desk plugin folder>]
+//
+// `--plugin` loads that Desk folder for Copilot instead of the installed one (and skips the configured plugins), so a branch's
+// own Desk is what runs.
+// `progress-note` is one session that records a progress note with task_update on a desk whose pre-commit hook is slow (longer
+// than Desk's 10 s card-commit budget). The prompt says nothing about timeouts or routes; it passes when the note reaches the
+// remote and the answer does not say it cannot be recorded or is not in effect.
 //
 // Copilot is started as `agency copilot --allow-all -p`; its answer is read from ~/.copilot/session-state/<id>/events.jsonl,
 // found by the unique tag in the prompt. Claude Code is started as `claude -p --output-format json`.
@@ -23,6 +29,9 @@ const hosts = option("--hosts", "copilot,claude").split(",")
 const out = path.resolve(option("--out", path.join(os.tmpdir(), "desk-blackbox-results")))
 const copilotUser = option("--copilot-user", "arimendelow_microsoft")
 const timeoutMs = Number(option("--timeout", "600")) * 1000
+const scenario = option("--scenario", "lessons")
+const plugin = option("--plugin", null)
+if (!["lessons", "progress-note"].includes(scenario)) throw new Error(`unknown --scenario ${scenario}`)
 
 function prompt(tag, secret) {
   return [
@@ -97,7 +106,9 @@ async function hostRun(host, tag, text, desk) {
   let result
   if (host === "copilot") {
     const token = execFileSync("gh", ["auth", "token", "--user", copilotUser], { encoding: "utf8" }).trim()
-    result = await run("agency", ["copilot", "--allow-all", "-p", text], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
+    const pluginArgs = plugin ? ["--no-config-plugins", "--plugin", plugin] : []
+    // A fresh session per run: without it, agency resumes the last session, which carries the earlier run's context.
+    result = await run("agency", ["copilot", "--allow-all", "--session-id", randomUUID(), ...pluginArgs, "-p", text], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
     Object.assign(result, copilotAnswer(tag, since))
   } else {
     result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", text], { cwd: desk, env: personEnv() })
@@ -141,15 +152,72 @@ async function session(host) {
   return { host, tag, ms: Math.round(result.ms + next.ms), sessionId: result.sessionId, nextSessionId: next.sessionId, nextAnswerTail: next.answer.slice(-400), checks, reported, answerTail: result.answer.slice(-600), stderrTail: result.stderr.slice(-400), commits: log.split("\n") }
 }
 
+const TRACK = "search-quality"
+const SLUG = "rank-recent-cards-higher"
+const TASK_CARD = [
+  "---",
+  "schema_version: 1",
+  "title: Rank recent cards higher",
+  `track: ${TRACK}`,
+  "status: drafting",
+  "created: \"2026-11-01T09:00:00Z\"",
+  "updated: \"2026-11-01T09:00:00Z\"",
+  "---",
+  "",
+  "# Rank recent cards higher",
+  "",
+  "## Goal",
+  "",
+  "Make recent cards rank higher in desk search.",
+  "",
+].join("\n")
+
+// One session records a progress note on a live task while the desk's pre-commit hook is slow. The person's own hook is the slow
+// one: Desk's session start keeps a pre-commit hook it finds and chains it after Desk's card guard.
+async function progressNoteSession(host) {
+  const tag = `bbx${randomUUID().slice(0, 8)}`
+  const note = `Progress check ${tag}: the recency boost is measured.`
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `desk-real-${host}-`))
+  const { desk, remote } = makeDesk({ root, env: process.env })
+  fs.mkdirSync(path.join(desk, TRACK, SLUG), { recursive: true })
+  fs.writeFileSync(path.join(desk, TRACK, "track.md"), `# ${TRACK}\n`)
+  fs.writeFileSync(path.join(desk, TRACK, SLUG, "task.md"), TASK_CARD)
+  git(desk, ["add", "-A"], process.env)
+  git(desk, ["commit", "-q", "-m", "Add the progress-check task"], process.env)
+  git(desk, ["push", "-q", "origin", "main"], process.env)
+  const hooks = path.resolve(desk, git(desk, ["rev-parse", "--git-path", "hooks"], process.env))
+  fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nsleep 11\n", { mode: 0o755 })
+
+  const text = [
+    `Black-box check ${tag}. Call desk_status first and note its state. Then record this progress note on the task "${SLUG}" in track "${TRACK}" with task_update, as the note: "${note}".`,
+    "Do not edit files yourself. Reply in one sentence saying whether the note is recorded.",
+  ].join("\n")
+  const result = await hostRun(host, tag, text, desk)
+  const answer = result.answer.trim()
+  const onRemote = (() => {
+    try { return git(root, ["--git-dir", remote, "show", `main:${TRACK}/${SLUG}/task.md`], process.env) } catch { return "" }
+  })()
+  const checks = {
+    exited_ok: result.code === 0,
+    answered: answer !== "",
+    note_on_remote: onRemote.includes(note),
+    answer_not_failure: !/can(?:'|no)t|cannot|not in effect/iu.test(answer),
+  }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { fs.rmSync(root, { recursive: true, force: true }); break } catch { await new Promise((resolve) => setTimeout(resolve, 1000)) }
+  }
+  return { host, tag, ms: Math.round(result.ms), sessionId: result.sessionId, checks, answer, stderrTail: result.stderr.slice(-400) }
+}
+
 const runs = []
 for (const host of hosts) {
-  console.log(`Running a real ${host} session…`)
-  runs.push(await session(host))
+  console.log(`Running a real ${host} session (${scenario})…`)
+  runs.push(scenario === "progress-note" ? await progressNoteSession(host) : await session(host))
   const last = runs.at(-1)
   console.log(`${host}: ${Object.values(last.checks).filter(Boolean).length}/${Object.keys(last.checks).length} in ${last.ms} ms`, last.checks)
 }
 fs.mkdirSync(out, { recursive: true })
-const file = path.join(out, `blackbox-real-hosts-${process.platform}.json`)
+const file = path.join(out, scenario === "lessons" ? `blackbox-real-hosts-${process.platform}.json` : `blackbox-real-hosts-${scenario}-${process.platform}.json`)
 fs.writeFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), runs }, null, 2)}\n`)
 const md = ["| Check | " + runs.map((r) => r.host).join(" | ") + " |", "| --- | " + runs.map(() => "---").join(" | ") + " |"]
 for (const key of Object.keys(runs[0]?.checks ?? {})) md.push(`| ${key} | ${runs.map((r) => (r.checks[key] ? "pass" : "FAIL")).join(" | ")} |`)

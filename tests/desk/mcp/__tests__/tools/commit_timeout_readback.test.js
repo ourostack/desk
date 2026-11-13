@@ -9,6 +9,8 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { existsSync, readdirSync } from "node:fs"
+import * as os from "node:os"
 import { lesson_add as lessonAdd } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { task_create, task_update, stageAndCommitCard } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
@@ -17,6 +19,7 @@ import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.j
 import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeCardCommitted } from "../../../../../plugins/desk/mcp/src/tools/_card-commit.js"
 import { commitRoute } from "../../../../../plugins/desk/mcp/src/util/route-around.js"
+import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { AGENTS_MD_CAP_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { assertRoute, readsOnly } from "./_route_around.js"
@@ -183,9 +186,9 @@ for (const c of cases) {
     const result = await c.run(root, timedOutBeforeCommit, (opts) => pushes.push(opts))
     assert.equal(result.commit?.status, "failed")
     assertRoute(result.commit.route_around)
-    // A live card's route is held and publishes nothing (0972 #2 on ae1395e4); every other route publishes the desk root.
-    if (c.card) assert.equal(result.commit.route_around.held, true)
-    assert.deepEqual(publishRoots(result.commit.route_around), c.card ? [] : [root], "the route publishes the desk root a success would schedule")
+    // A live card's route finishes Desk's recorded change (capture-record.js), so it is not held and publishes the desk root like any route.
+    assert.equal(result.commit.route_around.held, undefined)
+    assert.deepEqual(publishRoots(result.commit.route_around), [root], "the route publishes the desk root a success would schedule")
     assert.equal(clean(root, c.rel), false, "the write is kept")
     assert.deepEqual(pushes, [])
   })
@@ -405,24 +408,26 @@ test("the route of a task move that did not land, run by hand, commits the move 
   assert.equal(remoteShow(origin, "trip/new-name/notes.md").stdout, "notes\n")
 })
 
-// 0972 #2 on ae1395e4: a live card commits only through task_update, and a new task_update appends a new note and takes along
-// whatever the card holds by then, so it is never this captured change. The route for a card reads where the captured change
-// stands and stops: it calls no tool, commits nothing and publishes nothing, and another session's later staged and unstaged
-// edits to the card and its track.md stay exactly as they were.
-function assertCardHeld(route, card) {
+// A live card's route finishes Desk's own record of the change (capture-record.js), never the command line: the finish names the
+// record by its id, and the card guard lets through only that recorded commit. A new task_update is still a new write, never a finish.
+function assertCardRecorded(route, card) {
   assertRoute(route)
-  assert.equal(route.held, true, "the route of a live card is held")
+  assert.equal(route.held, undefined, "the route of a live card with Desk's record is not held")
   for (const step of route.steps) {
     assert.equal(step.tool, undefined, `no Desk tool step: ${step.step}`)
-    assert.ok(step.argv === undefined || readsOnly(step), `every step only reads: ${step.step}`)
+    assert.ok(step.argv === undefined || readsOnly(step) || /^Only if step 1 exited 3/u.test(step.step) || /^Read whether|^Publish/u.test(step.step), `only the finish commits: ${step.step}`)
   }
-  assert.doesNotMatch(JSON.stringify(route), /sync-push\.js|finish-commit\.js[^"]*--commit/u, "nothing is published or committed")
-  assert.match(route.steps.at(-1).step, /^Stop here/u)
-  assert.match(route.steps.at(-1).step, new RegExp(`task_update for ${card}`, "u"))
-  assert.match(route.steps.at(-1).step, /not this captured change/u, "a new task_update is never presented as finishing the captured change")
+  const finish = route.steps[1].argv
+  assert.ok(finish.includes("--capture-id") && !finish.includes("--entry"), "the finish names the record and carries no captured entries")
+  assert.match(route.steps[1].step, /^Only if step 1 exited 3 \(ready\)/u)
+  assert.doesNotMatch(JSON.stringify(route), /DESK_TOOL_COMMIT/u, "the card guard's override is never named")
+  assert.doesNotMatch(route.steps[1].step, /desk_save/u, "a card is finished by Desk's finish, never saved with desk_save")
+  assert.match(route.summary, new RegExp(`card ${card} `, "u"))
 }
 
-async function cardTimedOut() {
+// Each live-card case gets its own state folder, so the records it leaves are its own.
+async function cardTimedOut(stateHome) {
+  process.env.XDG_STATE_HOME = stateHome ?? await fs.mkdtemp(path.join(os.tmpdir(), "desk-captures-"))
   const { root, origin } = await repoWithOrigin()
   await track_create({ deskRoot: root, input: { slug: "t", title: "T", scope: SCOPE }, schedulePush: () => {} })
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
@@ -433,17 +438,22 @@ async function cardTimedOut() {
 }
 
 const CARD = ["t/book-flights/task.md", "t/track.md"]
+const capturesLeft = () => {
+  const dir = path.join(resolveDeskStateDir(), "pending-captures")
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : []
+}
 
-test("the route of a live card whose commit did not land is held: it reads, calls no task_update, and commits nothing", async () => {
+test("the route of a live card finishes Desk's recorded change: it reads, commits once, publishes, and removes the record", async () => {
   const { root, origin, route } = await cardTimedOut()
-  const before = indexState(root, CARD)
-  const remote = git(root, ["rev-parse", "@{u}"])
-  const { code, first } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
+  const { code, first, newer } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
   assert.equal(code, 3, first[0].stdout)
-  assertCardHeld(route, "t/book-flights")
-  assert.deepEqual(indexState(root, CARD), before, "HEAD, the index and the checkout are as they were")
-  assert.equal(spawnSync("git", ["--git-dir", origin, "rev-parse", "main"], { encoding: "utf8" }).stdout, remote, "nothing was published")
-  assert.notEqual(runArgv(route.committed_locally_when.argv)[0].status, 0, "the local read-back does not call it committed")
+  assertCardRecorded(route, "t/book-flights")
+  assert.equal(git(root, ["status", "--porcelain"]), "", "the checkout agrees with HEAD")
+  assert.deepEqual(git(root, ["show", "--name-only", "--format=", "HEAD"]).trim().split("\n"), ["t/book-flights/task.md"], "exactly the card")
+  assert.equal(newer, 0, "nothing newer than the recorded change")
+  assert.equal(spawnSync("git", ["--git-dir", origin, "rev-parse", "main"], { encoding: "utf8" }).stdout.trim(), git(root, ["rev-parse", "HEAD"]).trim(), "the remote holds the commit")
+  assert.equal(runArgv(route.committed_locally_when.argv)[0].status, 0, "the read-back now says committed")
+  assert.deepEqual(capturesLeft(), [], "the record is removed once its commit is proven landed")
 })
 
 test("the route of a live card leaves another session's later staged and unstaged edits to the card and track.md exactly as they were", async () => {
@@ -454,11 +464,29 @@ test("the route of a live card leaves another session's later staged and unstage
   await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nAnother session's unstaged edit.\n", "utf8")
   await fs.appendFile(path.join(root, "t", "track.md"), "\nAnother session's unstaged edit.\n", "utf8")
   const before = indexState(root, CARD)
-  assertCardHeld(route, "t/book-flights")
+  const head = git(root, ["rev-parse", "HEAD"])
+  assertCardRecorded(route, "t/book-flights")
   const { code, first } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
-  assert.notEqual(code, 0, first[0].stdout)
+  assert.equal(code, 4, first[0].stdout)
   assert.deepEqual(indexState(root, CARD), before, "the other session's staged and unstaged work is untouched")
-  assert.notEqual(runArgv(route.committed_locally_when.argv)[0].status, 0)
+  assert.equal(git(root, ["rev-parse", "HEAD"]), head, "HEAD does not move")
+  assert.equal(capturesLeft().length, 1, "the record stays while its commit has not landed")
+})
+
+test("a live card whose change Desk cannot record is held: its route only reads and commits nothing", async () => {
+  const saved = process.env.XDG_STATE_HOME
+  const blocker = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "desk-captures-")), "not-a-folder")
+  await fs.writeFile(blocker, "x")
+  try {
+    const { root, route } = await cardTimedOut(blocker)
+    assertRoute(route)
+    assert.equal(route.held, true, "without a record the route of a live card is held")
+    for (const step of route.steps) assert.ok(step.argv === undefined || readsOnly(step), `every step only reads: ${step.step}`)
+    assert.doesNotMatch(JSON.stringify(route), /--capture-id/u)
+    assert.notEqual(git(root, ["status", "--porcelain"]), "", "the change is kept, uncommitted")
+  } finally {
+    process.env.XDG_STATE_HOME = saved
+  }
 })
 
 // R2 (0972 on #625): a clean status is no proof. The change was unstaged and its file removed after the failure: status is clean,
