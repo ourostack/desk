@@ -33,7 +33,7 @@
 // whole call.
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
-// instructions, root, host, prereqs, sync, sync_summary, agents_md, notes, active_tasks,
+// instructions, root, host, prereqs, sync, sync_summary, agents_md, agents_md_in_host_instructions, notes, active_tasks,
 // card_validation, push_accounts, factory }` (among others); `notes` is the open notes teammates left in this
 // person's `_inbox/` (`inbox.js`), or null. The CLI prints it as readable
 // text (`boot-text.js`) unless `--json` asks for this structure. `status` is one of "ready", "degraded" or
@@ -48,7 +48,7 @@
 // it found is healthy.
 
 import { execFile, spawn as nodeSpawn, spawnSync } from "node:child_process"
-import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
+import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -952,6 +952,20 @@ export function detectAgentHost(env) {
   return found === undefined ? "unknown" : found[0]
 }
 
+/**
+ * Whether the host has already put the desk's AGENTS.md into the model's instructions, so boot need not print it again.
+ * Copilot loads the AGENTS.md of the folder it starts in; only that exact file, read by a Copilot boot run from that
+ * folder, counts. Any other case, or a path that cannot be resolved, prints the file as before.
+ */
+export function hostLoadsAgentsMd({ agent, cwd, agentsMd }) {
+  if (agent !== "copilot" || !agentsMd) return false
+  try {
+    return realpathSync(path.join(cwd, "AGENTS.md")) === realpathSync(agentsMd.path)
+  } catch {
+    return false
+  }
+}
+
 function parserName(nested) {
   return nested ? "gray-matter" : "lite"
 }
@@ -1484,6 +1498,7 @@ export async function bootOnce({
   } catch {
     agentsMd = null
   }
+  const agentsMdInHostInstructions = hostLoadsAgentsMd({ agent: host.agent, cwd, agentsMd })
   // The person the Desk tools resolve (crew-member.js, the same resolver as the tool server's admission), worked out once:
   // it is printed on the status line and picks both the person's own AGENTS.md and their improvement cards. GitHub is
   // asked only when several signed-in accounts are on the roster, within a short budget. A bad DESK_PERSON never stops the boot.
@@ -1505,7 +1520,7 @@ export async function bootOnce({
   // the person's file keeps a floor of that budget however large the team's file grows.
   let personAgentsMd = null
   try {
-    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: personAgentsCap(agentsMd) })
+    if (who?.status === "ok" && who.personPrefix !== "") personAgentsMd = agentsFn(path.join(root.path, who.personPrefix), { cap: personAgentsCap(agentsMdInHostInstructions ? null : agentsMd) })
   } catch {
     personAgentsMd = null
   }
@@ -1659,6 +1674,7 @@ export async function bootOnce({
     sync,
     sync_summary: syncSummaryText,
     agents_md: agentsMd,
+    agents_md_in_host_instructions: agentsMdInHostInstructions,
     person_agents_md: personAgentsMd,
     lessons_shelf: lessonsShelf,
     notes,

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { osEnv } from "../_os_env.js"
 import { recordPullOutcome } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { bootOnce, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
+import { bootOnce, hostLoadsAgentsMd, parseBootArgs, repoStates, runBootCli } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { BOOT_TEXT_MAX_CHARS, TASKS_SHOWN_CAP, AGENTS_MD_CAP_BYTES, NO_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION, formatBootText, lastSyncedAt, readAgentsMd, syncSummary, syncWords } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { PERSON_AGENTS_MIN_BYTES } from "../../../../../plugins/desk/mcp/src/runtime/agents-md.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
@@ -97,6 +97,29 @@ test("boot also carries the person's own AGENTS.md in a shared workspace, where 
   assert.equal(unreadable.agents_md.text, "Team rule.\n")
   const unresolved = await boot(root, { personFn: async () => ({ status: "unresolved", reason: "login_not_cached" }) })
   assert.equal(unresolved.person_agents_md, null)
+})
+
+test("boot does not print a desk AGENTS.md a Copilot host already loaded from the folder the boot runs in", async () => {
+  const root = await desk()
+  await fs.writeFile(path.join(root, "AGENTS.md"), "Team rule.\n")
+  await fs.mkdir(path.join(root, "desks", "ari"), { recursive: true })
+  await fs.writeFile(path.join(root, "desks", "ari", "AGENTS.md"), "My rule.\n")
+  const copilot = { DESK: root, DESK_PERSON: "ari", COPILOT_AGENT_SESSION_ID: "s-1" }
+  const loaded = await boot(root, { env: copilot })
+  assert.equal(loaded.agents_md_in_host_instructions, true)
+  assert.equal(loaded.agents_md.text, "Team rule.\n", "the JSON result still carries the file")
+  const text = formatBootText(loaded)
+  assert.doesNotMatch(text, /Team rule\./u)
+  assert.match(text, /## The desk's AGENTS\.md \(.*AGENTS\.md\); its rules bind this session\n\nYour host already loaded this file into your instructions, so it is not printed again here\.\n/u)
+  assert.match(text, /## Your own AGENTS\.md \(.*\); its rules bind this session\n\nMy rule\.\n/u, "the person's own file is not in the host's instructions, so it is still printed")
+  const elsewhere = await boot(root, { env: copilot, cwd: path.join(root, "desks", "ari") })
+  assert.equal(elsewhere.agents_md_in_host_instructions, false, "a boot run from another folder cannot tell the host loaded this file")
+  assert.match(formatBootText(elsewhere), /Team rule\./u)
+  const claude = await boot(root, { env: { DESK: root, DESK_PERSON: "ari", CLAUDECODE: "1" } })
+  assert.equal(claude.agents_md_in_host_instructions, false)
+  assert.match(formatBootText(claude), /Team rule\./u)
+  assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: { path: path.join(root, "gone", "AGENTS.md") } }), false, "a path that cannot be resolved prints the file")
+  assert.equal(hostLoadsAgentsMd({ agent: "copilot", cwd: root, agentsMd: null }), false)
 })
 
 test("boot carries the shelf of lessons beside the person's AGENTS.md, or the desk's own on a solo desk", async () => {

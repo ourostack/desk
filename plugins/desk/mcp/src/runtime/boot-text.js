@@ -451,7 +451,8 @@ export function formatBootText(result) {
   if ((result.repo_states ?? []).length > 0) middle.push("", "Repos of open tasks:", ...result.repo_states.map(repoLine))
   const instructions = result.text_instructions ?? (result.instructions ?? []).map((instruction) => PLAIN_TEXT_INSTRUCTIONS.get(instruction) ?? instruction)
   const tail = instructions.length > 0 ? ["", "Instructions, in order:", ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`)] : []
-  const files = [[result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]].filter(([md]) => md)
+  const hostHasDeskFile = result.agents_md_in_host_instructions === true && Boolean(result.agents_md)
+  const files = [[hostHasDeskFile ? null : result.agents_md, "The desk's AGENTS.md"], [result.person_agents_md, "Your own AGENTS.md"]].filter(([md]) => md)
   const size = (list) => list.reduce((total, line) => total + line.length + 1, 0)
   // Each file's heading, blank lines and cut marker, which names its path again.
   const frame = (md, name) => name.length + 2 * md.path.length + 100
@@ -474,6 +475,8 @@ export function formatBootText(result) {
     notes.push(`shortened the task list (${middle.length - kept} lines not shown)`)
   }
   lines.push(...shown, ...tail)
+  // The host's own copy of the desk's file is already in the model's instructions: say so in a line, not a second copy.
+  if (hostHasDeskFile) lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", "Your host already loaded this file into your instructions, so it is not printed again here.")
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
   let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
   const cuts = []
