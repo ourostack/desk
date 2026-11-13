@@ -39,7 +39,7 @@ function runner(spawnGit, cwd, env) {
  * The default branch a card write must publish to, when the checkout at `root` is on a different named branch; null when
  * the checkout's own branch is the target, when it is detached, or when the remote names no default branch.
  */
-export function defaultBranchForPublication(root, spawnGit = spawnSync) {
+export function defaultBranchForPublication(root, spawnGit) {
   const git = runner(spawnGit, root, gitEnv())
   const head = git(["symbolic-ref", "--quiet", "--short", "HEAD"])
   if (head.status !== 0 || head.stdout.trim() === "") return null
@@ -95,7 +95,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const git = runner(spawnGit, top, env)
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
   try {
-    for (let attempt = 1; ; attempt += 1) {
+    for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt += 1) {
       const fetched = git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS)
       if (fetched.status !== 0) {
         return fail(relPaths, `Desk could not fetch ${REMOTE}/${defaultBranch}: ${fetched.stderr.split("\n")[0] || "git fetch failed"}`, "the remote is unreachable, refused this machine's credentials, or is not configured", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still on disk and staged, so the next write publishes it too; retry once the remote answers", fetched.timedOut ? "unknown" : "absent")
@@ -130,7 +130,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       } else {
         const pushed = git(["push", "--quiet", REMOTE, `${commit}:refs/heads/${defaultBranch}`], NETWORK_TIMEOUT_MS)
         if (pushed.status !== 0) {
-          if (!pushed.timedOut && REJECTED.test(pushed.stderr) && attempt < PUSH_ATTEMPTS) continue
+          if (!pushed.timedOut && REJECTED.test(pushed.stderr)) continue
           return fail(relPaths, `the remote refused the push to ${defaultBranch}`, pushed.timedOut ? "the push was cut off" : "the remote rejected the commit", `git -C ${root} push ${REMOTE} HEAD:refs/heads/${defaultBranch}`, "the card is still staged, so the next write retries the publication", pushed.timedOut ? "unknown" : "absent")
         }
         target = commit
@@ -138,6 +138,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       git(["update-ref", remoteRef, target])
       return { ok: true, stderr: "" }
     }
+    return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {
     rmSync(indexFile, { force: true })
   }

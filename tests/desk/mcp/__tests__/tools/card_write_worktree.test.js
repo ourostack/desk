@@ -124,7 +124,7 @@ test("a push the remote keeps rejecting is tried a bounded number of times, then
   git(worktree, ["add", "notes.md"])
   const refused = commitPaths(worktree, ["notes.md"], "notes", spawnSync)
   assert.equal(refused.ok, false)
-  assert.match(refused.stderr, /remote refused the push to main/u)
+  assert.match(refused.stderr, /kept rejecting the push to main after 3 tries/u)
 })
 
 test("a repository whose publication policy cannot be read refuses the write before anything is pushed", async () => {
