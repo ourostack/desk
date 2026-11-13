@@ -188,10 +188,11 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
   if (running === null) return null
   const dir = stateDir ?? resolveDeskStateDir({ env })
   const file = path.join(dir, VERSION_CACHE_FILE)
-  const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: homeDir ?? os.homedir(), readFile })
+  const home = homeDir ?? os.homedir()
+  const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
   // Agency's cached release copy already names the release, so an Agency install on that channel asks no one.
   if (agency && channel === "release") {
-    const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: homeDir ?? os.homedir(), readFile })
+    const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: home, readFile })
     if (known !== null) return staleDeskFinding({ running, latest: known, agentHost, channel, agency, spec })
   }
   let latest = readCache(file, now, channel)

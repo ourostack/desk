@@ -99,6 +99,8 @@ test("the finding is one line, with a count when reliable and just behind otherw
   assert.equal(release.channel, "release")
   assert.equal(release.line, releaseNotice({ running: "3.2.92", latest: "3.2.93" }))
   assert.equal(release.refresh, 'run agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release", then start a new session')
+  const notAgency = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release" })
+  assert.equal(notAgency.line, "Desk 3.2.92 is behind the release channel (3.2.93); run copilot plugin update desk, then start a new session.")
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.172", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.173", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
 })
@@ -416,4 +418,37 @@ test("an offline check prints nothing and doesn't delay startup", async () => {
   const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: known.pluginRoot, stateDir: known.stateDir, homeDir: known.home, agentHost: "copilot", budgetMs: 60, fetchFn: () => new Promise(() => {}) })
   assert.equal(found.latest, "3.2.101")
   assert.ok(Date.now() - fast < 50, `took ${Date.now() - fast} ms`)
+})
+
+test("a release copy Desk cannot read is not a version, so the check falls back to the network", async () => {
+  const { home, pluginRoot } = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.93" } })
+  const index = path.join(home, ".local", "agency", "plugins", "cache", "cache_index.json")
+  const fetchedRelease = async (calls) => byBranch({ release: "3.2.93" }, calls)
+  writeFileSync(index, "not json")
+  const corrupt = []
+  const fromNetwork = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir: await mkTempRoot("desk-stale-state-"), homeDir: home, agentHost: "copilot", fetchFn: await fetchedRelease(corrupt) })
+  assert.equal(corrupt.length, 1)
+  assert.equal(fromNetwork.latest, "3.2.93")
+  writeFileSync(index, "{}")
+  const noEntries = []
+  assert.equal((await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir: await mkTempRoot("desk-stale-state-"), homeDir: home, agentHost: "copilot", fetchFn: await fetchedRelease(noEntries) })).latest, "3.2.93")
+  assert.equal(noEntries.length, 1)
+  writeFileSync(index, JSON.stringify({ entries: { [RELEASE]: { dir_name: "e0" } } }))
+  for (const version of ["  ", 3]) {
+    await fs.writeFile(path.join(home, ".local", "agency", "plugins", "cache", "entries", "e0", "plugin.json"), JSON.stringify({ name: "desk", version }))
+    const calls = []
+    assert.equal((await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir: await mkTempRoot("desk-stale-state-"), homeDir: home, agentHost: "copilot", fetchFn: await fetchedRelease(calls) })).latest, "3.2.93")
+    assert.equal(calls.length, 1, `version ${JSON.stringify(version)} is not a version`)
+  }
+})
+
+test("an Agency session with no engine variable reads its engine from the host, and an unknown engine asks the network", async () => {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.93" } })
+  const found = await checkStaleDesk({ env: {}, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: async () => { throw new Error("no network") } })
+  assert.equal(found.latest, "3.2.93")
+  assert.equal(found.channel, "release")
+  const calls = []
+  const unknown = await checkStaleDesk({ env: {}, pluginRoot, stateDir: await mkTempRoot("desk-stale-state-"), homeDir: home, agentHost: "other", fetchFn: byBranch({ release: "3.2.93" }, calls) })
+  assert.equal(calls.length, 1)
+  assert.equal(unknown.latest, "3.2.93")
 })
