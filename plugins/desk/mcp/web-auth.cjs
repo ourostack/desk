@@ -27,6 +27,15 @@ var RESOURCE_TYPES = ["document", "script", "stylesheet", "image", "font", "xhr"
 // Identity providers a page is sent to in order to sign in: a page on one of them is waiting on a sign-in redirect.
 var SIGN_IN_HOSTS = ["login.microsoftonline.com", "login.live.com", "login.windows.net", "accounts.google.com"];
 var SIGN_IN_SUFFIXES = [".okta.com"];
+// Links that open an installed app first, each with the query flag its launcher reads to open the web app instead. The
+// browser already refuses every app launch, so such a launcher stays on its prompt; opening the web form skips the prompt.
+// `param` names the query value that holds the real link (a launcher address), and the flag goes inside it.
+var WEB_FORMS = [
+  { hosts: ["teams.microsoft.com", "teams.cloud.microsoft"], path: /^\/l\//u, query: { webjoin: "true" } },
+  { hosts: ["teams.microsoft.com", "teams.cloud.microsoft"], path: /^\/dl\/launcher\/launcher\.html$/u, param: "url", query: { webjoin: "true" } }
+];
+// Schemes a browser uses for its own pages: a failed request to one is not an app launch.
+var BROWSER_SCHEMES = ["about", "blob", "chrome", "chrome-error", "chrome-extension", "chrome-untrusted", "data", "devtools", "file", "javascript", "view-source"];
 var FRESH_OR_APP = "try a fresh context (browser_context with browser \"fresh\"); if it repeats, use the desktop app or another route";
 // A ref's action shares one deadline of this long, or half the command time if less. Playwright then fails a stalled
 // action before the command's own bound closes the context.
@@ -765,6 +774,30 @@ function narrow(result, view) {
 
 function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
+// `text` with each flag of `flags` added to the end of its query unless it already has that flag. The text is kept as it was written.
+function withFlags(text, flags) {
+  return Object.keys(flags).reduce(function (out, name) {
+    if (new RegExp("[?&]" + name + "=", "u").test(out)) return out;
+    return out + (out.indexOf("?") === -1 ? "?" : "&") + name + "=" + flags[name];
+  }, text);
+}
+
+// The address a link should be opened at: its web form when WEB_FORMS has one, otherwise the address as given.
+function webFormOf(raw, forms) {
+  var url = addressOf(raw);
+  if (!url || !/^https?:$/u.test(url.protocol) || url.username || url.password) return raw;
+  var rule = (forms || WEB_FORMS).find(function (form) { return form.hosts.indexOf(url.hostname) !== -1 && form.path.test(url.pathname); });
+  if (!rule) return raw;
+  if (!rule.param) {
+    url.search = withFlags(url.search, rule.query);
+  } else {
+    var inner = url.searchParams.get(rule.param);
+    if (!inner) return raw;
+    url.searchParams.set(rule.param, withFlags(inner, rule.query));
+  }
+  return url.href;
+}
+
 // ---- Why a page never became ready: its requests and console, kept as counts, host names and codes only ----
 var recorders = new WeakMap();
 
@@ -790,6 +823,13 @@ function pageAddress(raw) {
   if (!/^https?:$/u.test(url.protocol)) return url.protocol;
   var path = url.pathname.split("/").some(looksSecret) ? "/[redacted]" : url.pathname.slice(0, 80);
   return url.protocol + "//" + hostOf(url) + (url.port ? ":" + url.port : "") + path;
+}
+
+// The scheme of an address that is not a web page or one of the browser's own, such as the msteams: of an app launch.
+function externalScheme(url) {
+  if (!url || /^(?:https?|wss?):$/u.test(url.protocol)) return undefined;
+  var scheme = url.protocol.replace(/:$/u, "");
+  return BROWSER_SCHEMES.indexOf(scheme) === -1 && /^[a-z][a-z0-9+.-]{0,29}$/u.test(scheme) ? scheme : undefined;
 }
 
 function identityProvider(url) {
@@ -822,7 +862,7 @@ function isMainNavigation(page, request) {
 function recorderFor(page) {
   var known = recorders.get(page);
   if (known) return known;
-  var rec = { pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false };
+  var rec = { pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined };
   recorders.set(page, rec);
   function finish(request, code) {
     var entry = rec.pending.get(request);
@@ -831,13 +871,15 @@ function recorderFor(page) {
     rec.done.push({ host: entry.host, type: entry.type, code: code || (entry.status >= 400 ? "http_" + entry.status : undefined) });
     if (rec.done.length > RECENT) rec.done.shift();
     if (entry.main && code) rec.mainFailed = code;
+    if (entry.scheme && code === "aborted") rec.external = entry.scheme;
   }
   page.on("request", function (request) {
     if (rec.pending.size >= RECENT) rec.pending.delete(rec.pending.keys().next().value);
     var url = addressOf(request.url());
     var main = isMainNavigation(page, request);
-    if (main) { rec.mainFailed = undefined; rec.mainIdentity = identityProvider(url); }
-    rec.pending.set(request, { host: hostOf(url), type: resourceType(request), start: Date.now(), main: main });
+    var scheme = externalScheme(url);
+    if (main) { rec.mainFailed = undefined; rec.mainIdentity = identityProvider(url); if (!scheme) rec.external = undefined; }
+    rec.pending.set(request, { host: scheme || hostOf(url), type: resourceType(request), scheme: scheme, start: Date.now(), main: main });
   });
   page.on("response", function (response) {
     var entry = rec.pending.get(response.request());
@@ -883,6 +925,12 @@ function discardPicture(file) {
 // The likeliest cause, first match wins, with what probably happened and how to keep working from it.
 function likelyCause(d) {
   if (d.signIn) return { probably: "the page was waiting on a sign-in redirect", keepWorking: "complete sign-in in the person's own browser, then open a new context with browser_context so the profile copy has it" };
+  if (d.externalScheme) {
+    return {
+      probably: "the page tried to open an app through its " + d.externalScheme + ": link; desk-web blocks every app launch, so the page stayed on its app prompt",
+      keepWorking: "choose the page's own web option from [\"snapshot\",\"--interactive\"] (such as \"Use the web app instead\"), or goto the link's web form (a Teams link takes webjoin=true in its query); opening an app needs its own explicit route, which desk-web does not offer yet"
+    };
+  }
   if (d.mainFailed || d.status >= 400) {
     return { probably: d.status >= 400 ? "the page's main document returned HTTP " + d.status : "the page's main document did not arrive (" + d.mainFailed + ")", keepWorking: FRESH_OR_APP };
   }
@@ -925,6 +973,8 @@ function withEvidence(error, evidence) {
 function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   requireTrue(typeof runtimePolicy === "function", "AUTH_RUNTIME_POLICY_MISSING");
   var attempts = options && integer(options.snapshotAttempts, 1, SNAPSHOT_ATTEMPTS) ? options.snapshotAttempts : SNAPSHOT_ATTEMPTS;
+  // Tests give their own forms; otherwise WEB_FORMS applies.
+  var webForms = options && Array.isArray(options.webForms) ? options.webForms : undefined;
   var closed = false;
   // Set once a command timed out: its context is closed, but its evidence is still read before the close.
   var evidencing = false;
@@ -1359,6 +1409,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       url: pageAddress(page.url()),
       status: rec.mainStatus,
       mainFailed: rec.mainFailed,
+      externalScheme: rec.external,
       network: {
         failed: failed.map(function (entry) { return { host: entry.host, type: entry.type, code: entry.code }; }),
         pending: waiting.map(function (entry) { return { host: entry.host, type: entry.type, ageS: Math.round((now - entry.start) / 1000) }; }),
@@ -1487,7 +1538,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
         checkRuntime();
         applied = true;
-        if (command === "goto") await page.goto(args[1], { timeout: timeoutMs });
+        if (command === "goto") await page.goto(webFormOf(args[1], webForms), { timeout: timeoutMs });
         if (command === "go-back") await page.goBack({ timeout: timeoutMs });
         if (command === "go-forward") await page.goForward({ timeout: timeoutMs });
         if (command === "reload") await page.reload({ timeout: timeoutMs });
@@ -1614,4 +1665,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, webFormOf: webFormOf, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
