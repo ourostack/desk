@@ -1,6 +1,6 @@
 ---
 name: shared-initiative
-description: Use when creating, discovering, contributing to or asking about a shared initiative or multi-person effort in a Crew workspace, including existing shared tracks, linked personal tasks, shared deliberation and unresolved decisions.
+description: Use when creating, discovering, contributing to or asking about a shared initiative or multi-person effort in a Crew workspace, including existing shared tracks, linked personal tasks, shared deliberation and unresolved decisions, or when new or existing work involves or seeks collaborators.
 ---
 
 # Shared initiative
@@ -12,6 +12,12 @@ An initiative is a shared track, not a second task system. Its coordination card
 1. Find the Crew repository root from its `desks/` and `_meta/desks.md`, not the current person's desk root. Read its README and `AGENTS.md` for existing navigation.
 2. Read `_shared/tracks/` and search related desk tracks/tasks by outcome and subject, not just slug. Reuse an existing shared effort even if its entry is named `track.md`, `index.md` or something else. Follow its current navigation; never create a second card just to fit this convention. If several cards overlap, report them and resolve which to use before writing.
 3. If `_shared/tracks/` is absent or empty, say no shared initiatives are recorded; personal tasks can still exist. For an authorized new effort, choose a descriptive slug and create `_shared/tracks/<slug>/README.md` using [the card template](template.md). Do not create `_shared/initiatives/`, a separate registry or shared task copies.
+
+## Suggest one when work needs other people
+
+When a request starts a task, track or effort that involves or seeks collaborators (a proposal others will comment on, an assignment or allocation, goals, anything others will edit or act on), offer a shared initiative in one sentence before creating a personal one. Offer it again when an existing personal task starts looking for outside collaboration. If the person already said "shared" or "not on my desk", just do it. A decline stands: keep it personal.
+
+To move an existing task into one, discover first, then create or update the card with the task's outcome and link the task and its documents. The personal task keeps its own lifecycle. If collaborators need to edit the work itself, move its files into the card's folder through the shared-path protocol and leave a one-line pointer where they were; never copy them.
 
 ## Keep the card small
 
