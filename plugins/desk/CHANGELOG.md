@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.108 — 2026-11-13
+
+A new `preToolUse` hook, [`hooks/destructive-command-guard.cjs`](hooks/destructive-command-guard.cjs), refuses a Bash command that removes or moves away something its author did not create, and says what to do instead. Two incidents drove it: a subagent ran `cd ~/code && rm -rf desk` and deleted a registered main checkout, which broke every linked worktree that pointed at it, and a worker ran `colima delete -f` on a Colima profile that already existed.
+
+It refuses `rm` or `mv` of a git main checkout (a folder with a `.git` directory) or of a folder that holds one, which it looks for up to two folders down, so `rm -rf ~/code` is caught as well as `rm -rf ~/code/desk`. It refuses `rm` of a linked worktree and points to `git worktree remove <path>`, which stays allowed. It refuses `colima delete`, `limactl delete`, `limactl remove` and `limactl rm` for every profile, because the hook keeps no record of what a session created; the message suggests starting a dedicated profile with a new name. Ordinary removal, such as `rm -rf /tmp/x` or a scratch folder that is not a checkout, is unchanged.
+
+The command reader is small on purpose. It follows `cd`, `pushd`, `~`, `$VAR` and simple `NAME=value` assignments, and looks through `sudo`, `env`, `bash -c`, `eval`, subshells and `$(...)`. Anything it cannot resolve, such as a computed path or an unclosed quote, is allowed, and so is any error in the hook itself.
+
+Copilot runs this hook for subagents' Bash calls too, so a `task` subagent is refused the same way as the main agent. It is registered for Claude's `Bash` and Copilot's `bash`; Copilot's `powershell` tool is not read, so on Windows the hook is not registered.
+
+Desk's sync status no longer loses track of pushed commits when two writers overlap. A status write that finds its lock held by a process that has exited now takes the lock over at once instead of waiting it out, and a lock held by a live process is left alone. A status file that is damaged or not a plain record is moved aside, with the newest three kept as evidence, so it can no longer block later writes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.107 — 2026-11-13
 
 Archiving a task now keeps its Markdown links working. `task_archive` rewrites the relative links that point into or out of the moved folder, in the task's own files, in other tasks' files and in the track card, so each one still resolves after the move. In a Git desk the rewritten files join the archive commit, and a non-Git desk gets the same rewrites without a commit. The result lists what it changed in `links.rewritten`. A link it cannot rewrite is listed in `links.not_rewritten` with the reason, and the archive still happens. A file with unstaged or untracked work is never touched, so another session's edits are kept.
