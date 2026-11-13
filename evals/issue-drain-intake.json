@@ -3,7 +3,7 @@
   "id": "issue-drain-intake",
   "description": "Visible issue intake, truthful ownership and replay-safe discovery. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/draining-issues/SKILL.md"],
-  "reviewedSourceFingerprint": "45b7bde477f3b2c787b0ce680aaeb19b4ee55f244c306bf844d913eb37cd25aa",
+  "reviewedSourceFingerprint": "e26222f67a61dc30a8d4b1de81770106d24b182b79ac529b158b8cd8a625a9b3",
   "requirements": [
     {"id": "visible-intake", "description": "A private event receipt does not replace one concise acknowledgement on the issue."},
     {"id": "truthful-ownership", "description": "Distinguish received or triaged, assigned, actively claimed and blocked; read comments, claims and fixes and recheck ownership before claiming."},

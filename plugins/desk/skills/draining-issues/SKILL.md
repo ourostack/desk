@@ -53,7 +53,7 @@ For continuing discovery, use deterministic API polling, webhooks or another non
 
 Deduplicate by stable repository/issue identity and relevant revision; durably record eligible events before waking the drain. Recheck ownership/dependencies on intake; recover pending events idempotently. Authentication/network failures must remain observable through deterministic health/status reporting, without model wakeups or advancing seen markers.
 
-Filter the drain's own status-only comment creations/edits deterministically so acknowledgements do not wake the drain again. Match the specific comment/revision, not all activity on that issue or by that account; meaningful external changes remain eligible.
+Filter the drain's own status-only comment creations/edits deterministically so acknowledgements do not wake the drain again. Match the specific comment/revision, not all activity on that issue or by that account; meaningful external changes remain eligible. Put `<!-- ouro-drain-status -->` in the drain's own acknowledgement and status comments: Ouroboros' issue-drain watcher skips a change only when the newest activity is a marked comment by the polling account, so a comment without the marker still wakes the drain.
 
 Record owner, exact lifetime, restart/recovery steps and pending-event location. For example, an attached poller can sleep until it persists an event and exits to wake its agent; it does not survive owning-session termination or reboot.
 
