@@ -15,7 +15,8 @@ const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta
 const SCRIPT = path.join(plugin, "hooks", "session-end.cjs")
 const claude = JSON.parse(readFileSync(path.join(plugin, "hooks", "hooks.json"), "utf8")).hooks
 const copilot = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
-const WAIT_MS = 30000
+// On Windows the worker's marker write starts the ACL helper, whose cold PowerShell start may take up to its 45 s default (#626), so the wait must be longer than that (#645).
+const WAIT_MS = 60000
 
 test("each host registers exactly one session-end command, and it is session-end.cjs", () => {
   assert.deepEqual(copilot.sessionEnd, [
