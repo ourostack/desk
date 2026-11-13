@@ -25,6 +25,7 @@ import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
+import { remoteIdentityEnv } from "./remote-identity.js"
 import { publicationPolicy, publicationRecovery, publishPullRequest } from "./pr-publication.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -41,7 +42,8 @@ export function gitEnv() {
 
 function runner(spawnGit, cwd) {
   return (args, timeout = GIT_TIMEOUT_MS) => {
-    const result = spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout, env: gitEnv(), maxBuffer: 64 * 1024 * 1024 })
+    const env = remoteIdentityEnv({ root: cwd, args, env: gitEnv(), spawn: spawnGit })
+    const result = spawnGit("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", timeout, env, maxBuffer: 64 * 1024 * 1024 })
     return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: typeof result.stderr === "string" ? result.stderr : "" }
   }
 }

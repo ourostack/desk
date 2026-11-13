@@ -53,7 +53,7 @@ function checkState(checks, required, observed, ruled) {
   return [...new Set([...waiting, ...missing, ...checks.filter((check) => !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.state)).map((check) => check.name)])]
 }
 
-function commandArgument(value, platform = process.platform) {
+export function commandArgument(value, platform = process.platform) {
   return platform === "win32" ? `'${value.replaceAll("'", "''")}'` : shellQuote(value)
 }
 
