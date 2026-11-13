@@ -21,6 +21,8 @@ export function latestPluginUrl(channel) {
   return `https://raw.githubusercontent.com/ourostack/desk/${channel === "release" ? "release" : "main"}/plugins/desk/plugin.json`
 }
 const VERSION_FETCH_BUDGET_MS = 1500
+// Boot has 15 s; fetching the newest release's copy is the longest thing it waits for beside the sync.
+const RELEASE_BUDGET_MS = 6000
 export const VERSION_CACHE_TTL_MS = 60 * 60 * 1000
 // A failed lookup is remembered briefly, so an offline machine does not retry on every boot.
 export const VERSION_FAILURE_TTL_MS = 10 * 60 * 1000
@@ -181,7 +183,7 @@ async function fetchLatest(fetchFn, budgetMs, channel) {
  * The stale-Desk finding for this boot, or null. Never rejects (every step handles its own errors) and never takes longer than `budgetMs` (a cached answer
  * takes no time). `fetchFn` is for tests; passing one also lifts the node:test off switch.
  */
-export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.now, fetchFn, budgetMs = VERSION_FETCH_BUDGET_MS, stateDir, homeDir, readFile }) {
+export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.now, fetchFn, budgetMs = VERSION_FETCH_BUDGET_MS, stateDir, homeDir, readFile, newestReleaseFn }) {
   if (String(env[VERSION_CHECK_SWITCH] ?? "").trim() === "0") return null
   if (fetchFn === undefined && looksLikeNodeTestRunner(env)) return null
   const running = readRunningVersion(pluginRoot)
@@ -190,6 +192,17 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
   const file = path.join(dir, VERSION_CACHE_FILE)
   const home = homeDir ?? os.homedir()
   const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
+  // On Agency's release channel the server loads the newest release itself (`./newest-release.js`): ask it the same question, so the finding says which version the tools run (and warms the copy the server is about to want).
+  if (agency && channel === "release" && (newestReleaseFn !== undefined || !looksLikeNodeTestRunner(env))) {
+    const { ensureNewestRelease, newestReleaseLine } = await import("./newest-release.js")
+    // istanbul ignore next -- outside a node:test run the real step is used; every test hands its own.
+    const ensure = newestReleaseFn ?? ensureNewestRelease
+    const result = await ensure({ env, pluginRoot, running, agentHost, homeDir: home, readFile, budgetMs: RELEASE_BUDGET_MS })
+    if (result.latest !== undefined) {
+      const finding = staleDeskFinding({ running, latest: result.latest, agentHost, channel, agency, spec })
+      return finding === null ? null : { ...finding, line: newestReleaseLine(result) }
+    }
+  }
   // Agency's cached release copy already names the release, so an Agency install on that channel asks no one.
   if (agency && channel === "release") {
     const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: home, readFile })
