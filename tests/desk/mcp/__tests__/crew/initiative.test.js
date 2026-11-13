@@ -50,13 +50,13 @@ test("new makes a README card from the template and refuses to overwrite", async
   const card = read(clone, made.card)
   assert.match(card, /^# Reliability checks\n/u)
   assert.match(card, /## Decisions\n\nNo decision recorded\./u)
-  assert.match(made.message, /Nothing is committed yet/u)
+  assert.match(made.message, /nothing is committed yet/u)
 
   const again = newInitiative({ repo: clone, slug: "reliability-checks", now: NOW })
   assert.equal(again.state, "exists")
   const legacy = newInitiative({ repo: clone, slug: "engineering-needs", now: NOW })
   assert.equal(legacy.state, "exists")
-  assert.match(legacy.message, /its card is _shared\/tracks\/engineering-needs\/track\.md/u)
+  assert.match(legacy.message, /^Read _shared\/tracks\/engineering-needs\/track\.md and contribute there/u)
   assert.equal(newInitiative({ repo: clone, slug: "***", now: NOW }).state, "refused")
   assert.equal(newInitiative({ repo: clone, slug: undefined, now: NOW }).state, "refused")
   await fs.writeFile(path.join(clone, "_shared/tracks/loose-file"), "x")
@@ -103,6 +103,10 @@ test("adopt titles a card from the slug when the document has no heading, and re
   assert.equal(taken.state, "refused")
   assert.match(taken.message, /is a file, not a folder/u)
   assert.equal(adoptInitiative({ repo: clone, source: "desks/alex/notes.md", slug: "***", now: NOW }).state, "refused")
+  await fs.writeFile(path.join(clone, "desks/alex/###.md"), "x")
+  const nameless = adoptInitiative({ repo: clone, source: "desks/alex/###.md", now: NOW })
+  assert.equal(nameless.state, "refused")
+  assert.match(nameless.message, /^Pass --slug <short-name> made of letters or digits\. ###/u)
 })
 
 test("adopt refuses a symbolic link and a folder whose slug is taken", async () => {
