@@ -24,10 +24,10 @@ import { resolveDeskStateDir } from "./last-start.js"
 import { assertNotRealStateUnderTest, looksLikeNodeTestRunner } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 
-export const BOOT_RESULT_DIR = "boot-results"
-export const AUTO_BOOT_SWITCH = "DESK_AUTO_BOOT"
+const BOOT_RESULT_DIR = "boot-results"
+const AUTO_BOOT_SWITCH = "DESK_AUTO_BOOT"
 /** How long the server's first tool reply waits for a boot that is still running; the boot's own budget is 15 s. */
-export const SERVER_WAIT_MS = 12_000
+const SERVER_WAIT_MS = 12_000
 const POLL_MS = 50
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -35,7 +35,7 @@ const hasText = (value) => typeof value === "string" && value.trim() !== ""
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The session script this module starts: `<plugin>/mcp/scripts/session-boot.js`, found from this file's own place in the plugin. */
-export const BOOT_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "session-boot.js")
+const BOOT_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "session-boot.js")
 
 /**
  * The session's key, or null when there is nothing to key on. A Copilot session id wins; Claude has no id the server shares with
