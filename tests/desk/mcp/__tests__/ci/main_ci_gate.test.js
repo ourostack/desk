@@ -3,7 +3,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -152,4 +153,64 @@ test("the command line refuses missing arguments", () => {
   const result = spawnSync(process.execPath, [path.join(scripts, "main-ci-gate.mjs"), "--repo", "o/r", "--head", "nope"], { encoding: "utf8" })
   assert.equal(result.status, 2)
   assert.match(result.stderr, /usage/u)
+})
+
+// Runs the release's wait step on a throwaway checkout. A fake `node` on PATH records each call to the gate.
+function runWaitStep({ fragment, stage }) {
+  const lines = readFileSync(path.join(workflowsDir, "desk-release.yml"), "utf8").split("\n")
+  const gateAt = lines.findIndex((line) => line.trim() === "id: gate")
+  const runAt = lines.findIndex((line, index) => index > gateAt && line.trim() === "run: |")
+  const body = []
+  for (let index = runAt + 1; index < lines.length && (lines[index].trim() === "" || /^ {10}/u.test(lines[index])); index += 1) body.push(lines[index].slice(10))
+  const script = body.join("\n")
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-release-wait-"))
+  const bin = path.join(root, "bin")
+  try {
+    mkdirSync(path.join(root, "plugins/desk/changelog.d"), { recursive: true })
+    writeFileSync(path.join(root, "plugins/desk/changelog.d/README.md"), "# Fragments\n")
+    if (fragment) writeFileSync(path.join(root, "plugins/desk/changelog.d/change.md"), "A change.\n")
+    const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" })
+    git("init", "--quiet")
+    git("add", "-A")
+    git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "base")
+    const head = git("rev-parse", "HEAD").stdout.trim()
+    mkdirSync(bin)
+    writeFileSync(path.join(bin, "node"), "#!/bin/sh\necho called >> \"$FAKE_LOG\"\n")
+    chmodSync(path.join(bin, "node"), 0o755)
+    const output = path.join(root, "github-output")
+    const summary = path.join(root, "step-summary")
+    const log = path.join(root, "gate-calls")
+    const result = spawnSync("bash", ["-c", script], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_LOG: log, RELEASE_STAGE: stage,
+        GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, GITHUB_REPOSITORY: "o/r",
+      },
+    })
+    return {
+      status: result.status,
+      head,
+      output: existsSync(output) ? readFileSync(output, "utf8") : "",
+      summary: existsSync(summary) ? readFileSync(summary, "utf8") : "",
+      gateCalls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0,
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+test("the release waits for no CI when no changelog fragment is pending and no stage is requested", { skip: process.platform === "win32" && "the step runs in bash on Linux" }, () => {
+  const idle = runWaitStep({ fragment: false, stage: "auto" })
+  assert.equal(idle.status, 0)
+  assert.equal(idle.gateCalls, 0)
+  assert.match(idle.summary, /nothing to release/u)
+  assert.equal(idle.output, `head=${idle.head}\n`)
+
+  const pending = runWaitStep({ fragment: true, stage: "auto" })
+  assert.equal(pending.status, 0)
+  assert.equal(pending.gateCalls, 1, "a pending fragment is still gated")
+
+  const promoted = runWaitStep({ fragment: false, stage: "rc" })
+  assert.equal(promoted.gateCalls, 1, "a requested stage is still gated, because it can release without a fragment")
 })
