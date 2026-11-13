@@ -288,6 +288,37 @@ try {
 
   {
     const { dir, suite } = makeFixture();
+    const { run, cases } = receipt(suite);
+    const piped = spawnSync(process.execPath, [cli, "record", "evals/fixture.json", "--result", "-"], { cwd: dir, input: JSON.stringify({ run, cases }), encoding: "utf8" });
+    assert.equal(piped.status, 0, piped.stderr);
+    assert.match(piped.stdout, /Recorded evals\/receipts\/fixture\.json/u);
+    assert.equal(requireEvidence(dir).suites, 1, "no baseline means a receipt is required, and the piped one satisfies it");
+
+    assert.throws(() => recordReceipt("source.txt", "-", dir), /not an eval suite/u);
+    fs.writeFileSync(path.join(dir, "list.json"), "[]");
+    assert.throws(() => recordReceipt("evals/fixture.json", "list.json", dir), /must be a JSON object/u);
+    const misuse = spawnSync(process.execPath, [cli, "record", "evals/fixture.json"], { cwd: dir, encoding: "utf8" });
+    assert.match(misuse.stderr, /usage: .* record <suite-file> --result/u);
+
+    fs.writeFileSync(path.join(dir, "evals", "receipts", "_baseline.json"), JSON.stringify({ schemaVersion: 1, grandfathered: 1 }));
+    assert.throws(() => requireEvidence(dir), /needs a "grandfathered" object/u);
+
+    const here = process.cwd();
+    process.chdir(dir);
+    try {
+      fs.rmSync(path.join(dir, "evals", "receipts"), { recursive: true });
+      assert.equal(validateRepo().suites, 1);
+      assert.throws(() => requireEvidence(), /without a matching run receipt/u);
+    } finally {
+      process.chdir(here);
+    }
+
+    fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify({ ...suite, id: "../fixture" }, null, 2)}\n`);
+    assert.throws(() => requireEvidence(dir), /cannot name a receipt file/u);
+  }
+
+  {
+    const { dir, suite } = makeFixture();
     fs.writeFileSync(path.join(dir, "source.txt"), "changed\n");
     const moved = {
       ...suite,
