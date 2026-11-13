@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { errorLine } from "../../../../../plugins/desk/mcp/src/lib/ouro/ax/problem.ts"
 import { checkFailureCopyAllow, vagueFailuresIn } from "../../../../../plugins/desk/mcp/src/lib/ouro/ax/precise-copy.ts"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
@@ -34,6 +35,14 @@ test("a Desk failure says what probably happened, how to look further, the one c
   const line = failure()
   assert.equal(line, 'desk: demo: the demo service refused the call, probably because its sign-in expired; to look further, call desk_doctor; to file a bug with its evidence, call friction_add with {"error_code":"desk_demo_failure"}; your work is safe and Desk retries with every write. Fix: gh auth login.')
   assert.deepEqual(vagueFailuresIn(line), [])
+})
+
+test("Desk's failure line is the Ouro AX kit's own line, with and without a fix", () => {
+  const line = (fix) => deskFailure({ code: "desk_demo_parity", thing: "demo", probably: "the demo service refused the call", look: "call desk_doctor", keepWorking: "keep working", fix })
+  const problem = 'the demo service refused the call; to look further, call desk_doctor; to file a bug with its evidence, call friction_add with {"error_code":"desk_demo_parity"}; keep working'
+  assert.equal(line("gh auth login"), errorLine("desk", { thing: "demo", problem, fix: "gh auth login" }))
+  assert.equal(line(null), errorLine("desk", { thing: "demo", problem, fix: null }))
+  assert.equal(line("a\nb. "), errorLine("desk", { thing: "demo", problem, fix: "a\nb. " }))
 })
 
 test("friction_add with an error_code records the failure's evidence on the desk, credentials redacted, and desk_doctor lists the failure", async () => {

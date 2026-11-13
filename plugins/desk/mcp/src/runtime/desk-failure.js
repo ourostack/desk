@@ -1,7 +1,14 @@
-// The shape of a Desk failure an agent reads: Ouro AX's one-line error (src/lib/ouro/ax/problem.ts, copied in with
-// `npx shadcn@latest add ourostack/ouro-ui/ax-problem#v1.3.10`; keep it as it is and take changes from Ouro UI) holding what
-// probably happened, how to look further, the one call that files a bug with its evidence, and how to keep working.
-import { errorLine } from "../lib/ouro/ax/problem.ts"
+// The shape of a Desk failure an agent reads: Ouro AX's one-line error, `<tool>: <thing>: <problem>. Fix: <fix>.` (ax-problem,
+// copied into src/lib/ouro/ax/ with `npx shadcn@latest add ourostack/ouro-ui/ax-problem#v1.3.10`), holding what probably
+// happened, how to look further, the one call that files a bug with its evidence, and how to keep working.
+//
+// The kit is TypeScript that Node runs only from 22.18, and Desk still supports Node 20, so the server cannot import it yet;
+// `errorLine` below is the kit's own and a test pins it to the kit's output. Raise Desk's Node floor, then import the kit's.
+const sentence = (text) => text.trim().replace(/[.\s]+$/u, "")
+const errorLine = (tool, { thing, problem, fix }) => {
+  const head = `${tool}: ${thing}: ${sentence(problem)}.`
+  return (fix === null ? head : `${head} Fix: ${sentence(fix)}.`).replace(/\s*[\r\n]+\s*/gu, " ")
+}
 
 // The latest failure per code in this process, with the stack where it was built, for `friction_add`'s evidence and `desk_doctor`.
 const recent = new Map()

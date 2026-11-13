@@ -19,7 +19,7 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 
-var DEFAULT_RANGE = ">=22.18.0";
+var DEFAULT_RANGE = ">=20.0.0";
 var DEFAULT_PROTOCOL = "2025-06-18";
 var PROBE_SCRIPT = "process.stdout.write(process.version + \" \" + process.versions.modules)";
 // Node's module ABI for each release line it is known for; a Node from any other line is asked.
