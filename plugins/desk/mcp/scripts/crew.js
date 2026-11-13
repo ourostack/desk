@@ -40,6 +40,7 @@ function parseArguments(argv) {
   if (!Object.hasOwn(ALLOWED, action ?? "")) return { error: `unknown action ${JSON.stringify(action ?? "")}` }
   const options = {}
   let rest = tail
+  const hint = action === "initiative" ? { usage: INITIATIVE_USAGE } : {}
   let allowed = ALLOWED[action]
   if (action === "initiative") {
     const [sub, ...after] = tail
@@ -56,13 +57,13 @@ function parseArguments(argv) {
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i]
     const name = flag.startsWith("--") ? flag.slice(2) : null
-    if (name === null || !allowed.includes(name)) return { error: `${action} does not take ${flag}`, ...(action === "initiative" ? { usage: INITIATIVE_USAGE } : {}) }
+    if (name === null || !allowed.includes(name)) return { error: `${action} does not take ${flag}`, ...hint }
     if (!VALUE_FLAGS.has(name)) {
       options[name] = true
       continue
     }
     const value = rest[i + 1]
-    if (value === undefined || value.startsWith("--")) return { error: `${flag} needs a value`, ...(action === "initiative" ? { usage: INITIATIVE_USAGE } : {}) }
+    if (value === undefined || value.startsWith("--")) return { error: `${flag} needs a value`, ...hint }
     options[name] = value
     i += 1
   }

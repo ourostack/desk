@@ -212,7 +212,7 @@ test("the command line: new, adopt and check print JSON and check exits 1 on pro
   assert.equal((await run(["initiative", "new", "fresh-idea", "--title", "Fresh idea"])).result.state, "created")
   assert.equal((await run(["initiative", "new", "fresh-idea"])).code, 0, "exists is not a failure")
   assert.equal((await main({ argv: ["initiative"], cwd: clone, write: () => {} })), 2)
-  for (const argv of [["initiative"], ["initiative", "rename"], ["initiative", "new"], ["initiative", "adopt", "--slug", "x"], ["initiative", "check", "--slug", "x"], ["initiative", "new", "a", "--bogus"]]) {
+  for (const argv of [["initiative"], ["initiative", "rename"], ["initiative", "new"], ["initiative", "adopt", "--slug", "x"], ["initiative", "check", "--slug", "x"], ["initiative", "adopt", "x", "--slug"], ["initiative", "new", "a", "--bogus"]]) {
     const usage = await run(argv)
     assert.equal(usage.code, 2, argv.join(" "))
     assert.match(usage.result.message, /usage: crew\.js initiative/u)
