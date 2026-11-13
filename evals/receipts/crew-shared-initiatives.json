@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "crew-shared-initiatives",
+  "sourceFingerprint": "559423993a2cd0c8b7c76de2fed7f3c806be5d432a912dd9460bf696f1f66099",
+  "contractFingerprint": "a6964462f855ed8f54747c483e6537876f63cb3e22d302c4228a2a9f75cd2c03",
+  "run": {
+    "actor": "Crew maintainer agent (self-run in local disposable fixtures; no independent judge)",
+    "model": "GitHub Copilot agent",
+    "runtimeRevision": "ourostack/desk bd0f01a82 plus the initiative-command branch (shared-initiative skill with the crew.js initiative commands)",
+    "startedAt": "2026-11-13T22:31:00Z",
+    "completedAt": "2026-11-13T22:38:00Z"
+  },
+  "cases": [
+    {
+      "id": "cold-create-discover-update-query",
+      "checks": [
+        {
+          "id": "canonical-card",
+          "passed": true,
+          "evidence": "In a worktree of the fixture's fresh main, `crew.js initiative new reliability` created only _shared/tracks/reliability/README.md from the template; the card was then filled in with the template's sections."
+        },
+        {
+          "id": "tasks-preserved",
+          "passed": true,
+          "evidence": "`shasum -c` on desks/alex/reliability/checks/task.md and desks/sam/reliability/oncall/task.md reported OK after the run; both card links resolved with test -f."
+        },
+        {
+          "id": "honest-disagreement",
+          "passed": true,
+          "evidence": "The card holds Alex's and Sam's dated, sourced views as separate bullets, commitments marked Unknown, and Decisions says 'No decision recorded.'"
+        },
+        {
+          "id": "joiner-discovers",
+          "passed": true,
+          "evidence": "README.md links _shared/tracks/README.md, which links reliability/README.md; a joiner reaches the card from the front door and nobody is assigned work."
+        },
+        {
+          "id": "no-new-task-system",
+          "passed": true,
+          "evidence": "`ls _shared` shows decisions, landscape and tracks only; no _shared/initiatives root, registry or task copy; `git status` shows only the new card folder and the tracks index."
+        }
+      ]
+    },
+    {
+      "id": "legacy-and-concurrent-writer",
+      "checks": [
+        {
+          "id": "legacy-reused",
+          "passed": true,
+          "evidence": "`initiative new reliability` answered state exists and named _shared/tracks/reliability/track.md as its card; `initiative check` stayed ok; track.md is the only entry file."
+        },
+        {
+          "id": "landed-view-preserved",
+          "passed": true,
+          "evidence": "Sam's view landed on origin/main first; `git rebase origin/main` conflicted and was resolved by keeping both attributed bullets; the log shows Sam's commit under mine."
+        },
+        {
+          "id": "no-replacement-or-consensus",
+          "passed": true,
+          "evidence": "`find _shared/tracks -type f` lists no README.md duplicate in the folder; the resolved text states the disagreement and 'no decision recorded'; the diff against origin/main touches only track.md."
+        }
+      ]
+    },
+    {
+      "id": "empty-and-unsafe-read-only",
+      "checks": [
+        {
+          "id": "empty-not-created",
+          "passed": true,
+          "evidence": "With no _shared/tracks, `initiative check` said there is nothing to check and `git status` stayed empty; with an empty folder it reported a correct layout; the queries created no files."
+        },
+        {
+          "id": "bad-links-explicit",
+          "passed": true,
+          "evidence": "A read-only resolver reported the missing task as missing, the ../ escape as 'escapes repo: do not follow' and the symlink to /etc/hosts as 'leaves repo: do not follow'; the malformed link was flagged by reading it and the dated snapshot was set against the live card (`todo` recorded, `doing` live)."
+        },
+        {
+          "id": "queries-do-not-write",
+          "passed": true,
+          "evidence": "No task, link or decision was changed: the only commands were `initiative check` (read only) and a read-only link resolver; fixture files were created by setup, not by a query, and tasks kept their content."
+        }
+      ]
+    },
+    {
+      "id": "explicit-edit-of-another-desk",
+      "checks": [
+        {
+          "id": "edit-made",
+          "passed": true,
+          "evidence": "On branch alex-requested-edit from origin/main, `git diff` shows one changed line: Unilever's primary Borja to Alex in desks/sam/draft.md; Contoso's row is unchanged."
+        },
+        {
+          "id": "names-the-desk",
+          "passed": true,
+          "evidence": "The commit message says it touches Sam's desk at Alex's explicit request while Sam is out."
+        },
+        {
+          "id": "no-refusal-or-owner-gate",
+          "passed": true,
+          "evidence": "The edit was made without asking Alex to get Sam's permission and without substituting a note; Sam's pending branch origin/sam-pending stayed at 9c46448."
+        },
+        {
+          "id": "no-identity-switch",
+          "passed": true,
+          "evidence": "The commit used Alex's git identity; no person, account or DESK_PERSON setting was changed."
+        }
+      ]
+    },
+    {
+      "id": "suggest-initiative-for-collaboration",
+      "checks": [
+        {
+          "id": "offers-initiative",
+          "passed": true,
+          "evidence": "Reply: 'Sam and Jo will add their own proposals, so I'd start this as a shared initiative in _shared/tracks/quarterly-goals/ instead of a personal task on your desk. Want that?' No files were created."
+        },
+        {
+          "id": "no-silent-personal-task",
+          "passed": true,
+          "evidence": "No personal task or track was started, no _shared/initiatives root or registry was created; the shared option was the whole reply."
+        }
+      ]
+    },
+    {
+      "id": "adopt-existing-doc-into-shared-tracks",
+      "checks": [
+        {
+          "id": "folders-with-cards",
+          "passed": true,
+          "evidence": "After `initiative adopt` for _shared/tracks/q3-goals.md and desks/alex/okr-draft.md, both files sit in _shared/tracks/<slug>/ beside a README.md card that links the document under Evidence."
+        },
+        {
+          "id": "ran-the-command",
+          "passed": true,
+          "evidence": "`initiative check` named the loose q3-goals.md first with the adopt command; the two `initiative adopt` runs printed state adopted; `check` then printed state ok."
+        },
+        {
+          "id": "nothing-loose",
+          "passed": true,
+          "evidence": "`find _shared/tracks -type f` lists README.md plus two folders of README.md and the document; no loose file and no _shared/initiatives root."
+        }
+      ]
+    }
+  ]
+}

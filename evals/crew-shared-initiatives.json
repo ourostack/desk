@@ -10,7 +10,7 @@
     "plugins/crew/skills/join-crew/SKILL.md",
     "plugins/desk/skills/session-start/details.md"
   ],
-  "reviewedSourceFingerprint": "76a42e10d768f717676ac6041edcf3dfae31f264106c89b6d7fb01cc39e1d99f",
+  "reviewedSourceFingerprint": "559423993a2cd0c8b7c76de2fed7f3c806be5d432a912dd9460bf696f1f66099",
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
@@ -19,7 +19,8 @@
     { "id": "safe-references", "description": "Queries distinguish verified sources from stale, missing and unsafe references." },
     { "id": "concurrent-contribution", "description": "A contribution preserves another writer's landed text and conflicting view." },
     { "id": "requested-cross-desk-edit", "description": "An explicit request to change another member's desk is carried out through the contribution path, naming that desk and keeping the owner's other work." },
-    { "id": "suggest-initiative", "description": "New or existing work that involves or seeks collaborators gets a one-sentence offer of a shared initiative before a personal task." }
+    { "id": "suggest-initiative", "description": "New or existing work that involves or seeks collaborators gets a one-sentence offer of a shared initiative before a personal task." },
+    { "id": "one-command-layout", "description": "Putting existing work into shared tracks uses Crew's initiative command, so it ends as _shared/tracks/<slug>/ with a README card and nothing loose beside it." }
   ],
   "cases": [
     {
@@ -72,6 +73,16 @@
       "checks": [
         { "id": "offers-initiative", "polarity": "must", "evidenceType": "response", "covers": ["suggest-initiative"], "description": "The reply offers a shared initiative in `_shared/tracks/` (or creates one with the card template) because Sam and Jo will contribute, in about a sentence." },
         { "id": "no-silent-personal-task", "polarity": "must_not", "evidenceType": "state", "covers": ["suggest-initiative", "single-home"], "description": "The proposals are not started only as a personal task or track on Alex's desk with no mention of the shared option, and no _shared/initiatives root or registry is created." }
+      ]
+    },
+    {
+      "id": "adopt-existing-doc-into-shared-tracks",
+      "description": "A request to move a personal doc into shared tracks ends as a folder with a card, through the command, with nothing loose left behind.",
+      "prompt": "In a neutral Crew fixture with Alex and Sam registered, you work for Alex. A teammate's agent left a loose file, _shared/tracks/q3-goals.md, and Alex has a draft at desks/alex/okr-draft.md. Alex says: \"Move my okr draft to shared tracks so Sam can edit it, and tidy up anything in shared tracks that isn't laid out right.\" Read the actual Crew sources listed in this suite, then do it locally on a branch from fresh main in an isolated worktree. A local fixture is not proof of GitHub PR publication.",
+      "checks": [
+        { "id": "folders-with-cards", "polarity": "must", "evidenceType": "file", "covers": ["one-command-layout", "single-home"], "description": "Both documents end as files inside _shared/tracks/<slug>/ beside a README.md card, and the card links the document." },
+        { "id": "ran-the-command", "polarity": "must", "evidenceType": "tool_call", "covers": ["one-command-layout"], "description": "The subject ran crew.js initiative adopt for each document (and check to verify) instead of creating the folders and cards by hand." },
+        { "id": "nothing-loose", "polarity": "must_not", "evidenceType": "state", "covers": ["one-command-layout", "single-home"], "description": "No file other than README.md sits directly under _shared/tracks/, and no second card or _shared/initiatives root exists." }
       ]
     }
   ]

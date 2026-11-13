@@ -1,23 +1,39 @@
 ---
 name: shared-initiative
-description: Use when creating, discovering, contributing to or asking about a shared initiative or multi-person effort in a Crew workspace, including existing shared tracks, linked personal tasks, shared deliberation and unresolved decisions, or when new or existing work involves or seeks collaborators.
+description: Use when creating, discovering, contributing to or asking about a shared initiative or multi-person effort in a Crew workspace, including moving or putting an existing document, draft or folder into shared tracks (`_shared/tracks/`), making work shared, inviting collaborators or sharing it with teammates, existing shared tracks, linked personal tasks, shared deliberation and unresolved decisions, or when new or existing work involves or seeks collaborators.
 ---
 
 # Shared initiative
 
 An initiative is a shared track, not a second task system. Its coordination card links work and evidence where they already live. Read `crew:shared-desk-conventions` first for authority, attribution and the shared-path write protocol.
 
+## Make or adopt one with the command
+
+An initiative is a folder, `_shared/tracks/<slug>/`, with a `README.md` card; never a loose file in `_shared/tracks/`. Crew's script lays it out, so run it instead of creating or moving files by hand. Use it from the workspace clone, in the isolated worktree the shared-path protocol has you work in. The Desk plugin folder is on boot's `Desk startup:` line.
+
+```sh
+node <Desk plugin folder>/mcp/scripts/crew.js initiative new <slug> [--title <name>]
+node <Desk plugin folder>/mcp/scripts/crew.js initiative adopt <file-or-folder> [--slug <slug>] [--title <name>]
+node <Desk plugin folder>/mcp/scripts/crew.js initiative check
+```
+
+- `new` creates the card from the template.
+- `adopt` is for work that already exists, whether the person says move it to shared tracks, make it shared or invite others to it. It moves the file or folder into its own `_shared/tracks/<slug>/` (copying it when it lives outside the workspace), keeps it beside a new card that links it under Evidence, and leaves a one-line pointer where a moved Markdown file was. It adds no second card to a folder that already has `README.md`, `track.md` or `index.md`.
+- `check` lists anything in `_shared/tracks/` that is not a folder with a card and names the `adopt` command that fixes each.
+
+Each prints what it did. They change the working tree only: fill in the card's `<…>` placeholders, then publish through the shared-path protocol.
+
 ## Discover before creating
 
 1. Find the Crew repository root from its `desks/` and `_meta/desks.md`, not the current person's desk root. Read its README and `AGENTS.md` for existing navigation.
 2. Read `_shared/tracks/` and search related desk tracks/tasks by outcome and subject, not just slug. Reuse an existing shared effort even if its entry is named `track.md`, `index.md` or something else. Follow its current navigation; never create a second card just to fit this convention. If several cards overlap, report them and resolve which to use before writing.
-3. If `_shared/tracks/` is absent or empty, say no shared initiatives are recorded; personal tasks can still exist. For an authorized new effort, choose a descriptive slug and create `_shared/tracks/<slug>/README.md` using [the card template](template.md). Do not create `_shared/initiatives/`, a separate registry or shared task copies.
+3. If `_shared/tracks/` is absent or empty, say no shared initiatives are recorded; personal tasks can still exist. For an authorized new effort, choose a descriptive slug and run `initiative new <slug>`, which creates `_shared/tracks/<slug>/README.md` from [the card template](template.md). Do not create `_shared/initiatives/`, a separate registry or shared task copies.
 
 ## Suggest one when work needs other people
 
 When a request starts a task, track or effort that involves or seeks collaborators (a proposal others will comment on, an assignment or allocation, goals, anything others will edit or act on), offer a shared initiative in one sentence before creating a personal one. Offer it again when an existing personal task starts looking for outside collaboration. If the person already said "shared" or "not on my desk", just do it. A decline stands: keep it personal.
 
-To move an existing task into one, discover first, then create or update the card with the task's outcome and link the task and its documents. The personal task keeps its own lifecycle. If collaborators need to edit the work itself, move its files into the card's folder through the shared-path protocol and leave a one-line pointer where they were; never copy them.
+To move an existing task into one, discover first, then create or update the card with the task's outcome and link the task and its documents. The personal task keeps its own lifecycle. If collaborators need to edit the work itself, run `initiative adopt <file-or-folder>` so its files move into the card's folder with a pointer left where they were; never duplicate them by hand.
 
 ## Keep the card small
 
