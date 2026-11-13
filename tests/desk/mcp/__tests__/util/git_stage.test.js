@@ -287,19 +287,16 @@ test("a detached HEAD is refused by stage and commit whatever the caller knows, 
   assert.equal(commitCount(root), 1)
 })
 
-test("with the remote's default branch known, staging and committing off it are refused and name both branches", async () => {
+test("with the remote's default branch known, a commit off it is published to that branch and never made on this one", async () => {
   const root = await repoWithChange("trunk")
   originHead(root, "trunk")
   git(root, ["switch", "-q", "-c", "feature"])
-  const staged = stagePaths(root, ["a.txt"], spawnSync, null)
-  assert.equal(staged.ok, false)
-  assert.match(staged.stderr, /on branch `feature`/u)
-  assert.match(staged.stderr, /only on `trunk`/u)
-  assert.equal(commitPaths(root, ["a.txt"], "off", spawnSync, null).ok, false)
-  assert.equal(git(root, ["diff", "--cached", "--name-only"]).trim(), "")
-  git(root, ["switch", "-q", "trunk"])
-  assert.equal(stagePaths(root, ["a.txt"], spawnSync, null).ok, true)
-  assert.equal(commitPaths(root, ["a.txt"], "on trunk", spawnSync, null).ok, true)
+  const head = git(root, ["rev-parse", "HEAD"]).trim()
+  assert.equal(stagePaths(root, ["a.txt"], spawnSync, null).ok, true, "staging is not refused")
+  const committed = commitPaths(root, ["a.txt"], "off", spawnSync, null)
+  assert.equal(committed.ok, false, "this repository has no origin to publish to")
+  assert.match(committed.stderr, /origin\/trunk/u)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), head, "the feature branch got no commit")
 })
 
 test("a configured state branch is the one branch Desk writes on, whatever the remote's default is", async () => {
@@ -319,11 +316,13 @@ test("a configured state branch is the one branch Desk writes on, whatever the r
   assert.equal(commitCount(root), 2)
 })
 
-test("a caller that was not told is only held to the detached-HEAD rule", async () => {
+test("a caller that was not told publishes off the remote's default branch too, and never commits on its own branch", async () => {
   const root = await repoWithChange("feature")
   originHead(root, "trunk")
+  const head = git(root, ["rev-parse", "HEAD"]).trim()
   assert.equal(stagePaths(root, ["a.txt"], spawnSync).ok, true)
-  assert.equal(commitPaths(root, ["a.txt"], "untold", spawnSync).ok, true)
+  assert.equal(commitPaths(root, ["a.txt"], "untold", spawnSync).ok, false)
+  assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), head)
 })
 
 test("a Git that cannot answer the branch question, or answers with no output, is not mistaken for a wrong branch", async () => {
@@ -668,13 +667,13 @@ test("a commit whose branch read comes back empty carries no capture, so its rou
   git(root, ["add", "--", "a.txt"])
   let branchReads = 0
   const spawn = (command, args, options) => {
-    if (args[2] === "symbolic-ref" && args.includes("HEAD") && ++branchReads === 2) return { status: 0 }
+    if (args[2] === "symbolic-ref" && args.includes("HEAD") && ++branchReads === 3) return { status: 0 }
     if (args[2] === "commit") return { status: 1, stdout: "", stderr: "hook said no" }
     return spawnSync(command, args, options)
   }
   const result = commitPaths(root, ["a.txt"], "save", spawn)
   assert.deepEqual(result, { ok: false, stderr: "hook said no", readback: "absent" })
-  assert.equal(branchReads, 2, "the refusal check and the branch read")
+  assert.equal(branchReads, 3, "the publication check, the refusal check and the branch read")
 })
 
 test("a path commit whose working tree differs from the index carries no capture: the commit would take bytes no read hashed", async () => {

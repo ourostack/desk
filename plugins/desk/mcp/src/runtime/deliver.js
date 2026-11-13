@@ -298,7 +298,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     // Only commits inside the captured head are pushed, so only those may be acknowledged: HEAD can move during the fetch.
     const commits = undeliveredCommits({ root, spawnGit, delivered, head })
     const onto = git(["rev-parse", upstream.tracking]).stdout.trim()
-    if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: catchUp({ git, upstream, head, target: onto }) }
+    if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: followsUpstream({ git, upstream, head, target: onto }) }
     let policy
     try { policy = publicationPolicy(git, onto) } catch (error) {
       return { state: "failed", reason: "publication_blocked", error: `${error.message}. Fix: repair .desk/publication.json through a PR, then run ${publicationRecovery(root)}`, delivered: [], skipped: [] }
@@ -322,7 +322,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     if (!fastForward) removeWorktree(git, paths)
     if (pushed.status === 0) {
       git(["update-ref", upstream.tracking, target])
-      const checkout = built.skipped.length === 0 ? catchUp({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }
+      const checkout = built.skipped.length === 0 ? followsUpstream({ git, upstream, head, target }) : { state: "behind", reason: "skipped_commits" }
       return { state: "delivered", delivered: built.replayed, skipped: built.skipped, checkout, ...(publication ? { publication } : {}) }
     }
     // Rejected because the remote moved on while this ran: fetch and replay again, a bounded number of times.
@@ -363,6 +363,15 @@ function removeIdenticalUntracked(git, target, stderr) {
     removed += 1
   }
   return removed
+}
+
+/**
+ * Moves the checkout with its upstream only when both name the same branch. A checkout on another branch (a worktree on a
+ * feature branch that tracks the default branch) keeps its branch: moving it would move the work it holds.
+ */
+function followsUpstream({ git, upstream, head, target }) {
+  if (upstream.merge !== `refs/heads/${upstream.branch}`) return { state: "other_branch" }
+  return catchUp({ git, upstream, head, target })
 }
 
 /**
