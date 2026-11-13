@@ -172,6 +172,75 @@ test("the file is replaced only under the lock and only if nobody changed it mea
   assert.equal(existsSync(`${fixture.file}${LOCK_SUFFIX}`), false)
 })
 
+test("a refused rename is retried only after agency.toml is re-read: a write that lands meanwhile is never overwritten", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  const other = `${entry(MAIN_SPEC)}# added by Agency\n`
+  // The first rename is refused while another writer (Agency) replaces agency.toml.
+  let attempts = 0
+  const racing = async (from, to) => {
+    if (attempts++ === 0) {
+      writeFileSync(fixture.file, other)
+      throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    }
+    return fsPromises.rename(from, to)
+  }
+  assert.equal(await replaceIfUnchanged({ ...args, rename: racing }), "changed")
+  assert.equal(attempts, 1)
+  assert.equal(readFileSync(fixture.file, "utf8"), other)
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+  assert.equal(existsSync(`${fixture.file}${LOCK_SUFFIX}`), false)
+})
+
+test("a refused rename is retried when agency.toml still holds what was read, and the retry writes", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  let attempts = 0
+  const refusedOnce = async (from, to) => {
+    if (attempts++ === 0) throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    return fsPromises.rename(from, to)
+  }
+  assert.equal(await replaceIfUnchanged({ ...args, rename: refusedOnce }), "written")
+  assert.equal(attempts, 2)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(RELEASE_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+})
+
+test("before a retry, a target that cannot be read stops the move, but a read that is only busy does not", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  // Reads: 1 before the temporary file, 2 before the swap, 3 before the retry.
+  const failingOnRead = (code) => {
+    let reads = 0
+    return {
+      ...fsPromises,
+      readFile: async (file, encoding) => {
+        if (reads++ === 2) throw Object.assign(new Error(code), { code })
+        return fsPromises.readFile(file, encoding)
+      },
+    }
+  }
+  let attempts = 0
+  const refusedOnce = async (from, to) => {
+    if (attempts++ === 0) throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    return fsPromises.rename(from, to)
+  }
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: failingOnRead("ENOENT"), rename: refusedOnce }), "changed")
+  assert.equal(attempts, 1)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+
+  // A rename refused for any other reason is thrown as it is, and leaves no temporary file or change behind.
+  const full = async () => { throw Object.assign(new Error("no space left"), { code: "ENOSPC" }) }
+  await assert.rejects(replaceIfUnchanged({ ...args, rename: full }), { code: "ENOSPC" })
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+
+  attempts = 0
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: failingOnRead("EBUSY"), rename: refusedOnce }), "written")
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(RELEASE_SPEC))
+})
+
 test("Desk alone moves to release; an entry another plugin covers on every engine gives way", async () => {
   const alone = await agencyHome([entry(SUPERPOWERS), entry(MAIN_SPEC, copilotOnly)].join("\n"), { [SUPERPOWERS]: null })
   await run(["--migrate"], alone)
