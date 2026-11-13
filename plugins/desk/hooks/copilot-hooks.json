@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/destructive-command-guard.cjs\" copilot",
+        "timeoutSec": 5
+      }
+    ],
     "postToolUse": [
       {
         "type": "command",
