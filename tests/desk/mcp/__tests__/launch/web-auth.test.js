@@ -1929,6 +1929,171 @@ test("a picture that hangs cannot hold a timed-out context open past its bound, 
   await slow.close()
 })
 
+test("a diagnosis reads an unusual address, request type or event as a plain value and never fails on it", async () => {
+  const root = await mkTempRoot("auth-not-ready-odd-")
+  const native = fakeDriver()
+  native.page.url = () => "http://app.example.test:8080/work"
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const unparsed = requestOn(native, "not an address", { type: "beacon" })
+    native.page.emit("request", unparsed)
+    native.page.emit("requestfailed", unparsed)
+    for (const errorText of ["net::ERR_ABORTED", "net::ERR_ABORTED"]) {
+      const inline = requestOn(native, "data:image/png;base64,AAAA", { type: "image", errorText })
+      native.page.emit("request", inline)
+      native.page.emit("requestfailed", inline)
+    }
+    const slow = requestOn(native, "https://slow.example.test/api", { errorText: "net::ERR_TIMED_OUT" })
+    native.page.emit("request", slow)
+    native.page.emit("requestfailed", slow)
+    const detached = { ...requestOn(native, "https://detached.example.test/x"), isNavigationRequest: () => { throw new Error("frame detached") } }
+    native.page.emit("request", detached)
+    const fine = requestOn(native, "https://fine.example.test/data")
+    native.page.emit("request", fine)
+    native.page.emit("response", { request: () => fine, status: () => 200 })
+    native.page.emit("requestfinished", fine)
+    const stranger = requestOn(native, "https://stranger.example.test/x")
+    native.page.emit("response", { request: () => stranger, status: () => 500 })
+    native.page.emit("requestfinished", stranger)
+    native.page.emit("console", { type: () => "log", text: () => "LOG_TEXT_849" })
+    const first = await adapter.call(["wait", "never shows"])
+    assert.equal(first.diagnosis.url, "http://app.example.test:8080/work")
+    assert.deepEqual(first.diagnosis.network.failed, [
+      { host: "unknown", type: "other", code: "net_error" },
+      { host: "data", type: "image", code: "aborted" },
+      { host: "slow.example.test", type: "xhr", code: "timeout" },
+    ], "one entry per host, type and code, oldest first; a request finished with HTTP 200 or never seen is not a failure")
+    assert.deepEqual(first.diagnosis.network.pending.map(({ host }) => host), ["detached.example.test"], "a request whose frame is gone counts as a plain request")
+    assert.equal(first.diagnosis.status, null, "a request's frame that cannot be read is not the main document")
+    assert.deepEqual(first.diagnosis.console, { errors: 0, warnings: 0, pageErrors: 0 }, "a log line is not counted")
+    assert.equal(JSON.stringify(first.diagnosis).includes("LOG_TEXT_849"), false)
+
+    native.page.url = () => "about:blank"
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.url, "about:", "only the scheme of an address that is not a web page")
+    native.page.url = () => "not an address"
+    const unknown = await adapter.call(["wait", "never shows"])
+    assert.equal(unknown.diagnosis.url, "unknown")
+    assert.equal(unknown.diagnosis.signIn, false)
+  } finally { await adapter.close() }
+})
+
+test("a diagnosis keeps only the last 200 requests a page made", async () => {
+  const root = await mkTempRoot("auth-not-ready-recent-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const finished = Array.from({ length: 201 }, (_, index) => requestOn(native, `https://done${index}.example.test/x`, { errorText: "net::ERR_FAILED" }))
+    for (const request of finished) {
+      native.page.emit("request", request)
+      native.page.emit("requestfailed", request)
+    }
+    const waiting = Array.from({ length: 201 }, (_, index) => requestOn(native, `https://wait${index}.example.test/x`))
+    for (const request of waiting) native.page.emit("request", request)
+    // The oldest pending request was dropped to keep 200: its failure arrives with nothing left to record.
+    native.page.emit("requestfailed", waiting[0])
+    const { diagnosis } = await adapter.call(["wait", "never shows"])
+    assert.deepEqual(diagnosis.network.failed.map(({ host }) => host), Array.from({ length: 10 }, (_, index) => `done${191 + index}.example.test`))
+    assert.deepEqual(diagnosis.network.pending.map(({ host }) => host), Array.from({ length: 10 }, (_, index) => `wait${191 + index}.example.test`))
+    assert.equal(diagnosis.network.failed.some(({ host }) => host === "wait0.example.test"), false, "a dropped request's failure is not recorded")
+  } finally { await adapter.close() }
+})
+
+test("a main document that never arrived, or a page whose scripts failed, is named as the likely cause", async () => {
+  const root = await mkTempRoot("auth-not-ready-main-")
+  const native = fakeDriver()
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const main = requestOn(native, "https://app.example.test/work", { type: "document", main: true, errorText: "net::ERR_NAME_NOT_RESOLVED" })
+    native.page.emit("request", main)
+    native.page.emit("requestfailed", main)
+    const missing = await adapter.call(["wait", "never shows"])
+    assert.equal(missing.diagnosis.mainFailed, "net_error")
+    assert.match(missing.hint, /Probably the page's main document did not arrive \(net_error\); /u)
+  } finally { await adapter.close() }
+
+  const scripted = fakeDriver()
+  scripted.page.screenshot = async () => { throw new Error("SCREENSHOT_FAILED_849") }
+  const failing = adapterFor(scripted, await mkTempRoot("auth-not-ready-scripts-"), 2000)
+  try {
+    scripted.page.emit("console", { type: () => "error", text: () => "CONSOLE_TEXT_849" })
+    const missing = await failing.call(["wait", "never shows"])
+    assert.equal(missing.diagnosis.screenshot, null, "a picture that fails is not kept")
+    assert.equal(missing.diagnosis.screenshotSkipped, true)
+    assert.match(missing.hint, /Probably the page's scripts reported errors; .*; no screenshot was kept; /u)
+    assert.equal(JSON.stringify(missing).includes("SCREENSHOT_FAILED_849"), false)
+  } finally { await failing.close() }
+})
+
+test("a timed-out command's evidence names the main document's status, failed hosts with their codes and a sign-in redirect", async () => {
+  const root = await mkTempRoot("auth-timeout-evidence-signin-")
+  const native = fakeDriver()
+  native.page.url = () => "https://login.microsoftonline.com/common/oauth2/authorize?client_id=SIGNIN_QUERY_849"
+  const send = native.cdp.send
+  native.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
+    return send(...args)
+  }
+  const adapter = adapterFor(native, root, 20)
+  const main = requestOn(native, native.page.url(), { type: "document", main: true })
+  native.page.emit("request", main)
+  native.page.emit("response", { request: () => main, status: () => 200 })
+  const blocked = requestOn(native, "https://cdn.example.test/app.js", { type: "script", errorText: "net::ERR_BLOCKED_BY_CLIENT" })
+  native.page.emit("request", blocked)
+  native.page.emit("requestfailed", blocked)
+  await assert.rejects(adapter.call(["snapshot", "--save"]), error =>
+    error.message.includes("; main document status 200; failed requests cdn.example.test blocked; ") &&
+    error.message.includes("; sign-in redirect yes.") && !error.message.includes("SIGNIN_QUERY_849"))
+  await adapter.close()
+})
+
+test("a command that times out before its tab was read keeps what evidence it can, and none when there is no tab or it cannot be read", async () => {
+  // A new tab that opens only after the command's time: the command times out with its old tab still selected.
+  const hang = function () { return new Promise(resolve => setTimeout(() => resolve(this.pages()[0]), 100)) }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 150))
+  const unread = fakeDriver()
+  unread.context.newPage = hang
+  const before = auth.create(unread.context, await mkTempRoot("auth-timeout-unread-"), 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  await assert.rejects(before.call(["tab-new"]), error =>
+    /^AUTH_TIMEOUT: .*; evidence kept before the close: no screenshot was kept; main document status none; /u.test(error.message))
+  assert.equal(unread.calls.some(call => call[0] === "page.screenshot"), false, "a tab with no reader is not pictured")
+  await settle()
+  await before.close()
+
+  const empty = fakeDriver()
+  empty.context.pages = () => []
+  empty.context.newPage = hang
+  const none = auth.create(empty.context, await mkTempRoot("auth-timeout-no-tab-"), 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  await assert.rejects(none.call(["tab-new"]), error => /^AUTH_TIMEOUT: /u.test(error.message) && !error.message.includes("evidence kept"))
+  await settle()
+  await none.close()
+
+  const unreadable = fakeDriver()
+  unreadable.context.newPage = hang
+  unreadable.page.url = () => { throw new Error("TARGET_CLOSED_849") }
+  const broken = auth.create(unreadable.context, await mkTempRoot("auth-timeout-unreadable-"), 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  await assert.rejects(broken.call(["tab-new"]), error =>
+    /^AUTH_TIMEOUT: /u.test(error.message) && !error.message.includes("evidence kept") && !error.message.includes("TARGET_CLOSED_849"))
+  assert.ok(unreadable.calls.some(call => call[0] === "context.close"), "the context still closes")
+  await settle()
+  await broken.close()
+})
+
+test("a picture reported late with no file written is let go without an error", async () => {
+  const late = fakeDriver()
+  late.page.screenshot = async () => { await new Promise(resolve => setTimeout(resolve, 150)) }
+  const send = late.cdp.send
+  late.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
+    return send(...args)
+  }
+  const root = await mkTempRoot("auth-timeout-late-unwritten-")
+  const slow = auth.create(late.context, root, 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  await assert.rejects(slow.call(["snapshot", "--save"]), error => /no screenshot was kept/u.test(error.message))
+  await new Promise(resolve => setTimeout(resolve, 800))
+  assert.deepEqual(fs.readdirSync(root), [])
+  await slow.close()
+})
+
 test("press with only a key presses it on whatever has focus", async () => {
   const root = await mkTempRoot("auth-native-key-")
   const native = fakeDriver()

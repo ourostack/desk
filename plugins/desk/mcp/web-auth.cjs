@@ -875,7 +875,7 @@ function within(work, ms, discard) {
 }
 
 function discardPicture(file) {
-  if (file) fs.promises.unlink(file).catch(function () {});
+  fs.promises.unlink(file).catch(function () {});
 }
 
 // The likeliest cause, first match wins, with what probably happened and how to keep working from it.
