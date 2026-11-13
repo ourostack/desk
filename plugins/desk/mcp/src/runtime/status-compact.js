@@ -111,6 +111,12 @@ function errorLine(error) {
 const statusErrorSummary = (error) => `Desk is ready, but its runtime status failed (${error}), so the empty fields below (root, search, sync) are not a missing desk. Call desk_status again; if it fails the same way, call desk_doctor.`
 const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime detail (the runtime is not loaded, or Desk is in refuse mode), so the empty root, search and sync fields below are not a missing desk. Call desk_doctor to see why."
 
+// What the compact answer shows of the full answer's `runtime`: who is serving, not the runtime's own diagnostics.
+const identityOf = ({ plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, newest_release }) => (
+  { plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, ...(newest_release === undefined ? {} : { newest_release }) })
+// The fields of the compact answer that stay empty while the runtime's status is pending.
+const COMPACT_PENDING = ["activation", "write_scope", "sync"]
+
 /** The compact answer for a full desk_status payload (already merged with the admission fields). */
 export function compactStatus(payload) {
   const syncProblem = syncDegradation(payload.sync?.last_pull)
@@ -149,6 +155,8 @@ export function compactStatus(payload) {
     },
     sync: syncLine(payload.sync),
     plugin_version: payload.runtime?.plugin?.version ?? null,
+    ...(payload.runtime?.plugin_root === undefined ? {} : { runtime: identityOf(payload.runtime) }),
+    ...(detailPending && Array.isArray(payload.pending) ? { pending: payload.pending.filter((field) => COMPACT_PENDING.includes(field)) } : {}),
     ...(payload.status_detail === undefined ? {} : { status_detail: payload.status_detail }),
     detail: DETAIL_POINTER,
   }

@@ -2020,6 +2020,29 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.equal(late.state, "ready", "the admission fields are current, not cached")
 })
 
+test("desk_status names who is serving even when the runtime status misses its budget", async (t) => {
+  const pluginRoot = path.join(await mkTempRoot("desk-identity-"), "plugin")
+  mkdirSync(pluginRoot, { recursive: true })
+  writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", version: "9.8.7" }))
+  const mirror = path.join(pluginRoot, "source-mirror", "abc123")
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime, loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready", plugin_root: pluginRoot, source_mirror_path: mirror, newest_release: { state: "current" } } }) })
+  await session.admission.refresh()
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  runtime.callTool = () => new Promise(() => {})
+  const identity = { plugin: { name: "desk", version: "9.8.7" }, plugin_root: pluginRoot, source_mirror_path: mirror, source_mirror_hash: "abc123", loaded: true, newest_release: { state: "current" } }
+  const detail = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(detail.detail_pending, true)
+  assert.deepEqual(detail.runtime, identity)
+  assert.deepEqual(detail.pending, ["activation", "write_scope", "sync", "active_tasks", "factory"])
+  const compact = payload(await session.callTool({ name: "desk_status", input: {} }))
+  assert.equal(compact.detail_pending, true)
+  assert.deepEqual(compact.runtime, identity)
+  assert.equal(compact.plugin_version, "9.8.7")
+  assert.deepEqual(compact.pending, ["activation", "write_scope", "sync"])
+})
+
 test("desk_status serves a fresh detail once no older computation is running, and a cached one after it", async (t) => {
   const runtime = fakeRuntime()
   const { session } = await makeSession(t, { runtime })

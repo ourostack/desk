@@ -141,6 +141,7 @@ function settings(o) {
     env: env, homeDir: homeDir, platform: platform, fileExists: fileExists, node: node,
     npmCli: o.npmCli === undefined ? npmCli(node, platform, fileExists) : o.npmCli,
     tmpDir: o.tmpDir || os.tmpdir(),
+    pluginRoot: o.pluginRoot || path.resolve(__dirname, ".."),
     stateRoot: stateDir(env, homeDir),
     profileRoots: o.profileRoots || {},
     installMs: o.installMs || 180000,
@@ -437,7 +438,7 @@ async function openAuth(s) {
     s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); }, { evidenceDir: evidenceDir(s) });
     var opened = {
       contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
-      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks every input/textarea/editable region; raw commands are refused. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
+      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks every input/textarea/editable region; every command is yours to run. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
     };
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
@@ -747,6 +748,13 @@ function sweep(s) {
 
 // ---- MCP ----
 
+// Who is serving this reply, so a result binds to the code that produced it: the loaded plugin folder and the Desk version in its plugin.json.
+function runtimeIdentity(s) {
+  var version = null;
+  try { version = JSON.parse(fs.readFileSync(path.join(s.pluginRoot, "plugin.json"), "utf8")).version; } catch (error) { /* an unreadable manifest leaves the version unknown */ }
+  return { plugin: { name: "desk", version: typeof version === "string" ? version : null }, plugin_root: s.pluginRoot };
+}
+
 function createController(options) {
   var s = settings(options || {});
   function answer(work) {
@@ -760,7 +768,7 @@ function createController(options) {
   function context(input) {
     if (input.action === "open") {
       return open(s, input.browser || "fresh").then(function (opened) {
-        return opened;
+        return Object.assign({}, opened, { runtime: runtimeIdentity(s) });
       });
     }
     if (input.action !== "close") throw plain("action must be \"open\" or \"close\".");

@@ -153,6 +153,33 @@ test("the catalog lists exactly the two browser tools", () => {
   assert.deepEqual(catalog.tools[0].inputSchema.properties.browser.enum, ["fresh", "mine"])
 })
 
+test("no tool text claims that eval, run-code or raw commands are refused", () => {
+  const text = JSON.stringify(catalog)
+  assert.doesNotMatch(text, /raw (commands?|operations?) (is|are) refused|refuses? (raw|eval|run-code)|(eval|run-code)[^.]{0,40}(refused|unavailable|not available)/iu)
+  assert.match(catalog.tools[1].description, /eval and run-code return what the script returns/u)
+  assert.doesNotMatch(fs.readFileSync(webFile, "utf8"), /raw commands are refused/u)
+})
+
+test("the open reply says which Desk and which plugin folder served it", async () => {
+  const { options, tmp, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const pluginRoot = path.join(tmp, "plugin")
+  fs.mkdirSync(pluginRoot)
+  fs.writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify({ name: "desk", version: "7.6.5" }))
+  const controller = web.createController({ ...options, pluginRoot })
+  const opened = json(await controller.call("browser_context", { action: "open" }))
+  try { assert.deepEqual(opened.runtime, { plugin: { name: "desk", version: "7.6.5" }, plugin_root: pluginRoot }) } finally { await controller.closeAll() }
+  const bare = web.createController({ ...options, pluginRoot: path.join(tmp, "none") })
+  const second = json(await bare.call("browser_context", { action: "open" }))
+  try { assert.deepEqual(second.runtime, { plugin: { name: "desk", version: null }, plugin_root: path.join(tmp, "none") }) } finally { await bare.closeAll() }
+  const own = web.createController(options)
+  const mine = json(await own.call("browser_context", { action: "open", browser: "mine" }))
+  try {
+    assert.equal(mine.runtime.plugin_root, path.join(repoRoot, "plugins", "desk"))
+    assert.match(mine.runtime.plugin.version, /^\d+\.\d+\.\d+/u)
+  } finally { await own.closeAll() }
+})
+
 test("profileRoot names each browser's profile folder on each platform", () => {
   assert.equal(web.profileRoot("msedge", "win32", { LOCALAPPDATA: "C:\\L" }, "C:\\H"), "C:\\L\\Microsoft\\Edge\\User Data")
   assert.equal(web.profileRoot("chrome", "win32", {}, "C:\\H"), "C:\\H\\AppData\\Local\\Google\\Chrome\\User Data")
