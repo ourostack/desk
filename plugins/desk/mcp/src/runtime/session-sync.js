@@ -35,7 +35,7 @@ import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, re
 import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
-import { shellQuote } from "../util/shell-quote.js"
+import { commandArgument } from "./pr-publication.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { applyPublicationMode } from "./publication-mode.js"
 
@@ -404,9 +404,10 @@ const TELL = {
 // The Ouro AX error shape: `<tool>: <thing>: <problem>. Fix: <command>.` It names the probable cause, the command that
 // shows more, the one call that files the failure with its evidence, and that work continues meanwhile.
 function credentialRefusal({ root, env, remote, error }) {
-  const evidence = argvSafeReason(`git refused the credentials for ${remote ?? "origin"}: ${error || "no message"}`)
-  const file = `node ${shellQuote(FILE_DESK_PROBLEM_SCRIPT)} --mechanism session-sync --reason ${shellQuote(evidence)} --host ${shellQuote(hostFromEnv(env))}`
-  return `desk: sync: the remote refused this host's credentials, probably because the GitHub account Git is signed in as here does not own ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${shellQuote(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth status.`
+  // The remote's path is left out of the evidence: the argv narrowing would read a repository path as a desk path.
+  const evidence = argvSafeReason(`git refused the credentials for ${remote?.match(/^https?:\/\/([^/]+)/u)?.[1] ?? "origin"}: ${error || "no message"}`)
+  const file = `node ${commandArgument(FILE_DESK_PROBLEM_SCRIPT)} --mechanism session-sync --reason ${commandArgument(evidence)} --host ${commandArgument(hostFromEnv(env))}`
+  return `desk: sync: the remote refused this host's credentials, probably because the GitHub account Git is signed in as here does not own ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${commandArgument(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth status.`
 }
 
 function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
