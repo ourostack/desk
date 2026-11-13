@@ -34,6 +34,8 @@ import { spawnSync } from "node:child_process"
 import { indexEntries, readBackCommit } from "./git-stage.js"
 import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 import { commitCaptured, git, headOf, held, operationAnswer, same, treeLines } from "./cas-commit.js"
+import { readCaptureRecord, removeCaptureRecord } from "./capture-record.js"
+import { resolveDeskStateDir } from "../runtime/last-start.js"
 
 /**
  * Where a captured change stands, and with `commit: true` the one commit that finishes it. `root` is the folder the paths are
@@ -42,7 +44,7 @@ import { commitCaptured, git, headOf, held, operationAnswer, same, treeLines } f
  * it dispatched (`""` for unborn), `branch` the branch it committed on. Returns `{ state, reason, ... }`, `state` one of
  * `committed`, `ready`, `finished` (this call made the commit), `held` or `unknown`. Never throws on a Git failure.
  */
-export function finishCommit({ root, paths, expected, before, branch, message, commit = false, spawnGit = spawnSync, env = process.env }) {
+export function finishCommit({ root, paths, expected, before, branch, message, commit = false, recorded = false, spawnGit = spawnSync, env = process.env }) {
   if (env[TOOL_COMMIT_ENV]) return held("the card guard's own override is set in this environment; this check runs only without it, so the card guard keeps its say")
   if (!Array.isArray(paths) || paths.length === 0 || !Array.isArray(expected) || typeof before !== "string" || !branch || !message)
     return held("the route does not carry the captured change (paths, entries, HEAD, branch and message), so nothing can be checked")
@@ -71,13 +73,14 @@ export function finishCommit({ root, paths, expected, before, branch, message, c
   const staged = index.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}`).sort()
   if (!same(staged, wanted)) return held("the shared index holds something other than the captured change at these paths (another session's staged work, or a later edit); it is left exactly as it is")
   if (!commit) return { state: "ready", reason: "the index holds exactly the captured change, HEAD does not yet, and nothing else changed these paths", head }
-  return commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, env })
+  // A recorded change (Desk's own record, see capture-record.js) is committed the way Desk's tool commits are: with the card guard's marker, for this commit only.
+  return commitCaptured({ root, paths, wanted, head, branch, message, spawnGit, env: recorded ? { ...env, [TOOL_COMMIT_ENV]: "1" } : env, toolCommit: recorded })
 }
 
 /** Exit codes the route's steps branch on: done (committed or finished), ready (read-only run, nothing changed), held, unknown, bad usage. */
 const FINISH_EXIT = { done: 0, ready: 3, held: 4, unknown: 5, usage: 2 }
 
-/** `--root R --branch B --before H --message M --path P... --entry "mode sha<TAB>path"... [--commit]`: prints the answer as JSON and returns its exit code. */
+/** `--root R --branch B --before H --message M --path P... --entry "mode sha<TAB>path"... [--commit]`, or `--root R --capture-id ID --message M --path P... [--commit]` for Desk's recorded change: prints the answer as JSON and returns its exit code. */
 export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = spawnSync, env = process.env, out = process.stdout } = {}) {
   const options = { paths: [], expected: [], commit: false }
   for (let i = 0; i < argv.length; i += 1) {
@@ -90,12 +93,30 @@ export function runFinishCommitCli(argv = process.argv.slice(2), { spawnGit = sp
     else if (flag === "--branch") options.branch = value
     else if (flag === "--before") options.before = value
     else if (flag === "--message") options.message = value
+    else if (flag === "--capture-id") options.captureId = value
     else if (flag === "--path") options.paths.push(value)
     else if (flag === "--entry") options.expected.push(value)
     else { out.write(`${JSON.stringify({ state: "usage", reason: `unknown option ${flag}` })}\n`); return FINISH_EXIT.usage }
   }
   if (!options.root) { out.write(`${JSON.stringify({ state: "usage", reason: "--root is required" })}\n`); return FINISH_EXIT.usage }
-  const answer = finishCommit({ ...options, spawnGit, env })
+  const answer = options.captureId === undefined ? finishCommit({ ...options, spawnGit, env }) : finishRecorded(options, { spawnGit, env })
   out.write(`${JSON.stringify(answer)}\n`)
   return answer.state === "committed" || answer.state === "finished" ? FINISH_EXIT.done : FINISH_EXIT[answer.state]
+}
+
+/**
+ * A finish that names Desk's record by its id: the record supplies the change, and the command line must name the same checkout,
+ * paths and message as the record, or the finish is held. The record is removed once its commit is proven landed.
+ */
+function finishRecorded(options, { spawnGit, env }) {
+  const stateDir = resolveDeskStateDir({ env })
+  const loaded = readCaptureRecord({ stateDir, id: options.captureId })
+  if (loaded.error) return held(loaded.error)
+  const { record } = loaded
+  if (record.root !== options.root) return held("Desk's record of this change is for another checkout, so it is not finished from here")
+  if (JSON.stringify([...record.paths].sort()) !== JSON.stringify([...options.paths].sort())) return held("the paths named are not the paths Desk recorded for this change")
+  if (record.message !== options.message) return held("the message named is not the one Desk recorded for this change")
+  const answer = finishCommit({ root: record.root, paths: record.paths, expected: record.expected, before: record.before, branch: record.branch, message: record.message, commit: options.commit, recorded: true, spawnGit, env })
+  if (answer.state === "committed" || answer.state === "finished") removeCaptureRecord({ stateDir, id: record.id })
+  return answer
 }

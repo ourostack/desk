@@ -10,7 +10,7 @@
 // branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
 // cannot qualify, builds the commit from a private index with the repository's hooks run through Git, and moves the branch
 // by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). After the publish, a read-only last step says whether those paths hold edits newer than the committed change; those are not delivered, and the route never folds them in. A live task card's captured change is held instead: only task_update
-// commits a card, and a new task_update is a new write, never the captured change (0972 #2). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
+// commits a card, and a new task_update is a new write, never the captured change (0972 #2). A live card's change is finished only from Desk's own record of it, named by an id (capture-record.js), so a card whose record cannot be written is held. Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
 //
 // What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
 // card guard's override variable, a hard-coded remote or branch (the published read-back compares with the checkout's own
@@ -18,6 +18,8 @@
 
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { writeCaptureRecord } from "./capture-record.js"
+import { resolveDeskStateDir } from "../runtime/last-start.js"
 
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
 const FINISH_SCRIPT = fileURLToPath(new URL("../../scripts/finish-commit.js", import.meta.url))
@@ -39,6 +41,14 @@ function finishArgv(root, paths, message, capture, commit = false) {
   return [
     process.execPath, FINISH_SCRIPT, "--root", root, "--branch", capture.branch, "--before", capture.before, "--message", message,
     ...paths.flatMap((p) => ["--path", p]), ...capture.expected.flatMap((line) => ["--entry", line]), ...(commit ? ["--commit"] : []),
+  ]
+}
+
+/** The finish-commit argv for a change Desk recorded under `captureId`: the id names the change, and the paths and message are checked against it. */
+function recordedArgv(root, paths, message, captureId, commit = false) {
+  return [
+    process.execPath, FINISH_SCRIPT, "--root", root, "--capture-id", captureId, "--message", message,
+    ...paths.flatMap((p) => ["--path", p]), ...(commit ? ["--commit"] : []),
   ]
 }
 
@@ -71,17 +81,45 @@ function cardRoute({ root, paths, message, readback, card, capture }) {
 }
 
 /**
+ * The route for a live task card whose captured change Desk recorded (`captureId`, see capture-record.js): the read-back, finish,
+ * publish and newer-bytes steps of any captured change. The finish names the record, so the card guard lets through only the
+ * change Desk recorded; a hand commit of a card is still refused, and a finish with no record is not offered.
+ */
+function recordedCardRoute({ root, paths, message, readback, card, captureId, deskRoot }) {
+  const check = recordedArgv(root, paths, message, captureId)
+  const finish = recordedArgv(root, paths, message, captureId, true)
+  const newer = [["git", "-C", root, "diff", "--quiet", "HEAD", "--", ...paths]]
+  const publish = { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) }
+  const published_when = publishedWhen(root, paths)
+  return {
+    summary: readback === "absent"
+      ? `Desk's commit of the card ${card} did not land. Finish exactly the change Desk recorded for it: read where it stands, commit it once only if the read says ready, publish, then read back the remote.`
+      : `Desk cannot tell whether its commit of the card ${card} landed. Never repeat it blind: read where the recorded change stands first; commit it once only if the read says ready, otherwise stop and report.`,
+    steps: [
+      { step: `Read back where the recorded change stands. ${READS_ONLY} Exit 0: HEAD already holds exactly it, go straight to publishing. Exit 3 (ready): go on. ${STOP}`, argv: check },
+      { step: `Only if step 1 exited 3 (ready): commit exactly the recorded change, once. The change comes from Desk's record named by ${captureId}; the command line only names that record and repeats its paths and message, which the command checks. The repository's commit hooks run through Git with Desk's own commit marker, so the card guard lets this one commit through; a hand commit of a card is still refused. The branch moves by one compare-and-swap against the HEAD step 1 qualified. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.`, argv: finish },
+      publish,
+      { step: `Read whether these paths hold anything newer than the change just committed. ${READS_ONLY} Exit 0: nothing newer, and the save is complete. Exit 1: the working tree holds later bytes this route did not commit; they are not delivered. If they are this session's own edits, save them with a Desk write of the same paths (task_update for the card, desk_save for other files). If they may be another session's, leave them and report them. Never fold them into this recorded change.`, argv: newer },
+    ],
+    committed_locally_when: { argv: [["git", "-C", root, "diff", "--exit-code", "HEAD", "--", ...paths], ["git", "-C", root, "log", "-1", "--format=%s", "--", ...paths]], expect: `the first exits 0 (nothing at these paths differs from HEAD) and the second prints "${message}"` },
+    published_when,
+    newer_unsaved_when: { argv: newer, expect: "exits 0 when nothing is newer; exits 1 means the working tree holds edits newer than the committed change, which are not delivered" },
+  }
+}
+
+/**
  * The route for a commit Desk could not finish: exactly `paths` (relative to `root`) with `message`. `readback` is the commit's
  * read-back (`absent` or `unknown`); `capture` is the change Desk captured before dispatch (`{ before, branch, expected }`), when it
  * could; `card` names a live task card (`<track>/<slug>`) that is `paths[0]`, which the card guard lets in only through
- * task_update, so its route is held. `deskRoot` is the root a successful call hands `schedulePush`; the publish step uses exactly
+ * task_update. Its route is finished from Desk's record of the change when `captureId` names one (see capture-record.js), and
+ * held otherwise. `deskRoot` is the root a successful call hands `schedulePush`; the publish step uses exactly
  * it, never a nested `root`, because the push worker's lock and delivery state are keyed by it (R6), and Desk tool steps name
  * paths relative to it.
  */
-export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root, capture = null }) {
+export function commitRoute({ root, paths, message, readback = "unknown", card = null, deskRoot = root, capture = null, captureId = null }) {
   const publish = { step: "Publish through Desk's push worker.", argv: publishArgv(deskRoot) }
   const published_when = publishedWhen(root, paths)
-  if (capture && card !== null) return cardRoute({ root, paths, message, readback, card, capture })
+  if (capture && card !== null) return captureId === null ? cardRoute({ root, paths, message, readback, card, capture }) : recordedCardRoute({ root, paths, message, readback, card, captureId, deskRoot })
   if (capture) {
     const check = finishArgv(root, paths, message, capture)
     const newer = [["git", "-C", root, "diff", "--quiet", "HEAD", "--", ...paths]]
@@ -119,11 +157,22 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
 /** The failure object a commit step returns: `failed` when the commit did not land, `unknown` when Desk cannot tell, always with its route. */
 export function commitFailure({ root, paths, message, committed, card = null, deskRoot = root }) {
   const readback = committed.readback === "absent" ? "absent" : "unknown"
+  const capture = committed.capture ?? null
+  const captureId = card !== null && capture !== null ? recordCapture({ root, paths, message, capture }) : null
   return {
     status: readback === "absent" ? "failed" : "unknown",
     reason: committed.stderr,
     ...(committed.landed ? { landed: committed.landed } : {}),
-    route_around: commitRoute({ root, paths, message, readback, card, deskRoot, capture: committed.capture ?? null }),
+    route_around: commitRoute({ root, paths, message, readback, card, deskRoot, capture, captureId }),
+  }
+}
+
+/** Desk's record of a card change it could not finish, or null when the state folder cannot be written (the route is then held). */
+function recordCapture({ root, paths, message, capture }) {
+  try {
+    return writeCaptureRecord({ stateDir: resolveDeskStateDir(), root, paths, message, capture })
+  } catch {
+    return null
   }
 }
 

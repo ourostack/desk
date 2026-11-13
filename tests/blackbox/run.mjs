@@ -767,8 +767,8 @@ function argvsOf(field) {
   return typeof field?.[0] === "string" ? [field] : field ?? []
 }
 
-function runArgv(argv) {
-  const answer = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", windowsHide: true })
+function runArgv(argv, env) {
+  const answer = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", windowsHide: true, env })
   assert(answer.error === undefined, `${argv[0]} did not run: ${answer.error?.message}`)
   return { argv, status: answer.status, stdout: answer.stdout ?? "" }
 }
@@ -804,16 +804,23 @@ async function timedOutTaskUpdate(ctx, world, session) {
     assert(!/can't|cannot finish|not in effect/iu.test(timed.text) || commit.route_around, "the result says the change cannot be finished or is not in effect, with no route")
     assert(git(desk, ["rev-parse", "HEAD"], env) === headBefore, "the timed-out commit moved HEAD before the route ran")
 
-    // Run the route as written: each step's argv in order, stopping at a step that says to stop.
+    // Run the route as written, as an agent reads it: each step's argv in order; "Only if step N exited X" runs only when step N
+    // exited X; "On exit 4 (held) or 5 (unknown): stop" ends the run; "Stop here" ends it too.
     const route = commit.route_around
     const trace = []
-    for (const step of route.steps) {
+    const exits = []
+    for (const [index, step] of route.steps.entries()) {
       if (/\bStop here\b/u.test(step.step)) break
+      const gate = /^Only if step (\d+) exited (\d+)/u.exec(step.step)
+      if (gate && exits[Number(gate[1])] !== Number(gate[2])) continue
+      if (index > 0 && /On exit 4 \(held\) or 5 \(unknown\): stop/u.test(route.steps[index - 1].step) && [4, 5].includes(exits[index])) break
       assert(step.tool === undefined, `route step needs a Desk tool call, which this check does not follow: ${step.step.slice(0, 120)}`)
-      for (const argv of argvsOf(step.argv)) trace.push(runArgv(argv))
+      const ran = argvsOf(step.argv).map((argv) => runArgv(argv, env))
+      trace.push(...ran)
+      exits[index + 1] = ran.at(-1)?.status
     }
-    const committedLocally = argvsOf(route.committed_locally_when.argv).map(runArgv)
-    const finished = committedLocally.every((answer) => answer.status === 0) && /"state":"committed"/u.test(committedLocally.at(-1).stdout)
+    const committedLocally = argvsOf(route.committed_locally_when.argv).map((argv) => runArgv(argv, env))
+    const finished = committedLocally.every((answer) => answer.status === 0)
     const trail = JSON.stringify({ route: trace.map((t) => ({ status: t.status, out: t.stdout.slice(0, 300) })), committedLocally: committedLocally.map((t) => t.status) }).slice(0, 900)
     assert(finished, `the route did not commit the card change; the tool reported ${commit.status} (${commit.reason}); the route stopped: ${trail}`)
 

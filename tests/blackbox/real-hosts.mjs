@@ -5,8 +5,10 @@
 // proof. A second session on the same desk then quotes the lesson from its own session start: the lesson's body carries a
 // secret the second prompt does not, so only a session start that printed the lesson can give it back.
 //
-//   node tests/blackbox/real-hosts.mjs [--hosts copilot,claude] [--out <dir>] [--copilot-user <gh user>] [--scenario lessons|progress-note]
+//   node tests/blackbox/real-hosts.mjs [--hosts copilot,claude] [--out <dir>] [--copilot-user <gh user>] [--scenario lessons|progress-note] [--plugin local:<desk plugin folder>]
 //
+// `--plugin` loads that Desk folder for Copilot instead of the installed one (and skips the configured plugins), so a branch's
+// own Desk is what runs.
 // `progress-note` is one session that records a progress note with task_update on a desk whose pre-commit hook is slow (longer
 // than Desk's 10 s card-commit budget). The prompt says nothing about timeouts or routes; it passes when the note reaches the
 // remote and the answer does not say it cannot be recorded or is not in effect.
@@ -28,6 +30,7 @@ const out = path.resolve(option("--out", path.join(os.tmpdir(), "desk-blackbox-r
 const copilotUser = option("--copilot-user", "arimendelow_microsoft")
 const timeoutMs = Number(option("--timeout", "600")) * 1000
 const scenario = option("--scenario", "lessons")
+const plugin = option("--plugin", null)
 if (!["lessons", "progress-note"].includes(scenario)) throw new Error(`unknown --scenario ${scenario}`)
 
 function prompt(tag, secret) {
@@ -103,7 +106,9 @@ async function hostRun(host, tag, text, desk) {
   let result
   if (host === "copilot") {
     const token = execFileSync("gh", ["auth", "token", "--user", copilotUser], { encoding: "utf8" }).trim()
-    result = await run("agency", ["copilot", "--allow-all", "-p", text], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
+    const pluginArgs = plugin ? ["--no-config-plugins", "--plugin", plugin] : []
+    // A fresh session per run: without it, agency resumes the last session, which carries the earlier run's context.
+    result = await run("agency", ["copilot", "--allow-all", "--session-id", randomUUID(), ...pluginArgs, "-p", text], { cwd: desk, env: { ...personEnv(), COPILOT_GITHUB_TOKEN: token } })
     Object.assign(result, copilotAnswer(tag, since))
   } else {
     result = await run("claude", ["-p", "--permission-mode", "bypassPermissions", "--output-format", "json", text], { cwd: desk, env: personEnv() })
