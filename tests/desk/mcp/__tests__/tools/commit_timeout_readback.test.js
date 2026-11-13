@@ -327,17 +327,20 @@ function runArgv(argv) {
 }
 
 // Follows a route the way its words say: step 1's exit code picks the path, a step that runs "only if step 1 exited 3" runs only
-// then, a Desk tool step goes to `tools`, and "Stop here" stops. Returns step 1's exit code and output.
+// then, a Desk tool step goes to `tools`, and "Stop here" stops. Returns step 1's exit code and output, and the exit code of the
+// newer-edits check (null when the route has none); that check's non-zero exit is its answer, not a failure of the route.
 async function followRoute(route, tools = {}) {
   const first = runArgv(route.steps[0].argv)
   const code = first.at(-1).status
+  let newer = null
   for (const step of route.steps.slice(1)) {
     if (/^Stop here/u.test(step.step)) break
     if (/^Only if step 1 exited 3/u.test(step.step) && code !== 3) continue
     if (step.tool) { await tools[step.tool](step.arguments); continue }
+    if (/^Read whether these paths hold anything newer/u.test(step.step)) { newer = runArgv(step.argv).at(-1).status; continue }
     for (const ran of runArgv(step.argv)) assert.equal(ran.status, 0, `${step.step}: ${ran.stdout}${ran.stderr}`)
   }
-  return { code, first }
+  return { code, first, newer }
 }
 
 async function repoWithOrigin() {
@@ -362,9 +365,10 @@ test("the route of a commit that did not land, run by hand, commits exactly the 
   const result = await friction_add({ deskRoot: root, input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
   const route = result.commit.route_around
   const seed = git(root, ["rev-parse", "HEAD"]).trim()
-  const { code, first } = await followRoute(route)
+  const { code, first, newer } = await followRoute(route)
   assert.equal(code, 3, first[0].stdout)
   assert.match(first[0].stdout, /"state":"ready"/u)
+  assert.equal(newer, 0, "nothing newer than the change is left at the path")
   const local = runArgv(route.committed_locally_when.argv)[0]
   assert.equal(local.status, 0, local.stdout)
   assert.match(local.stdout, /"state":"committed"/u, "committed here")
@@ -492,8 +496,9 @@ test("the route of an unknown commit that landed never commits the dirt that cam
   await fs.writeFile(path.join(root, "notes.md"), "Exact notes.\nSomeone else's line.\nAnd more.\n", "utf8")
   const before = indexState(root, ["notes.md"])
   const route = result.commit.route_around
-  const { code } = await followRoute(route)
+  const { code, newer } = await followRoute(route)
   assert.equal(code, 0, "already committed")
+  assert.equal(newer, 1, "the later edit is reported as newer than the save, so it is not delivered")
   const { head, ...rest } = indexState(root, ["notes.md"])
   assert.deepEqual({ head, ...rest }, before, "nothing was committed, staged or reset")
   for (const ran of runArgv(route.published_when.argv)) assert.equal(ran.status, 0, `published: ${ran.stdout}${ran.stderr}`)

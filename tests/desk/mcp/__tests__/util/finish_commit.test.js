@@ -834,6 +834,23 @@ test("a live card's held route names the other paths a new task_update would com
   assert.doesNotMatch(alone.steps[1].step, /track\.md/u, "a card alone names no other path")
 })
 
+test("a captured route is no longer a blind save: its last step checks for newer edits at the same paths, and reports them as not delivered", () => {
+  const { root, committed } = readyChange()
+  const route = commitFailure({ root, paths: ["notes.md"], message: "save notes", committed }).route_around
+  const newer = route.steps.at(-1)
+  assert.match(newer.step, /^Read whether these paths hold anything newer than the change just committed\. It changes nothing\./u)
+  assert.deepEqual(newer.argv, [["git", "-C", root, "diff", "--quiet", "HEAD", "--", "notes.md"]])
+  assert.deepEqual(route.newer_unsaved_when.argv, newer.argv)
+  const check = () => spawnSync(newer.argv[0][0], newer.argv[0].slice(1), { encoding: "utf8", env }).status
+  const commit = route.steps[1].argv
+  const done = spawnSync(commit[0], commit.slice(1), { encoding: "utf8", env })
+  assert.equal(done.status, 0, done.stdout)
+  assert.equal(check(), 0, "nothing newer than the committed change")
+  writeFileSync(path.join(root, "notes.md"), "mine\nlater\n")
+  assert.equal(check(), 1, "a later edit at the same path is newer, so it is not delivered")
+  assert.equal(git(root, ["show", "HEAD:notes.md"]), "mine\n", "the commit still holds only the captured change")
+})
+
 test("a captured route given no read-back is the unknown route: read first, never a blind repeat", () => {
   const route = commitRoute({ root: "/desk", paths: ["notes.md"], message: "m", capture: { before: "a".repeat(40), branch: "main", expected: [] } })
   assert.match(route.summary, /^Desk cannot tell whether its commit landed/u)
