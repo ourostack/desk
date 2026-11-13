@@ -1,3 +1,0 @@
-### Feedback about Desk and its plugins goes to the Desk issues
-
-Feedback about Desk, Crew, Superpowers and Plain Language was split across several places, so it was easy to lose. Now system friction about one of those plugins also gets an issue in `ourostack/desk`: the agent searches the open issues, comments on a match or opens one, and the friction entry links to it. The issue describes the pattern only, under the same public-safety rules as Desk problem reports. Friction that is a Desk mechanism failing at its own job still goes through Desk problem reports. The desk-local friction log and its improvement cards work as before.
