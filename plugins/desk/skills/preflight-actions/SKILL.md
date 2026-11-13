@@ -1,6 +1,6 @@
 ---
 name: preflight-actions
-description: Use before a live or shared-state action (send, post, publish, deploy, change shared config) that departs from the literal ask or touches a partner's surface, and when asked to widen permissions or stop prompts.
+description: Use before a live or shared-state action (send, post, publish, deploy, change shared config) that departs from the literal ask, comes from your own research rather than a mandate, or touches a partner's surface, and when asked to widen permissions or stop prompts.
 ---
 
 # Preflight actions

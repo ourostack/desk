@@ -1,13 +1,13 @@
 ---
 name: delightful-decks
-description: Use when asked to make, redo or polish slides for a talk, meeting or demo that someone will present live, or when a deck is judged dull, wordy or cluttered. Not for turning a document into slides.
+description: Use when asked to make, redo or polish slides for a talk, meeting or demo that someone will present live, or when a deck is judged dull, wordy or cluttered. To turn a finished document into slides, hand off to a document-to-deck skill if one is installed; otherwise cover it here.
 ---
 
 # Delightful decks
 
 A deck is a visual aid for a person who talks. The audience should feel something on every slide, and the presenter carries the explanation. The usual failure is a deck that is correct, tidy and fits on every slide, and still scores 2 out of 10 because it explains instead of showing.
 
-Turning an existing document into slides, with speaker notes and a script, is a different job. If that is the ask, use a document-to-deck skill if one is installed, and use this skill's bar for the look.
+Turning an existing document into slides, with speaker notes and a script, is a different job. If that is the ask, use a document-to-deck skill if one is installed, and use this skill's bar for the look. If none is installed, make the deck yourself with this skill.
 
 ## The bar
 
