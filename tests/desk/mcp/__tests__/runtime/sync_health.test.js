@@ -3,10 +3,11 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, promises as fs, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir as osTmpdir } from "node:os"
 import * as path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { once } from "node:events"
 import { mkTempRoot } from "../_temp_roots.js"
 import { healthWord, pullStillFailing, syncDegradation } from "../../../../../plugins/desk/mcp/src/runtime/health.js"
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
@@ -14,6 +15,7 @@ import { fastForwardStateBranch } from "../../../../../plugins/desk/mcp/src/runt
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { readFetchOkAt, readSyncStatus, recordFetchOk, syncStatusPath, recordPullOutcome, runPushWorker, updateSyncStatus } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { readProcessStartSync } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 
 // These tests are about the pull; the detached delivery a pull may start is covered in sync_deliver.test.js.
 const noDelivery = () => {}
@@ -303,4 +305,166 @@ test("a stale lock that cannot be removed does not hang the writer", () => {
   utimesSync(`${file}.lock`, old, old)
   updateSyncStatus(root, env, { d: 4 }, file, { waitMs: 30 })
   assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { d: 4 })
+})
+
+// ---- The status lock's owner rule, the merge a function patch sees, and invalid records. ----
+
+const STATUS_ROOT = "/nonexistent/status-lock-root"
+
+function statusFile(prefix) {
+  return path.join(mkdtempSync(path.join(osTmpdir(), prefix)), "x.status.json")
+}
+
+test("a function patch merges into the record as it is at the write, keeping a field another writer just set", () => {
+  const file = statusFile("desk-status-fn-")
+  updateSyncStatus(STATUS_ROOT, env, { a: 1 }, file)
+  // Another writer lands a field after the caller read the record and before its write.
+  updateSyncStatus(STATUS_ROOT, env, { other: 2 }, file)
+  const written = updateSyncStatus(STATUS_ROOT, env, (current) => ({ mine: current.other + 1 }), file)
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { a: 1, other: 2, mine: 3 })
+  assert.deepEqual(written, { a: 1, other: 2, mine: 3 })
+})
+
+test("a status lock held by a live owner is not taken over, however old it looks", async (t) => {
+  const file = statusFile("desk-status-live-")
+  const lock = `${file}.lock`
+  const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => owner.kill())
+  await once(owner, "spawn")
+  const held = `${JSON.stringify({ token: "held", pid: owner.pid, start: readProcessStartSync(owner.pid) })}\n`
+  writeFileSync(lock, held)
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(lock, old, old)
+  updateSyncStatus(STATUS_ROOT, env, { b: 2 }, file, { waitMs: 60 })
+  assert.equal(readFileSync(lock, "utf8"), held, "the live owner's lock is left as it was")
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { b: 2 })
+})
+
+test("a live owner whose start time the operating system cannot read is held by its PID alone", async (t) => {
+  const file = statusFile("desk-status-unreadable-start-")
+  const lock = `${file}.lock`
+  const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => owner.kill())
+  await once(owner, "spawn")
+  const held = `${JSON.stringify({ token: "held", pid: owner.pid, start: "not-what-the-os-reports" })}\n`
+  writeFileSync(lock, held)
+  updateSyncStatus(STATUS_ROOT, env, { e: 5 }, file, { waitMs: 60, processStart: () => null })
+  assert.equal(readFileSync(lock, "utf8"), held, "no readable start time means the PID decides, so the lock stays")
+})
+
+test("a live owner whose lock records no start time is held by its PID alone", async (t) => {
+  const file = statusFile("desk-status-no-start-")
+  const lock = `${file}.lock`
+  const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => owner.kill())
+  await once(owner, "spawn")
+  const held = `${JSON.stringify({ token: "held", pid: owner.pid, start: null })}\n`
+  writeFileSync(lock, held)
+  updateSyncStatus(STATUS_ROOT, env, { i: 9 }, file, { waitMs: 60 })
+  assert.equal(readFileSync(lock, "utf8"), held, "a record without a start time is judged by its live PID")
+})
+
+test("a status lock whose owner PID has exited is taken over at once, though the lock is fresh", () => {
+  const file = statusFile("desk-status-dead-")
+  const lock = `${file}.lock`
+  const exited = spawnSync(process.execPath, ["-e", ""]).pid
+  writeFileSync(lock, `${JSON.stringify({ token: "gone", pid: exited, start: "linux:boot:1" })}\n`)
+  const started = Date.now()
+  updateSyncStatus(STATUS_ROOT, env, { c: 3 }, file, { waitMs: 5000 })
+  assert.ok(Date.now() - started < 2000, "a dead owner is not waited for")
+  assert.equal(existsSync(lock), false, "the lock is released")
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { c: 3 })
+})
+
+test("a status lock that names this process is stale, since this process never holds two at once", () => {
+  const file = statusFile("desk-status-own-")
+  const lock = `${file}.lock`
+  writeFileSync(lock, `${JSON.stringify({ token: "left", pid: process.pid, start: readProcessStartSync(process.pid) })}\n`)
+  const started = Date.now()
+  updateSyncStatus(STATUS_ROOT, env, { f: 6 }, file, { waitMs: 5000 })
+  assert.ok(Date.now() - started < 2000, "this process's own leftover lock is not waited for")
+  assert.equal(existsSync(lock), false)
+})
+
+test("a status lock whose PID now belongs to another process, by its start time, is taken over", { skip: readProcessStartSync(process.pid) === null && "this platform has no start time" }, async (t) => {
+  const file = statusFile("desk-status-reused-")
+  const lock = `${file}.lock`
+  const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => other.kill())
+  await once(other, "spawn")
+  writeFileSync(lock, `${JSON.stringify({ token: "reused", pid: other.pid, start: "some-earlier-process" })}\n`)
+  const started = Date.now()
+  updateSyncStatus(STATUS_ROOT, env, { d: 4 }, file, { waitMs: 5000 })
+  assert.ok(Date.now() - started < 2000, "a reused PID does not hold the lock")
+  assert.equal(existsSync(lock), false)
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { d: 4 })
+})
+
+test("a lock file that is not an owner record is judged by its age alone", () => {
+  for (const text of ["", "5", "null", "[]", '{"pid":"x"}']) {
+    const file = statusFile("desk-status-not-owner-")
+    const lock = `${file}.lock`
+    writeFileSync(lock, text)
+    updateSyncStatus(STATUS_ROOT, env, { g: 7 }, file, { waitMs: 30 })
+    assert.equal(readFileSync(lock, "utf8"), text, `a fresh ${JSON.stringify(text)} lock is waited for, not taken`)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(lock, old, old)
+    updateSyncStatus(STATUS_ROOT, env, { h: 8 }, file, { waitMs: 5000 })
+    assert.equal(existsSync(lock), false, `an old ${JSON.stringify(text)} lock is taken over and released`)
+  }
+})
+
+test("releasing a status lock leaves in place a lock another writer took while this write held it", () => {
+  const file = statusFile("desk-status-release-")
+  const lock = `${file}.lock`
+  const theirs = `${JSON.stringify({ token: "theirs", pid: process.pid, start: null })}\n`
+  updateSyncStatus(STATUS_ROOT, env, () => {
+    writeFileSync(lock, theirs)
+    return { e: 5 }
+  }, file)
+  assert.equal(readFileSync(lock, "utf8"), theirs, "a token that is not ours is never unlinked")
+})
+
+test("an invalid status record is set aside and a fresh one written, keeping the three newest set-aside copies", () => {
+  const file = statusFile("desk-status-invalid-")
+  const dir = path.dirname(file)
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    writeFileSync(file, `{"torn": ${attempt}`)
+    updateSyncStatus(STATUS_ROOT, env, { fresh: attempt }, file)
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { fresh: attempt })
+  }
+  const asideNames = readdirSync(dir).filter((name) => name.startsWith("x.status.json.invalid-"))
+  assert.equal(asideNames.length, 3)
+  assert.match(readFileSync(path.join(dir, asideNames[0]), "utf8"), /^\{"torn": /u, "the evidence is kept, not parsed away")
+})
+
+test("a status file that is oversized, a JSON scalar or array, or a symlink is set aside, and a link's target is never touched", { skip: process.platform === "win32" && "creating a symlink needs privilege on Windows" }, () => {
+  const file = statusFile("desk-status-shape-")
+  const dir = path.dirname(file)
+  writeFileSync(file, "5")
+  updateSyncStatus(STATUS_ROOT, env, { scalar: 1 }, file)
+  writeFileSync(file, "[1,2]")
+  updateSyncStatus(STATUS_ROOT, env, { array: 1 }, file)
+  writeFileSync(file, "x".repeat(1024 * 1024 + 1))
+  updateSyncStatus(STATUS_ROOT, env, { big: 1 }, file)
+  const target = path.join(dir, "elsewhere.json")
+  writeFileSync(target, '{"keep":true}')
+  unlinkSync(file)
+  symlinkSync(target, file)
+  updateSyncStatus(STATUS_ROOT, env, { link: 1 }, file)
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { link: 1 })
+  assert.equal(readFileSync(target, "utf8"), '{"keep":true}')
+  assert.equal(readdirSync(dir).filter((name) => name.includes(".invalid-")).length, 3)
+})
+
+test("a set-aside record that cannot be removed does not block the writes after it", () => {
+  const file = statusFile("desk-status-stuck-aside-")
+  // A directory with the set-aside prefix sorts first, so it is the oldest, and unlink refuses it.
+  mkdirSync(`${file}.invalid-0000`)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    writeFileSync(file, "{ torn")
+    updateSyncStatus(STATUS_ROOT, env, { attempt }, file)
+  }
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { attempt: 2 })
+  assert.equal(existsSync(`${file}.invalid-0000`), true)
 })

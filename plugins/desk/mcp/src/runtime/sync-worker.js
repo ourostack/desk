@@ -49,12 +49,12 @@
 
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
-import { readProcessStart } from "../readiness/process-start.js"
+import { readProcessStart, readProcessStartSync } from "../readiness/process-start.js"
 import { formatDeskProblem } from "./index-drift.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
@@ -118,6 +118,21 @@ function readJsonIfPresent(file) {
   }
 }
 
+// A lock record names its owner by `pid` and, when Desk could read it, `start`: together they name one process.
+function hasStart(record) {
+  return typeof record.start === "string" && record.start !== ""
+}
+
+// Whether a PID is running; `kill(pid, 0)` only checks, it sends nothing.
+function pidRunning(pid, kill) {
+  try {
+    kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Whether the owner a lock record names is still running: mirrors `owner-
  * record.js`'s `inspectOwner` staleness rule exactly (a dead PID is the only
@@ -125,15 +140,20 @@ function readJsonIfPresent(file) {
  * worker never steals a lock it cannot actually show is dead).
  */
 async function isLockLive(record, processStart, kill) {
-  try {
-    kill(record.pid, 0)
-  } catch {
-    return false
-  }
-  if (typeof record.start !== "string" || record.start === "") return true
+  if (!pidRunning(record.pid, kill)) return false
+  if (!hasStart(record)) return true
   const current = await processStart(record.pid)
-  if (current === null) return true
-  return current === record.start
+  return current === null || current === record.start
+}
+
+// `isLockLive`'s rule for the status lock, taken from synchronous code. A lock naming this process is never held by a
+// concurrent writer (status writes are synchronous), so it is stale: a release that failed left it behind.
+function statusLockLive(record, processStart) {
+  if (record.pid === process.pid) return false
+  if (!pidRunning(record.pid, process.kill)) return false
+  if (!hasStart(record)) return true
+  const current = processStart(record.pid)
+  return current === null || current === record.start
 }
 
 function releaseSyncLock(lockPath, token) {
@@ -266,30 +286,86 @@ function canPush(root, spawnGit) {
 //
 // The read-merge-write runs under a short-lived lock file beside the status file (`<file>.lock`, made with an exclusive
 // create, which is atomic on every platform Desk runs on), so two writers (a push worker and a boot sync) cannot each
-// read the same old record and have the later rename drop the earlier one's fields. The file is also replaced
-// atomically (a temp file, then a rename), so a reader never sees a half-written record. The lock never blocks for
-// long: a writer waits at most `waitMs`, takes over a lock older than `STATUS_LOCK_STALE_MS` (its holder died; the
-// critical section is a few milliseconds), and if the lock is still held after the wait it writes anyway, because a
-// missed status update is a smaller harm than a hung boot or tool call. `fetchOkPath`'s fetch time keeps its own file.
+// read the same old record and have the later rename drop the earlier one's fields. The lock file holds `{ token, pid,
+// start }`, the same owner record the sync lock uses: a lock whose owner has ended is taken over at once, and an
+// unreadable one only once it is older than `STATUS_LOCK_STALE_MS`. Taking it over and releasing it both check the
+// token first, so a writer never removes another writer's lock. The file is replaced atomically (a temp file, then a
+// rename), so a reader never sees a half-written record. The lock never blocks for long: a writer waits at most
+// `waitMs`, then writes anyway, because a missed status update is a smaller harm than a hung boot or tool call.
+// `fetchOkPath`'s fetch time keeps its own file.
 const STATUS_LOCK_STALE_MS = 5000
 const STATUS_LOCK_WAIT_MS = 1500
+// A status record larger than this, or one that is not a regular file holding a JSON object, is set aside, not parsed.
+const STATUS_MAX_BYTES = 1024 * 1024
+// How many set-aside invalid records are kept; the oldest go first.
+const INVALID_STATUS_KEPT = 3
+
+let ownStatusStart
+
+function ownStatusStartOnce() {
+  if (ownStatusStart === undefined) ownStatusStart = readProcessStartSync(process.pid)
+  return ownStatusStart
+}
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-/** Takes `lockFile` or returns `null` once `waitMs` has passed without getting it. Never throws. */
-function acquireStatusLock(lockFile, waitMs) {
+function readTextIfPresent(file) {
+  try {
+    return readFileSync(file, "utf8")
+  } catch {
+    return null
+  }
+}
+
+/** The owner record a lock file holds, or `null` when the text is missing, unreadable or not `{ pid, ... }`. */
+function parseLockRecord(text) {
+  try {
+    const record = JSON.parse(text)
+    return record !== null && typeof record === "object" && Number.isSafeInteger(record.pid) ? record : null
+  } catch {
+    return null
+  }
+}
+
+function olderThan(file, ms) {
+  try {
+    return Date.now() - statSync(file).mtimeMs > ms
+  } catch {
+    // istanbul ignore next -- the lock can be released between the read that judged it and this stat; the next pass sees that
+    return false
+  }
+}
+
+// Replaces the stale lock `seen` with ours only if the file still holds `seen`. The check and the rename are two
+// steps, so a writer that takes the lock between them can be overwritten: the same narrow window as `acquireSyncLock`.
+function replaceStatusLock(lockFile, seen, bytes, token) {
+  // istanbul ignore if -- the lock changed since the read that judged it: the next pass judges what it holds now
+  if (readTextIfPresent(lockFile) !== seen) return false
+  const temporary = `${lockFile}.${token}.tmp`
+  writeFileSync(temporary, bytes, { mode: 0o600 })
+  renameWithRetry(temporary, lockFile)
+  return true
+}
+
+/** Takes `lockFile` or returns `null` once `waitMs` has passed without getting it. */
+function acquireStatusLock(lockFile, waitMs, processStart) {
   const deadline = Date.now() + waitMs
+  const token = randomUUID()
+  const bytes = `${JSON.stringify({ token, pid: process.pid, start: ownStatusStartOnce() })}\n`
+  // A record judged live is not judged again until its text changes, so a long wait does not re-read the owner's start time on every pass.
+  let judgedLive = null
   for (;;) {
-    try {
-      closeSync(openSync(lockFile, "wx", 0o600))
-      return lockFile
-    } catch {
-      try {
-        if (Date.now() - statSync(lockFile).mtimeMs > STATUS_LOCK_STALE_MS) unlinkSync(lockFile)
-      } catch {
-        // Gone already, or not removable: the next attempt decides.
+    if (tryCreateExclusive(lockFile, bytes)) return { file: lockFile, token }
+    const seen = readTextIfPresent(lockFile)
+    if (seen !== null && seen !== judgedLive) {
+      const record = parseLockRecord(seen)
+      if (record === null ? olderThan(lockFile, STATUS_LOCK_STALE_MS) : !statusLockLive(record, processStart)) {
+        // istanbul ignore else -- a lost race with another takeover: the next pass judges the lock as it is now
+        if (replaceStatusLock(lockFile, seen, bytes, token)) return { file: lockFile, token }
+      } else if (record !== null) {
+        judgedLive = seen
       }
     }
     if (Date.now() >= deadline) return null
@@ -297,8 +373,60 @@ function acquireStatusLock(lockFile, waitMs) {
   }
 }
 
-/** Reads, merges `patch` into and atomically replaces the JSON file at `file`, under the lock described above. */
-export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS } = {}) {
+// Removes the lock only while it still holds our token. The read and the unlink are two steps, as in replaceStatusLock.
+function releaseStatusLock({ file, token }) {
+  if (parseLockRecord(readTextIfPresent(file))?.token !== token) return
+  try {
+    unlinkSync(file)
+  } catch {
+    // Windows can refuse the unlink while another process has the file open. The lock then names this process, which the next write takes over.
+  }
+}
+
+/** Keeps the newest `INVALID_STATUS_KEPT` set-aside records beside `file`. Best effort. */
+function pruneInvalidStatusFiles(file) {
+  const dir = path.dirname(file)
+  const prefix = `${path.basename(file)}.invalid-`
+  const kept = readdirSync(dir).filter((name) => name.startsWith(prefix)).sort()
+  for (const name of kept.slice(0, -INVALID_STATUS_KEPT)) {
+    try {
+      unlinkSync(path.join(dir, name))
+    } catch {
+      // Not removable: it stays, and the next write tries again.
+    }
+  }
+}
+
+/** Moves an invalid status record aside, so its evidence stays. Throws if it cannot, as the write that follows would fail the same way. */
+function setAsideInvalidStatus(file) {
+  renameWithRetry(file, `${file}.invalid-${new Date().toISOString().replace(/:/gu, "-")}-${randomUUID().slice(0, 8)}`)
+  pruneInvalidStatusFiles(file)
+}
+
+/**
+ * The record `file` holds now, or `{}` when there is none. A file that is not a regular file holding a JSON object
+ * of at most `STATUS_MAX_BYTES` is set aside and treated as absent, so it can never block a later write.
+ */
+function readStatusForWrite(file) {
+  let stats
+  try {
+    stats = lstatSync(file)
+  } catch {
+    return {}
+  }
+  if (stats.isFile() && stats.size <= STATUS_MAX_BYTES) {
+    const parsed = readJsonIfPresent(file)
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return parsed
+  }
+  setAsideInvalidStatus(file)
+  return {}
+}
+
+/**
+ * Reads, merges and atomically replaces the JSON file at `file`, under the lock described above. `patch` is an object,
+ * or a function of the record as it is at the moment of the write (the merge happens against that read, under the lock).
+ */
+export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS, processStart = readProcessStartSync } = {}) {
   try {
     assertNotRealStateUnderTest(path.dirname(file), { env })
   } catch (error) {
@@ -308,21 +436,17 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
     return null
   }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const lock = acquireStatusLock(`${file}.lock`, waitMs)
+  // Without the lock, a write can still lose a concurrent update to any field; `delivered` is written only by the delivery loop, which holds the sync lock, so two delivery writes never overlap.
+  const lock = acquireStatusLock(`${file}.lock`, waitMs, processStart)
   try {
-    const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
+    const current = readStatusForWrite(file)
+    const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch) }
     const temporary = `${file}.${randomUUID()}.tmp`
     writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600 })
     renameWithRetry(temporary, file)
     return next
   } finally {
-    if (lock !== null) {
-      try {
-        unlinkSync(lock)
-      } catch {
-        // Already taken over as stale; nothing to release.
-      }
-    }
+    if (lock !== null) releaseStatusLock(lock)
   }
 }
 
@@ -454,18 +578,25 @@ function deliveredSoFar(root, env) {
   return Array.isArray(recorded) ? recorded : []
 }
 
+// The delivered list as the record holds it at write time, plus `added`, without repeats, keeping the newest DELIVERED_CAP.
+function deliveredWith(current, added) {
+  const recorded = Array.isArray(current?.delivered) ? current.delivered : []
+  return [...new Set([...recorded, ...added])].slice(-DELIVERED_CAP)
+}
+
 function deliverUntilDone({ root, env, spawnGit, fileProblem }) {
   let pushedAt = null
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const delivered = deliveredSoFar(root, env)
     const pending = undeliveredCommits({ root, spawnGit, delivered })
     if (pending === null || pending.length === 0) {
+      // A fast-forward push proves the remote is reachable and holds this desk's history, so an earlier pull failure no longer describes the desk.
       updateSyncStatus(root, env, { blocked: false, reason: null, paths: [], unpushed: 0, error: null, ...(pushedAt === null ? {} : { last_push_at: pushedAt, last_pull: null }) })
       return { result: "ok" }
     }
     const outcome = deliver({ root, env, spawnGit, delivered })
     const followed = ["current", "caught_up"].includes(outcome.checkout?.state)
-    updateSyncStatus(root, env, { delivered: followed ? [] : [...delivered, ...outcome.delivered].slice(-DELIVERED_CAP), checkout: outcome.checkout ?? null, publication: outcome.publication ?? null })
+    updateSyncStatus(root, env, (current) => ({ delivered: followed ? [] : deliveredWith(current, outcome.delivered), checkout: outcome.checkout ?? null, publication: outcome.publication ?? null }))
     if (outcome.delivered.length > 0) pushedAt = new Date().toISOString()
     if (outcome.state !== "failed" && outcome.skipped.length === 0) continue
     return recordBlocked({ root, env, spawnGit, fileProblem, pushedAt, reason: outcome.state === "failed" ? outcome.reason : "conflict", paths: outcome.skipped.flatMap((skip) => skip.paths), error: outcome.error ?? null })
@@ -637,9 +768,8 @@ export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {
   if (left === null || left.length === 0) return { state: "clean" }
 
   const reason = existing?.blocked && typeof existing.reason === "string" ? existing.reason : "unpushed_at_session_end"
-  if (!existing?.blocked) {
-    updateSyncStatus(root, env, { blocked: true, reason, paths: existing?.paths ?? [], unpushed: left.length, at: new Date().toISOString() })
-  }
+  // Decided against the record as it is at the write, so a block another writer just recorded is kept.
+  updateSyncStatus(root, env, (current) => (current?.blocked === true ? {} : { blocked: true, reason: "unpushed_at_session_end", paths: current?.paths ?? [], unpushed: left.length, at: new Date().toISOString() }))
 
   const diagnostic = formatDeskProblem({
     mechanism: "desk-sync",
