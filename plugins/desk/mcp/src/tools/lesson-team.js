@@ -148,7 +148,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
         summary: `The lesson did not reach ${SECTION} in AGENTS.md on the default branch of ${result.repo}, so it is not in effect yet.`,
         landed: { argv: ["gh", "api", "-H", "Accept: application/vnd.github.raw", `repos/${result.repo}/contents/AGENTS.md`], expect: `exits 0 and prints the lesson ${JSON.stringify(line ?? topic)}` },
         tool: "lesson_add",
-        arguments: { scope: "team", topic, body, source, ...(repo === undefined ? {} : { repo }) },
+        arguments: { scope: "team", topic, body, source, repo: top },
       })
     return { ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }
   }

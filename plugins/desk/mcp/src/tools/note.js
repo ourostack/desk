@@ -193,7 +193,7 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
         summary: `The note to ${to} did not reach the default branch of ${result.repo}, so ${to} does not see it yet.`,
         landed: { argv: ["gh", "api", `repos/${result.repo}/contents/${result.note}`, "--jq", ".path"], expect: `exits 0 and prints ${result.note}` },
         tool: "note_leave",
-        arguments: { to, subject, body, ...(related.length > 0 ? { related } : {}) },
+        arguments: { to, subject, body, related },
       })
     return { ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }
   }

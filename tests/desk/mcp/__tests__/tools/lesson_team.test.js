@@ -429,7 +429,7 @@ test("team lesson's failure says how to finish it by hand, with a read-back: the
   assert.equal(none.status, "failed")
   assert.deepEqual(none.route_around.landed_when.argv, ["gh", "api", "-H", "Accept: application/vnd.github.raw", "repos/acme/cit/contents/AGENTS.md"])
   assert.equal(none.route_around.steps[1].tool, "lesson_add")
-  assert.deepEqual(none.route_around.steps[1].arguments, { scope: "team", topic: "Build what was asked", body: "When someone asks for a List, build a List.", source: "Ari in the CIT channel, 2026-10-26", repo: repo.clone })
+  assert.deepEqual(none.route_around.steps[1].arguments, { scope: "team", topic: "Build what was asked", body: "When someone asks for a List, build a List.", source: "Ari in the CIT channel, 2026-10-26", repo: git(repo.clone, ["rev-parse", "--show-toplevel"]) })
   let pushes = 0
   const spawnGit = toBare(repo.bare, (cmd, args, options) => (args.includes("push") && args.includes("--force") && (pushes += 1) === 2 ? { status: 1, stdout: "", stderr: "remote: denied" } : spawnSync(cmd, args, options)))
   const open = await run({ gh: fakeGh(repo.bare, { merge: () => ({ code: 1 }) }).gh, spawnGit })
