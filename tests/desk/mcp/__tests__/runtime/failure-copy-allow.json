@@ -1,5 +1,5 @@
 [
-  {"match":"${done}: GitHub merged the pull request ${result.pr}, so the change is in effect. This computer could not download it afterwards to double-check, probably a brief network problem. Next: once the network is back, update this copy of the workspace and check its status. ${next}","reason":"crew/workspace.js: not yet in the Ouro AX problem shape"},
+  {"match":"${done}: GitHub merged the pull request ${result.pr}, so the change is in effect. This computer could not download it afterwards to double-check, probably a brief network problem. ${next}","reason":"crew/workspace.js: not yet in the Ouro AX problem shape"},
   {"match":"${ROSTER} could not be verified; reconcile the registry before continuing","reason":"crew/workspace.js: not yet in the Ouro AX problem shape"},
   {"match":"could not verify the authenticated member as ${identity}; nothing may be adopted with another account${answer.code === 0 ? \"\" : ","reason":"crew/workspace.js: not yet in the Ouro AX problem shape"},
   {"match":"I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.","reason":"desk/tidy.js: not yet in the Ouro AX problem shape"},
