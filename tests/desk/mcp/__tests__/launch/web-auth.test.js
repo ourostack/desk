@@ -2471,6 +2471,7 @@ test("a navigation whose page is still loading reports that it went through and 
       const result = await adapter.call(args)
       assert.equal(result.navigated, true, String(args))
       assert.match(result.hint, /\["wait"/u)
+      assert.match(result.page.url, /^https:\/\/app\.example\.test\//u, "a navigation that was not read still says where the tab is")
     }
     await assert.rejects(adapter.call(["mousewheel", "0", "10"]), /AUTH_SNAPSHOT_INVALIDATED.*wait/u, "other actions still refuse an unread page")
     loading = false
@@ -3000,6 +3001,130 @@ test("an aborted browser-internal address, or an app launch the page has since l
   } finally { await adapter.close() }
 })
 
+// A visible paragraph added under the page's body, as the page itself would.
+function addParagraph(packet, text, backend) {
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (value) => { packet.strings.push(value); return packet.strings.length - 1 }
+  const add = (parent, type, name, value, id) => {
+    const at = table.parentIndex.length
+    table.parentIndex.push(parent); table.nodeType.push(type); table.nodeName.push(s(name))
+    table.nodeValue.push(value === null ? -1 : s(value)); table.backendNodeId.push(id); table.attributes.push([])
+    layout.nodeIndex.push(at); layout.styles.push(layout.styles[0].slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1)
+    return at
+  }
+  add(add(2, 1, "P", null, backend), 3, "#text", text, backend + 1)
+}
+
+test("every read says where the tab is: its address without query or fragment, and its title with typed values redacted", async () => {
+  const native = fakeDriver()
+  const adapter = adapterFor(native, await mkTempRoot("auth-page-"))
+  try {
+    const at = native.packet.documents[0]
+    native.packet.strings[at.documentURL] = "https://synthetic.invalid/work/item?token=PAGE_QUERY_AX#PAGE_FRAGMENT_AX"
+    for (const args of [["goto", "https://synthetic.invalid/work/item"], ["snapshot"], ["find", "password"], ["wait", "password"], ["wait", "0.2"]]) {
+      const result = await adapter.call(args)
+      assert.deepEqual(result.page, { url: "https://synthetic.invalid/work/item", title: "Sign in" }, String(args))
+    }
+    native.packet.strings[at.title] = "Welcome " + PASSWORD
+    const titled = await adapter.call(["snapshot"])
+    assert.equal(titled.page.title, "Welcome [redacted]")
+    noPassword(titled.page)
+    const ref = titled.snapshot.children[0].children[0].children[0].ref
+    assert.equal((await adapter.call(["click", ref])).page.url, "https://synthetic.invalid/work/item")
+    at.title = -1
+    assert.equal((await adapter.call(["snapshot"])).page.title, "", "a page with no title reads as an empty one")
+  } finally { await adapter.close() }
+})
+
+test("a click says whether the page navigated, changed in place or stayed as it was, so a repeated click is told it did nothing", async () => {
+  const native = fakeDriver()
+  const adapter = adapterFor(native, await mkTempRoot("auth-change-"))
+  try {
+    const refOf = (result) => result.snapshot.children[0].children[0].children[0].ref
+    const first = await adapter.call(["snapshot"])
+    const same = await adapter.call(["click", refOf(first)])
+    assert.equal(same.change, "none")
+    assert.match(same.changeNote, /The click left the page as your last read showed it: no navigation and no visible change\. Doing it again will not help; act on another ref/u)
+    const twice = await adapter.call(["click", refOf(same)])
+    assert.equal(twice.change, "none", "the same page back a second time is still said to be unchanged")
+    addParagraph(native.packet, "Opened panel", 301)
+    const changed = await adapter.call(["click", refOf(twice)])
+    assert.equal(changed.change, "changed")
+    assert.match(changed.changeNote, /The click changed the page without navigating: 2 lines added and 0 lines removed since your last read\./u)
+    assert.equal((await adapter.call(["hover", refOf(changed)])).change, "none", "the change is measured against the read before each action")
+    native.packet.strings[native.packet.strings.indexOf("Opened panel")] = "Closed panel"
+    const swapped = await adapter.call(["press", "Enter"])
+    assert.equal(swapped.change, "changed")
+    assert.match(swapped.changeNote, /1 line added and 1 line removed since your last read\./u)
+    native.packet.strings[native.packet.documents[0].documentURL] = "https://synthetic.invalid/next"
+    const moved = await adapter.call(["click", refOf(swapped)])
+    assert.equal(moved.change, "navigated")
+    assert.match(moved.changeNote, /^The click navigated: the page is now https:\/\/synthetic\.invalid\/next \(Sign in\)\.$/u)
+    native.packet.strings[native.packet.documents[0].documentURL] = "https://synthetic.invalid/untitled"
+    native.packet.strings[native.packet.documents[0].title] = ""
+    const bare = await adapter.call(["click", refOf(moved)])
+    assert.match(bare.changeNote, /^The click navigated: the page is now https:\/\/synthetic\.invalid\/untitled\.$/u)
+    assert.equal((await adapter.call(["snapshot"])).change, undefined, "only an action reports a change")
+  } finally { await adapter.close() }
+})
+
+test("a wait for text that has not shown stops early, saying why, once nothing has moved on the page for a while", async () => {
+  const native = fakeDriver()
+  const adapter = auth.create(native.context, await mkTempRoot("auth-stuck-"), 40000, () => {}, { snapshotAttempts: 1, stuckMs: 1500 })
+  try {
+    const started = Date.now()
+    const stuck = await adapter.call(["wait", "never shows"])
+    assert.ok(Date.now() - started < 8000, "it did not sit for the wait's full limit")
+    assert.equal(stuck.waited.found, false)
+    assert.ok(stuck.waited.stuck.seconds >= 1.5)
+    assert.match(stuck.hint, /^The text did not show, and the page has been still for [\d.]+ s \(no request and no change on it\), so waiting longer will not help\. Probably the page finished loading without that text/u)
+    assert.match(stuck.hint, /\["find","<part of the text>"\]/u)
+    assert.equal(stuck.page.title, "Sign in")
+    const gone = await adapter.call(["wait", "--gone", "Password"])
+    assert.match(gone.hint, /^The text did not go, and the page has been still for /u)
+  } finally { await adapter.close() }
+})
+
+test("a wait does not stop early while a request is pending or the page keeps changing", async () => {
+  const busy = fakeDriver()
+  const pending = auth.create(busy.context, await mkTempRoot("auth-moving-"), 6000, () => {}, { snapshotAttempts: 1, stuckMs: 1000 })
+  try {
+    busy.page.emit("request", requestOn(busy, "https://api.example.test/slow", { type: "fetch" }))
+    const waited = await pending.call(["wait", "never shows"])
+    assert.equal(waited.waited.stuck, undefined, "a request still pending is network activity")
+    assert.match(waited.hint, /^The text did not show within 3 s\./u)
+  } finally { await pending.close() }
+  let tick = 0
+  const live = fakeDriver({ hook: ({ method }) => { if (method === "DOMSnapshot.captureSnapshot") addParagraph(live.packet, "Tick " + tick++, 400 + tick * 2) } })
+  const moving = auth.create(live.context, await mkTempRoot("auth-changing-"), 6000, () => {}, { snapshotAttempts: 1, stuckMs: 1500 })
+  try {
+    const waited = await moving.call(["wait", "never shows"])
+    assert.equal(waited.waited.stuck, undefined, "a page whose lines keep changing is not stuck")
+  } finally { await moving.close() }
+})
+
+test("no hint for a signed-in profile suggests a fresh browser, another profile or a desktop app", async () => {
+  const away = /fresh|desktop app|another route|another profile/iu
+  const causes = {
+    main: (native) => { const main = requestOn(native, "https://app.example.test/work", { type: "document", main: true, errorText: "net::ERR_NAME_NOT_RESOLVED" }); native.page.emit("request", main); native.page.emit("requestfailed", main) },
+    status: (native) => { const main = requestOn(native, "https://app.example.test/work", { type: "document", main: true }); native.page.emit("request", main); native.page.emit("response", { request: () => main, status: () => 503 }); native.page.emit("requestfinished", main) },
+    hosts: (native) => native.page.emit("request", requestOn(native, "https://cdn.example.test/app.js", { type: "script" })),
+    scripts: (native) => native.page.emit("pageerror", new Error("boom")),
+    loading: () => {},
+  }
+  for (const [cause, make] of Object.entries(causes)) {
+    const native = fakeDriver()
+    const adapter = auth.create(native.context, await mkTempRoot("auth-profile-hints-"), 6000, () => {}, { snapshotAttempts: 1, evidenceMs: 500, stuckMs: 1000 })
+    try {
+      make(native)
+      const missing = await adapter.call(["wait", "never shows"])
+      assert.ok(missing.hint, cause)
+      assert.equal(away.test(missing.hint), false, `${cause}: ${missing.hint}`)
+    } finally { await adapter.close() }
+  }
+})
+
 // A real Chromium against a local page that mimics a desktop-app launcher (set DESK_TEST_PLAYWRIGHT_CORE to a playwright-core folder).
 test("a launcher that tries several app schemes stays on its prompt, and its web form reaches the web page", { skip: process.env.DESK_TEST_PLAYWRIGHT_CORE ? false : "needs DESK_TEST_PLAYWRIGHT_CORE", timeout: 120000 }, async () => {
   const http = await import("node:http")
@@ -3031,6 +3156,46 @@ test("a launcher that tries several app schemes stays on its prompt, and its web
     assert.equal((await web.call(["wait", "Opened in the browser"])).waited.found, true)
   } finally {
     await context.close()
+    server.close()
+  }
+})
+
+test("in a real page, a click that does nothing says so, one that changes the page or leaves it says that, and a stuck wait stops early", { skip: process.env.DESK_TEST_PLAYWRIGHT_CORE ? false : "needs DESK_TEST_PLAYWRIGHT_CORE", timeout: 120000 }, async () => {
+  const http = await import("node:http")
+  const playwright = require(process.env.DESK_TEST_PLAYWRIGHT_CORE)
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html")
+    response.end(request.url.startsWith("/next") ? "<title>Next page</title><h1>Arrived</h1>" :
+      `<title>Start page</title><h1>Start</h1><button id=quiet>Use the web app</button><button id=grow onclick="document.body.insertAdjacentHTML('beforeend','<p>Panel opened</p>')">Open panel</button><a href="/next">Go next</a>`)
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const root = await mkTempRoot("auth-change-real-")
+  const context = await playwright.chromium.launchPersistentContext(path.join(root, "profile"), { headless: true })
+  const adapter = auth.create(context, root, 30000, () => {}, { stuckMs: 2000 })
+  const refFor = (result, name) => {
+    const found = []
+    ;(function walk(node) { if (node.ref && (node.children || []).some((child) => child.text === name)) found.push(node.ref); (node.children || []).forEach(walk) })(result.snapshot)
+    return found[0]
+  }
+  try {
+    const opened = await adapter.call(["goto", `http://127.0.0.1:${server.address().port}/`])
+    assert.equal(opened.page.title, "Start page")
+    const first = await adapter.call(["click", refFor(opened, "Use the web app")])
+    assert.equal(first.change, "none")
+    const second = await adapter.call(["click", refFor(first, "Use the web app")])
+    assert.equal(second.change, "none")
+    assert.match(second.changeNote, /no navigation and no visible change/u)
+    const grown = await adapter.call(["click", refFor(second, "Open panel")])
+    assert.equal(grown.change, "changed")
+    const moved = await adapter.call(["click", refFor(grown, "Go next")])
+    assert.equal(moved.change, "navigated")
+    assert.equal(moved.page.title, "Next page")
+    const started = Date.now()
+    const stuck = await adapter.call(["wait", "never shows"])
+    assert.ok(Date.now() - started < 10000)
+    assert.ok(stuck.waited.stuck)
+  } finally {
+    await adapter.close()
     server.close()
   }
 })

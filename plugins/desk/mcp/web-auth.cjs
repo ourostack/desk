@@ -4,6 +4,8 @@ var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
 var failures = new WeakMap();
+// Each read's look (see lookOf), for telling what an action or a wait changed. Never part of a reply.
+var looks = new WeakMap();
 
 var STYLES = ["display", "visibility", "-webkit-user-modify"];
 var TARGET_WAIT_MS = 2000;
@@ -17,6 +19,10 @@ var NAVIGATIONS = ["goto", "go-back", "go-forward", "reload"];
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
 var WAIT_POLL_MS = 1000;
+// A wait for text gives up early once the page has been still this long: no request started or ended and no line of it changed.
+var STUCK_MS = 10000;
+// A command that acts on the page then reports whether it changed what the last read showed.
+var ACTS = ["click", "dblclick", "hover", "check", "uncheck", "select", "press"];
 // Evidence for a page that never became ready (a screenshot, and the diagnosis of its requests) is given this long at most.
 var EVIDENCE_MS = 5000;
 // What a reply keeps back from a command's time for the evidence it sends, so a late poll cannot end past the command.
@@ -36,7 +42,8 @@ var WEB_FORMS = [
 ];
 // Schemes a browser uses for its own pages: a failed request to one is not an app launch.
 var BROWSER_SCHEMES = ["about", "blob", "chrome", "chrome-error", "chrome-extension", "chrome-untrusted", "data", "devtools", "file", "javascript", "view-source"];
-var FRESH_OR_APP = "try a fresh context (browser_context with browser \"fresh\"); if it repeats, use the desktop app or another route";
+// Mine is the person's own signed-in profile, so no hint here sends the agent to another profile, a fresh browser or a desktop app.
+var RELOAD_THEN_WAIT = "run [\"reload\"], then [\"wait\",\"<text you expect>\"]; if it fails the same way, work from another page of the same site, or report what you saw";
 // A ref's action shares one deadline of this long, or half the command time if less. Playwright then fails a stalled
 // action before the command's own bound closes the context.
 var ACTION_MAX_MS = 30000;
@@ -46,6 +53,8 @@ var ERROR_PAGE_CHARS = 20000;
 var TEXT_BUDGET = 24000;
 // One text longer than this reads cut short, so a single long paragraph cannot crowd out the rest of the page.
 var LINE_CHARS = 4000;
+// A page title is cut to this many characters in a reply.
+var TITLE_CHARS = 200;
 var ERROR_PAGE = /\b(?:oops|something went wrong|unknown error|an error occurred|try again later)\b/i;
 // A large store product page has about 18,000 nodes and 250,000 native values.
 var MAX_NODES = 100000;
@@ -440,7 +449,13 @@ function prepare(packet, scope, frameId, nextRef, outside) {
   try {
     var tree = render(main.rows[0]);
     dataOnly(tree);
-    return { tree: tree, targets: targets, frames: frames, masks: masks };
+    var top = packet.documents[0];
+    var title = packet.strings[top.title];
+    var place = packet.strings[top.documentURL];
+    return {
+      tree: tree, targets: targets, frames: frames, masks: masks, place: place,
+      page: { url: pageAddress(place), title: typeof title === "string" ? scrub(title).replace(/\s+/gu, " ").trim().slice(0, TITLE_CHARS) : "" }
+    };
   } finally {
     secrets.clear();
   }
@@ -668,6 +683,30 @@ function textLines(node) {
   return entries;
 }
 
+// What a read showed, kept to tell whether a later read differs: the document's address and load, and its lines (refs
+// left out, indentation ignored so a wrapper appearing moves nothing) counted by hash, so no page text is kept twice.
+function lookOf(prepared, loader) {
+  var counts = new Map();
+  var whole = crypto.createHash("sha1");
+  textLines(prepared.tree).filter(function (entry) { return !entry.virtual; }).forEach(function (entry) {
+    var key = crypto.createHash("sha1").update(entry.line.replace(/ \[ref=e\d+\]/u, "")).digest("base64").slice(0, 12);
+    counts.set(key, (counts.get(key) || 0) + 1);
+    whole.update(key);
+  });
+  return { url: prepared.place, loader: loader, lines: counts, digest: whole.digest("base64") };
+}
+
+// How a read differs from the one before it: a new document, or lines added and removed in the same one.
+function difference(seen, now) {
+  var added = 0;
+  var removed = 0;
+  now.lines.forEach(function (count, key) { added += Math.max(0, count - (seen.lines.get(key) || 0)); });
+  seen.lines.forEach(function (count, key) { removed += Math.max(0, count - (now.lines.get(key) || 0)); });
+  return { navigated: seen.url !== now.url || seen.loader !== now.loader, added: added, removed: removed };
+}
+
+function plural(count, noun) { return count + " " + noun + (count === 1 ? "" : "s"); }
+
 // Whitespace runs (no-break spaces and line breaks included) read as one space, and case does not matter.
 function normalizeText(text) { return text.replace(/\s+/g, " ").trim().toLowerCase(); }
 
@@ -862,11 +901,12 @@ function isMainNavigation(page, request) {
 function recorderFor(page) {
   var known = recorders.get(page);
   if (known) return known;
-  var rec = { pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined };
+  var rec = { lastActivity: Date.now(), pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined };
   recorders.set(page, rec);
   function finish(request, code) {
     var entry = rec.pending.get(request);
     if (!entry) return;
+    rec.lastActivity = Date.now();
     rec.pending.delete(request);
     rec.done.push({ host: entry.host, type: entry.type, code: code || (entry.status >= 400 ? "http_" + entry.status : undefined) });
     if (rec.done.length > RECENT) rec.done.shift();
@@ -874,6 +914,7 @@ function recorderFor(page) {
     if (entry.scheme && code === "aborted") rec.external = entry.scheme;
   }
   page.on("request", function (request) {
+    rec.lastActivity = Date.now();
     if (rec.pending.size >= RECENT) rec.pending.delete(rec.pending.keys().next().value);
     var url = addressOf(request.url());
     var main = isMainNavigation(page, request);
@@ -923,7 +964,7 @@ function discardPicture(file) {
 }
 
 // The likeliest cause, first match wins, with what probably happened and how to keep working from it.
-function likelyCause(d) {
+function likelyCause(d, stuck) {
   if (d.signIn) return { probably: "the page was waiting on a sign-in redirect", keepWorking: "complete sign-in in the person's own browser, then open a new context with browser_context so the profile copy has it" };
   if (d.externalScheme) {
     return {
@@ -932,18 +973,22 @@ function likelyCause(d) {
     };
   }
   if (d.mainFailed || d.status >= 400) {
-    return { probably: d.status >= 400 ? "the page's main document returned HTTP " + d.status : "the page's main document did not arrive (" + d.mainFailed + ")", keepWorking: FRESH_OR_APP };
+    return { probably: d.status >= 400 ? "the page's main document returned HTTP " + d.status : "the page's main document did not arrive (" + d.mainFailed + ")", keepWorking: RELOAD_THEN_WAIT };
   }
   var hosts = Array.from(new Set(d.network.failed.concat(d.network.pending).map(function (entry) { return entry.host; }))).slice(0, 3);
-  if (hosts.length) return { probably: "network requests are still pending or failing for " + hosts.join(", "), keepWorking: "try a fresh context (browser_context with browser \"fresh\"); if the same hosts stay blocked, use the desktop app or another route" };
-  if (d.console.pageErrors || d.console.errors) return { probably: "the page's scripts reported errors", keepWorking: "use the desktop app or another route; if the page is still changing, wait again" };
-  return { probably: "the page is still loading with no failing request", keepWorking: "wait again with [\"wait\",\"<text you expect>\"]; if it still does not show, use the desktop app or another route" };
+  if (hosts.length) return { probably: "network requests are still pending or failing for " + hosts.join(", "), keepWorking: "wait again with [\"wait\",\"<text you expect>\"]; if the same hosts stay blocked, a network rule is probably blocking them, so work with what loaded (see [\"snapshot\",\"--interactive\"])" };
+  if (d.console.pageErrors || d.console.errors) return { probably: "the page's scripts reported errors", keepWorking: RELOAD_THEN_WAIT };
+  if (stuck) return { probably: "the page finished loading without that text: it is not on this page, it needs an action first, or it is worded differently", keepWorking: "look for it with a shorter phrase in [\"find\",\"<part of the text>\"], or act on a ref from [\"snapshot\",\"--interactive\"]" };
+  return { probably: "the page is still loading with no failing request", keepWorking: "wait again with [\"wait\",\"<text you expect>\"]; if it still does not show, run [\"snapshot\",\"--interactive\"] to see what the page wants next" };
 }
 
-function notReadyHint(d, text, gone, seconds) {
-  var cause = likelyCause(d);
+function notReadyHint(d, text, gone, seconds, still) {
+  var cause = likelyCause(d, still !== undefined);
   var look = "[\"snapshot\"] to see the page as it is now" + (d.screenshot ? ", and the screenshot at " + d.screenshot : "; no screenshot was kept");
-  return "The text did not " + (gone ? "go" : "show") + " within " + seconds + " s. Probably " + cause.probably + "; to look further, " + look +
+  var verdict = still !== undefined ?
+    "The text did not " + (gone ? "go" : "show") + ", and the page has been still for " + still + " s (no request and no change on it), so waiting longer will not help." :
+    "The text did not " + (gone ? "go" : "show") + " within " + seconds + " s.";
+  return verdict + " Probably " + cause.probably + "; to look further, " + look +
     "; to file a bug with this evidence, call friction_add with {\"error_code\":\"auth_page_not_ready\"}; " + cause.keepWorking + ".";
 }
 
@@ -978,6 +1023,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   var closed = false;
   // Set once a command timed out: its context is closed, but its evidence is still read before the close.
   var evidencing = false;
+  var stuckMs = options && integer(options.stuckMs, 1, STUCK_MS) ? options.stuckMs : STUCK_MS;
   var evidenceMs = options && integer(options.evidenceMs, 1, EVIDENCE_MS) ? options.evidenceMs : EVIDENCE_MS;
   var readers = new Map();
   var refs = new Map();
@@ -1252,7 +1298,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       outside.forEach(function (frame) { frame.packet = null; });
       checkRuntime();
       var rendered = renderText(prepared.tree);
-      var result = { snapshot: prepared.tree, text: rendered.text };
+      var result = { page: prepared.page, snapshot: prepared.tree, text: rendered.text };
+      var look = lookOf(prepared, before.loaderId);
+      looks.set(result, look);
       if (rendered.left) result.hint = LEFT_OUT(rendered.left);
       if (prepared.frames) result.framesOmitted = prepared.frames;
       if (rendered.full <= ERROR_PAGE_CHARS && ERROR_PAGE.test(result.text)) {
@@ -1292,6 +1340,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         fs.renameSync(staged, final); staged = undefined; result.artifact = final;
       }
       provisional.forEach(function (record) { refs.set(record.ref, record); });
+      reader.last = look;
       if (poll) polled.set(result, provisional);
       else counted(reader, provisional);
       return result;
@@ -1462,6 +1511,10 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       return paused;
     }
     var deadline = Date.now() + limit;
+    var rec = recorderFor(reader.page);
+    // The page counts as moving until a request ran or a line of it changed; the wait's own start is the earliest.
+    var movedAt = started;
+    var digest;
     var last;
     var pending = [];
     for (;;) {
@@ -1477,13 +1530,23 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         counted(reader, pending);
         return last;
       }
-      if (last && Date.now() >= deadline) {
+      if (last) {
+        var look = looks.get(last);
+        if (digest !== undefined && look.digest !== digest) movedAt = Date.now();
+        digest = look.digest;
+        if (rec.pending.size) movedAt = Date.now();
+      }
+      var still = Date.now() - Math.max(movedAt, rec.lastActivity);
+      var stuck = still >= stuckMs;
+      if (last && (stuck || Date.now() >= deadline)) {
         counted(reader, pending);
         last.waited = { text: plan.text, found: false };
+        var stillS = stuck ? Math.round(still / 100) / 10 : undefined;
+        if (stuck) last.waited.stuck = { seconds: stillS };
         // The picture must fit in the command's time that is left, less a margin for the reply: the last poll can end late.
         var left = timeoutMs - (Date.now() - started) - REPLY_MARGIN_MS;
         last.diagnosis = await diagnose(reader.page, reader, Math.max(1, Math.min(evidenceMs, left)));
-        last.hint = notReadyHint(last.diagnosis, plan.text, plan.gone, limit / 1000);
+        last.hint = notReadyHint(last.diagnosis, plan.text, plan.gone, limit / 1000, stillS);
         return last;
       }
       // The next poll rechecks the runtime policy first thing, after this poll's refs are dropped.
@@ -1534,6 +1597,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "wait") return wait(reader, waitPlan(args));
     if (command === "screenshot") return screenshot(reader, args);
     var applied = false;
+    // What the agent last saw of this tab, before the action changes it.
+    var seen = reader.last;
     try {
       if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
         checkRuntime();
@@ -1609,9 +1674,19 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         // A page still loading changes faster than it can be read. The navigation itself went through, so it says so
         // and how to read the page, rather than refusing what already happened.
         if (NAVIGATIONS.indexOf(command) === -1 || closed || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
-        return { navigated: true, hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
+        return { navigated: true, page: { url: pageAddress(page.url()) }, hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
       }
       if (typed) outcome.typed = typed;
+      if (seen && ACTS.indexOf(command) !== -1) {
+        var change = difference(seen, looks.get(outcome));
+        var kind = change.navigated ? "navigated" : change.added || change.removed ? "changed" : "none";
+        outcome.change = kind;
+        outcome.changeNote = kind === "navigated" ?
+          "The " + command + " navigated: the page is now " + outcome.page.url + (outcome.page.title ? " (" + outcome.page.title + ")" : "") + "." :
+          kind === "changed" ?
+            "The " + command + " changed the page without navigating: " + plural(change.added, "line") + " added and " + plural(change.removed, "line") + " removed since your last read." :
+            "The " + command + " left the page as your last read showed it: no navigation and no visible change. Doing it again will not help; act on another ref from [\"snapshot\",\"--interactive\"], or run [\"wait\",\"<text you expect>\"] if the page is still loading.";
+      }
       return outcome;
     } catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_ACTION_FAILED", applied);
