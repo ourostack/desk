@@ -32,6 +32,12 @@ export function bootCommand(script = BOOT_SCRIPT) {
   return `node ${/\s/u.test(script) ? `"${script}"` : script}`
 }
 
+// The boot is for desk-backed work. An explicit "don't boot" from the operator or a coordinating parent, or a bounded read-only
+// assignment, skips it, and Desk's tools still work: desk_status needs no boot (the server admits the desk itself) and desk-web
+// (browser_command, browser_context) never reads the desk. One sentence, because a child that had to guess between "boot first"
+// and "don't boot" stopped and blocked its parent.
+export const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
+
 // A child agent with a bounded brief (dispatched with a scoped outcome, authority and return contract) is not the
 // root operator's session, even when it receives this same startup text; it stands down from this imperative and
 // follows its brief, the same way Superpowers' own entry skill stands its subagents down (equivalent to
@@ -41,13 +47,13 @@ export function bootCommand(script = BOOT_SCRIPT) {
 // reads like a finished status. So it says in its own words that the boot has not run, gives the exact command, and
 // calls the `Desk boot pre-checks:` line (when present) a pre-check, not the boot, without spelling its prefix so a hook with no such line never mentions one.
 export function startDirection(command = bootCommand()) {
-  return `The boot has not run yet: this line and any pre-check line are a pointer and quick checks, not a workspace scan. Run \`${command}\` now, before other work and before anything else, including your first reply and any search of files or folders (add \`--task "<what the operator named>"\` when their first message names a task). Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong. Then do what its \`instructions\` say; \`desk:session-start\` explains the result. A child agent with a bounded brief follows the brief instead and skips this.`
+  return `The boot has not run yet: this line and any pre-check line are a pointer and quick checks, not a workspace scan. Unless the skip rule below applies, run \`${command}\` now, before other work and before anything else, including your first reply and any search of files or folders (add \`--task "<what the operator named>"\` when their first message names a task). Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong. Then do what its \`instructions\` say; \`desk:session-start\` explains the result. ${BOOT_SKIP}`
 }
 const START = startDirection()
 
 // Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of each session carries this shorter line, worded as a pointer rather than a claim about the boot's state (see hooks/copilot-boot-prompt.cjs).
 export function promptBootDirection(command = bootCommand()) {
-  return `Desk boot is pending for this session: run \`${command}\` first (one quick call), then answer this message. Do this before anything else, including any search of files or folders; nothing else counts as the boot. A child agent with a bounded brief skips this.`
+  return `Desk boot is pending for this session: unless the skip rule below applies, run \`${command}\` first (one quick call), then answer this message. Do this before anything else, including any search of files or folders; nothing else counts as the boot. ${BOOT_SKIP}`
 }
 
 /**
@@ -60,7 +66,7 @@ export function copilotPromptPointer({ env, sessionFolder, homeDir }) {
 }
 
 export const DESK_SETUP_DIRECTION =
-  "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
+  "Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, run the boot script (" + bootCommand() + ") for the authoritative workspace scan. " + BOOT_SKIP
 
 function sourceLabel(source) {
   if (source === "host-project") return "the project folder"

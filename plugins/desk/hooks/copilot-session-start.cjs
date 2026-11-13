@@ -14,6 +14,8 @@ const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md")
 // input does not say which agent runs, so every session is told to act as the worker unless it was started as another agent.
 const workerPointer = `Unless started with \`--agent\`, act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
 const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
+// The same rule as BOOT_SKIP in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
+const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.";
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
@@ -179,7 +181,7 @@ async function startupDirection() {
     if (lines === null) optionalLinesTimedOut = true;
     return [direction, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
-    return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
+    return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. ${BOOT_SKIP}`;
   }
 }
 
@@ -221,6 +223,6 @@ function emit(additionalContext) {
     if (!optionalLinesTimedOut) await startFactory();
     emit(output);
   } catch {
-    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node ${bootScript} before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this.`);
+    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node ${bootScript} before other work, then desk:session-start explains its result. ${BOOT_SKIP}`);
   }
 })();

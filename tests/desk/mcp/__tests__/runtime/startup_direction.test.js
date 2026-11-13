@@ -20,6 +20,10 @@ import {
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
 
+// The explicit-skip rule every boot instruction carries: an operator's or coordinating parent's "don't boot", or a bounded read-only
+// assignment, skips the boot, and the tools that need no boot are named.
+const EXPLICIT_SKIP = /The boot is for desk-backed work \(tasks, cards, saves, sync, memory\)\. Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: .*desk_status and desk-web's browser_command and browser_context\./u
+
 // A temporary HOME with a ~/desk fallback that has the desk layout, a solo desk, a crew-shaped workspace and a plain repository.
 function withSandbox(body) {
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-startup-line-")))
@@ -52,7 +56,7 @@ test("the startup line names the bound root and where it came from", () => {
   ]) {
     const line = deskStartupDirection({ root: "/desks/one", source })
     assert.ok(line.startsWith(`Desk startup: $DESK is /desks/one (${label}). `), `${source}: ${line}`)
-    assert.match(line, /The boot has not run yet: .* not a workspace scan\. Run `node \S*session-boot\.js` now, before other work/u)
+    assert.match(line, /The boot has not run yet: .* not a workspace scan\. Unless the skip rule below applies, run `node \S*session-boot\.js` now, before other work/u)
     assert.match(line, /An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound/u)
   }
 })
@@ -225,27 +229,29 @@ test("the startup line gives the boot command by absolute path, says the boot ha
   const command = bootCommand()
   assert.ok(path.isAbsolute(command.replace(/^node /u, "")), command)
   assert.ok(command.endsWith(path.join("mcp", "scripts", "session-boot.js")) || command.endsWith(`${path.join("mcp", "scripts", "session-boot.js")}"`))
-  assert.ok(line.includes(`Run \`${command}\` now`))
+  assert.ok(line.includes(`run \`${command}\` now`))
   assert.match(line, /--task "<what the operator named>"/u)
-  assert.match(line, /A child agent with a bounded brief follows the brief instead/u)
+  assert.match(line, EXPLICIT_SKIP)
   assert.equal(bootCommand("/a b/session-boot.js"), 'node "/a b/session-boot.js"')
   assert.equal(bootCommand("/a/session-boot.js"), "node /a/session-boot.js")
-  assert.match(startDirection("node x"), /Run `node x` now/u)
+  assert.match(startDirection("node x"), /Unless the skip rule below applies, run `node x` now/u)
   assert.match(DESK_SETUP_DIRECTION, /the boot has not run/u)
+  assert.match(DESK_SETUP_DIRECTION, EXPLICIT_SKIP)
   assert.ok(DESK_SETUP_DIRECTION.includes(command))
   assert.doesNotMatch(line, /Desk boot pre-checks:/u, "a hook with no pre-check line never mentions one")
 })
 
 test("the per-prompt boot direction is a short pointer that gives the exact command", () => {
   const line = promptBootDirection("node /x/session-boot.js")
-  assert.match(line, /^Desk boot is pending for this session: run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. A child agent with a bounded brief skips this\.$/u)
+  assert.match(line, /^Desk boot is pending for this session: unless the skip rule below applies, run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. /u)
+  assert.match(line, EXPLICIT_SKIP)
   assert.doesNotMatch(line, /has not run/u, "a pointer, not an unconditional claim")
   assert.ok(promptBootDirection().includes(bootCommand()))
 })
 
 test("both hosts' boot direction is an imperative first action: the exact command, before the first reply or any search, and nothing else counts", () => {
   const claude = startDirection("node /x/session-boot.js")
-  assert.match(claude, /Run `node \/x\/session-boot\.js` now, before other work and before anything else, including your first reply and any search of files or folders/u)
+  assert.match(claude, /run `node \/x\/session-boot\.js` now, before other work and before anything else, including your first reply and any search of files or folders/u)
   assert.match(claude, /Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong\./u)
   const copilot = promptBootDirection("node /x/session-boot.js")
   assert.match(copilot, /run `node \/x\/session-boot\.js` first/u)
