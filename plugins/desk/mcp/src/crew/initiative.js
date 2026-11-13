@@ -10,7 +10,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { crewWorkspace } from "../desk/crew-roster.js"
 
-export const TRACKS = "_shared/tracks"
+const TRACKS = "_shared/tracks"
 // A card is the file a folder's reader opens first. README.md is the layout; the older names are accepted because an
 // existing initiative is reused as it is, never given a second card.
 const CARD_NAMES = ["readme.md", "track.md", "index.md"]
@@ -72,7 +72,7 @@ function titleOf(slug) {
 }
 
 function toplevel(repo) {
-  const result = spawnSync("git", ["-C", repo, "rev-parse", "--show-toplevel"], { encoding: "utf8" })
+  const result = spawnSync("git", ["-C", repo, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true })
   return result.status === 0 ? path.resolve(result.stdout.trim()) : null
 }
 
