@@ -11,6 +11,7 @@
     "plugins/desk/skills/fast-honest-ci/SKILL.md"
   ],
   "reviewedSourceFingerprint": "a9740603b2e51c6de1c5c42e6c828dc0b7aa4aec3a376e1e04ec9ade6795422a",
+  "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/851", "case": "relayed-dates", "observed": "2026-11-13"},
   "requirements": [
     {
       "id": "experience-first-status",

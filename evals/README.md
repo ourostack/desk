@@ -14,6 +14,8 @@ The pilot fingerprints each declared owner as a whole file; do not add section o
 
 Run `node scripts/skill-evals.cjs validate`, `node scripts/skill-evals.cjs fingerprint evals/investigation-boundaries.json`, or `node scripts/skill-evals.cjs verify path/to/result.json`. The fingerprint command prints both hashes a receipt must carry; use its output instead of reserializing the contract.
 
+A suite whose eval was rerun and still fails may carry `"knownFailure": {"issue": "<issue URL>", "case": "<case id>", "observed": "YYYY-MM-DD"}` beside `reviewedSourceFingerprint`. Add it only after you reran the eval and the case failed, and refresh the fingerprint as usual. `validate` accepts it only with an issue URL and prints a `KNOWN FAILURE` line, `verify` refuses a receipt while it remains, and it does not change `contractFingerprint`. Delete it when the eval passes again.
+
 Add scenarios from observed regressions, not to inflate counts.
 
 ## Core meeting capture
