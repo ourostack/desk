@@ -30,7 +30,7 @@ const ROOT = mkdtempSync(path.join(tmpdir(), "startup-boot-"))
 // A boot that is still winding down can hold a folder open on Windows; a leftover temp folder is harmless.
 test.after(() => {
   try {
-    rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    rmSync(ROOT, { recursive: true, force: true })
   } catch {
     // Left for the OS to clear.
   }
