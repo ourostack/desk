@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -206,7 +206,7 @@ test("runBlock runs the block with the bash it is given, which on Windows defaul
 
 test("runBlock runs the block from a file, never as a command-line argument Windows would garble, and leaves no file behind", async () => {
   const runs = []
-  const spy = (command, args, options) => { runs.push({ args, block: readFileSync(args[0], "utf8") }); return spawn("bash", args, options) }
+  const spy = (command, args, options) => { runs.push({ args, block: readFileSync(args[0], "utf8"), mode: statSync(args[0]).mode & 0o777 }); return spawn("bash", args, options) }
   const block = `q='"'; printf '%s' "say $q\\"hi\\"$q it's done"`
   const ran = await runBlock(block, { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
   assert.equal(ran.status, 0)
@@ -214,10 +214,71 @@ test("runBlock runs the block from a file, never as a command-line argument Wind
   assert.equal(runs.length, 1)
   assert.equal(runs[0].args.length, 1, "only the file path reaches bash's command line")
   assert.equal(runs[0].block, block)
+  if (process.platform !== "win32") assert.equal(runs[0].mode, 0o600, "the file is private to its owner")
   assert.equal(existsSync(path.dirname(runs[0].args[0])), false, "the block's file is removed once bash exits")
   const failed = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: (command, args) => { runs.push({ args }); return spawn(path.join(path.dirname(args[0]), "no-such-bash"), [], {}) } })
   assert.equal(failed.unavailable, true)
   assert.equal(existsSync(path.dirname(runs[1].args[0])), false, "and when bash cannot start")
+})
+
+test("a timed-out Windows block whose tree cleanup is confirmed resolves as timed out, with no cleanup note", async () => {
+  // Stands in for taskkill: it ends the launcher (`exec sleep` makes the sleep the launcher) and reports success.
+  const seen = []
+  const taskkill = (file, args, options, callback) => {
+    seen.push(args)
+    try {
+      process.kill(Number(args[1]), "SIGKILL")
+      process.nextTick(callback, null, "", "")
+    } catch (error) {
+      process.nextTick(callback, error, "", "")
+    }
+    return {}
+  }
+  const run = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "bash", execFile: taskkill })
+  assert.deepEqual(run, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
+  assert.equal(seen.length, 1)
+  assert.deepEqual(seen[0].slice(0, 1), ["/PID"])
+  assert.deepEqual(seen[0].slice(2), ["/T", "/F"])
+})
+
+test("a Windows tree cleanup that is slow or refused resolves as timed out with an unqualified note, and never rejects", async () => {
+  const neverCalledBack = () => ({})
+  const slow = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "bash", treeBudgetMs: 200, execFile: neverCalledBack })
+  assert.deepEqual(slow, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" })
+  const refused = (file, args, options, callback) => {
+    process.nextTick(callback, new Error("Access is denied."), "", "")
+    return {}
+  }
+  const denied = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "bash", treeBudgetMs: 5_000, execFile: refused })
+  assert.deepEqual(denied, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" })
+})
+
+test("on Windows a block longer than the command-line limit runs intact from its file", { skip: process.platform !== "win32" }, async () => {
+  // 40 KB, past the 32 KB limit that a `-c` argument is cut at.
+  const payload = "0123456789".repeat(4_000)
+  const run = await runBlock(`printf '%s' '${payload}'`, { env: process.env, cwd: process.cwd(), timeoutMs: 20_000, outputChars: Infinity })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, payload)
+})
+
+test("on Windows a timed-out block resolves as timed out, and the child process it started is gone afterwards", { skip: process.platform !== "win32", timeout: 60_000 }, async () => {
+  const root = await mkTempRoot("desk-pending-tree-")
+  const marker = path.join(root, "child.pid")
+  // The node process is a child of the block's shell, so only ending the whole tree stops it.
+  const block = `node -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)" ${shellQuote(marker.replace(/\\/gu, "/"))}`
+  const run = await runBlock(block, { env: process.env, cwd: root, timeoutMs: 10_000 })
+  assert.deepEqual(run, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
+  const pid = Number(readFileSync(marker, "utf8"))
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert.fail(`process ${pid} is still running`)
 })
 
 const RELAY_ERROR = "<3>WSL (9 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed: No such file or directory"
