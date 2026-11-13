@@ -60,6 +60,7 @@ With a PowerShell window open, the person can set up a coding agent there by fol
 ## When it stops
 
 - `AUTH_TIMEOUT`: the command ran too long and the context is closed. Open a new one, start again from step 1 and keep waits under a minute.
+- `AUTH_ACTION_COVERED`, `AUTH_ACTION_NOT_READY` or `AUTH_ACTION_TIMEOUT`: that one control could not be used in time, and the context is still open. Look at the page with a snapshot or a find, clear what covers the control or wait for the page to settle, then act on a fresh ref.
 - `AUTH_CONTEXT_REFUSED`: the tab or context is gone. Open a new one.
 - `AUTH_COMMAND_REFUSED`: the command isn't one `mine` runs. The hint lists the ones it does.
 - A certificate, unsafe-site or operating-system authentication prompt: stop and tell the person. Desk never clicks through these.

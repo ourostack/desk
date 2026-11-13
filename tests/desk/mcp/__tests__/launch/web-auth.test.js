@@ -716,8 +716,74 @@ test("an action scrolls its element into view first, so a button enabled only on
     await adapter.call(["click", input.ref])
     const order = native.calls.map((call) => call[0]).filter((name) => name === "scrollIntoViewIfNeeded" || name === "click")
     assert.deepEqual(order, ["scrollIntoViewIfNeeded", "click"])
-    assert.deepEqual(native.calls.find((call) => call[0] === "scrollIntoViewIfNeeded")[1], { timeout: 5000 })
+    const scroll = native.calls.find((call) => call[0] === "scrollIntoViewIfNeeded")[1]
+    assert.ok(scroll.timeout > 0 && scroll.timeout <= 2500, "the action's deadline is half the command's time, not all of it")
   } finally { await adapter.close() }
+})
+
+// Playwright's timeout error, as the client sees it: its class name is the only part the code relies on.
+function timeoutError(message) {
+  const error = new Error(message)
+  error.name = "TimeoutError"
+  return error
+}
+
+test("ref actions share one deadline under the command's time, so a stalled step fails before the command does", async () => {
+  const root = await mkTempRoot("auth-action-deadline-")
+  const native = fakeDriver()
+  const handle = native.handles.get(104)
+  const seen = []
+  handle.scrollIntoViewIfNeeded = async (options) => { seen.push(["scroll", options.timeout]); await new Promise((resolve) => setTimeout(resolve, 300)) }
+  handle.click = async (options) => { seen.push(["click", options.timeout]) }
+  const adapter = adapterFor(native, root)
+  try {
+    const input = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
+    await adapter.call(["click", input.ref])
+    const [scroll, click] = seen.map(([, timeout]) => timeout)
+    assert.ok(scroll > 0 && scroll <= 2500)
+    assert.ok(click >= 1 && scroll - click >= 200, "the click gets only what the scroll left of the shared deadline")
+  } finally { await adapter.close() }
+})
+
+test("a Playwright timeout on an action keeps the context open with a recoverable code, and says nothing of the page", async () => {
+  const root = await mkTempRoot("auth-action-covered-")
+  const native = fakeDriver()
+  const handle = native.handles.get(104)
+  const click = handle.click
+  const adapter = adapterFor(native, root)
+  try {
+    const input = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
+    handle.click = async () => { throw timeoutError("<span>" + PASSWORD + "</span> intercepts pointer events") }
+    await assert.rejects(adapter.call(["click", input.ref]), error =>
+      error.message.includes("AUTH_ACTION_COVERED") && error.message.includes("may have applied") && !error.message.includes(PASSWORD))
+    assert.equal(native.calls.some((call) => call[0] === "context.close"), false, "the context is not closed")
+    handle.click = click
+    noPassword(await adapter.call(["snapshot"]))
+  } finally { handle.click = click; await adapter.close() }
+})
+
+test("Playwright's timeout wording maps to fixed codes, and its text never reaches the output", async () => {
+  const root = await mkTempRoot("auth-action-codes-")
+  const native = fakeDriver()
+  const handle = native.handles.get(104)
+  const click = handle.click
+  const adapter = adapterFor(native, root)
+  const cases = [
+    ["<div>" + PASSWORD + "</div> intercepts pointer events", "AUTH_ACTION_COVERED"],
+    ["element is not visible " + PASSWORD, "AUTH_ACTION_NOT_READY"],
+    ["element is not stable", "AUTH_ACTION_NOT_READY"],
+    ["element is not enabled", "AUTH_ACTION_NOT_READY"],
+    ["waiting for " + PASSWORD, "AUTH_ACTION_TIMEOUT"],
+  ]
+  try {
+    const input = (await adapter.call(["snapshot"])).snapshot.children[0].children[0].children[0]
+    for (const [message, code] of cases) {
+      handle.click = async () => { throw timeoutError(message) }
+      await assert.rejects(adapter.call(["click", input.ref]), error =>
+        error.message.includes(code) && !error.message.includes(PASSWORD) && !error.message.includes("intercepts"))
+    }
+    assert.equal(native.calls.some((call) => call[0] === "context.close"), false)
+  } finally { handle.click = click; await adapter.close() }
 })
 
 test("an action disposes its element handle and binds the path of the ref it names", async () => {
