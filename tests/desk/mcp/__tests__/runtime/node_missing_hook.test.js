@@ -20,7 +20,8 @@ const WINDOWS = process.platform === "win32"
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "node-missing-")))
 test.after(() => rmSync(ROOT, { recursive: true, force: true }))
 
-const floor = /^>=(\d+)\.0\.0$/u.exec(readJson("mcp", "package.json").engines.node)[1]
+const engines = readJson("mcp", "package.json").engines.node
+const floor = /^>=(\d+(?:\.\d+)?)\.0$/u.exec(engines)[1]
 const claudeCommand = readJson("hooks", "hooks.json").hooks.SessionStart[0].hooks[0].command
 const copilotStart = readJson("hooks", "copilot-hooks.json").hooks.sessionStart[0]
 const RESTART = "Then the person must open a new terminal and start a new session, because tool servers load only when a session starts."
@@ -138,7 +139,7 @@ test("the shell messages name the Node.js floor in mcp/package.json, so the two 
 // ---- a node older than Desk needs ----
 
 const old = { path: "/old/bin/node", version: "v16.20.2", abi: "93" }
-const noneCompatible = () => ({ node: null, range: `>=${floor}.0.0` })
+const noneCompatible = () => ({ node: null, range: engines })
 
 test("a node older than Desk needs, with no newer one installed, gets the same message with the version it found", () => {
   const home = mkdtempSync(path.join(ROOT, "old-home-"))
@@ -153,12 +154,12 @@ test("a node older than Desk needs, with no newer one installed, gets the same m
   const mac = nodeRequiredLine({ env: { HOME: home, PATH: bin }, platform: "darwin", current: old, select: noneCompatible })
   if (!WINDOWS) assert.ok(mac.includes("run `brew install node` in a terminal"), mac)
 
-  const range = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: () => ({ node: null, range: `>=${floor}.11.0` }) })
-  assert.match(range, new RegExp(`^Desk needs Node\\.js >=${floor}\\.11\\.0, and`, "u"), "a range that is not a plain major floor is named as written")
+  const range = nodeRequiredLine({ env: { HOME: home }, platform: "win32", current: old, select: () => ({ node: null, range: `>=${floor}.11` }) })
+  assert.match(range, new RegExp(`^Desk needs Node\\.js >=${floor.replace(".", "\\.")}\\.11, and`, "u"), "a range that is not a plain major floor is named as written")
 })
 
 test("a node Desk can use, here or installed elsewhere, gets no message, and a failed check never blocks the session", () => {
-  assert.equal(nodeRequiredLine({ current: old, select: () => ({ node: { path: "/newer/bin/node" }, range: `>=${floor}.0.0` }) }), "")
+  assert.equal(nodeRequiredLine({ current: old, select: () => ({ node: { path: "/newer/bin/node" }, range: engines }) }), "")
   assert.equal(nodeRequiredLine({ current: old, select: () => { throw new Error("broken") } }), "")
   assert.equal(nodeRequiredLine(), "", "the Node running this test is new enough")
 })
@@ -176,7 +177,7 @@ test("an old node first on PATH with a slow, unversioned newer Node beside it ge
 
 test("a search cut short by its time budget never claims Node is missing", () => {
   let clock = 0
-  const exhausted = (options) => { clock += 60_000; return { node: null, range: `>=${floor}.0.0`, probeBudgetMs: options.probeBudgetMs } }
+  const exhausted = (options) => { clock += 60_000; return { node: null, range: engines, probeBudgetMs: options.probeBudgetMs } }
   assert.equal(nodeRequiredLine({ env: { HOME: ROOT }, platform: "linux", current: old, select: exhausted, now: () => clock }), "")
 })
 

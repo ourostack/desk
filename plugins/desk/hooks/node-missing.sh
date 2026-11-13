@@ -15,9 +15,9 @@ elif [ -s "$NVM_DIR/nvm.sh" ] || [ -s "$HOME/.nvm/nvm.sh" ]; then
 elif [ -d /System/Library/CoreServices ]; then
   desk_install='run `brew install node` in a terminal (without Homebrew, use the installer from https://nodejs.org/en/download)'
 else
-  desk_install='install the nodejs package with the distribution package manager (for example `sudo apt install nodejs` or `sudo dnf install nodejs`) and check that `node --version` prints v20 or newer; if it is older, install the current LTS from https://nodejs.org/en/download'
+  desk_install='install the nodejs package with the distribution package manager (for example `sudo apt install nodejs` or `sudo dnf install nodejs`) and check that `node --version` prints v22.18 or newer; if it is older, install the current LTS from https://nodejs.org/en/download'
 fi
-desk_text='Desk needs Node.js 20 or newer, and this machine has no Node.js (no `node` on PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: '"$desk_install"'. Then the person must open a new terminal and start a new session, because tool servers load only when a session starts.'
+desk_text='Desk needs Node.js 22.18 or newer, and this machine has no Node.js (no `node` on PATH), so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: '"$desk_install"'. Then the person must open a new terminal and start a new session, because tool servers load only when a session starts.'
 if [ "$desk_host" = claude ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$desk_text"
 else

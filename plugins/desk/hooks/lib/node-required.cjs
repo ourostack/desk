@@ -45,8 +45,8 @@ function nodeRequiredLine({
     });
     if (node || now() - started >= budget) return "";
     const command = bootstrap().installCommand({ platform, env, homeDir, major: null });
-    const floor = /^>=\s*v?(\d+)\.0\.0$/u.exec(String(range).trim());
-    const needed = floor ? `Node.js ${floor[1]} or newer` : `Node.js ${range}`;
+    const floor = /^>=\s*v?(\d+)(?:\.([1-9]\d*))?\.0$/u.exec(String(range).trim());
+    const needed = floor ? `Node.js ${floor[1]}${floor[2] ? `.${floor[2]}` : ""} or newer` : `Node.js ${range}`;
     return `Desk needs ${needed}, and the \`node\` on PATH is ${current.version} with no newer Node.js installed, so the Desk tool servers (desk, desk-web) cannot run and Desk tools do not work in this session. Install it: run \`${command}\` in a terminal. ${RESTART}`;
   } catch {
     return "";

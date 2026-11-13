@@ -232,15 +232,14 @@ test("the default startup-exception starter serves the diagnostic on stdio with 
 
 // ---- the Node floor check at the top of main ----
 
-test("the Node floor comes from engines.node and falls back to 20.0.0", () => {
+test("the Node floor comes from engines.node and falls back to 22.18.0", () => {
   const read = (text) => entrypoint.resolveNodeFloor({ mcpRoot: "/fixture", readFile: () => text })
   assert.deepEqual(read(JSON.stringify({ engines: { node: ">=20.0.0" } })), [20, 0, 0])
   assert.deepEqual(read(JSON.stringify({ engines: { node: ">= v22.3" } })), [22, 3, 0])
   assert.deepEqual(read(JSON.stringify({ engines: { node: ">=24" } })), [24, 0, 0])
-  assert.deepEqual(read(JSON.stringify({ engines: { node: "^22 || ^24" } })), [20, 0, 0])
-  assert.deepEqual(read(JSON.stringify({})), [20, 0, 0])
-  assert.deepEqual(read("{not json"), [20, 0, 0])
-  assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot }), [20, 0, 0])
+  assert.deepEqual(read(JSON.stringify({ engines: { node: "^22 || ^24" } })), [22, 18, 0])
+  assert.deepEqual(read(JSON.stringify({})), [22, 18, 0])
+  assert.deepEqual(read("{not json"), [22, 18, 0])
   const engines = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8")).engines.node
   const [major, minor = 0, patch = 0] = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(engines).slice(1).map(Number)
   assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot }), [major, minor, patch], "the floor is mcp/package.json's engines.node, not the default")
@@ -250,7 +249,7 @@ test("the Node floor comes from engines.node and falls back to 20.0.0", () => {
   fs.writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ engines: { node: ">=22.4.1" } }))
   fs.writeFileSync(path.join(plugin, "plugin.json"), JSON.stringify({ version: "1.0.0" }))
   assert.deepEqual(entrypoint.resolveNodeFloor({ mcpRoot: path.join(plugin, "mcp") }), [22, 4, 1])
-  assert.deepEqual(entrypoint.resolveNodeFloor(), [20, 0, 0])
+  assert.deepEqual(entrypoint.resolveNodeFloor(), [22, 18, 0])
   assert.equal(entrypoint.nodeMeetsFloor("16.20.2", [20, 0, 0]), false)
   assert.equal(entrypoint.nodeMeetsFloor("19.9.9", [20, 0, 0]), false)
   assert.equal(entrypoint.nodeMeetsFloor("20.0.0", [20, 0, 0]), true)

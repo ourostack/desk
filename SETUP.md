@@ -23,7 +23,7 @@ claude --version && node --version && git --version && gh --version
 ```
 
 - Claude Code 2.1.277 or later. If older, run `claude update`. The desktop app bundles its own Claude Code; this check is for the `claude` CLI the setup commands use, which can lag behind the app.
-- Node 22 on macOS arm64 or Linux x64, or Node 24 on Windows x64. It does not need to be the default `node`: Desk finds a compatible installed Node on its own. If none is installed, install it yourself (for example `nvm install 22`, or the platform's package manager), and change the default `node` if that helps other tools; involve the operator only for something only they can do, such as a password prompt. Desk ships its native runtime for exactly these platforms; others are unsupported.
+- Node 22.18 or later on macOS arm64 or Linux x64, or Node 24 on Windows x64. It does not need to be the default `node`: Desk finds a compatible installed Node on its own. If none is installed, install it yourself (for example `nvm install 22`, or the platform's package manager), and change the default `node` if that helps other tools; involve the operator only for something only they can do, such as a password prompt. Desk ships its native runtime for exactly these platforms; others are unsupported.
 - Edge or Chrome for the browser Desk ships. Windows always has Edge. Desk's first browser open downloads `playwright-core` from npm once, so the machine must reach the npm registry that time.
 - `gh auth status` should be healthy so desk discovery can find the operator's desk repository. If it is not, give the repair (`gh auth login`) and continue; local discovery still works.
 
