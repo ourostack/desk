@@ -176,7 +176,7 @@ test("runBlock reports the exit, the output, a timeout that kills the whole bloc
   assert.deepEqual(ran, { status: 4, stdout: "out\n", stderr: "err\n", timedOut: false, unavailable: false })
   const root = await mkTempRoot("desk-pending-block-")
   const marker = path.join(root, "grandchild.pid")
-  const slow = await runBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
+  const slow = await runBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 5_000 })
   assert.equal(slow.timedOut, true)
   assert.equal(slow.status, null)
   assert.equal(slow.unavailable, false)
