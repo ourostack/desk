@@ -202,6 +202,43 @@ test("never wakes for a closed issue the drain handled, and drops its waiting ev
   assert.equal(w.sent.length, 2)
 })
 
+test("a cross-reference never wakes the drain, whoever made it, including the one the drain's own marked comment on another issue creates", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0))])
+  await w.poll()
+  const crossReference = (id, created_at, source) => ({ id, event: "cross-referenced", created_at, source: { type: "issue", issue: { number: source } } })
+  w.issues[0] = issue(1, T(5))
+  w.issues[1] = issue(2, T(6))
+  w.comments = async () => []
+  w.events = async (_repo, n) => (n === 1 ? [crossReference(10, T(5), 3)] : [crossReference(11, T(6), 4), { ...crossReference(12, T(6), 4), actor: { login: "someone" } }])
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  matches(w.state().seen["1"], seenAt(T(5)))
+  matches(w.state().seen["2"], seenAt(T(6)))
+  // The next real change still wakes.
+  w.issues[0] = issue(1, T(9), "Issue 1", "edited")
+  await w.poll()
+  assert.equal(w.sent.length, 1)
+})
+
+test("a closed issue whose only later changes are the drain's own label edits never wakes the drain, even when a wake for it was waiting", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0))])
+  await w.poll()
+  w.issues[0] = issue(1, T(5), "Issue 1", "edited")
+  w.issues[1] = issue(2, T(5), "Issue 2", "edited")
+  w.refuse = "queued behind the app"
+  await w.poll()
+  assert.deepEqual(w.state().pending.map((event) => event.number), [1, 2])
+  // Issue 2 closes; the drain later unlabels it. Neither a close nor a label edit on a closed issue is news.
+  w.issues.splice(1, 1)
+  w.events = async () => [{ id: 1, event: "closed", created_at: T(6) }, labelEvent(T(40), "drain: in progress", "unlabeled")]
+  await w.poll(NOW + 1000)
+  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #1 Issue 1. Drain them."])
+  await w.poll(NOW + 2000)
+  await w.poll(NOW + 3000)
+  assert.equal(w.sent.length, 2)
+  assert.deepEqual(w.state().pending, [])
+})
+
 test("treats a closed issue that returns unchanged as seen, and one that is reopened as news", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))], { events: { 2: [{ id: 1, event: "closed", created_at: T(5) }, { id: 2, event: "reopened", created_at: T(9) }] } })
   await w.poll()
