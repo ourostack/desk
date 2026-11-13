@@ -801,6 +801,7 @@ async function timedOutTaskUpdate(ctx, world, session) {
     const commit = timed.json.commit
     assert(commit && (commit.status === "failed" || commit.status === "unknown"), `the commit was not reported unfinished: ${JSON.stringify(commit ?? null).slice(0, 400)}`)
     assert(commit.route_around && typeof commit.route_around === "object", `the unfinished commit carries no route_around: ${JSON.stringify(commit).slice(0, 400)}`)
+    assert(Object.keys(timed.json)[0] === "next" && /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order/u.test(timed.json.next), `the answer does not open with the next step: ${timed.text.slice(0, 300)}`)
     assert(!/can't|cannot finish|not in effect/iu.test(timed.text) || commit.route_around, "the result says the change cannot be finished or is not in effect, with no route")
     assert(git(desk, ["rev-parse", "HEAD"], env) === headBefore, "the timed-out commit moved HEAD before the route ran")
 

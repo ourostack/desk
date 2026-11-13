@@ -167,6 +167,15 @@ export function commitFailure({ root, paths, message, committed, card = null, de
   }
 }
 
+/**
+ * The `next` sentence a result gives first when its commit did not finish (#623): run the route's steps as written, or, when the
+ * route is held, read it back and report. `where` names the route's field in the result, so the sentence points at it.
+ */
+export function unfinishedNext(route, where) {
+  if (route.held) return `The change is on disk but not committed, and Desk will not finish it from here: read back with ${where}.steps step 1 (it only reads), then report its JSON together with the tool's failure.`
+  return `The change is on disk but not committed or on the remote yet: run ${where}.steps now, in order, then read back the remote.`
+}
+
 /** Desk's record of a card change it could not finish, or null when the state folder cannot be written (the route is then held). */
 function recordCapture({ root, paths, message, capture }) {
   try {

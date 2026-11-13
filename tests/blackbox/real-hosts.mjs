@@ -188,10 +188,7 @@ async function progressNoteSession(host) {
   const hooks = path.resolve(desk, git(desk, ["rev-parse", "--git-path", "hooks"], process.env))
   fs.writeFileSync(path.join(hooks, "pre-commit"), "#!/bin/sh\nsleep 11\n", { mode: 0o755 })
 
-  const text = [
-    `Black-box check ${tag}. Call desk_status first and note its state. Then record this progress note on the task "${SLUG}" in track "${TRACK}" with task_update, as the note: "${note}".`,
-    "Do not edit files yourself. Reply in one sentence saying whether the note is recorded.",
-  ].join("\n")
+  const text = `Black-box check ${tag}. Call desk_status first and note its state. Record this progress note on the task "${SLUG}" in track "${TRACK}" with task_update: "${note}". Then tell me in one sentence whether it's saved.`
   const result = await hostRun(host, tag, text, desk)
   const answer = result.answer.trim()
   const onRemote = (() => {

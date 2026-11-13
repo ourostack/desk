@@ -29,6 +29,7 @@ import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.j
 import { deskRelativePath, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { stagingAllowed, stageAndCommitFile, writeCardCommitted, cardCommitMessage } from "./_card-commit.js"
+import { unfinishedNext } from "../util/route-around.js"
 import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
@@ -117,7 +118,10 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
     if (OPENED_CODES.has(result.result) && typeof result.file_name === "string") Object.assign(out, { improvement_key: key, improvement_path: path.posix.join(prefix, "_meta", "improvement", result.file_name) })
     if (OPENED_CODES.has(result.result) && commit !== "committed" && commit !== "no_change" && commit !== "no_files") {
       out.improvement_commit = commit
-      if (routeAround) out.improvement_route_around = routeAround
+      if (routeAround) {
+        out.improvement_route_around = routeAround
+        return { next: unfinishedNext(routeAround, "improvement_route_around"), ...out }
+      }
     }
     return out
   } catch {
@@ -276,6 +280,10 @@ export async function friction_add({ deskRoot, input, person = null, search, env
     result = { status: "added", path: written, kaizen: filed.result }
   }
   if (commit) result.commit = commit
-  if (card !== null) Object.assign(result, await openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush }))
+  if (card !== null) {
+    const opened = await openCard({ deskRoot, person, card, fingerprint, lesson, now, commitCard, spawnGit, schedulePush })
+    // A card whose commit did not finish says what to do first, as the answer's first key (#623).
+    result = opened.next === undefined ? { ...result, ...opened } : { next: opened.next, ...result, ...opened }
+  }
   return result
 }

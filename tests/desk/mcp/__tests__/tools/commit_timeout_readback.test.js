@@ -434,7 +434,7 @@ async function cardTimedOut(stateHome) {
   assert.equal(git(root, ["status", "--porcelain"]), "", "the fixture is committed")
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } }, spawnGit: timedOutBeforeCommit, schedulePush: () => assert.fail("no push") })
   assert.equal(result.commit?.status, "failed")
-  return { root, origin, route: result.commit.route_around }
+  return { root, origin, route: result.commit.route_around, result }
 }
 
 const CARD = ["t/book-flights/task.md", "t/track.md"]
@@ -444,7 +444,10 @@ const capturesLeft = () => {
 }
 
 test("the route of a live card finishes Desk's recorded change: it reads, commits once, publishes, and removes the record", async () => {
-  const { root, origin, route } = await cardTimedOut()
+  const { root, origin, route, result } = await cardTimedOut()
+  assert.deepEqual(Object.keys(result).slice(0, 2), ["next", "status"], "the answer opens with the next step, then its status")
+  assert.equal(result.status, "updated", "the status is unchanged: the note is on disk")
+  assert.match(result.next, /^The change is on disk but not committed or on the remote yet: run commit\.route_around\.steps now, in order, then read back the remote\.$/u)
   const { code, first, newer } = await followRoute(route, { task_update: () => assert.fail("the route never calls task_update") })
   assert.equal(code, 3, first[0].stdout)
   assertCardRecorded(route, "t/book-flights")
@@ -478,9 +481,11 @@ test("a live card whose change Desk cannot record is held: its route only reads 
   const blocker = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "desk-captures-")), "not-a-folder")
   await fs.writeFile(blocker, "x")
   try {
-    const { root, route } = await cardTimedOut(blocker)
+    const { root, route, result } = await cardTimedOut(blocker)
     assertRoute(route)
     assert.equal(route.held, true, "without a record the route of a live card is held")
+    assert.match(result.next, /^The change is on disk but not committed, and Desk will not finish it from here: read back with commit\.route_around\.steps step 1 \(it only reads\), then report its JSON together with the tool's failure\.$/u, "a held route says to report the read-back, not to run the steps")
+    assert.doesNotMatch(result.next, /can't|cannot finish|not in effect/u)
     for (const step of route.steps) assert.ok(step.argv === undefined || readsOnly(step), `every step only reads: ${step.step}`)
     assert.doesNotMatch(JSON.stringify(route), /--capture-id/u)
     assert.notEqual(git(root, ["status", "--porcelain"]), "", "the change is kept, uncommitted")

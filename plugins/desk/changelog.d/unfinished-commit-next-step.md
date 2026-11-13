@@ -1,0 +1,1 @@
+When a Desk write's commit did not finish, its result now opens with a `next` sentence: run the route's steps now, in order, then read back the remote. A held route says to report its read-back instead. The `status` stays as it was. The card guard still refuses any hand commit of a card.

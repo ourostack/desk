@@ -12,6 +12,7 @@ import { isNoninteractive } from "../runtime/boot.js"
 import { isHeadlessFactorySession } from "../factory/headless-flag.js"
 import { cardKey, openImprovement, claimNext, updateCard, readCards, MAX_CARD_FILES } from "../desk/improvement-cards.js"
 import { writeCardCommitted, cardCommitMessage } from "./_card-commit.js"
+import { unfinishedNext } from "../util/route-around.js"
 import { AUTHORITY } from "../desk/improvement-authority.js"
 
 export const IMPROVEMENT_OPEN_FIELDS = ["source", "id", "title", "evidence", "plugin", "signal"]
@@ -46,7 +47,7 @@ function withCommit(answer, commit, setAside, leftAlone, routeAround) {
   if (routeAround) answer.route_around = routeAround
   if (setAside) answer.set_aside = setAside
   if (leftAlone) answer.left_alone = leftAlone
-  return answer
+  return routeAround ? { next: unfinishedNext(routeAround, "route_around"), ...answer } : answer
 }
 
 const messageFor = (verb) => (result) => cardCommitMessage(verb, result.file_name ?? "set_aside")
