@@ -222,13 +222,25 @@ test("runBlock runs the block from a file, never as a command-line argument Wind
 })
 
 const WINDOWS_TIMEOUT = { env: process.env, cwd: process.cwd(), platform: "win32", bash: "bash" }
-// Stands in for taskkill: it ends the process named by `/PID`, then reports to `callback` after `delayMs` (`null` reports before any output close).
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+// Stands in for taskkill: it ends the process tree named by `/PID`, then reports to `callback` after `delayMs` (`null` reports before any output close).
+// On Windows it runs the real taskkill, because Git Bash's `exec sleep` leaves sleep.exe holding the pipes after bash is ended.
 const fakeTaskkill = (delayMs) => (file, args, options, callback) => {
+  const pid = Number(args[1])
   let error = null
   try {
-    process.kill(Number(args[1]), "SIGKILL")
+    if (process.platform === "win32") execFileSync(file, args, { windowsHide: true, stdio: "ignore" })
+    else process.kill(pid, "SIGKILL")
   } catch (killed) {
-    error = killed
+    // taskkill fails when the tree is already gone, which is not a refusal.
+    if (process.platform !== "win32" || processAlive(pid)) error = killed
   }
   if (delayMs === null) process.nextTick(callback, error, "", "")
   else setTimeout(callback, delayMs, error, "", "")

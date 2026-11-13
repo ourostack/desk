@@ -159,9 +159,10 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   }
   const card = (root) => path.join(root, ...(person ? ["desks", person] : []), "work", "one", "task.md")
   // A status request answers from its own short budget (about 90 ms) whatever admission is doing, so a request that waited for the
-  // late resolution would take as long as that resolution (hundreds of ms to seconds). The rule is the one admission_conditions uses
-  // for the same property: the median request must answer within 200 ms, and no single request may take 750 ms. One slow request on a
-  // shared runner is jitter: two Windows runs measured a single 215 ms and 297 ms request beside 90 ms ones, while the session was
+  // late resolution would take as long as that resolution (hundreds of ms to seconds). The rule has the same shape as admission_conditions':
+  // the median request must answer within 375 ms (half the 750 ms cap), and no single request may take 750 ms.
+  // Hosted Windows runners serve an unblocked status in 100-300 ms, while a blocked one waits seconds.
+  // One slow request on a shared runner is jitter: two Windows runs measured a single 215 ms and 297 ms request beside 90 ms ones, while the session was
   // re-checking its destination in its worker thread.
   const status = async () => {
     const deadline = Date.now() + 15000
@@ -186,7 +187,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
       assert.ok(elapsedMs < 750, budget(elapsedMs))
       // A status still waiting for the runtime detail already names the admitted desk; the detail is what this waits for.
       if (value.root?.path && value.detail_pending !== true) {
-        assert.ok([...times].sort((x, y) => x - y)[Math.floor(times.length / 2)] < 200, budget(elapsedMs))
+        assert.ok([...times].sort((x, y) => x - y)[Math.floor(times.length / 2)] < 375, budget(elapsedMs))
         return value
       }
       await new Promise((resolve) => setTimeout(resolve, 20))

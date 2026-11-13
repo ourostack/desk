@@ -18,6 +18,8 @@ import { mkTempRoot } from "../_temp_roots.js"
 const diagnosticHelper = new URL("./_readiness_failure_preload.mjs", import.meta.url)
 const diagnosticSource = new URL("../../../../../plugins/desk/mcp/src/", import.meta.url)
 const diagnosticScope = { sourceRoot: diagnosticSource.href, cacheRoot: "file:///tiny-cache/", helperURL: diagnosticHelper.href }
+// Hosted Windows runners can take tens of seconds to start a cold process, so every status wait here allows 60 s (as #614 and #645 do).
+const SLOW_RUNNER_STATUS = { deadlineMs: 60000 }
 async function diagnostics() {
   const helper = await import(diagnosticHelper.href).catch(error => {
     if (error.code === "ERR_MODULE_NOT_FOUND") return {}
@@ -447,10 +449,10 @@ test("a missing root recovers in place once the desk appears: ready, same tool l
   t.after(() => session.close())
   await withReadinessFailure(session, async () => {
     const before = session.tools.result.tools
-    const degraded = await session.statusUntil(settled)
+    const degraded = await session.statusUntil(settled, SLOW_RUNNER_STATUS)
     assert.equal(degraded.state, "degraded:root_unavailable")
     git(fixture.root, "clone", fixture.origin, pending)
-    const ready = await session.statusUntil((payload) => payload.state === "ready")
+    const ready = await session.statusUntil((payload) => payload.state === "ready", SLOW_RUNNER_STATUS)
     assert.equal(ready.status, "ok")
     assert.equal(ready.admission.state, "ready")
     const after = await session.request("tools/list")
@@ -474,7 +476,7 @@ test("a saved binding to a missing folder never binds a home-folder desk and rec
   t.after(() => session.close())
   await withReadinessFailure(session, async () => {
     const before = session.tools.result.tools
-    const degraded = await session.statusUntil(settled)
+    const degraded = await session.statusUntil(settled, SLOW_RUNNER_STATUS)
     assert.equal(degraded.state, "degraded:root_unavailable")
     assert.equal(degraded.root.path, pending)
     assert.equal(degraded.root.source, "activation-config")
@@ -489,7 +491,7 @@ test("a saved binding to a missing folder never binds a home-folder desk and rec
     assert.equal(existsSync(pending), false, "refusal must not recreate the missing saved desk")
     git(fixture.root, "clone", fixture.origin, pending)
     // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
-    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
+    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending, SLOW_RUNNER_STATUS)
     assert.equal(ready.root.path, pending)
     assert.equal(ready.root.source, "activation-config")
     assert.deepEqual((await session.request("tools/list")).result.tools, before)
@@ -509,10 +511,10 @@ test("a malformed activation config recovers in place once it is fixed", async (
   writeFile(configPath, "{not json")
   const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
   t.after(() => session.close())
-  assert.equal((await session.statusUntil(settled)).state, "degraded:activation_config_invalid")
+  assert.equal((await session.statusUntil(settled, SLOW_RUNNER_STATUS)).state, "degraded:activation_config_invalid")
   writeActivation(fixture)
   writeFile(configPath, readFileSync(path.join(fixture.root, "desk.activation.json"), "utf8"))
-  assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+  assert.equal((await session.statusUntil((payload) => payload.state === "ready", SLOW_RUNNER_STATUS)).state, "ready")
 })
 
 test("a detached HEAD with a local-only commit recovers once the commit is pushed and desk_doctor switches back: repaired, then ready", async (t) => {
@@ -526,7 +528,7 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] })
   t.after(() => session.close())
   const before = session.tools.result.tools
-  const degraded = await session.statusUntil(settled)
+  const degraded = await session.statusUntil(settled, SLOW_RUNNER_STATUS)
   assert.equal(degraded.state, "degraded:state_branch_detached")
   // What the fix tells the agent to do: keep the commit on a pushed branch.
   assert.match(degraded.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u)
@@ -536,7 +538,7 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   assert.equal(afterPush.state, "degraded:state_branch_detached", JSON.stringify({ summary: afterPush.summary, diagnostic: afterPush.diagnostic }))
   const doctored = (await session.call("desk_doctor", { repair: "switch_state_branch" })).payload
   assert.equal(doctored.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
-  const ready = await session.statusUntil((payload) => payload.state === "ready")
+  const ready = await session.statusUntil((payload) => payload.state === "ready", SLOW_RUNNER_STATUS)
   // The doctor's forced refresh runs a fresh attempt even when the .git/HEAD watch started one first, so desk_status reports the repair, and the repair log keeps it.
   assert.equal(ready.repair, doctored.repair)
   assert.match(readFileSync(path.join(fixture.stateDir, "repairs.log"), "utf8"), new RegExp(`repaired: detached HEAD → main \\(was ${sha.slice(0, 12)}\\)`, "u"))
@@ -549,7 +551,7 @@ test("a HEAD change is noticed without a tool call: the .git/HEAD watch or recon
   const configPath = writeActivation(fixture)
   const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] })
   t.after(() => session.close())
-  assert.equal((await session.statusUntil(settled)).state, "ready")
+  assert.equal((await session.statusUntil(settled, SLOW_RUNNER_STATUS)).state, "ready")
   git(fixture.desk, "checkout", "--detach")
   writeFile(path.join(fixture.desk, "ops", "unpushed.md"), "unpushed\n")
   git(fixture.desk, "add", "-A")
@@ -567,7 +569,7 @@ test("a deliberate git switch mid-session stays put: writes go read-only with th
   const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"], diagnostics: "initial-admission" })
   t.after(() => session.close())
   await withReadinessFailure(session, async () => {
-    assert.equal((await session.statusUntil(settled)).state, "ready")
+    assert.equal((await session.statusUntil(settled, SLOW_RUNNER_STATUS)).state, "ready")
   })
   // Clean and equal to its upstream: at startup Desk would switch this back; mid-session it must not.
   git(fixture.desk, "switch", "feature")
@@ -578,11 +580,11 @@ test("a deliberate git switch mid-session stays put: writes go read-only with th
   assert.equal(write.isError, true)
   assert.equal(write.payload.code, "state_branch_mismatch")
   assert.match(write.payload.fix, /desk_doctor with \{"repair":"switch_state_branch"\}/u)
-  const status = await session.statusUntil(settled)
+  const status = await session.statusUntil(settled, SLOW_RUNNER_STATUS)
   assert.equal(status.state, "degraded:state_branch_mismatch")
   assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
   git(fixture.desk, "switch", "main")
-  assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+  assert.equal((await session.statusUntil((payload) => payload.state === "ready", SLOW_RUNNER_STATUS)).state, "ready")
 })
 
 test("a session that never reaches ready never switches a deliberate git switch back: only the first admission attempt may", async (t) => {
@@ -592,11 +594,11 @@ test("a session that never reaches ready never switches a deliberate git switch 
   // A launcher read-only code keeps the session degraded for its whole life.
   const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main", "--degraded", "identity_unavailable"] })
   t.after(() => session.close())
-  const first = await session.statusUntil(settled)
+  const first = await session.statusUntil(settled, SLOW_RUNNER_STATUS)
   assert.equal(first.state, "degraded:identity_unavailable")
   // Clean and equal to its upstream: the first attempt would have switched this back; every later one must not.
   git(fixture.desk, "switch", "feature")
-  const later = await session.statusUntil((payload) => payload.admission.attempts >= first.admission.attempts + 3, { deadlineMs: 30000, intervalMs: 500 })
+  const later = await session.statusUntil((payload) => payload.admission.attempts >= first.admission.attempts + 3, { ...SLOW_RUNNER_STATUS, intervalMs: 500 })
   assert.equal(later.state, "degraded:identity_unavailable")
   assert.equal(later.admission.state_branch.ok, false)
   assert.equal((await session.call("desk_status", { detail: true })).payload.admission.state_branch.kind, later.admission.state_branch.kind)
@@ -639,7 +641,7 @@ for (const launch of crashPaths) {
     // NODE_OPTIONS reaches a re-exec child too; the crash is injected into whichever process runs Desk.
     const session = await startDesk(fixture, { args: ["--activation-config", configPath], entry: launch.entry, node, env: { NODE_OPTIONS: `--import=${preload}` } })
     t.after(() => session.close())
-    assert.equal((await session.statusUntil(settled)).state, "ready")
+    assert.equal((await session.statusUntil(settled, SLOW_RUNNER_STATUS)).state, "ready")
     // Worker threads load the preload too, so a process can say it more than once.
     const armed = [...new Set([...session.stderr().matchAll(/\[crash-preload\] armed pid (\d+)/gu)].map((match) => Number(match[1])))]
     const deskPid = launch.reexec ? armed.find((pid) => pid !== session.child.pid) : session.child.pid
@@ -652,7 +654,7 @@ for (const launch of crashPaths) {
       ["unhandled_rejection", "injected unhandled rejection"],
     ])
     assert.match(session.stderr(), /state: degraded:runtime_exception/u)
-    assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+    assert.equal((await session.statusUntil((payload) => payload.state === "ready", SLOW_RUNNER_STATUS)).state, "ready")
     const write = await session.call("task_create", { track: "ops", slug: "after-crash-write", title: "Still serving" })
     assert.equal(write.isError, false, JSON.stringify(write.payload))
     assert.equal(session.child.exitCode, null, "the process is still running")
