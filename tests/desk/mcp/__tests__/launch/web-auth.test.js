@@ -301,7 +301,7 @@ test("only frame owners may own child documents, and the main document must come
   }
 })
 
-test("allowed actions pass literal data and all raw commands are refused before dispatch", async () => {
+test("actions pass literal data, scripts and the formerly refused commands run as given, and only unusable snapshot options are refused", async () => {
   const root = await mkTempRoot("auth-actions-")
   const native = fakeDriver()
   native.page.evaluateHandle = () => { throw new Error(PASSWORD) }
@@ -315,12 +315,39 @@ test("allowed actions pass literal data and all raw commands are refused before 
     noPassword(result)
     assert.equal(JSON.stringify(result).includes(literal), false)
     assert.equal(native.calls.find((call) => call[0] === "fill")[1], literal)
-    for (const args of [["eval", "() => 1"], ["run-code", "async page => 1"], ["console"], ["response-body", "1"], ["snapshot", "--raw"], ["snapshot", "--json"], ["snapshot", "--filename=../outside"], ["goto", "javascript:1"]]) {
+    native.page.evaluateHandle = async (script) => ({ script, dispose: async () => {} })
+    native.page.evaluate = async (script, argument) => {
+      native.calls.push(["page.evaluate", script, argument])
+      return argument?.[0]?.script !== undefined ? { script: argument[0].script, argument: null } : { script: "storage", argument }
+    }
+    native.page.once = (event, handler) => native.calls.push(["page.once", event, handler.length])
+    for (const method of ["down", "up"]) native.page.keyboard[method] = async (...args) => { native.calls.push([`keyboard.${method}`, ...args]) }
+    for (const method of ["move", "down", "up"]) native.page.mouse[method] = async (...args) => { native.calls.push([`mouse.${method}`, ...args]) }
+    const evaluated = await adapter.call(["eval", "() => document.title"])
+    assert.deepEqual(evaluated.result, { script: "() => document.title", argument: null }, "a script runs as given and its value comes back as it is")
+    assert.ok(evaluated.page.url)
+    const code = await adapter.call(["run-code", "async (page) => page.url()"])
+    assert.equal(code.result, "https://app.example.test/work")
+    assert.deepEqual((await adapter.call(["console"])).result, [])
+    await adapter.call(["keydown", "Shift"])
+    await adapter.call(["keyup", "Shift"])
+    await adapter.call(["mousemove", "5", "6"])
+    await adapter.call(["mousedown"])
+    await adapter.call(["mouseup", "right"])
+    await adapter.call(["dialog-accept", "yes"])
+    assert.deepEqual((await adapter.call(["localstorage-get", "key"])).result.argument.slice(0, 3), ["local", "get", "key"])
+    await adapter.call(["sessionstorage-set", "k", "v"])
+    await adapter.call(["goto", "file:///etc/hosts"])
+    await adapter.call(["goto", "javascript:1"])
+    assert.ok(native.calls.some((call) => call[0] === "goto" && call[1] === "file:///etc/hosts"), "any address is passed on")
+    assert.ok(native.calls.some((call) => call[0] === "page.once" && call[1] === "dialog"))
+    assert.ok(native.calls.some((call) => call[0] === "keyboard.down" && call[1] === "Shift") && native.calls.some((call) => call[0] === "mouse.up" && call[1].button === "right"))
+    for (const args of [["snapshot", "--raw"], ["snapshot", "--json"], ["snapshot", "--filename=../outside"]]) {
       const before = native.calls.length
-      await assert.rejects(adapter.call(args), /AUTH_/u)
+      await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u)
       assert.equal(native.calls.length, before)
     }
-    assert.equal(native.calls.some((call) => call[0] === "cdp" && /^Runtime\.(?:evaluate|callFunctionOn)/u.test(call[1])), false)
+    assert.equal(native.calls.some((call) => call[0] === "cdp" && /^Runtime\.(?:evaluate|callFunctionOn)/u.test(call[1])), false, "scripts go through the page API, never raw protocol evaluation")
   } finally { await adapter.close() }
 })
 
@@ -954,7 +981,6 @@ test("validated native history viewport mouse and no-argument locator actions di
     assert.ok(native.calls.some(call => call[0] === "setViewportSize" && call[1].width === 640))
     assert.ok(native.calls.some(call => call[0] === "wheel" && call[1] === 1 && call[2] === -2))
     assert.ok(native.calls.some(call => call[0] === "selectOption" && call[1] === "literal"))
-    await assert.rejects(adapter.call(["goto", "not a URL"]), /AUTH_URL_REFUSED/u)
     await assert.rejects(adapter.call(["resize", "0", "10"]), /AUTH_ARGUMENTS_REFUSED/u)
   } finally { await adapter.close() }
 })
@@ -2145,33 +2171,34 @@ test("press with only a key presses it on whatever has focus", async () => {
     assert.equal(result.actionMayHaveApplied, true)
     assert.ok(result.snapshot)
     await adapter.call(["press", "Shift+Tab"])
-    for (const key of ["", "Enter Enter", "a".repeat(41)]) await assert.rejects(adapter.call(["press", key]), /AUTH_ARGUMENTS_REFUSED/u)
+    await assert.rejects(adapter.call(["press", ""]), /AUTH_ARGUMENTS_REFUSED/u)
+    await adapter.call(["press", " "])
+    assert.ok(native.calls.some(call => call[0] === "keyboard.press" && call[1] === " "), "a space is a key like any other")
     native.page.keyboard.press = async () => { throw new Error(PASSWORD) }
     await assert.rejects(adapter.call(["press", "Enter"]), error => /AUTH_ACTION_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
   } finally { await adapter.close() }
 })
 
-test("every refusal says what to do instead, and none points at eval or page scripts", async () => {
+test("every failure says what to do instead, a command mine lacks is unknown rather than refused, and a script's own error comes back", async () => {
   const root = await mkTempRoot("auth-native-hints-")
   const native = fakeDriver()
   const adapter = adapterFor(native, root)
   try {
-    for (const command of ["eval", "run-code", "evaluate", "console", "wait-for"]) {
+    for (const command of ["evaluate", "wait-for", "constructor"]) {
       await assert.rejects(adapter.call([command, "document.title"]), error => {
-        assert.match(error.message, /^AUTH_COMMAND_REFUSED: /u)
-        for (const word of ["snapshot", "wait", "goto", "click", "fill", "press", "reload"]) assert.ok(error.message.includes(word), word)
-        assert.match(error.message, /eval.*never needed/u)
+        assert.match(error.message, /^AUTH_COMMAND_UNKNOWN: /u)
+        for (const word of ["snapshot", "wait", "goto", "click", "fill", "press", "reload", "eval", "run-code"]) assert.ok(error.message.includes(word), word)
         return true
       })
     }
+    native.page.evaluateHandle = async () => { throw new Error("boom: the script's own words") }
+    await assert.rejects(adapter.call(["eval", "() => nope()"]), /AUTH_SCRIPT_FAILED: .*The script said: boom: the script's own words/u)
     await assert.rejects(adapter.call(["click", "e999"]), /AUTH_TARGET_REFUSED.*\["snapshot"\]/u)
-    await assert.rejects(adapter.call(["goto", "file:///etc"]), /AUTH_URL_REFUSED.*https/u)
   } finally { await adapter.close() }
   for (const code of auth.FAILURE_CODES) {
     const message = auth.fail(code).message
     assert.ok(message.startsWith(`${code}: desk-web: `), code)
     assert.ok(message.includes(`; to file a bug with its evidence, call friction_add with {"error_code":"${code.toLowerCase()}"}; `), code)
-    assert.equal(/\beval\b(?!.*never needed)/u.test(message), false, code)
   }
   assert.match(auth.fail("AUTH_SOMETHING_NEW").message, /^AUTH_SOMETHING_NEW: desk-web: browser command: .*; to look further, .*; to file a bug with its evidence/u, "an unlisted code still gets the general advice")
 })
@@ -3413,6 +3440,37 @@ test("in a real page, a click that does nothing says so, one that changes the pa
     const stuck = await adapter.call(["wait", "never shows"])
     assert.ok(Date.now() - started < 10000)
     assert.ok(stuck.waited.stuck)
+  } finally {
+    await adapter.close()
+    server.close()
+  }
+})
+
+test("in a real page, eval runs functions and expressions as given, with or without an element, and the other formerly refused commands work", { skip: process.env.DESK_TEST_PLAYWRIGHT_CORE ? false : "needs DESK_TEST_PLAYWRIGHT_CORE", timeout: 120000 }, async () => {
+  const http = await import("node:http")
+  const playwright = require(process.env.DESK_TEST_PLAYWRIGHT_CORE)
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "text/html")
+    response.end(`<title>Scripts</title><button id=go>Go</button><script>console.warn("heads up")</script>`)
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const root = await mkTempRoot("auth-eval-real-")
+  const context = await playwright.chromium.launchPersistentContext(path.join(root, "profile"), { headless: true })
+  const adapter = auth.create(context, root, 30000, () => {}, {})
+  try {
+    const opened = await adapter.call(["goto", `http://127.0.0.1:${server.address().port}/`])
+    assert.equal((await adapter.call(["eval", "async () => document.title"])).result, "Scripts")
+    assert.equal((await adapter.call(["eval", "document.title.length"])).result, 7)
+    assert.equal((await adapter.call(["eval", "() => ({ a: [1, 2] })"])).result.a[1], 2)
+    const button = opened.text.match(/button \[ref=(e\d+)\]/u)?.[1]
+    assert.equal((await adapter.call(["eval", "(el) => el.id", button])).result, "go")
+    assert.equal((await adapter.call(["localstorage-set", "k", "v"])).result, null)
+    assert.equal((await adapter.call(["localstorage-get", "k"])).result, "v")
+    assert.deepEqual((await adapter.call(["localstorage-list"])).result, { k: "v" })
+    assert.equal((await adapter.call(["run-code", "async (page) => page.title()"])).result, "Scripts")
+    assert.equal((await adapter.call(["console", "warning"])).result[0].text, "heads up")
+    await adapter.call(["press", " "])
+    await assert.rejects(adapter.call(["eval", "() => { throw new Error('nope') }"]), /AUTH_SCRIPT_FAILED.*nope/u)
   } finally {
     await adapter.close()
     server.close()

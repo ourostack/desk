@@ -423,15 +423,18 @@ test("mine uses the owned native API and never opens or closes the CLI", async (
   assert.equal(calls().length, 0)
 })
 
-test("mine refuses arbitrary eval and emits owned redacted text JSON and artifacts", async () => {
+test("mine runs eval as given, and emits owned redacted text JSON and artifacts", async () => {
   const { options, profiles, calls } = await setup()
   makeProfile(path.join(profiles, "edge"))
   const native = fakeDriver()
   const controller = web.createController({ ...options, authDriver: native.driver })
   const opened = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
   try {
-    const denied = await controller.call("browser_command", { contextId: opened.contextId, args: ["eval", "() => document.querySelector('input').value"] })
-    assert.equal(denied.isError, true)
+    native.page.evaluateHandle = async (script) => ({ script, dispose: async () => {} })
+    native.page.evaluate = async (call, [source]) => `ran ${source.script}`
+    const ran = await controller.call("browser_command", { contextId: opened.contextId, args: ["eval", "() => document.querySelector('input').value"] })
+    assert.equal(ran.isError, false, text(ran))
+    assert.equal(json(ran).result, "ran () => document.querySelector('input').value")
     const snapshot = await controller.call("browser_command", { contextId: opened.contextId, args: ["snapshot", "--save"] })
     assert.equal(snapshot.isError, false, text(snapshot))
     assert.ok(text(snapshot).includes("[redacted]"))
@@ -1269,8 +1272,7 @@ test("browser_command runs only page commands, refuses options that switch sessi
   const before = calls().length
   for (const args of [undefined, [], [1]]) assert.match(await run(args), /args must be a list of strings/u)
   // The CLI takes the first argument that is not an option as the command, so a leading option or "--" must not let these through.
-  for (const args of [["open"], ["close"], ["kill-all"], ["close-all"], ["attach"], ["list"], ["run-code", "async page => 1"], ["state-save"], ["cookie-list"],
-    ["--json", "kill-all"], ["--raw", "close-all"], ["--", "kill-all"], ["--raw", "list", "--all"], ["--json", "attach", "--cdp=msedge"], ["-s=other", "snapshot"]]) {
+  for (const args of [["open"], ["close"], ["kill-all"], ["close-all"], ["attach"], ["list"], ["--json", "kill-all"], ["--raw", "close-all"], ["--", "kill-all"], ["--raw", "list", "--all"], ["--json", "attach", "--cdp=msedge"], ["-s=other", "snapshot"]]) {
     assert.match(await run(args), /must start with a page command/u, JSON.stringify(args))
   }
   for (const args of [["snapshot", "--session=x"], ["snapshot", "--session", "x"], ["snapshot", "--no-session"], ["goto", "--browser=chrome", "u"], ["snapshot", "--profile"],
