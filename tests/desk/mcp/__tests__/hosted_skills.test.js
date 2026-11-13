@@ -147,9 +147,19 @@ test("desk_skill called with no arguments lists the plugin's skills from the run
 test("withHostedStartup's own sleep really waits between polls", async () => {
   const replies = [answer({ detail_pending: true }), answer({ state: "ready" })]
   const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", waitMs: 50, pollMs: 5 })
-  const started = Date.now()
-  const result = await callTool({ name: "desk_status" })
-  assert.ok(Date.now() - started >= 4)
+  const originalSetTimeout = globalThis.setTimeout
+  const delays = []
+  globalThis.setTimeout = (handler, delay, ...args) => {
+    delays.push(delay)
+    return originalSetTimeout(handler, delay, ...args)
+  }
+  let result
+  try {
+    result = await callTool({ name: "desk_status" })
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+  }
+  assert.ok(delays.includes(5))
   assert.equal(result.content.length, 2)
 })
 
