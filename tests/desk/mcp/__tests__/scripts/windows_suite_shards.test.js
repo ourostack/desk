@@ -63,12 +63,12 @@ test("with no table every file weighs the same, so the split is even by count", 
   assert.deepEqual(plan.map((s) => s.files.length).sort(), [2, 2, 3, 3])
 })
 
-test("the checked-in table plans the workflow's shards inside the budget: none over 30 minutes and none far above the mean", () => {
+test("the checked-in table plans the workflow's shards inside the budget: none over 10 minutes and none far above the mean", () => {
   const real = loadDurations()
   const plan = assignShards(suiteFiles(testsRoot), WINDOWS_SHARDS, real)
   const mean = plan.reduce((n, s) => n + s.seconds, 0) / plan.length
   const worst = Math.max(...plan.map((s) => s.seconds))
-  assert.ok(worst <= 30 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
+  assert.ok(worst <= 10 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
   assert.ok(worst <= mean * 1.1, `the longest shard (${Math.round(worst)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
   // The per-file limit is 30 minutes; a file near it cannot be balanced away and needs its own fix.
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
@@ -127,7 +127,7 @@ test("refresh takes the median per file, so one outlier run does not set the wei
 test("the workflow's shard list, shard arguments and verdict all say the same number, and main skips it only for the docs no test reads", () => {
   const text = readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8")
   const workflow = load(text)
-  assert.equal(workflow.jobs["windows-suite"].strategy["max-parallel"], 8)
+  assert.equal(workflow.jobs["windows-suite"].strategy["max-parallel"], WINDOWS_SHARDS)
   const shards = workflow.jobs["windows-suite"].strategy.matrix.shard
   assert.deepEqual(shards, Array.from({ length: WINDOWS_SHARDS }, (_, i) => i + 1))
   const totals = [...text.matchAll(/matrix\.shard \}\}\/(\d+)/gu)].map((m) => Number(m[1]))
