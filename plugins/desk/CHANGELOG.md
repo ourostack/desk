@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.121 — 2026-11-13
+
+Crew's `crew.js` gains `initiative new <slug>`, `initiative adopt <file-or-folder> [--slug]` and `initiative check`, so a shared initiative is laid out the same way every time. `new` makes `_shared/tracks/<slug>/README.md` from the card template. `adopt` moves an existing document or folder into its own `_shared/tracks/<slug>/` (copying one that lives outside the workspace), keeps it beside a new card that links it, and leaves a one-line pointer where a moved Markdown file was; a folder that already has a `README.md`, `track.md` or `index.md` keeps that card. `check` lists any loose file in `_shared/tracks/` and any folder without a card, leads with the `adopt` command that fixes each, and exits 1. The commands change the working tree only; publishing stays with the shared-path protocol.
+
+The `shared-initiative` skill now says to run these commands instead of making or moving files by hand, and its description also covers moving an existing document into shared tracks, making work shared and inviting collaborators, so it loads for those requests (Crew 0.2.22). Its eval gains a case for adopting an existing document.
+
+Every Desk result that carries a route now opens with a `next` sentence, as its first key: run the route's steps now, in order, then read back the remote; a held route says to read it back and report. This covers task_create, task_move, task_archive and its pending answers, track_create, track_update, track_rename, note_leave, note_ack, lesson_add (personal, desk and team), and desk_save, as task_update, improvement and friction_add already did. The `status` stays as it was, and no route changes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.120 — 2026-11-13
 
 Every `desk_status` answer, compact or `detail: true`, now carries `runtime`: the serving process's own identity (plugin name and version, the loaded plugin folder, the source-mirror path and hash, whether the runtime is loaded, and the newest-release check when there was one). It is read in-process, never behind the slow search and index status, so a call that returns `detail_pending: true` still says which Desk answered. The answer also names exactly which fields are pending (`pending`), so a consumer no longer has to poll to tell missing metadata from an old runtime. `desk_doctor` carries the same `runtime` identity.
