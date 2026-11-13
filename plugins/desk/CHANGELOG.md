@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.120 — 2026-11-13
+
+Every `desk_status` answer, compact or `detail: true`, now carries `runtime`: the serving process's own identity (plugin name and version, the loaded plugin folder, the source-mirror path and hash, whether the runtime is loaded, and the newest-release check when there was one). It is read in-process, never behind the slow search and index status, so a call that returns `detail_pending: true` still says which Desk answered. The answer also names exactly which fields are pending (`pending`), so a consumer no longer has to poll to tell missing metadata from an old runtime. `desk_doctor` carries the same `runtime` identity.
+
+The `desk-web` tool descriptions match what `mine` does now: `eval`, `run-code`, raw input, storage, the console and dialogs run as given, and the stale "raw commands are refused" claims in the `browser_context` description and the `mine` open note are gone. Both descriptions are shorter. The `browser_context` open reply carries the same `runtime` identity (Desk version and loaded plugin folder), so a browser result binds to the code that produced it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.119 — 2026-11-13
 
 Desk's errors and tool descriptions are now checked against Ouro AX by its surface checker: an error opens with its fix and carries a stable code, and a tool description says when to use the tool and stays short. A test records today's findings per check and file in `tests/desk/mcp/__tests__/runtime/ax-surfaces-baseline.json`; a new finding fails, and so does a fixed one still recorded, so the count only goes down.
