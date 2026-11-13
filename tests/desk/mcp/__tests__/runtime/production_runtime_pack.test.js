@@ -324,7 +324,8 @@ test("production runtime dependency pack is committed at the current canonical p
   assert.deepEqual(
     expectations.map((expectation) => expectation.target),
     ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137", "win32-x64-node-147"],
-    const expectedPackDir = path.join(
+  )
+  for (const expectation of expectations) {
       mcpRoot,
       "artifacts",
       "runtime-deps",

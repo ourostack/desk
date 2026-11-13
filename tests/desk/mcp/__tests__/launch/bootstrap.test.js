@@ -313,7 +313,7 @@ test("on a fake Windows layout the bootstrap picks the packed Node, not the newe
     arch: "x64",
     env: { APPDATA: appData, PATH: "" },
   }))
-  assert.deepEqual(selection.packAbis, ["137"])
+  assert.deepEqual(selection.packAbis, ["137", "147"])
   assert.equal(selection.node.path, packed)
   assert.equal(selection.node.version, "24.9.0")
 })

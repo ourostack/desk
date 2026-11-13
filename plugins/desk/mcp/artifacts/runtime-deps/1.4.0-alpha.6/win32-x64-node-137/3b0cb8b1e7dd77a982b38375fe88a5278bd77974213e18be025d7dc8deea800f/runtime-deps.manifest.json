@@ -1,23 +1,23 @@
 {
   "schema_version": 1,
-  "created_at": "2026-11-05T16:41:37.023Z",
+  "created_at": "2026-11-13T06:49:08.822Z",
   "plugin": {
     "name": "@ourostack/desk-mcp",
     "version": "1.4.0-alpha.6"
   },
   "platform": {
-    "os": "darwin",
-    "arch": "arm64",
+    "os": "win32",
+    "arch": "x64",
     "node_abi": "137"
   },
   "package_lock": {
     "path": "plugins/desk/mcp/package-lock.json",
-    "sha256": "38490f7339e65bf6bba4ade5ee08971b6039c40bd1c0e63870784cbc0c4e7cbc",
-    "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    "sha256": "2a31491c0ccd662c99c7439797ed8c276f237cdcf0df02ef2564ebf6e1edc429",
+    "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
   },
   "archive": {
     "file": "runtime-deps.tgz",
-    "sha256": "1dc771dbb4f56d92f318f8abc0d9897d76bb587ead19565f381f1b21e7d51bc1",
+    "sha256": "4c06671ce44de60be84b1943b46f8171940046889864c049a947b7bb8564d42f",
     "root_entries": [
       "node_modules/",
       "package.json",
@@ -77,7 +77,7 @@
     },
     {
       "name": "better-sqlite3",
-      "version": "11.10.0",
+      "version": "12.11.1",
       "lock_path": "node_modules/better-sqlite3",
       "native": true
     },
@@ -760,9 +760,9 @@
       "native": true
     },
     {
-      "name": "sqlite-vec-darwin-arm64",
+      "name": "sqlite-vec-windows-x64",
       "version": "0.1.9",
-      "lock_path": "node_modules/sqlite-vec-darwin-arm64",
+      "lock_path": "node_modules/sqlite-vec-windows-x64",
       "native": true
     },
     {

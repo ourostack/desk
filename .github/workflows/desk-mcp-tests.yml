@@ -796,7 +796,6 @@ jobs:
 
       - name: Retain the verified native runtime dependency pack
         id: retain-runtime-pack
-        if: ${{ always() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:

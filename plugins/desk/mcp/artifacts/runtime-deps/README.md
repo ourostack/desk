@@ -16,7 +16,7 @@ Each pack directory contains:
 - `runtime-deps.manifest.json`
 - `runtime-deps.sha256`
 
-Darwin ARM64 ships separate packs for Node 22 (ABI 127) and Node 24 (ABI 137). A pack is specific to its native ABI; the Node 22 binary must not be relabeled for Node 24. The existing `desk-runtime-packs` CI matrix builds, verifies, and loads native dependencies on the exact target before its output is promoted to this directory.
+Darwin ARM64 ships separate packs for Node 22 (ABI 127) and Node 24 (ABI 137). Linux x64 ships Node 22 (ABI 127). Windows x64 ships Node 24 (ABI 137) and Node 26 (ABI 147). A pack is specific to its native ABI; the Node 22 binary must not be relabeled for Node 24. The existing `desk-runtime-packs` CI matrix builds, verifies, and loads native dependencies on the exact target before its output is promoted to this directory.
 
 Runtime restoration uses the installed MCP version and production lock hash, then mirrors that installation's current source. Missing or unsupported packs are reported explicitly through the diagnostic tool catalogue; they do not authorize loading an older cached source mirror. Adding a supported pack does not upgrade a server already running from an older mirror: installed-plugin refresh and a new session must be qualified separately, preserving any cards that were written before the failure.
 

@@ -10,36 +10,45 @@
       "platform": "darwin",
       "arch": "arm64",
       "node_abi": "127",
-      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-      "archive_sha256": "20eded34a9894ff244647fac6141187f06cefbc4eee3407d987915175ca6ba2e",
-      "artifact_path": "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+      "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f",
+      "archive_sha256": "45a1c48c46ae0b24b8feba3c471aecd254587e5e39395d4fa2ee1adad8ca0019",
+      "artifact_path": "darwin-arm64-node-127/3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
     },
     {
       "id": "darwin-arm64-node-137",
       "platform": "darwin",
       "arch": "arm64",
       "node_abi": "137",
-      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-      "archive_sha256": "1dc771dbb4f56d92f318f8abc0d9897d76bb587ead19565f381f1b21e7d51bc1",
-      "artifact_path": "darwin-arm64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+      "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f",
+      "archive_sha256": "69bc056c13385c253a733b5fc72f300c2c6e6b656f880befbfe3cba154b4a278",
+      "artifact_path": "darwin-arm64-node-137/3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
     },
     {
       "id": "linux-x64-node-127",
       "platform": "linux",
       "arch": "x64",
       "node_abi": "127",
-      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-      "archive_sha256": "2d54e2dfd6ff33c7ccc97306af421cef745982e40c8a092c47b4e968ad6ae62f",
-      "artifact_path": "linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+      "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f",
+      "archive_sha256": "08a3a092e16e06044df8f3acf054e116b6b12d3e70e5bb3f172ebeb0b3d5a085",
+      "artifact_path": "linux-x64-node-127/3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
     },
     {
       "id": "win32-x64-node-137",
       "platform": "win32",
       "arch": "x64",
       "node_abi": "137",
-      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-      "archive_sha256": "04556a33027b9f1c5cb270cdedb7ba2c02720332da4e6e48a056f79e9eab3f05",
-      "artifact_path": "win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+      "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f",
+      "archive_sha256": "4c06671ce44de60be84b1943b46f8171940046889864c049a947b7bb8564d42f",
+      "artifact_path": "win32-x64-node-137/3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
+    },
+    {
+      "id": "win32-x64-node-147",
+      "platform": "win32",
+      "arch": "x64",
+      "node_abi": "147",
+      "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f",
+      "archive_sha256": "d402ca53dbfcbbe769e2ce88f206c3c008e383f01215bda08cbfd5813c178d16",
+      "artifact_path": "win32-x64-node-147/3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
     }
   ]
 }
