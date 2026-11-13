@@ -272,6 +272,12 @@ function validateBatch(paths, label) {
 const sessions = new Map()
 const MAX_STDERR_CHARS = 4096
 
+// Ends the provider processes this process started. A test that ends its own fixture calls it, so the provider does not hold the
+// fixture for its idle timeout.
+export function closeWindowsAclSessions() {
+  for (const session of [...sessions.values()]) session.retire(new Error("Windows ACL provider closed"))
+}
+
 function createSession(executable, args, idleMs) {
   // Windows PowerShell cannot safely autoload PowerShell Core modules inherited from the host.
   const env = Object.fromEntries(

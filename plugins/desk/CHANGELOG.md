@@ -1,5 +1,49 @@
 # desk plugin — changelog
 
+## 3.2.101 — 2026-11-13
+
+### Card writes from a worktree on a feature branch land on main
+
+A desk checkout on a branch other than the remote's default branch, such as a worktree for parallel work, used to refuse every card write with `write_branch_mismatch`, because the worktree cannot switch to the default branch while the main checkout holds it. Desk now publishes those writes to the default branch itself: it stages the card in the worktree as before, builds one commit on the remote's default branch from the staged entries, and publishes it through the repository's pull-request policy, or by a fast-forward push when there is none. The worktree's own branch gets no commit, and the main checkout's HEAD, index and working tree are not touched. The refusal that remains names what Desk could not reach: `write_publication_unreachable` when the remote's default branch is not in the checkout's Git data, with the command that shows the remote and the fetch that fixes it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.100 — 2026-11-13
+
+### The Windows ACL helper waits longer for its first answer
+
+On Windows, Desk's ACL helper now waits up to 45 s instead of 20 s for its first answer, so a slow cold PowerShell start no longer fails a protected write ([`mcp/src/factory/windows-acl.js`](mcp/src/factory/windows-acl.js)).
+
+On Windows, `task_archive` gives a cold PowerShell start up to 30 s to become ready instead of 5 s, so a slow first start no longer fails the archive with "native handle capture readiness timeout" ([#573](https://github.com/ourostack/desk/issues/573)).
+
+### Feedback about Desk and its plugins goes to the Desk issues
+
+Feedback about Desk, Crew, Superpowers and Plain Language was split across several places, so it was easy to lose. Now system friction about one of those plugins also gets an issue in `ourostack/desk`: the agent searches the open issues, comments on a match or opens one, and the friction entry links to it. The issue describes the pattern only, under the same public-safety rules as Desk problem reports. Friction that is a Desk mechanism failing at its own job still goes through Desk problem reports. The desk-local friction log and its improvement cards work as before.
+
+### The release-channel move no longer costs Claude Desk
+
+The release-channel migration now counts another plugin as bringing Desk only on the engines its cached manifest supports. So Claude no longer loses Desk when MS Desk's `agency.toml` entry has no `engines` line and MS Desk supports only Copilot.
+
+### Captured saves say when newer edits are still unsaved
+
+When Desk finishes a captured save after a failed commit, the route now ends by checking whether the same paths hold edits newer than the committed change. If they do, the route says those edits are not delivered, instead of leaving the agent to think everything it saved was committed.
+
+### Name the Node versions Desk supports when no local Node matches
+
+When no installed Node matches a shipped runtime pack, Desk's `use_shipped_node` remediation now names the Node versions it supports on this machine, such as "Install Node 24", instead of module ABI numbers. A per-user install is enough and needs no administrator rights, for example with fnm under `%LOCALAPPDATA%` on Windows. Desk's launcher finds that Node by itself once the Desk MCP server reconnects.
+
+Plain Language 0.2.11 no longer injects its whole writing contract into every session and every subagent. Its session-start and subagent hooks are gone, so each turn no longer carries about 2,600 tokens of prose rules. The skill is still installed and loads when an agent writes something a person will read, such as a chat reply, a pull request, a review or a commit message; its [trigger](../../plain-language/skills/plain-language/SKILL.md) now names those outputs.
+
+### Desk sync uses the GitHub account that owns the desk's remote
+
+The Copilot app starts Desk with Git settings that make every GitHub request use the session's own account. A session working in a repository owned by one account therefore got "Repository not found" from a desk whose remote another account owns, and boot reported "sync failed: remote refused this host's credentials" while the desk's commits stayed on the machine.
+
+When those settings are present, Desk's fetch, pull and push now use the signed-in `gh` account that can reach the remote: the account named in the remote's URL, else the repository's owner, else any other account `gh` holds. Organizations own many desks, so Desk asks `gh` whether each account can read the repository (or push to it, for a push). The token is read from `gh` when Git asks, never written into config, and no global Git or `gh` account changes. If no signed-in account can reach the remote, Git behaves as before.
+
+A refused pull now explains itself in one line in the Ouro AX error shape: the probable cause, the command that shows Git's own answer, the one command that files the failure with its evidence, and that local work continues while Desk retries.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.99 — 2026-11-13
 
 ### Desk no longer asks you to allow an extension in every new session

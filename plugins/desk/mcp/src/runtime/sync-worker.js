@@ -64,6 +64,7 @@ import { redactCredentialLikeText } from "../util/redact.js"
 import { createGitReader } from "./git-read-worker.js"
 import { publicationRecovery } from "./pr-publication.js"
 import { publicationDeferred } from "./publication-mode.js"
+import { deliveryIsPublication } from "../util/main-publish.js"
 import { NOT_A_DESK_DEFECT, blockedWords, deliver, gitEnv, undeliveredCommits } from "./deliver.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -560,6 +561,8 @@ export function defaultSpawnWorker({ root, env, debounceMs, spawnImpl = spawn })
  */
 export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnWorker = defaultSpawnWorker }) {
   if (publicationDeferred(env)) return
+  // Card commits from a checkout on a feature branch were already published to the default branch when they were written.
+  if (deliveryIsPublication(root)) return
   try {
     spawnWorker({ root, env, debounceMs })
   } catch {

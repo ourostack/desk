@@ -15,6 +15,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths, commitBranchRefusal } from "../util/git-stage.js"
+import { defaultBranchForPublication } from "../util/main-publish.js"
 import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/paths.js"
 import { readRemotes } from "../util/git-config-file.js"
 
@@ -114,8 +115,8 @@ export async function recordLocalOnlyOnCards({ cards, deskRoot, spawnGit = spawn
       const git = isGitRepository(deskRoot, spawnGit)
       const rel = deskRelativePath(deskRoot, card.file)
       if (git && hasUnstagedWork(deskRoot, [rel], spawnGit)) continue
-      // Off the desk's branch, Desk writes nothing: the card stays unrecorded.
-      if (git && commitBranchRefusal(deskRoot, spawnGit, stateBranch) !== null) continue
+      // Off the desk's branch, Desk writes nothing: the card stays unrecorded. Boot never publishes to the default branch, so a checkout on another branch is skipped here too.
+      if (git && (commitBranchRefusal(deskRoot, spawnGit, stateBranch) !== null || (typeof stateBranch !== "string" && defaultBranchForPublication(deskRoot, spawnGit) !== null))) continue
       const parsed = await readMarkdown(card.file)
       await writeMarkdown(card.file, { ...parsed.data, repos: entries }, parsed.content)
       if (git && stagePaths(deskRoot, [rel], spawnGit, stateBranch).ok) commitPaths(deskRoot, [rel], `boot: record local-only clone on ${card.track}/${card.slug}`, spawnGit, stateBranch)
