@@ -1426,7 +1426,7 @@ export async function bootOnce({
     .catch(() => null)
   // Who else works in this repo on this machine (`./other-sessions.js`): a few local reads with their own budget.
   const others = Promise.resolve()
-    .then(() => (headless ? null : otherSessionsFn({ env, cwd })))
+    .then(() => (headless ? null : otherSessionsFn({ env, cwd, now, platform, home: homeDir })))
     .catch(() => null)
 
   // The network checks start now and run while the card guard and the sync run, so boot waits

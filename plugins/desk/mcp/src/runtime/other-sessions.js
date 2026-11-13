@@ -9,7 +9,6 @@
 
 import { execFile } from "node:child_process"
 import { readFileSync, statSync } from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 import { promisify } from "node:util"
 
@@ -22,7 +21,7 @@ const MAX_CANDIDATES = 40
 // An `agency copilot ...` process is one session; a bare `copilot` or `copilot-runtime` is one too, unless it is a helper of one (an extension or a child of an `agency copilot`).
 const SESSION_COMMAND = /(?:^|[\\/])(?:agency(?:\.exe)?\s+copilot|copilot(?:-runtime)?(?:\.exe)?)(?:\s|$)/u
 
-const here = (dir, home) => (home !== "" && (dir === home || dir.startsWith(home + path.sep)) ? `~${dir.slice(home.length)}` : dir)
+const tilde = (dir, home) => (dir.startsWith(home + path.sep) ? `~${dir.slice(home.length)}` : dir)
 
 /** The worktrees `git worktree list --porcelain` prints, main checkout first: `{ dir, branch, bare }`. */
 export function parseWorktrees(porcelain) {
@@ -64,8 +63,8 @@ function gitDirOf(dir) {
   try {
     const dotGit = path.join(dir, ".git")
     if (statSync(dotGit).isDirectory()) return dotGit
-    const pointer = /^gitdir:\s*(.+)$/mu.exec(readFileSync(dotGit, "utf8"))
-    return pointer === null ? null : path.resolve(dir, pointer[1].trim())
+    // A `.git` file that names no folder throws here, and reads as no git folder.
+    return path.resolve(dir, /^gitdir:\s*(.+)$/mu.exec(readFileSync(dotGit, "utf8"))[1].trim())
   } catch {
     return null
   }
@@ -87,32 +86,28 @@ function lastGitActivity(dir) {
   return latest
 }
 
-function ago(ms) {
-  const minutes = Math.max(0, Math.round(ms / 60000))
-  if (minutes < 1) return "just now"
-  if (minutes < 90) return `${minutes} min ago`
+// "5 min", "3 h" or "9 days".
+function span(ms) {
+  const minutes = Math.max(1, Math.round(ms / 60000))
+  if (minutes < 90) return `${minutes} min`
   const hours = Math.round(minutes / 60)
-  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`
+  return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} days`
 }
 
-function upFor(ms) {
-  const minutes = Math.round(ms / 60000)
-  return minutes < 90 ? `${Math.max(minutes, 1)} min` : minutes < 48 * 60 ? `${Math.round(minutes / 60)} h` : `${Math.round(minutes / 1440)} days`
-}
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`
 
 /** The lines for the agent: what is where, then the rules. `trees` carry `dir`, `branch`, `activity` (ms or null) and `sessions` (how many other sessions run there). */
 export function describe({ trees, current, home, now }) {
   const rules = "Rules while others work here: never stash, reset, clean or switch branches in a shared checkout; never touch, move or remove another session's worktree; branch from origin/main in your own worktree (`git worktree add <dir> -b <branch> origin/main`), and remove only what you created."
   const line = (tree, index) => {
-    const parts = []
-    if (index === 0) parts.push("the shared main checkout")
-    parts.push(tree.branch)
-    const where = `- ${here(tree.dir, home)} (${parts.join(", ")})`
-    if (tree.dir === current) return `${where}: you are here${tree.sessions > 0 ? `; ${tree.sessions} other session${tree.sessions === 1 ? "" : "s"} run${tree.sessions === 1 ? "s" : ""} here too` : ""}`
+    const mine = tree.dir === current
+    const where = `- ${tilde(tree.dir, home)} (${index === 0 ? "the shared main checkout, " : ""}${tree.branch})`
     const facts = []
-    if (tree.sessions > 0) facts.push(`${tree.sessions} session${tree.sessions === 1 ? "" : "s"} running${tree.upMs === null ? "" : ` (up ${upFor(tree.upMs)})`}`)
-    if (tree.activity !== null) facts.push(`last git activity ${ago(now - tree.activity)}`)
-    return facts.length === 0 ? where : `${where}: ${facts.join("; ")}`
+    if (mine) facts.push("you are here")
+    if (tree.sessions > 0) facts.push(`${plural(tree.sessions, "session")} ${mine ? "besides yours" : `running (up ${span(tree.upMs)})`}`)
+    if (!mine && tree.activity !== null) facts.push(`last git activity ${span(now - tree.activity)} ago`)
+    // Only a worktree with something to say is listed (`lively`), so there is always a fact.
+    return `${where}: ${facts.join("; ")}`
   }
   const lively = (tree) => tree.dir === current || tree.sessions > 0 || (tree.activity !== null && now - tree.activity < QUIET_MS)
   // This session's own worktree first, then the ones with a running session, then the most recently touched.
@@ -122,8 +117,8 @@ export function describe({ trees, current, home, now }) {
   const listed = shownTrees.slice(0, SHOWN)
   const more = shownTrees.length - listed.length + quiet
   const sessions = trees.reduce((total, tree) => total + tree.sessions, 0)
-  const head = `Other work on this machine in this repo: ${trees.length} worktree${trees.length === 1 ? "" : "s"}, ${sessions} other running session${sessions === 1 ? "" : "s"}.`
-  return [head, ...listed.map((tree) => line(tree, trees.indexOf(tree))), ...(more > 0 ? [`- and ${more} more worktree${more === 1 ? "" : "s"}, quiet for a day or more or past this list; \`git worktree list\` shows them`] : []), rules]
+  const head = `Other work on this machine in this repo: ${plural(trees.length, "worktree")}, ${plural(sessions, "other running session")}.`
+  return [head, ...listed.map((tree) => line(tree, trees.indexOf(tree))), ...(more > 0 ? [`- and ${plural(more, "more worktree")}, quiet for a day or more or past this list; \`git worktree list\` shows them`] : []), rules]
 }
 
 async function sessionsByWorktree({ trees, current, env, platform, exec }) {
@@ -161,7 +156,7 @@ async function sessionsByWorktree({ trees, current, env, platform, exec }) {
  * `{ lines, worktrees, sessions }` for boot, or null when there is nobody else (one worktree and no other running session), no
  * repo, or nothing could be read in `budgetMs`. Never rejects.
  */
-export async function otherSessions({ cwd = process.cwd(), env = process.env, now = Date.now, platform = process.platform, home = env.HOME || os.homedir(), budgetMs = BUDGET_MS, exec } = {}) {
+export async function otherSessions({ cwd, env, now, platform, home, budgetMs = BUDGET_MS, exec }) {
   let timer
   const hard = new Promise((resolve) => { timer = setTimeout(() => resolve(null), budgetMs) })
   const work = (async () => {
