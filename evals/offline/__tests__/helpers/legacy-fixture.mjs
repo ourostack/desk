@@ -69,6 +69,9 @@ export function makeLegacyFixture(directory, variant) {
   if (variant === "verify-invalid-shape") receipt.cases = {};
   writeFileSync(join(directory, "source.txt"), source);
   writeFileSync(join(directory, "evals/fixture.json"), `${JSON.stringify(suite)}\n`);
+  // Today's committed state is grandfathered, so validate needs no run receipt for the fixed fixture.
+  mkdirSync(join(directory, "evals/receipts"), { recursive: true });
+  writeFileSync(join(directory, "evals/receipts/_baseline.json"), `${JSON.stringify({ schemaVersion: 1, grandfathered: { fixture: hash(JSON.stringify(suite)) } })}\n`);
   writeFileSync(join(directory, "receipt.json"), `${JSON.stringify(receipt)}\n`);
   return { suite, receipt };
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "grandfathered": {
+    "always-on-collaboration": "b8218bcff6d981c3e6c813ee3e6085a2b7031f4b217a4d1d9e0ef149ec4af542",
+    "core-meeting-capture": "94e4725e25d9d3b71f44579c82e30ed6f847facef7860eaf07b20da8498b3584",
+    "crew-shared-initiatives": "140d93804f401a5868d56a547a0bdfaeb7ad6c8d4792f1d743cb09c0a5032630",
+    "engineering-v2-kernel": "a80504a47725b3612a8c85a58224665382d5455b61e284644017c3af295a1871",
+    "human-experience-defaults": "20d274a323cc865118ecf8bd84da3a522ccb8add0965f1bb016d087a1f02b61a",
+    "human-owned-work": "dd11d4eab63a2a6a06247e6579fba2b0943651c9b0dc16a9a225106cf9053778",
+    "investigation-boundaries": "4fe5bd709d078d99c5a97836a64c3b3b5563b309ea54d22c77b9905ff172684e",
+    "issue-drain-intake": "3732d98c264eeae7cf90e50729cca86076124c2c03d390c34e991aa40e75a2e4",
+    "plain-language-corrections": "b38a33850261d2415a0cb202df3861712ce49b24166b8e6951436669f49bba87"
+  }
+}

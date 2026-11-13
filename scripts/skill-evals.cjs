@@ -499,6 +499,10 @@ function verifyReceipt(resultFile, repoRoot = process.cwd()) {
   }
   const entry = corpus.entries.find(({ suite }) => suite.id === receipt.suiteId);
   if (!entry) fail(`result receipt names unknown suite: ${receipt.suiteId}`);
+  return checkReceipt(receipt, entry);
+}
+
+function checkReceipt(receipt, entry) {
   if (receipt.sourceFingerprint !== entry.fingerprint) fail("result receipt sourceFingerprint does not match current sources");
   if (receipt.contractFingerprint !== contractFingerprint(entry.suite)) fail("result receipt contractFingerprint does not match the current contract");
   if (entry.suite.knownFailure) fail(`suite ${entry.suite.id} still records a knownFailure; clear it when the eval passes`);
@@ -538,6 +542,64 @@ function verifyReceipt(resultFile, repoRoot = process.cwd()) {
   return { suiteId: entry.suite.id, cases: expectedCases.size, checks: entry.suite.cases.reduce((total, testCase) => total + testCase.checks.length, 0) };
 }
 
+const receiptsDirectory = path.join("evals", "receipts");
+// Grandfathered contract fingerprints, one per suite, frozen when receipts were introduced. Never add to it: a moved
+// fingerprint needs a run receipt or a knownFailure instead.
+const baselineFile = path.join(receiptsDirectory, "_baseline.json");
+
+function receiptPath(root, suiteId) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(suiteId)) fail(`suite id ${JSON.stringify(suiteId)} cannot name a receipt file`);
+  return path.join(root, receiptsDirectory, `${suiteId}.json`);
+}
+
+function evidenceError(label, contract, reason) {
+  return `${label}: run \`node scripts/skill-evals.cjs record ${label} --result <harness-result.json>\` after a real run of this suite, or add "knownFailure" with an issue URL if it fails for an unrelated reason. Its fingerprint moved to ${contract.slice(0, 12)} without a matching run receipt (${reason}).`;
+}
+
+// A suite whose contract fingerprint is not the grandfathered one needs a current passing receipt or a knownFailure.
+function requireEvidence(repoRoot = process.cwd()) {
+  const root = path.resolve(repoRoot);
+  const totals = validateRepo(root);
+  const baselineLocation = path.join(root, baselineFile);
+  const baseline = fs.existsSync(baselineLocation) ? readJson(baselineLocation).grandfathered : {};
+  if (!isObject(baseline)) fail(`${baselineFile} needs a "grandfathered" object of suite id to contract fingerprint`);
+  for (const entry of totals.entries) {
+    if (entry.suite.knownFailure) continue;
+    const contract = contractFingerprint(entry.suite);
+    if (baseline[entry.suite.id] === contract) continue;
+    const label = path.relative(root, entry.file).replaceAll(path.sep, "/");
+    const location = receiptPath(root, entry.suite.id);
+    if (!fs.existsSync(location)) fail(evidenceError(label, contract, `${path.join(receiptsDirectory, `${entry.suite.id}.json`)} is missing`));
+    try {
+      checkReceipt(readJson(location), entry);
+    } catch (error) {
+      fail(evidenceError(label, contract, error.message));
+    }
+  }
+  return totals;
+}
+
+// Stamps the current fingerprints onto an external harness result and writes the receipt only if it passes verify.
+function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
+  const root = path.resolve(repoRoot);
+  const corpus = validateRepo(root);
+  const requested = fs.realpathSync(path.resolve(root, suiteFile));
+  const entry = corpus.entries.find(({ file }) => fs.realpathSync(file) === requested);
+  if (!entry) fail(`not an eval suite: ${suiteFile}`);
+  const input = resultFile === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : readJson(path.resolve(root, resultFile));
+  if (!isObject(input)) fail("harness result must be a JSON object with run and cases");
+  const stamped = { suiteId: entry.suite.id, sourceFingerprint: entry.fingerprint, contractFingerprint: contractFingerprint(entry.suite) };
+  for (const [key, current] of Object.entries(stamped)) {
+    if (input[key] !== undefined && input[key] !== current) fail(`harness result ${key} does not match the current suite; rerun the eval against it`);
+  }
+  const receipt = { schemaVersion, ...stamped, run: input.run, cases: input.cases };
+  const summary = checkReceipt(receipt, entry);
+  const location = receiptPath(root, entry.suite.id);
+  fs.mkdirSync(path.dirname(location), { recursive: true });
+  fs.writeFileSync(location, `${JSON.stringify(receipt, null, 2)}\n`);
+  return { ...summary, receipt: path.relative(root, location).replaceAll(path.sep, "/") };
+}
+
 function usage() {
   return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
 }
@@ -549,9 +611,15 @@ function main(args) {
     console.log(JSON.stringify(revisionCommand(args.slice(1))));
     return;
   }
+  if (command === "record") {
+    if (!first || second !== "--result" || !extra || args.length !== 4) fail("usage: node scripts/skill-evals.cjs record <suite-file> --result <harness-result.json|->");
+    const result = recordReceipt(first, extra);
+    console.log(`Recorded ${result.receipt}: ${result.cases} case(s), ${result.checks} check(s); commit it with the fingerprint change.`);
+    return;
+  }
   if (extra) fail(usage());
   if (command === "validate" && !second) {
-    const totals = validateRepo(first);
+    const totals = requireEvidence(first);
     console.log(`Validated ${totals.suites} suite(s), ${totals.requirements} requirement(s), ${totals.cases} case(s), ${totals.checks} check(s). behavior: UNVERIFIED - validation does not run or judge an agent.`);
     for (const { suite } of totals.entries) {
       if (suite.knownFailure) console.log(`KNOWN FAILURE ${suite.id}/${suite.knownFailure.case} (observed ${suite.knownFailure.observed}): ${suite.knownFailure.issue}`);
@@ -597,4 +665,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { normalizeSource, contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, revisionStatus };
+module.exports = { normalizeSource, contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, requireEvidence, recordReceipt, revisionStatus };
