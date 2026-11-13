@@ -774,15 +774,11 @@ function narrow(result, view) {
 
 function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
-// `text` with each flag of `flags` added to its query unless it already has that flag. The text is kept as it was written.
-// A link carried inside another (`inner`) has its query after its own #, so the flag goes on its end.
-function withFlags(text, flags, inner) {
+// `text` with each flag of `flags` added to the end of its query unless it already has that flag. The text is kept as it was written.
+function withFlags(text, flags) {
   return Object.keys(flags).reduce(function (out, name) {
     if (new RegExp("[?&]" + name + "=", "u").test(out)) return out;
-    var hash = inner ? -1 : out.indexOf("#");
-    var head = hash === -1 ? out : out.slice(0, hash);
-    var tail = hash === -1 ? "" : out.slice(hash);
-    return head + (head.indexOf("?") === -1 ? "?" : "&") + name + "=" + flags[name] + tail;
+    return out + (out.indexOf("?") === -1 ? "?" : "&") + name + "=" + flags[name];
   }, text);
 }
 
@@ -797,7 +793,7 @@ function webFormOf(raw, forms) {
   } else {
     var inner = url.searchParams.get(rule.param);
     if (!inner) return raw;
-    url.searchParams.set(rule.param, withFlags(inner, rule.query, true));
+    url.searchParams.set(rule.param, withFlags(inner, rule.query));
   }
   return url.href;
 }

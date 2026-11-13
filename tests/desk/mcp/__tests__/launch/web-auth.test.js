@@ -2938,6 +2938,7 @@ test("a Teams link opens in its web form, with the link's query and fragment kep
   for (const same of ["https://teams.microsoft.com/l/chat/0/0?webjoin=false", "https://teams.microsoft.com/v2/", "https://example.test/l/chat/0/0", "msteams:/l/chat/0/0", "not a url"]) {
     assert.equal(form(same), same)
   }
+  assert.equal(form("https://teams.microsoft.com/dl/launcher/launcher.html?type=chat"), "https://teams.microsoft.com/dl/launcher/launcher.html?type=chat", "a launcher address with no link is left as given")
   const own = [{ hosts: ["app.example.test"], path: /^\/open\//u, query: { web: "1", lang: "en" } }]
   assert.equal(auth.webFormOf("https://app.example.test/open/x?a=1", own), "https://app.example.test/open/x?a=1&web=1&lang=en", "the rules are data")
 })
@@ -2951,6 +2952,12 @@ test("goto opens a Teams link at its web form", async () => {
     assert.deepEqual(native.calls.filter((call) => call[0] === "goto").map((call) => call[1]),
       ["https://teams.microsoft.com/l/chat/0/0?users=a%40b.test&webjoin=true", "https://app.example.test/work"])
   } finally { await adapter.close() }
+  const own = fakeDriver()
+  const custom = auth.create(own.context, await mkTempRoot("auth-web-form-own-"), 5000, () => {}, { webForms: [{ hosts: ["app.example.test"], path: /^\/open\//u, query: { web: "1" } }] })
+  try {
+    await custom.call(["goto", "https://app.example.test/open/x"])
+    assert.deepEqual(own.calls.filter((call) => call[0] === "goto").map((call) => call[1]), ["https://app.example.test/open/x?web=1"], "the forms an adapter is given replace the built-in ones")
+  } finally { await custom.close() }
 })
 
 test("an aborted app launch, for any scheme, is named as the cause; the hint offers the web path and an explicit app route, never a fresh browser", async () => {
@@ -2986,6 +2993,8 @@ test("an aborted browser-internal address, or an app launch the page has since l
     native.page.emit("request", launch)
     native.page.emit("requestfailed", launch)
     assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, "msteams")
+    native.page.emit("request", requestOn(native, "zoommtg://zoom.us/join", { type: "document", main: true }))
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, "msteams", "a main navigation to an app link does not clear it")
     native.page.emit("request", requestOn(native, "https://app.example.test/work", { type: "document", main: true }))
     assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.externalScheme, undefined, "a later page load clears it")
   } finally { await adapter.close() }
