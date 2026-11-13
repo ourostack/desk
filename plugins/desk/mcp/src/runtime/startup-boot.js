@@ -117,6 +117,8 @@ export function startBoot({ key, folder, sessionId, env, stateDir = resolveDeskS
     pruneStale(path.dirname(paths.start), now())
     const childEnv = { ...env }
     if (hasText(sessionId)) childEnv.COPILOT_AGENT_SESSION_ID = sessionId
+    // The process that started this hook or server is the session's own host: the boot leaves it, and its ancestors, out of "other sessions".
+    childEnv.DESK_SESSION_HOST_PID = String(process.ppid)
     const failed = (reason) => {
       try {
         writeText(paths.text, `Desk boot: it could not start (${reason}). desk_status reports the desk's state.\n`)

@@ -95,6 +95,7 @@ import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 import { noteSignoffListed } from "./signoff-listed.js"
 import { consentMentioned } from "./consent-mentioned.js"
+import { otherSessions } from "./other-sessions.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { applyPublicationMode } from "./publication-mode.js"
 import { renameWithRetry } from "../util/rename-retry.js"
@@ -1019,6 +1020,7 @@ function emptyResult({ status, degraded, pending, instructions = [], root, host 
     task: null,
     factory: null,
     stale_desk: null,
+    other_sessions: null,
     release_alert: null,
     desk_problems: null,
   }
@@ -1359,6 +1361,7 @@ export async function bootOnce({
   personFn = improvementPerson,
   memberFn = resolveMember,
   staleDeskFn = checkStaleDesk,
+  otherSessionsFn = otherSessions,
   releaseAlertFn = checkReleaseAlert,
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
@@ -1420,6 +1423,10 @@ export async function bootOnce({
   // The stale-Desk lookup runs alongside everything below; it has its own hard budget and never rejects.
   const staleDesk = Promise.resolve()
     .then(() => (headless ? null : staleDeskFn({ env, pluginRoot, agentHost: host.agent, now })))
+    .catch(() => null)
+  // Who else works in this repo on this machine (`./other-sessions.js`): a few local reads with their own budget.
+  const others = Promise.resolve()
+    .then(() => (headless ? null : otherSessionsFn({ env, cwd })))
     .catch(() => null)
 
   // The network checks start now and run while the card guard and the sync run, so boot waits
@@ -1655,6 +1662,7 @@ export async function bootOnce({
   const task = taskQuery === null ? null : namedTaskResult(taskQuery, cards, { root, host, homeDir })
 
   const staleFinding = await staleDesk
+  const otherWork = await others
   const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
   // Whether an agent on this machine already told the operator about the undecided store: then no session raises it again.
@@ -1689,6 +1697,7 @@ export async function bootOnce({
     task,
     factory,
     stale_desk: staleFinding,
+    other_sessions: otherWork,
     release_alert: releaseFinding?.release_alert ?? null,
     desk_problems: releaseFinding?.desk_problems ?? null,
     needs_operator: needsOperator(instructionContext),
