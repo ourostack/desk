@@ -2821,12 +2821,16 @@ test("CI retains only its verified runtime pack for source-bound consumption", (
   const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml"), "utf8")
   const steps = workflowStepBlocks(workflowJob(workflow, "desk-mcp-tests"))
   const uploads = steps.filter((step) => /^\s*uses:\s*actions\/upload-artifact@v4\s*$/mu.test(step))
-  assert.equal(uploads.length, 1, "the existing native build must return its verified pack")
-  const upload = uploads[0]
-  assert.equal(steps.at(-1), upload, "retention follows every existing validation step")
-  assert.match(upload, /^\s*name: desk-runtime-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}\s*$/mu)
-  assert.match(upload, /^\s*path: \$\{\{ runner\.temp \}\}\/desk-runtime-deps\s*$/mu)
-  assert.match(upload, /^\s*if-no-files-found: error\s*$/mu)
-  assert.match(upload, /^\s*retention-days: 7\s*$/mu)
-  assert.doesNotMatch(upload, /^\s*(?:if|continue-on-error):/mu)
+  assert.equal(uploads.length, 2, "the existing native build must return its verified pack, with one retry of the upload")
+  const [upload, retry] = uploads
+  assert.equal(steps.at(-1), retry, "retention follows every existing validation step")
+  assert.match(upload, /^\s*continue-on-error: true\s*$/mu, "the first upload must not fail the job so the retry can run")
+  assert.match(retry, /^\s*if: \$\{\{ steps\.retain-runtime-deps\.outcome == 'failure' \}\}\s*$/mu)
+  assert.doesNotMatch(retry, /^\s*continue-on-error:/mu, "a failed retry must fail the job")
+  for (const block of [upload, retry]) {
+    assert.match(block, /^\s*name: desk-runtime-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}\s*$/mu)
+    assert.match(block, /^\s*path: \$\{\{ runner\.temp \}\}\/desk-runtime-deps\s*$/mu)
+    assert.match(block, /^\s*if-no-files-found: error\s*$/mu)
+    assert.match(block, /^\s*retention-days: 7\s*$/mu)
+  }
 })
