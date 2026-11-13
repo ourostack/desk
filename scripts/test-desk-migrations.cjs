@@ -707,14 +707,16 @@ test("an Agency move is not blocked on a machine with Claude Code but no jq and 
   });
 });
 
-// Agency's cache beside the sandbox agency.toml: each spec's cached agency.json lists the given dependencies.
+// Agency's cache beside the sandbox agency.toml: each spec's cached agency.json lists the given dependencies. Each copy ships
+// both engines' manifests, so with no engines line it supports both engines.
 function seedAgencyCache(sandbox, manifests) {
   const cache = path.join(path.dirname(sandbox.toml), "plugins", "cache");
   const entries = {};
   Object.entries(manifests).forEach(([spec, dependencies], index) => {
     const dir = path.join(cache, "entries", `m${index}`);
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(path.join(dir, ".claude-plugin"), { recursive: true });
     fs.writeFileSync(path.join(dir, "plugin.json"), "{}");
+    fs.writeFileSync(path.join(dir, ".claude-plugin", "plugin.json"), "{}");
     fs.writeFileSync(path.join(dir, "agency.json"), JSON.stringify({ dependencies }));
     entries[`copilot:${spec}`] = { dir_name: `m${index}` };
   });

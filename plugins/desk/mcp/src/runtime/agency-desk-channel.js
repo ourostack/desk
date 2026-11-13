@@ -5,7 +5,8 @@
 // so the entry cannot simply be renamed while another plugin in the same list still declares Desk as a dependency. For each
 // explicit `@main` entry, the engines (`claude`, `copilot`) on which another plugin in its list already brings Desk, directly
 // or through its own dependencies (CIT declares MS Desk, which declares Desk), read from the cached `agency.json` files in
-// Agency's own cache, are covered:
+// Agency's own cache, are covered. A plugin whose entry has no engines line covers the engines its cached manifest supports,
+// because Agency limits a plugin to those:
 //
 // - every engine covered: the entry is removed, because the plugin that declares Desk selects it there, on the spec it declares;
 // - no engine covered: the entry moves to `@release`;
@@ -67,21 +68,26 @@ export function readBlocks(lines) {
   return blocks
 }
 
+// The folder of each cached copy of `spec`, one per engine that has one, in ENGINES order.
+function* cachedRoots(cacheDir, spec, readFile) {
+  let entries
+  try {
+    entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
+  } catch {
+    return
+  }
+  for (const engine of ENGINES) {
+    const dir = entries[`${engine}:${spec}`]?.dir_name
+    if (typeof dir === "string" && CACHE_DIR_NAME.test(dir)) yield path.join(cacheDir, "entries", dir)
+  }
+}
+
 /**
  * The dependencies a cached plugin declares, from Agency's cache: `string[]` (empty when its copy has no agency.json), or null
  * when Agency has no readable cached copy of `spec` for any engine.
  */
 export function cachedDependencies(cacheDir, spec, readFile = (file) => readFileSync(file, "utf8")) {
-  let entries
-  try {
-    entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
-  } catch {
-    return null
-  }
-  for (const engine of ENGINES) {
-    const dir = entries[`${engine}:${spec}`]?.dir_name
-    if (!(typeof dir === "string" && CACHE_DIR_NAME.test(dir))) continue
-    const root = path.join(cacheDir, "entries", dir)
+  for (const root of cachedRoots(cacheDir, spec, readFile)) {
     let manifest
     try {
       manifest = readFile(path.join(root, "agency.json"))
@@ -100,6 +106,43 @@ export function cachedDependencies(cacheDir, spec, readFile = (file) => readFile
     } catch {
       continue
     }
+  }
+  return null
+}
+
+const readOrNull = (readFile, file) => {
+  try {
+    return readFile(file)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The engines a cached plugin supports, from its first usable cached copy: the members of its agency.json `engines` array that
+ * are in ENGINES. Without an `engines` field, the engines whose manifest the copy holds (`.claude-plugin/plugin.json` for claude,
+ * `plugin.json` for copilot). Null when no copy is usable, or when its `engines` value is not an array of strings.
+ */
+export function cachedEngines(cacheDir, spec, readFile = (file) => readFileSync(file, "utf8")) {
+  for (const root of cachedRoots(cacheDir, spec, readFile)) {
+    const manifest = readOrNull(readFile, path.join(root, "agency.json"))
+    const claude = readOrNull(readFile, path.join(root, ".claude-plugin", "plugin.json")) !== null
+    const copilot = readOrNull(readFile, path.join(root, "plugin.json")) !== null
+    const derived = ENGINES.filter((engine) => (engine === "claude" ? claude : copilot))
+    let engines
+    if (manifest !== null) {
+      try {
+        engines = JSON.parse(manifest).engines
+      } catch {
+        return null
+      }
+    }
+    if (engines === undefined) {
+      if (derived.length > 0) return derived
+      continue
+    }
+    if (!Array.isArray(engines) || engines.some((engine) => typeof engine !== "string")) return null
+    return ENGINES.filter((engine) => engines.includes(engine))
   }
   return null
 }
@@ -144,6 +187,19 @@ export function plan({ text, cacheDir, readFile }) {
     if (!manifests.has(spec)) manifests.set(spec, cachedDependencies(cacheDir, spec, readFile))
     return manifests.get(spec)
   }
+  const engineSupport = new Map()
+  const cachedEnginesOf = (spec) => {
+    if (!engineSupport.has(spec)) engineSupport.set(spec, cachedEngines(cacheDir, spec, readFile))
+    return engineSupport.get(spec)
+  }
+  // The engines another block brings Desk on: its engines line, else the engines its plugin supports (a Desk spec itself
+  // supports every engine). Null when the cached manifest does not say.
+  const bringsOn = (block) => {
+    if (block.badEngines) return [...ENGINES]
+    if (block.engines !== null) return block.engines
+    if (DESK_DEPENDENCY.test(block.plugin)) return [...ENGINES]
+    return cachedEnginesOf(block.plugin)
+  }
   const actions = []
   const held = []
   for (const target of blocks.filter((block) => block.plugin === MAIN_SPEC)) {
@@ -156,16 +212,16 @@ export function plan({ text, cacheDir, readFile }) {
     const unknown = []
     for (const other of blocks) {
       if (other === target || other.table !== target.table || other.plugin === null || other.plugin === MAIN_SPEC) continue
-      const engines = other.badEngines ? [...ENGINES] : enginesOf(other)
-      if (!engines.some((engine) => wanted.includes(engine))) continue
+      const engines = bringsOn(other)
+      if (engines !== null && !engines.some((engine) => wanted.includes(engine))) continue
       const reach = reachesDesk(other.plugin, dependenciesOf)
       // A plugin that brings Desk on engines this cannot read might cover any of them, and one whose graph is not all cached
       // might bring Desk: either holds the entry, because guessing could select Desk twice.
-      if (reach.desk && !other.badEngines) for (const engine of engines) covered.add(engine)
+      if (engines !== null && reach.desk && !other.badEngines) for (const engine of engines) covered.add(engine)
       else if (reach.desk || reach.missing.length > 0) unknown.push(reach.missing.some((spec) => spec !== other.plugin) ? `${other.plugin} (not cached: ${reach.missing.join(", ")})` : other.plugin)
     }
     if (unknown.length > 0) {
-      held.push(`in ${target.table}, Desk cannot yet tell on which engines ${unknown.join(", ")} brings Desk (Agency has not cached every manifest it depends on, or its engines value is not one this reads), so ${MAIN_SPEC} stays until it can`)
+      held.push(`in ${target.table}, Desk cannot yet tell on which engines ${unknown.join(", ")} brings Desk (Agency has not cached every manifest it depends on, or its engines value, in agency.toml or its cached manifest, is not one this reads), so ${MAIN_SPEC} stays until it can`)
       continue
     }
     const rest = wanted.filter((engine) => !covered.has(engine))
