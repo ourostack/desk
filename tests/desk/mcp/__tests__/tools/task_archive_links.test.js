@@ -176,6 +176,20 @@ test("task_archive reports a link that leaves the desk and still archives the ta
   assert.deepEqual(await brokenLinks(root), ["t/_archive/book-flights/notes.md -> ../../../../outside.md"])
 })
 
+test("task_archive rewrites the task card's own links to the rest of the desk", async () => {
+  const root = await mkTempDeskRoot()
+  await buildDesk(root, { gitDesk: false })
+  await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nSee [the sibling](../other-task/notes.md).\n")
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, ...NO_PUSH })
+
+  assert.equal(result.status, "archived")
+  assert.ok(result.links.rewritten.includes("t/_archive/book-flights/task.md"))
+  const card = await readFront(path.join(root, "t", "_archive", "book-flights", "task.md"))
+  assert.match(card.content, /\[the sibling\]\(\.\.\/\.\.\/other-task\/notes\.md\)/u)
+  assert.deepEqual(await brokenLinks(root), [])
+})
+
 test("task_archive leaves an inbound file with local edits untouched and reports its broken links", async () => {
   const root = await mkTempDeskRoot()
   await buildDesk(root, { gitDesk: true })
@@ -245,6 +259,25 @@ test("task_archive leaves an untracked inbound file as it is and reports its lin
   assert.deepEqual(result.links.not_rewritten.map((entry) => entry.file), ["t/gamma/brief.md"])
   assert.match(result.links.not_rewritten[0].reason, /not a tracked regular file in Git/u)
   assert.equal(await fs.readFile(path.join(root, "t", "gamma", "brief.md"), "utf8"), fresh)
+})
+
+test("task_archive leaves an inbound file whose link it cannot rewrite safely as it was, and reports the link", async () => {
+  const root = await mkTempDeskRoot()
+  await buildDesk(root, { gitDesk: false })
+  await fs.mkdir(path.join(root, "t", "zeta"), { recursive: true })
+  await fs.writeFile(path.join(root, "t", "zeta", "escaped.md"), "# Escaped\n\nSee [card](../book-flights/a\\_b.md).\n")
+  const before = await fs.readFile(path.join(root, "t", "zeta", "escaped.md"), "utf8")
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, ...NO_PUSH })
+
+  assert.equal(result.status, "archived")
+  assert.deepEqual(result.links.rewritten.filter((file) => file.startsWith("t/zeta")), [])
+  assert.deepEqual(result.links.not_rewritten.filter((entry) => entry.file === "t/zeta/escaped.md"), [{
+    file: "t/zeta/escaped.md",
+    destination: "../book-flights/a\\_b.md",
+    reason: "the destination uses backslash or entity escapes, so it was not rewritten",
+  }])
+  assert.equal(await fs.readFile(path.join(root, "t", "zeta", "escaped.md"), "utf8"), before)
 })
 
 test("task_archive reports a Markdown file that is not UTF-8 and never rewrites its bytes", async () => {

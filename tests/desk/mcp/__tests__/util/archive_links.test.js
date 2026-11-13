@@ -62,6 +62,9 @@ test("archive links reports a new segment that the original plain form cannot ho
   assert.equal(result.unresolved.length, 1)
   assert.equal(result.unresolved[0].destination, "../src/x.md")
   assert.match(result.unresolved[0].reason, /cannot hold/u)
+  const escaped = rewriteForMove({ text, filePath: "track/other/x.md", sourcePrefix: "track/src", destinationPrefix: "track/arch%41/src" })
+  assert.equal(escaped.text, text)
+  assert.equal(escaped.unresolved.length, 1)
 })
 
 test("archive links rewrites links from a moved file to the desk root and to its sibling tasks", () => {
@@ -79,6 +82,18 @@ test("archive links reports a link whose target leaves the desk after the move",
   const result = move("track/_archive/slug/brief.md", "[out](../../../../outside.md) [in](../other/x.md)\n")
   assert.equal(result.text, "[out](../../../../outside.md) [in](../../other/x.md)\n")
   assert.deepEqual(result.unresolved, [{ destination: "../../../../outside.md", reason: "the target is outside the desk after the move" }])
+})
+
+test("archive links handles a file at the desk root, whose links to the moved folder and to the root itself differ", () => {
+  const result = move("LESSONS.md", "[task](track/slug/brief.md) [root](./) [up](../x.md)\n")
+  assert.equal(result.text, "[task](track/_archive/slug/brief.md) [root](./) [up](../x.md)\n")
+  assert.equal(result.rewritten, 1)
+  assert.equal(result.unresolved.length, 0)
+})
+
+test("archive links rewrites a link to the moved folder from a moved file's own name", () => {
+  const result = move("track/_archive/slug/brief.md", "[self](../slug/brief.md)\n")
+  assert.equal(result.text, "[self](brief.md)\n")
 })
 
 test("archive links leaves links that the move does not affect alone", () => {

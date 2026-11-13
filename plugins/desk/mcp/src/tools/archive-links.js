@@ -44,7 +44,7 @@ function noteUnresolved(state, file, unresolved) {
 }
 
 /** The `links` field of an archive result, with paths as `display(rel)` names them; null when nothing was found. */
-export function linksReport(state, display = (rel) => rel) {
+export function linksReport(state, display) {
   if (!state.rewritten.length && !state.not_rewritten.length) return null
   return {
     rewritten: state.rewritten.map(display),

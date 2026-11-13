@@ -6,7 +6,7 @@ const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/u
 const PERCENT_ESCAPE = /%[0-9A-Fa-f]{2}/u
 const UNWRITABLE_RAW = /[\u0000-\u001f\u007f<>\\#?]/u
 
-const segments = (dir) => (dir === "." || dir === "" ? [] : dir.split("/"))
+const segments = (dir) => (dir === "." ? [] : dir.split("/"))
 const dirOf = (file) => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : ".")
 const under = (target, prefix) => target === prefix || target.startsWith(`${prefix}/`)
 const moved = (target, sourcePrefix, destinationPrefix) =>
@@ -95,7 +95,7 @@ export function rewriteForMove({ text, filePath, sourcePrefix, destinationPrefix
     const result = relinkDestination(link, { filePath, oldPath, sourcePrefix, destinationPrefix })
     if (result === null) continue
     if (typeof result === "string") edits.push({ start: link.start, end: link.end, text: result })
-    else unresolved.push({ destination: link.destination, reason: result.reason })
+    else unresolved.push({ destination: link.raw, reason: result.reason })
   }
   let next = text
   for (const edit of edits.sort((left, right) => right.start - left.start)) {

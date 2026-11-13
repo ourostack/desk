@@ -360,6 +360,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
           return "it has unstaged, staged or untracked changes, so another session may be editing it"
         mode = gitMode({ kind: "file", mode: Number((await fs.lstat(file, { bigint: true })).mode & 0o777n) }, held[0], git)
       }
+      /* istanbul ignore next -- the file changed between the plan's read and this write; a test cannot time that gap, and the reason is reported. */
       if (!(await fs.readFile(file)).equals(Buffer.from(before))) return "it changed after the archive read it"
       await fs.writeFile(file, after)
       if (git) inbound.set(key, { file, after, mode })
