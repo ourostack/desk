@@ -9,7 +9,7 @@
 // failure carries the change Desk captured before it dispatched (`capture`: the entries with their modes, the HEAD and the
 // branch), the route finishes exactly that change with `scripts/finish-commit.js`, which reads first, refuses on anything it
 // cannot qualify, builds the commit from a private index with the repository's hooks run through Git, and moves the branch
-// by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). A live task card's captured change is held instead: only task_update
+// by one compare-and-swap against the HEAD it qualified, never touching the shared index or the working tree (R1, R3). After the publish, a read-only last step says whether those paths hold edits newer than the committed change; those are not delivered, and the route never folds them in. A live task card's captured change is held instead: only task_update
 // commits a card, and a new task_update is a new write, never the captured change (0972 #2). Without a capture the route is held: it reads, stops and reports, whether or not the commit landed. Committed here and published to the remote are separate facts with separate read-backs.
 //
 // What a route never contains: `git stash`, a force push, `git add`, `git commit`, `git reset`, `-a`/`-A`, `--no-verify`, the
@@ -84,6 +84,7 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
   if (capture && card !== null) return cardRoute({ root, paths, message, readback, card, capture })
   if (capture) {
     const check = finishArgv(root, paths, message, capture)
+    const newer = [["git", "-C", root, "diff", "--quiet", "HEAD", "--", ...paths]]
     const finish = [{ step: "Only if step 1 exited 3 (ready): commit exactly the captured change, once. It builds the commit from a private index, runs the repository's commit hooks through Git, and moves the branch by one compare-and-swap against the HEAD step 1 qualified, so a branch another writer moved is refused, never overwritten; the shared index and the working tree are not written. Exit 0 means it is committed; on any other exit, read back again with step 1 and stop unless it now exits 0.", argv: finishArgv(root, paths, message, capture, true) }]
     return {
       summary: readback === "absent"
@@ -93,9 +94,11 @@ export function commitRoute({ root, paths, message, readback = "unknown", card =
         { step: `Read back where the captured change stands. ${READS_ONLY} Exit 0: HEAD already holds exactly it, go straight to publishing. Exit 3 (ready): go on. ${STOP}`, argv: check },
         ...finish,
         publish,
+        { step: `Read whether these paths hold anything newer than the change just committed. ${READS_ONLY} Exit 0: nothing newer, and the save is complete. Exit 1: the working tree holds later bytes this route did not commit; they are not delivered. If they are this session's own edits, save them with a new desk_save of the same paths; if they may be another session's, leave them and report them. Never fold them into this captured change.`, argv: newer },
       ],
       committed_locally_when: { argv: check, expect: "exits 0 and prints \"state\":\"committed\"" },
       published_when,
+      newer_unsaved_when: { argv: newer, expect: "exits 0 when nothing is newer; exits 1 means the working tree holds edits newer than the committed change, which are not delivered" },
     }
   }
   // Without a capture nothing says which bytes at these paths are this call's (R2): a diff, a log line or a clean status is no
