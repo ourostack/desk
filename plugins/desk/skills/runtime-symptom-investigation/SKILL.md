@@ -36,7 +36,7 @@ Code analysis builds models of MECHANISM. Many mechanisms produce similar sympto
 
 5. **Update the hypothesis space.** Repeat step 4 until one hypothesis remains.
 
-6. **Only THEN go deep on code mechanism.** Use code analysis to confirm and explain the surviving hypothesis, not to discover it.
+6. **Only THEN go deep on code mechanism.** Use code analysis to confirm and explain the surviving hypothesis, not to discover it. Trace the code path from the entry point the evidence names instead of searching blind (Ari, 2026-11-11 17:59 PT: "dont just blindly search, trace the code! ... work smart, not hard"). When an approach is not working or is taking far too long, change lanes (Ari, 2026-11-09 10:49 PT: "none of these are things that should take DAYS ... work smart, not hard ... if an approach isn't working or is taking far too long, we need to change lanes").
 
 ### Prove the cause before changing behavior
 
