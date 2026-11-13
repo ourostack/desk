@@ -17,6 +17,9 @@ var NAVIGATIONS = ["goto", "go-back", "go-forward", "reload"];
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
 var WAIT_POLL_MS = 1000;
+// A ref's action shares one deadline of this long, or half the command time if less. Playwright then fails a stalled
+// action before the command's own bound closes the context.
+var ACTION_MAX_MS = 30000;
 // A page this small whose words read as an error is usually a transient error page, worth one reload.
 var ERROR_PAGE_CHARS = 20000;
 // Text an agent reads in one reply: hosts set aside larger tool output in a file the agent may never open.
@@ -82,6 +85,9 @@ var HINTS = {
   AUTH_SHADOW_COVERAGE_REFUSED: "Part of this page (or of one of its frames) is in a closed shadow root, which mine can neither read nor picture, so neither snapshot nor screenshot can show it. If the page was still loading, run [\"wait\",\"2\"] and try again; otherwise open the frame's own page with goto, or use another way to reach what you need.",
   AUTH_FOCUS_MOVED: "Something else on the page took the keyboard focus, so typing stopped before the next key; the field may hold part of the text. " + SNAPSHOT_AGAIN + " Check the field, then type into its ref again.",
   AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
+  AUTH_ACTION_COVERED: "Something else on the page is probably covering that control, such as a tooltip, menu or hover card. This context is still open. Run [\"find\",\"<text>\"] to see what covers it, press [\"press\",\"Escape\"] or click what covers it, then act on a fresh ref from [\"snapshot\"].",
+  AUTH_ACTION_NOT_READY: "That control was not ready: probably hidden, still moving, or disabled. This context is still open. Run [\"snapshot\"] to see whether it is visible and enabled; if the page is still changing, run [\"wait\",\"2\"] first, then act on a fresh ref.",
+  AUTH_ACTION_TIMEOUT: "That control did not respond in time. This context is still open. Run [\"snapshot\"] to see the page as it is now, then act on a fresh ref; if the page keeps stalling, run [\"wait\",\"2\"] first.",
   AUTH_SCREENSHOT_FAILED: "Run [\"wait\",\"2\"], then try again; for one part of the page, pass a ref from a snapshot.",
   AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
   AUTH_TAB_REFUSED: "There is no such open tab. Run [\"tab-list\"] and use an index from it with tab-select or tab-close.",
@@ -117,6 +123,15 @@ function knownFailure(error) {
 
 function safeFailure(error) {
   return error && typeof error === "object" ? failures.get(error) : undefined;
+}
+
+// Playwright's wording for why an action could not run. Only these fixed substrings are matched: its text can carry page
+// content, so it is never returned.
+function actionTimeoutFailure(error) {
+  var text = String(error.message);
+  var code = text.indexOf("intercepts pointer events") !== -1 ? "AUTH_ACTION_COVERED" :
+    /not visible|not stable|not enabled|disabled/.test(text) ? "AUTH_ACTION_NOT_READY" : "AUTH_ACTION_TIMEOUT";
+  return fail(code, true);
 }
 
 function sameStage(expected, current) {
@@ -1204,6 +1219,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         // A live page (Teams) changes somewhere every few milliseconds, so the ref is re-resolved now, wherever its
         // node is: the main document, a child frame's, or an out-of-process frame's.
         var bound = await bind(reader, record, command);
+        // Steps share one deadline inside the command's time, so Playwright fails a stalled one first and the context stays open.
+        var actionDeadline = Date.now() + Math.min(ACTION_MAX_MS, Math.floor(timeoutMs / 2));
+        var actionOptions = function () { return { timeout: Math.max(1, actionDeadline - Date.now()) }; };
         var actionError;
         var typed;
         try {
@@ -1211,7 +1229,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           applied = true;
           // Playwright waits for an element to be enabled before scrolling it into view, but some pages enable a control
           // only once it has been seen (GitHub's OAuth "Authorize" button), so it would wait forever. Scroll first.
-          await bound.handle.scrollIntoViewIfNeeded({ timeout: timeoutMs });
+          await bound.handle.scrollIntoViewIfNeeded(actionOptions());
           checkRuntime();
           var method = command === "select" ? "selectOption" : command;
           if (command === "type") {
@@ -1231,8 +1249,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
               checkRuntime();
               await page.keyboard.type(keys[at]);
             }
-          } else if (args.length === 3) await bound.handle[method](args[2], { timeout: timeoutMs });
-          else await bound.handle[method]({ timeout: timeoutMs });
+          } else if (args.length === 3) await bound.handle[method](args[2], actionOptions());
+          else await bound.handle[method](actionOptions());
           checkRuntime();
           // Typed text is redacted from every snapshot, so the field itself says whether it now holds it; only the
           // verdict comes back, never the field's text.
@@ -1240,6 +1258,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           checkRuntime();
         } catch (error) {
           actionError = error;
+          if (error && error.name === "TimeoutError") throw actionTimeoutFailure(error);
           throw error;
         } finally {
           // A failed disposal stays owned for close; the action's own refusal is the primary report.
