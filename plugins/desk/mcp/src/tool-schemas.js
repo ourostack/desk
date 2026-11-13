@@ -39,131 +39,129 @@ const TASK_TARGET = {
   slug: text("The task folder name."),
 }
 
-const DISPLAY_LABEL = text("Optional transient display proposal for the current focused task: author a short safe functional description, at most 72 Unicode code points. Never supply paths, URLs, email addresses or credential-like values. Omitted/unsafe labels do not change task CRUD. A proposal is not an applied native name, activity, ownership or delivery proof; no card title is used as a fallback.")
+const DISPLAY_LABEL = text("Optional short description of the focused task, at most 72 characters; never paths, URLs, emails or credentials. Unsafe labels are ignored.")
 
 const CONTENT_HOME = {
   type: "object",
   additionalProperties: false,
   properties: {
-    purpose: text("A context or product purpose from the repository's published .desk/content-home.json; mixed requires sections. Unknown or ambiguous purposes are refused, not inferred from filenames."),
-    lifecycle: { type: "string", enum: ["current", "historical"], description: "Whether the supplied material is current or preserved historical source." },
-    product_repository: text("Canonical owner/repository for new authoritative product material. A different repository is refused; source preservation is not a new execution lease."),
-    source_reference: text("Original provenance, restrictions, or unknown. Preserving evidence grants no public-copy, migration, deletion, or execution permission."),
+    purpose: text("A purpose from the repository's .desk/content-home.json, or `mixed` (then `sections` is required)."),
+    lifecycle: { type: "string", enum: ["current", "historical"] },
+    product_repository: { type: "string" },
+    source_reference: text("Original provenance and restrictions, or unknown."),
     sections: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          subject: text("Mutation subject: a task_update field such as note or body_append (objects use JSON.stringify), desk_save files/<index>/content, or paths/<index>."),
-          start: integer("Inclusive UTF-8 byte offset; may be omitted for one section covering the whole subject."),
-          end: integer("Exclusive UTF-8 byte offset; may be omitted for one section covering the whole subject."),
-          purpose: text("Declared context or product purpose from the published policy."),
-          lifecycle: { type: "string", enum: ["current", "historical"], description: "Current material or preserved historical source." },
-          product_repository: text("Canonical owner/repository for current product authority."),
-          source_reference: text("Source provenance, restrictions, or unknown; not public-copy clearance."),
+          subject: text("What the section covers: a task_update field such as `note` or `body_append`, `files/<index>/content` or `paths/<index>` for desk_save."),
+          start: integer("Inclusive UTF-8 byte offset; omit to cover the whole subject."),
+          end: integer("Exclusive UTF-8 byte offset; omit to cover the whole subject."),
+          purpose: { type: "string" },
+          lifecycle: { type: "string", enum: ["current", "historical"] },
+          product_repository: { type: "string" },
+          source_reference: { type: "string" },
         },
         required: ["subject", "purpose", "lifecycle"],
       },
-      description: "For mixed content, classify every subject's exact bytes once, in order, without gaps or overlaps. No partial batch is written.",
+      description: "For `mixed`: classify every subject's bytes once, in order, with no gaps or overlaps, with the same four fields as above.",
     },
   },
   required: ["purpose"],
-  description: "Required only by repositories with a published .desk/content-home.json. Purpose/lifecycle admission happens before mutation; preserves CIT-style project context and historical evidence, refuses wrong-home current product authority, and surfaces ambiguous mixed sections. Does not classify semantic truth, migrate sources, authorize publication, or cover other tools.",
+  description: "Required only where the repository publishes .desk/content-home.json: `lifecycle` is current or historical, `product_repository` the owner/repository of current product material. A refusal says what to declare.",
 }
 
 const CARD_UPDATE = {
   frontmatter: {
     type: "object",
     additionalProperties: true,
-    description: "Fields to shallow-merge into the card's frontmatter, as a JSON object (not a string). `schema_version` and `created` are kept; `updated` is refreshed. A `status` here must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled; any other value is refused.",
+    description: "Fields to merge into the card's frontmatter, as a JSON object (not a string). A `status` must be one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled.",
   },
   body_append: text("Markdown to append to the card body, separated by a blank line."),
 }
 
-const REPOS_REMOVED_REASON = text("Required to remove every repo from a card that names code repos (a task whose work turned out not to touch them): one line on why, recorded on the card as `repos_removed` with each repo\'s name and the time. The same call may not set `status: done`; finish in a separate call. Not needed when the call sets `status: cancelled`.")
+const REPOS_REMOVED_REASON = text("One line on why. Required to remove every repo from a card; not with `status: done`, and not needed with `status: cancelled`.")
 
 const RETURN_REASON = {
   type: "string",
   enum: ["agent_error", "changed_ask", "new_information", "external"],
-  description: "Required when this call sends a task backwards (out of `done`, or to a stage below the furthest one it reached): why. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke). Refused on any call that is not a return.",
+  description: "Required when the task goes backwards (out of `done`, or below its furthest stage), refused otherwise: agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break.",
 }
 
 // Mirrors STEP_STATES in src/desk/steps.js, less the states Desk derives (DERIVED_STATES) (this file stays free of imports).
 const STEP = {
   type: "object",
   properties: {
-    id: text("The step's name: short kebab-case, unique on the card, never renamed. Unknown names add a row."),
-    state: { type: "string", enum: ["pending", "in progress", "blocked", "dropped"], description: "Where the step is. A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL (or `task:<track>/<slug>` for a delegated step) in `evidence`; callers cannot." },
-    depends_on: list("The steps that must be delivered (or dropped) first; empty for none. Needed for a new step; changes only while the step is pending."),
-    repo: text("One of the card's repos, or \"—\" for none. Needed for a new step; changes only while the step is pending."),
-    evidence: text("The PR URL that backs the step (Desk derives the step's state from it), `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."),
-    reason: text("Why the step is blocked or dropped; written into the step's Evidence cell."),
-    expect: text("The state you last saw. If the step is in another state now, nothing is written and the refusal shows the current row."),
-    dependents_ok: list("When dropping a step: the steps that depend on it and are still valid. The others become blocked."),
+    id: text("The step's name: short kebab-case, unique on the card, never renamed. An unknown name adds a row."),
+    state: { type: "string", enum: ["pending", "in progress", "blocked", "dropped"], description: "A new step starts pending. `blocked` and `dropped` need `reason`. Desk sets `in review`, `merged` and `delivered` itself from the PR URL in `evidence`." },
+    depends_on: list("Steps that must be delivered or dropped first; empty for none. Needed for a new step; changes only while pending."),
+    repo: text("One of the card's repos, or \"—\" for none. Needed for a new step; changes only while pending."),
+    evidence: text("The PR URL that backs the step, `task:<track>/<slug>` for a step delegated to its own card, or a line on where it stands."),
+    reason: text("Why the step is blocked or dropped."),
+    expect: text("The state you last saw; if the step is in another state, nothing is written."),
+    dependents_ok: list("When dropping: dependent steps that are still valid; the others become blocked."),
   },
   required: ["id"],
   additionalProperties: false,
-  description: "One row of the card's `## Steps` table, a JSON object.",
+  description: "One row of the card's `## Steps` table.",
 }
 
 // Mirrors DISPOSITIONS and RESOURCE_FIELDS in src/desk/resources.js.
 const RESOURCE = {
   type: "object",
   properties: {
-    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (or `branch:<org/project/repo>#<name>` for Azure DevOps): a worktree or branch you created. Unknown identities add a row; known ones update it."),
-    step: text("The step (a name in the card's `## Steps` table) that owns it; written as `step <id>`. Cleanup is due when that step is delivered or dropped."),
-    intended: text("What you intend to do with it, in a few words (for example `remove after merge`)."),
-    disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record this once the resource is dealt with; needs `details`. Desk removes nothing." },
-    details: text("With `disposition`: removed-and-absent, the readback that it is gone; named transfer, who took it and that they acknowledged; retained-with-trigger, why, who owns it and what triggers its cleanup."),
+    identity: text("`worktree:<absolute path>` or `branch:<owner/repo>#<name>` (`<org/project/repo>` for Azure DevOps) that you created. A known identity updates its row."),
+    step: text("The step in the card's `## Steps` table that owns it; cleanup is due when that step is delivered or dropped."),
+    intended: text("What you intend to do with it, in a few words."),
+    disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record once the resource is dealt with; needs `details`. Desk removes nothing." },
+    details: text("With `disposition`: the readback that it is gone; who took it and acknowledged; or why it stays, who owns it and what triggers its cleanup."),
     migrate: {
       type: "object",
       properties: Object.fromEntries(["identity", "owner", "writers", "intended", "evidence", "terminal"].map((key) => [key,
-        key === "identity"
-          ? text("Existing identity column name (case-insensitive).")
-          : oneOf([{ type: "string" }, { type: "null" }], "Existing source column name (case-insensitive), or null only if absent. In a partially canonical table, existing canonical columns must map to themselves."),
+        key === "identity" ? { type: "string" } : oneOf([{ type: "string" }, { type: "null" }]),
       ])),
       required: ["identity", "owner", "writers", "intended", "evidence", "terminal"],
       additionalProperties: false,
-      description: "Explicit legacy Resources table recovery, applied atomically with this row write. Map all six fields; Desk puts them in standard order, adds absent columns, and preserves every other column after them, all row cells and surrounding prose. Duplicate headers/typed identities and malformed rows refuse without writing. Repeating on a canonical table leaves its schema unchanged. Live cards only; archived cards still accept only a disposition on an existing readable row.",
+      description: "Legacy Resources table recovery, applied with this row write: map each of the six fields to an existing column name (case-insensitive), or null if absent (not for identity); task-card-format has the rules. Live cards only.",
     },
   },
   required: ["identity"],
   additionalProperties: false,
-  description: "One row of the card's `## Resources` table, a JSON object.",
+  description: "One row of the card's `## Resources` table.",
 }
 
 const TASK_PROGRESS = {
-  note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
-  next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
+  note: text("One line of progress, appended as `- <date>: <note>` under `## Progress log`. Say only what happened; completion needs `status: done` with `evidence`."),
+  next_step: text("Replaces the card's `**Next step:**` paragraph."),
 }
 
 const REPLACE_SECTION = {
   type: "object",
   properties: {
-    heading: text("The section's name without the `## `, such as `Progress log`. The first such section outside fenced code is replaced; a card without it gets it appended."),
-    markdown: text("The section's new text, without its heading and without any `## ` heading of its own. Use it to shorten a card: it is the only way to replace a section, because the card cannot be edited directly."),
+    heading: text("The section's name without the `## `, such as `Progress log`; a missing section is appended."),
+    markdown: text("The section's new text, without its heading. The only way to replace a section."),
   },
   required: ["heading", "markdown"],
   additionalProperties: false,
-  description: "Replace the body of one `## ` section of the card (up to the next `## `); the frontmatter is never touched.",
+  description: "Replace the body of one `## ` section; the frontmatter is untouched.",
 }
 
 const TASK_DONE_EVIDENCE = {
   type: "object",
   additionalProperties: false,
   properties: {
-    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code", "steps"], description: "What kind of reference this is. `steps` closes a card that has a `## Steps` table: it needs no `ref`, and Desk refreshes every step from its pull request and refuses while any is not delivered or dropped." },
-    ref: text('Not needed for `steps`. The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
+    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code", "steps"], description: "What kind of reference this is. `steps` closes a card that has a `## Steps` table and needs no `ref`." },
+    ref: text("Not needed for `steps`. A PR URL for pr; a 7-40 character hex commit sha (optionally with repo/branch) or commit URL for commit; the run's https URL for ci_run; an https URL or desk-relative path to the proof for non_code."),
   },
   required: ["kind"],
-  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. A card with a readable `## Steps` table can only be finished with `{ kind: \"steps\" }`, and every other card never with it. A task whose card lists `repos` (and has no steps table) can only be finished with `pr` (a PR URL in one of those repos) or `commit` (a commit that resolves in a recorded clone and is pushed): `ci_run` and `non_code` are refused, and a commit made in the desk never counts. One exception: a repo Desk recorded as local-only (`local_only: true` on its entry in the card as it was before this call; Desk sets it when `task_create` or boot first sees the clone with no remote and the entry has no `url`, and no call can set it) accepts a commit in that clone that a local branch or HEAD reaches and that was made after the task was created. If the work cannot be delivered yet (nothing pushed, no PR), do not mark the task done: leave it at `validating` and tell the operator the commit sha. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+  description: "A JSON object, required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with a `## Steps` table finishes only with `{ kind: \"steps\" }`; a card listing `repos` only with `pr` or a pushed `commit` in one of them (task-card-format has the rules). A refusal says what to supply.",
 }
 
 const TASK_ARCHIVE_OUTCOME = {
   type: "string",
   enum: ["cancelled"],
-  description: 'Pass "cancelled" to archive a task that is not already `done` or `cancelled` as abandoned work, needing no `evidence`. Omit for a completed task and pass `evidence` instead. An already-`done` or already-`cancelled` task, or one with no task.md at all, needs neither.',
+  description: 'Pass "cancelled" to archive a task not already `done` or `cancelled` as abandoned work, with no `evidence`. Omit otherwise.',
 }
 
 export const TOOL_INPUT_SCHEMAS = Object.freeze({
@@ -171,21 +169,21 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     ...TASK_TARGET,
     slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
     title: text("The task title."),
-    status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
+    status: text("Initial status; defaults to drafting. One of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
-    focus: flag("Pass true to also declare this new task as the one this session is working on (as task_focus does), for work that starts now; leave it out for a parked follow-up. Only if you are the session's main agent."),
+    focus: flag("Pass true to also declare this task as the session's focus (as task_focus does), for work that starts now. Main agent only."),
     display_label: DISPLAY_LABEL,
     intake_proposal: {
       type: "object",
       additionalProperties: false,
       properties: {
-        outcome: text("The actual requested outcome and purpose, reflecting supplied scope."),
-        assumptions: text("Your actual material assumptions/defaults, including relevant runtime, input/data and error behavior for code. Reflect supplied constraints; do not defer routine choices until after a format question or invent requirements."),
-        recommended_decisions: text("Settle routine technical defaults yourself and recommend every remaining human decision together; plainly say all choices are settled when they are. No invented questions."),
-        completion_checks: text("Concrete proposed completion terms: usable/runnable output, usage/documentation and specific behavioral/edge/error verification as applicable, not just the word tests. Do not leave the human to assemble these at Go."),
+        outcome: text("The requested outcome and its purpose, reflecting the supplied scope."),
+        assumptions: text("Your actual material assumptions and defaults, including runtime, input/data and error behavior for code."),
+        recommended_decisions: text("Routine technical defaults you settled, and every remaining human decision together; say plainly when all are settled."),
+        completion_checks: text("Concrete completion terms: usable output, usage/documentation and specific behavioral, edge and error verification as applicable."),
       },
       required: ["outcome", "assumptions", "recommended_decisions", "completion_checks"],
-      description: "For a genuinely unapproved new focused drafting outcome, supply your complete actual first-reply proposal BEFORE creating the card, not a deferred-design placeholder. It is stored in the existing card and returned as alignment_packet: present all four actual contents together before any confirmation, in normal chat, never ask_user or a form. Keep bounded work short. Omit for existing Go/approved/resumed/parked work; reflect execution in status/planning_complete, never reopen approval. No empty defaults, invented agreement or separate ledger.",
+      description: "For a new, unapproved focused drafting outcome: your complete first-reply proposal, supplied before the card exists (start-task has the rules). Stored on the card and returned as alignment_packet; present all four contents together in normal chat, never ask_user or a form, before any confirmation. Omit for approved, resumed or parked work.",
     },
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),
@@ -202,39 +200,39 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       items: {
         type: "object",
         properties: {
-          name: text("The repository name."),
-          local_path: text("Where it is cloned, as a tilde path; empty when it is not cloned."),
-          mode: { type: "string", enum: ["local", "remote"], description: "local (cloned) or remote (read through the API)." },
-          url: text("Where to clone it from, when the clone is missing on a machine; optional."),
+          name: { type: "string" },
+          local_path: text("Where it is cloned, as a tilde path; empty when not cloned."),
+          mode: { type: "string", enum: ["local", "remote"] },
+          url: text("Where to clone it from if the clone is missing; optional."),
         },
         required: ["name"],
         additionalProperties: true,
       },
-      description: "The code repositories the task works in, per the task-card format.",
+      description: "The code repositories the task works in (task-card-format has the shape); `mode` is local (cloned) or remote (read through the API).",
     },
     iterations: {
       type: "object",
       properties: {
-        active: oneOf([{ type: "string" }, { type: "null" }], "The running iteration's relative path, or null between iterations."),
-        history: { type: "array", items: { type: "object", additionalProperties: true }, description: "One entry per iteration." },
+        active: oneOf([{ type: "string" }, { type: "null" }]),
+        history: { type: "array", items: { type: "object", additionalProperties: true } },
       },
       additionalProperties: true,
-      description: "The task's iterations, per the task-card format.",
+      description: "The task's iterations: `active` is the running iteration's relative path or null, `history` has one entry per iteration.",
     },
     predecessor: { type: "object", additionalProperties: true, description: "The task this one continues, such as { track, slug }." },
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
-    steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
+    steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
   task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION, content_home: CONTENT_HOME }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),
     slug: text("The task folder name."),
-    outcome: { type: "string", enum: ["accepted", "refused"], description: "The operator's answer: accepted, or refused (the task goes back to processing)." },
+    outcome: { type: "string", enum: ["accepted", "refused"], description: "The operator's answer; refused sends the task back to processing." },
     // Mirrors REFUSAL_REASONS in src/factory/outcome.js (this file stays free of imports).
-    reason: { type: "string", enum: ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"], description: "Required when refused, and not allowed when accepted: the operator's reason, mapped from what they said. not_what_was_asked, defect, changed_ask, incomplete or other." },
-    return_reason: { ...RETURN_REASON, description: "Required when refused, and not allowed when accepted: your own reading of the cause. agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)." },
+    reason: { type: "string", enum: ["not_what_was_asked", "defect", "changed_ask", "incomplete", "other"], description: "Required when refused, not allowed when accepted: the operator's reason, mapped from what they said." },
+    return_reason: { ...RETURN_REASON, description: "Required when refused, not allowed when accepted: your own reading of the cause. agent_error is your mistake, changed_ask the operator's new ask, new_information something nobody knew, external an outside break." },
   }, ["track", "slug", "outcome"]),
   task_focus: schema({
     track: text("The track folder of the task you are working on; give it with `slug`."),
@@ -244,7 +242,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   }),
   task_move: schema({
     ...TASK_TARGET,
-    handle: text("The task's handle from the boot result's active_tasks, desk_status with detail: true, or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
+    handle: text("The task's handle from active_tasks, desk_status `detail: true` or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),
     to_track: text("The destination track; its track.md must already exist."),
     to_slug: text("The new task folder name: an outcome name."),
     unarchive: flag("Reopen an archived task into a live folder."),
