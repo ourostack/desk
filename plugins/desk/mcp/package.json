@@ -21,7 +21,7 @@
   "dependencies": {
     "@adraffy/ens-normalize": "1.11.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^12.11.1",
     "gray-matter": "^4.0.3",
     "sqlite-vec": "^0.1.6",
     "unicode-case-folding": "1.1.1"
