@@ -1795,6 +1795,10 @@ function requestOn(native, url, { type = "xhr", main = false, errorText } = {}) 
   return { url: () => url, resourceType: () => type, isNavigationRequest: () => main, frame: () => native.page.mainFrame(), failure: () => (errorText ? { errorText } : null) }
 }
 
+// A wait that runs out polls for half the command's time, and the diagnosis and its picture need the rest: 2 s left a loaded runner
+// too little (#855).
+const WAIT_OUT_MS = 6000
+
 test("a wait that never finds its text says why, with evidence: hosts and codes, console counts and a picture, and no page text or query", async () => {
   const root = await mkTempRoot("auth-not-ready-")
   const native = fakeDriver()
@@ -1833,7 +1837,7 @@ test("a page on a sign-in host is waiting on a sign-in redirect, and the hint sa
   const root = await mkTempRoot("auth-not-ready-signin-")
   const native = fakeDriver()
   native.page.url = () => "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=SIGNIN_QUERY_688"
-  const adapter = adapterFor(native, root, 2000)
+  const adapter = adapterFor(native, root, WAIT_OUT_MS)
   try {
     native.page.emit("request", requestOn(native, native.page.url(), { type: "document", main: true }))
     const missing = await adapter.call(["wait", "never shows"])
@@ -1854,7 +1858,7 @@ test("a diagnosis shows a host or path that looks like an address or token as re
   const root = await mkTempRoot("auth-not-ready-redact-")
   const native = fakeDriver()
   native.page.url = () => "https://app.example.test/mail/user@example.test/"
-  const adapter = adapterFor(native, root, 2000)
+  const adapter = adapterFor(native, root, WAIT_OUT_MS)
   try {
     const blocked = requestOn(native, "https://0123456789abcdef0123456789abcdef.example.test/x", { type: "xhr", errorText: "net::ERR_BLOCKED_BY_CLIENT" })
     native.page.emit("request", blocked)
@@ -1934,7 +1938,7 @@ test("a diagnosis reads an unusual address, request type or event as a plain val
   const root = await mkTempRoot("auth-not-ready-odd-")
   const native = fakeDriver()
   native.page.url = () => "http://app.example.test:8080/work"
-  const adapter = adapterFor(native, root, 2000)
+  const adapter = adapterFor(native, root, WAIT_OUT_MS)
   try {
     const unparsed = requestOn(native, "not an address", { type: "beacon" })
     native.page.emit("request", unparsed)
@@ -1999,7 +2003,7 @@ test("a wait whose reads were slow still answers within the command's time, givi
 test("a diagnosis keeps only the last 200 requests a page made", async () => {
   const root = await mkTempRoot("auth-not-ready-recent-")
   const native = fakeDriver()
-  const adapter = adapterFor(native, root, 2000)
+  const adapter = adapterFor(native, root, WAIT_OUT_MS)
   try {
     const finished = Array.from({ length: 201 }, (_, index) => requestOn(native, `https://done${index}.example.test/x`, { errorText: "net::ERR_FAILED" }))
     for (const request of finished) {
@@ -2020,7 +2024,7 @@ test("a diagnosis keeps only the last 200 requests a page made", async () => {
 test("a main document that never arrived, or a page whose scripts failed, is named as the likely cause", async () => {
   const root = await mkTempRoot("auth-not-ready-main-")
   const native = fakeDriver()
-  const adapter = adapterFor(native, root, 2000)
+  const adapter = adapterFor(native, root, WAIT_OUT_MS)
   try {
     const main = requestOn(native, "https://app.example.test/work", { type: "document", main: true, errorText: "net::ERR_NAME_NOT_RESOLVED" })
     native.page.emit("request", main)
