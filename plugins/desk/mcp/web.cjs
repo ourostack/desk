@@ -20,6 +20,7 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var browserDiscovery = require("./web-browser-discovery.cjs");
+var launch = require("./web-launch.cjs");
 var authBrowser = require("./web-auth.cjs");
 
 var PLAYWRIGHT_VERSION = "1.63.0";
@@ -684,15 +685,21 @@ function command(s, id, args) {
     throw plain("This browser context has no current password-store exclusion policy. Close it with browser_context and open a new context; Desk will not scrub or migrate an existing profile.");
   }
   checkArgs(args);
-  if (args[0] === "goto" && args.length > 1) args = [args[0], authBrowser.webFormOf(args[1])].concat(args.slice(2));
   var folders = [path.join(dir, "files"), dir];
   var known = args[0] === "screenshot" ? folders.map(pictures) : [];
   return runCli(s, dir, args, s.commandMs).then(function (result) {
     if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
     if (result.code !== 0) throw plain(result.text || "The command failed.");
-    if (args[0] !== "screenshot") return result.text;
+    if (args[0] !== "screenshot") return result.text + webOptionHint(result.text);
     return result.text + keepPictures(s, folders, known);
   });
+}
+
+// A fresh browser's replies are the driver's own text, so a launch cannot be told from it; a page that shows a web option
+// (a launcher's "Join from browser") is pointed out, so an agent takes it instead of waiting for an app that never opens.
+function webOptionHint(text) {
+  var option = launch.webOptionInText(text);
+  return option ? "\ndesk-web: this page offers a web option, the " + option.role + " " + JSON.stringify(option.name) + " [ref=" + option.ref + "]; desk-web never opens desktop apps, so click it to continue in the browser." : "";
 }
 
 // Copies each picture a screenshot command just wrote to the evidence folder; returns the line that says where, or "".

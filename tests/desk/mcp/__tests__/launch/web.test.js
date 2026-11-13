@@ -45,7 +45,8 @@ const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
 if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waiting for the browser\\n"); setTimeout(() => {}, 10000) }
-if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
+if (verb === "snapshot" && mode === "web-option") process.stdout.write('- button "Open app" [ref=e3]\\n- link "Join from browser" [ref=e4] [cursor=pointer]:\\n')
+else if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "screenshot" && mode !== "no-picture") { fs.writeFileSync(path.join(process.cwd(), "files", "page-1.png"), "PNG"); process.stdout.write("### Result\\n- [Screenshot](files/page-1.png)\\n") }
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
@@ -1251,14 +1252,13 @@ test("a missing browser, a failed start and bad input each give a plain message"
   assert.deepEqual(json(gone), { contextId: "00000000-0000-4000-8000-000000000000", closed: true })
 })
 
-test("a fresh browser opens a Teams link at its web form and passes other goto commands through", async () => {
-  const { options, calls } = await setup()
+test("a fresh browser's reply points out a page's web option, and says nothing on a page without one", async () => {
+  const { options } = await setup({ mode: "web-option" })
   const controller = web.createController(options)
   const { contextId } = json(await controller.call("browser_context", { action: "open" }))
-  await controller.call("browser_command", { contextId, args: ["goto", "https://teams.microsoft.com/l/chat/0/0?users=a"] })
-  await controller.call("browser_command", { contextId, args: ["goto", "https://app.example.test/work"] })
-  const gotos = calls().filter((call) => call.args.includes("goto")).map((call) => call.args.slice(call.args.indexOf("goto")))
-  assert.deepEqual(gotos, [["goto", "https://teams.microsoft.com/l/chat/0/0?users=a&webjoin=true"], ["goto", "https://app.example.test/work"]])
+  const withOption = text(await controller.call("browser_command", { contextId, args: ["snapshot"] }))
+  assert.match(withOption, /desk-web: this page offers a web option, the link "Join from browser" \[ref=e4\]; desk-web never opens desktop apps, so click it/u)
+  assert.doesNotMatch(withOption, /Open app.*\n.*offers a web option, the button/u)
 })
 
 test("browser_command runs only page commands, refuses options that switch session or browser, and reports failures plainly", async () => {

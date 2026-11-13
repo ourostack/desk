@@ -3,6 +3,7 @@
 var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
+var launch = require("./web-launch.cjs");
 var failures = new WeakMap();
 // Each read's look (see lookOf), for telling what an action or a wait changed. Never part of a reply.
 var looks = new WeakMap();
@@ -27,19 +28,22 @@ var ACTS = ["click", "dblclick", "hover", "check", "uncheck", "select", "press",
 var EVIDENCE_MS = 5000;
 // What a reply keeps back from a command's time for the evidence it sends, so a late poll cannot end past the command.
 var REPLY_MARGIN_MS = 200;
+// After a page tries to open an app, desk-web waits up to WEB_PATH_WAIT_MS for it to move on by itself or show a web
+// option, reading it every WEB_PATH_POLL_MS, before it says so; and up to LAUNCH_GRACE_MS after a load for a launch that a page's timer starts a moment late,
+// but only on a page that already shows a web option. A navigation waits up to LOAD_GRACE_MS for the load event: a
+// launcher that points the page at an app address (Zoom, Teams) can keep it from ever firing, so a navigation returns
+// once the response commits and the load is given that long, or LAUNCH_SETTLE_MS once a launch is refused.
+var WEB_PATH_WAIT_MS = 3500;
+var WEB_PATH_POLL_MS = 400;
+var LAUNCH_GRACE_MS = 700;
+var LOAD_GRACE_MS = 8000;
+var LAUNCH_SETTLE_MS = 500;
 // The latest requests a page's recorder keeps.
 var RECENT = 200;
 var RESOURCE_TYPES = ["document", "script", "stylesheet", "image", "font", "xhr", "fetch", "websocket", "media"];
 // Identity providers a page is sent to in order to sign in: a page on one of them is waiting on a sign-in redirect.
 var SIGN_IN_HOSTS = ["login.microsoftonline.com", "login.live.com", "login.windows.net", "accounts.google.com"];
 var SIGN_IN_SUFFIXES = [".okta.com"];
-// Links that open an installed app first, each with the query flag its launcher reads to open the web app instead. The
-// browser already refuses every app launch, so such a launcher stays on its prompt; opening the web form skips the prompt.
-// `param` names the query value that holds the real link (a launcher address), and the flag goes inside it.
-var WEB_FORMS = [
-  { hosts: ["teams.microsoft.com", "teams.cloud.microsoft"], path: /^\/l\//u, query: { webjoin: "true" } },
-  { hosts: ["teams.microsoft.com", "teams.cloud.microsoft"], path: /^\/dl\/launcher\/launcher\.html$/u, param: "url", query: { webjoin: "true" } }
-];
 // Schemes a browser uses for its own pages: a failed request to one is not an app launch.
 var BROWSER_SCHEMES = ["about", "blob", "chrome", "chrome-error", "chrome-extension", "chrome-untrusted", "data", "devtools", "file", "javascript", "view-source"];
 // Mine is the person's own signed-in profile, so no hint here sends the agent to another profile, a fresh browser or a desktop app.
@@ -822,30 +826,6 @@ function narrow(result, view) {
 
 function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
-// `text` with each flag of `flags` added to the end of its query unless it already has that flag. The text is kept as it was written.
-function withFlags(text, flags) {
-  return Object.keys(flags).reduce(function (out, name) {
-    if (new RegExp("[?&]" + name + "=", "u").test(out)) return out;
-    return out + (out.indexOf("?") === -1 ? "?" : "&") + name + "=" + flags[name];
-  }, text);
-}
-
-// The address a link should be opened at: its web form when WEB_FORMS has one, otherwise the address as given.
-function webFormOf(raw, forms) {
-  var url = addressOf(raw);
-  if (!url || !/^https?:$/u.test(url.protocol) || url.username || url.password) return raw;
-  var rule = (forms || WEB_FORMS).find(function (form) { return form.hosts.indexOf(url.hostname) !== -1 && form.path.test(url.pathname); });
-  if (!rule) return raw;
-  if (!rule.param) {
-    url.search = withFlags(url.search, rule.query);
-  } else {
-    var inner = url.searchParams.get(rule.param);
-    if (!inner) return raw;
-    url.searchParams.set(rule.param, withFlags(inner, rule.query));
-  }
-  return url.href;
-}
-
 // ---- Why a page never became ready: its requests and console, kept as counts, host names and codes only ----
 var recorders = new WeakMap();
 
@@ -910,7 +890,7 @@ function isMainNavigation(page, request) {
 function recorderFor(page) {
   var known = recorders.get(page);
   if (known) return known;
-  var rec = { lastActivity: Date.now(), pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined };
+  var rec = { lastActivity: Date.now(), pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined, launches: [], launchCount: 0, moves: 0, reported: 0 };
   recorders.set(page, rec);
   function finish(request, code) {
     var entry = rec.pending.get(request);
@@ -920,7 +900,11 @@ function recorderFor(page) {
     rec.done.push({ host: entry.host, type: entry.type, code: code || (entry.status >= 400 ? "http_" + entry.status : undefined) });
     if (rec.done.length > RECENT) rec.done.shift();
     if (entry.main && code) rec.mainFailed = code;
-    if (entry.scheme && code === "aborted") rec.external = entry.scheme;
+    if (entry.scheme && code) {
+      rec.external = entry.scheme;
+      rec.launches.push({ seq: ++rec.launchCount, scheme: entry.scheme, host: hostOf(addressOf(page.url())), moves: rec.moves });
+      if (rec.launches.length > RECENT) rec.launches.shift();
+    }
   }
   page.on("request", function (request) {
     rec.lastActivity = Date.now();
@@ -928,7 +912,7 @@ function recorderFor(page) {
     var url = addressOf(request.url());
     var main = isMainNavigation(page, request);
     var scheme = externalScheme(url);
-    if (main) { rec.mainFailed = undefined; rec.mainIdentity = identityProvider(url); if (!scheme) rec.external = undefined; }
+    if (main) { rec.mainFailed = undefined; rec.mainIdentity = identityProvider(url); if (!scheme) { rec.external = undefined; rec.moves++; } }
     rec.pending.set(request, { host: scheme || hostOf(url), type: resourceType(request), scheme: scheme, start: Date.now(), main: main });
   });
   page.on("response", function (response) {
@@ -977,8 +961,8 @@ function likelyCause(d, stuck) {
   if (d.signIn) return { probably: "the page was waiting on a sign-in redirect", keepWorking: "complete sign-in in the person's own browser, then open a new context with browser_context so the profile copy has it" };
   if (d.externalScheme) {
     return {
-      probably: "the page tried to open an app through its " + d.externalScheme + ": link; desk-web blocks every app launch, so the page stayed on its app prompt",
-      keepWorking: "choose the page's own web option from [\"snapshot\",\"--interactive\"] (such as \"Use the web app instead\"), or goto the link's web form (a Teams link takes webjoin=true in its query); opening an app needs its own explicit route, which desk-web does not offer yet"
+      probably: "the page tried to open an app through its " + d.externalScheme + ": link; desk-web refused it, so the page stayed on its app prompt",
+      keepWorking: "choose the page's own web option from [\"snapshot\",\"--interactive\"] (such as \"Join from browser\"); opening an app needs its own explicit route, which desk-web does not offer yet"
     };
   }
   if (d.mainFailed || d.status >= 400) {
@@ -1027,8 +1011,6 @@ function withEvidence(error, evidence) {
 function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   requireTrue(typeof runtimePolicy === "function", "AUTH_RUNTIME_POLICY_MISSING");
   var attempts = options && integer(options.snapshotAttempts, 1, SNAPSHOT_ATTEMPTS) ? options.snapshotAttempts : SNAPSHOT_ATTEMPTS;
-  // Tests give their own forms; otherwise WEB_FORMS applies.
-  var webForms = options && Array.isArray(options.webForms) ? options.webForms : undefined;
   // Where screenshots are kept: a folder the context's close does not delete. Without one they go in the context's files folder.
   var evidenceDir = options && typeof options.evidenceDir === "string" && options.evidenceDir ? options.evidenceDir : undefined;
   var closed = false;
@@ -1588,7 +1570,80 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         noChangeNote(command);
     return outcome;
   }
-  async function execute(args) {
+  // A load that never finishes (see LOAD_GRACE_MS) is not a failed navigation: what the page shows is read as it is. A
+  // page that tried to open an app stops waiting for the load shortly after, as the launch is what holds the load back.
+  async function loaded(page, mark) {
+    var rec = recorderFor(page);
+    var finished = false;
+    var load = page.waitForLoadState("load", { timeout: Math.max(1, Math.min(LOAD_GRACE_MS, Math.floor(timeoutMs / 4))) }).then(function () { finished = true; }, function () { finished = true; });
+    await Promise.race([load, until(function () { return finished || rec.launchCount > mark; }, LOAD_GRACE_MS)]);
+    if (!finished) await Promise.race([load, sleep(LAUNCH_SETTLE_MS)]);
+    checkRuntime();
+  }
+  async function until(test, ms) {
+    var end = Date.now() + Math.min(ms, Math.floor(timeoutMs / 4));
+    while (!test()) {
+      if (Date.now() >= end) return false;
+      await sleep(50);
+    }
+    return true;
+  }
+  function launchesAfter(rec, mark) {
+    return rec.launches.filter(function (entry) { return entry.seq > mark; });
+  }
+  function schemesOf(list) {
+    return Array.from(new Set(list.map(function (entry) { return entry.scheme; })));
+  }
+  // The page tried to open an app while `command` ran: refused already, so the page is left to take its web path.
+  // Either it does so by itself, or desk-web follows the web option it offers, by role and name, once. The reply says which.
+  async function followLaunch(reader, command, outcome, mark) {
+    var rec = recorderFor(reader.page);
+    var option = launch.webOptionIn(outcome.snapshot);
+    var fresh = launchesAfter(rec, mark);
+    if (!fresh.length && option) {
+      await until(function () { return rec.launchCount > mark; }, LAUNCH_GRACE_MS);
+      fresh = launchesAfter(rec, mark);
+    }
+    if (!fresh.length) return outcome;
+    var last = fresh[fresh.length - 1];
+    var how = "none";
+    var problem;
+    var end = Date.now() + Math.min(WEB_PATH_WAIT_MS, Math.floor(timeoutMs / 4));
+    for (;;) {
+      if (rec.moves > last.moves) { how = "page"; break; }
+      if (option) {
+        try {
+          outcome = await execute(["click", option.ref], true);
+          how = "followed";
+        } catch (error) {
+          problem = "its click did not complete";
+        }
+        break;
+      }
+      if (Date.now() >= end) break;
+      // The page may show its web option a moment after the launch (Zoom does, about two seconds later), or move on by itself.
+      await sleep(WEB_PATH_POLL_MS);
+      checkRuntime();
+      outcome = await settled(reader, false, true);
+      option = launch.webOptionIn(outcome.snapshot);
+    }
+    if (how === "page") outcome = await settled(reader, false, true);
+    rec.reported = rec.launchCount;
+    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: how, option: option, url: outcome.page.url, problem: problem });
+    return outcome;
+  }
+  // A read never acts: a launch it finds that no reply has told yet is reported with the page's web option and its click.
+  function reportLaunch(reader, outcome) {
+    var rec = recorderFor(reader.page);
+    if (rec.reported >= rec.launchCount) return outcome;
+    var fresh = launchesAfter(rec, rec.reported);
+    var last = fresh[fresh.length - 1];
+    var moved = rec.moves > last.moves;
+    rec.reported = rec.launchCount;
+    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: moved ? "page" : "none", option: moved ? null : launch.webOptionIn(outcome.snapshot), url: outcome.page.url });
+    return outcome;
+  }
+  async function execute(args, inner) {
     checkRuntime();
     checkArgs(args);
     requireTrue(!closed, "AUTH_CONTEXT_REFUSED");
@@ -1627,26 +1682,29 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_READER_SETUP_FAILED", command === "tab-new");
     }
-    if (command === "snapshot" && args[1] === "--interactive") return narrow(await settled(reader, false, false), { interactive: true });
-    if (command === "find") return narrow(await settled(reader, false, false), { find: args[1] });
-    if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
+    if (command === "snapshot" && args[1] === "--interactive") return narrow(reportLaunch(reader, await settled(reader, false, false)), { interactive: true });
+    if (command === "find") return narrow(reportLaunch(reader, await settled(reader, false, false)), { find: args[1] });
+    if (command === "snapshot" || command === "tab-select" || command === "tab-new") return reportLaunch(reader, await settled(reader, args[1] === "--save", command === "tab-new"));
     if (command === "wait") {
       // The polls move reader.last, so the read to compare with is taken first.
       var before = reader.last;
-      return reportChange(command, before, await wait(reader, waitPlan(args)));
+      return reportChange(command, before, reportLaunch(reader, await wait(reader, waitPlan(args))));
     }
     if (command === "screenshot") return screenshot(reader, args);
     var applied = false;
     // What the agent last saw of this tab, before the action changes it.
     var seen = reader.last;
+    var mark = recorderFor(reader.page).launchCount;
     try {
       if (NAVIGATIONS.concat(["resize", "mousewheel"]).indexOf(command) !== -1) {
         checkRuntime();
         applied = true;
-        if (command === "goto") await page.goto(webFormOf(args[1], webForms), { timeout: timeoutMs });
-        if (command === "go-back") await page.goBack({ timeout: timeoutMs });
-        if (command === "go-forward") await page.goForward({ timeout: timeoutMs });
-        if (command === "reload") await page.reload({ timeout: timeoutMs });
+        var arrival = { timeout: timeoutMs, waitUntil: "commit" };
+        if (command === "goto") await page.goto(args[1], arrival);
+        if (command === "go-back") await page.goBack(arrival);
+        if (command === "go-forward") await page.goForward(arrival);
+        if (command === "reload") await page.reload(arrival);
+        if (NAVIGATIONS.indexOf(command) !== -1) await loaded(page, mark);
         if (command === "resize") await page.setViewportSize({ width: Number(args[1]), height: Number(args[2]) });
         if (command === "mousewheel") await page.mouse.wheel(Number(args[1]), Number(args[2]));
         checkRuntime();
@@ -1718,6 +1776,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         return { navigated: true, page: { url: loading }, change: "navigated", changeNote: "The " + command + " navigated: the page is now " + loading + ", still loading.", hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
       }
       if (typed) outcome.typed = typed;
+      if (!inner && (command === "click" || NAVIGATIONS.indexOf(command) !== -1)) outcome = await followLaunch(reader, command, outcome, mark);
+      else if (!inner) reportLaunch(reader, outcome);
       reportChange(command, seen, outcome);
       return outcome;
     } catch (error) {
@@ -1772,4 +1832,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, webFormOf: webFormOf, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
