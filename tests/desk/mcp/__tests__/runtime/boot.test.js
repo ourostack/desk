@@ -1660,6 +1660,21 @@ test("bootOnce: the tool-loading line names the tools the host really exposes (C
   assert.doesNotMatch(claude, /desk-task_update/u)
 })
 
+test("bootOnce: the other sessions in this repo are in the result when there are any, and a look that fails costs boot nothing", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const seen = []
+  const found = { lines: ["Other work on this machine in this repo: 2 worktrees, 1 other running session."], worktrees: 2, sessions: 1 }
+  const withOthers = await healthyBoot(root, { otherSessionsFn: (options) => { seen.push(options); return found } })
+  assert.deepEqual(withOthers.other_sessions, found)
+  assert.equal(typeof seen[0].cwd, "string")
+  assert.equal(typeof seen[0].now, "function")
+  assert.equal(typeof seen[0].home, "string")
+  const failing = await healthyBoot(root, { otherSessionsFn: async () => { throw new Error("git is gone") } })
+  assert.equal(failing.other_sessions, null)
+  assert.equal(failing.status, "ready")
+})
+
 test("bootOnce: a healthy boot lists instructions (export line, MCP check, status block) and the covered hosts", async () => {
   const root = await mkDeskWorkspace()
   await writeCard(root, "track-a", "open-task", VALID_CARD)

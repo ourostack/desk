@@ -26,8 +26,8 @@ import { renameWithRetry } from "../util/rename-retry.js"
 
 const BOOT_RESULT_DIR = "boot-results"
 const AUTO_BOOT_SWITCH = "DESK_AUTO_BOOT"
-/** How long the server's first tool reply waits for a boot that is still running; the boot's own budget is 15 s. */
-const SERVER_WAIT_MS = 12_000
+/** How long the server's first tool reply waits for a boot that is still running (on Windows the hooks start none, so it is the whole wait): short, so the first Desk call is not held for a slow boot; a later reply carries the result. The boot's own budget is 15 s. */
+const SERVER_WAIT_MS = 4000
 const POLL_MS = 50
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -117,6 +117,8 @@ export function startBoot({ key, folder, sessionId, env, stateDir = resolveDeskS
     pruneStale(path.dirname(paths.start), now())
     const childEnv = { ...env }
     if (hasText(sessionId)) childEnv.COPILOT_AGENT_SESSION_ID = sessionId
+    // The process that started this hook or server is the session's own host: the boot leaves it, and its ancestors, out of "other sessions".
+    childEnv.DESK_SESSION_HOST_PID = String(process.ppid)
     const failed = (reason) => {
       try {
         writeText(paths.text, `Desk boot: it could not start (${reason}). desk_status reports the desk's state.\n`)
@@ -223,6 +225,12 @@ export function bootContext({ boot, maxChars = Infinity }) {
   const cut = boot.text.lastIndexOf("\n", room)
   return { whole, text: `${frame}\n\n${boot.text.slice(0, cut > 0 ? cut : room).trimEnd()}\n\n${note}` }
 }
+
+/**
+ * What a hook says on Windows, where it starts no boot: a child it spawned would inherit the hook's own stdout pipe, and a host that
+ * waits for that pipe to close would wait for the whole boot. The Desk server starts the boot with the first Desk tool reply instead.
+ */
+export const WINDOWS_BOOT_LINE = "Desk's boot starts with your first Desk tool reply, and that reply carries its result. Call desk_status before you say anything about the desk's state."
 
 /** What a hook says when the boot has not finished within its time budget. */
 export function pendingBootLine({ seconds } = {}) {
