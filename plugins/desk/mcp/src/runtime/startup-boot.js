@@ -26,8 +26,8 @@ import { renameWithRetry } from "../util/rename-retry.js"
 
 const BOOT_RESULT_DIR = "boot-results"
 const AUTO_BOOT_SWITCH = "DESK_AUTO_BOOT"
-/** How long the server's first tool reply waits for a boot that is still running; the boot's own budget is 15 s. */
-const SERVER_WAIT_MS = 12_000
+/** How long the server's first tool reply waits for a boot that is still running (on Windows the hooks start none, so it is the whole wait): short, so the first Desk call is not held for a slow boot; a later reply carries the result. The boot's own budget is 15 s. */
+const SERVER_WAIT_MS = 4000
 const POLL_MS = 50
 const STALE_MS = 7 * 24 * 60 * 60 * 1000
 
