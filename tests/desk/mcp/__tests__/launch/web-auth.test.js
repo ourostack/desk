@@ -1799,7 +1799,8 @@ test("a wait that never finds its text says why, with evidence: hosts and codes,
   const root = await mkTempRoot("auth-not-ready-")
   const native = fakeDriver()
   native.page.url = () => "https://app.example.test/work/item?token=QUERY_SECRET_688"
-  const adapter = adapterFor(native, root, 2000)
+  // Time enough after the wait for a picture on a busy runner: the picture only gets what is left of the command's time.
+  const adapter = adapterFor(native, root, 4000)
   try {
     const broken = requestOn(native, "https://cdn.example.test/app.js?key=REQUEST_QUERY_688", { type: "script", errorText: "net::ERR_CONNECTION_RESET" })
     native.page.emit("request", broken)
@@ -1974,6 +1975,24 @@ test("a diagnosis reads an unusual address, request type or event as a plain val
     const unknown = await adapter.call(["wait", "never shows"])
     assert.equal(unknown.diagnosis.url, "unknown")
     assert.equal(unknown.diagnosis.signIn, false)
+  } finally { await adapter.close() }
+})
+
+test("a wait whose reads were slow still answers within the command's time, giving up the picture rather than the diagnosis", async () => {
+  const root = await mkTempRoot("auth-not-ready-budget-")
+  const native = fakeDriver()
+  native.page.screenshot = () => new Promise(() => {})
+  const send = native.cdp.send
+  native.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 300))
+    return send(...args)
+  }
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const missing = await adapter.call(["wait", "never shows"])
+    assert.equal(missing.waited.found, false)
+    assert.equal(missing.diagnosis.screenshot, null)
+    assert.match(missing.hint, /no screenshot was kept/u)
   } finally { await adapter.close() }
 })
 
