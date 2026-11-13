@@ -33,7 +33,8 @@ const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.
 
 const DEFAULT_LABEL = "desk_feedback"
 const MAX_PATHS = 64
-const DEFAULT_TIMEOUT_MS = 20_000
+// Covers a cold Windows PowerShell 5.1 start, measured up to about 20 s on hosted runners, plus the provider's own work (#626).
+const DEFAULT_TIMEOUT_MS = 45_000
 const DEFAULT_IDLE_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 const ENTRY_FIELDS = new Set(["path", "kind", "created"])
