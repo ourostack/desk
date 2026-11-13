@@ -22,12 +22,12 @@ emit() {
 }
 
 if [ ! -r "$FOUNDATION_SKILL" ]; then
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
   exit 0
 fi
 
 foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" before other work, then desk:session-start explains its result. The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
   exit 0
 }
 
@@ -44,7 +44,7 @@ if command -v node >/dev/null 2>&1; then
   direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line --boot-checks 2>/dev/null)
 fi
 if [ -z "$direction" ]; then
-  direction="Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this."
+  direction="Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node \"$PLUGIN_ROOT/mcp/scripts/session-boot.js\" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
 fi
 
 # The foundation points at the RFC through this line: the installed copy, which

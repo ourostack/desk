@@ -83,7 +83,7 @@ test("a foundation that cannot be read prints the boot-pointer fallback and stil
   const missing = path.join(dir, "no-such-SKILL.md")
   const result = runNode([missing], env)
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(context(result.stdout), `desk worker boot — the Desk foundation could not be read from ${missing}. The boot has not run: run node "${plugin}/mcp/scripts/session-boot.js" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this.`)
+  assert.equal(context(result.stdout), `desk worker boot — the Desk foundation could not be read from ${missing}. The boot has not run: run node "${plugin}/mcp/scripts/session-boot.js" before other work, then desk:session-start explains its result. The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.`)
 })
 
 test("a plugin root whose Desk modules cannot be loaded gets the could-not-resolve line, with the foundation and RFC line after it", () => {
