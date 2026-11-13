@@ -352,6 +352,18 @@ test("a live owner whose start time the operating system cannot read is held by 
   assert.equal(readFileSync(lock, "utf8"), held, "no readable start time means the PID decides, so the lock stays")
 })
 
+test("a live owner whose lock records no start time is held by its PID alone", async (t) => {
+  const file = statusFile("desk-status-no-start-")
+  const lock = `${file}.lock`
+  const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => owner.kill())
+  await once(owner, "spawn")
+  const held = `${JSON.stringify({ token: "held", pid: owner.pid, start: null })}\n`
+  writeFileSync(lock, held)
+  updateSyncStatus(STATUS_ROOT, env, { i: 9 }, file, { waitMs: 60 })
+  assert.equal(readFileSync(lock, "utf8"), held, "a record without a start time is judged by its live PID")
+})
+
 test("a status lock whose owner PID has exited is taken over at once, though the lock is fresh", () => {
   const file = statusFile("desk-status-dead-")
   const lock = `${file}.lock`

@@ -321,7 +321,6 @@ function readTextIfPresent(file) {
 
 /** The owner record a lock file holds, or `null` when the text is missing, unreadable or not `{ pid, ... }`. */
 function parseLockRecord(text) {
-  if (text === null) return null
   try {
     const record = JSON.parse(text)
     return record !== null && typeof record === "object" && Number.isSafeInteger(record.pid) ? record : null

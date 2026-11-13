@@ -59,7 +59,7 @@ async function linuxStart(pid, { read = readFile } = {}) {
   return linuxStartFrom(stat, boot)
 }
 
-function linuxStartSync(pid, { read = readFileSync } = {}) {
+function linuxStartSync(pid, { read = readFileSync }) {
   let stat
   try {
     stat = read(`/proc/${pid}/stat`, "utf8")
@@ -84,7 +84,7 @@ async function darwinStart(pid, { run = runForText } = {}) {
   return darwinStartFrom(await run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }))
 }
 
-function darwinStartSync(pid, { run = runForTextSync } = {}) {
+function darwinStartSync(pid, { run = runForTextSync }) {
   return darwinStartFrom(run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }))
 }
 
@@ -111,7 +111,7 @@ async function win32Start(pid, { run = runForText, env = process.env } = {}) {
   return win32StartFrom(await run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", win32Script(pid)], { timeout: EXEC_TIMEOUT_MS.win32, env }))
 }
 
-function win32StartSync(pid, { run = runForTextSync, env = process.env } = {}) {
+function win32StartSync(pid, { run = runForTextSync, env = process.env }) {
   return win32StartFrom(run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", win32Script(pid)], { timeout: EXEC_TIMEOUT_MS.win32, env }))
 }
 

@@ -120,6 +120,8 @@ test("the synchronous readers give the values the async ones do, from the same s
   }
   assert.equal(readProcessStartSync(7, { platform: "linux", read }), "linux:boot-1:12345")
   assert.equal(readProcessStartSync(7, { platform: "linux", read }), await readProcessStart(7, { platform: "linux", read: async (file) => read(file) }))
+  files["/proc/sys/kernel/random/boot_id"] = "\n"
+  assert.equal(readProcessStartSync(7, { platform: "linux", read }), "linux:unknown-boot:12345", "an empty boot id is no boot id")
   delete files["/proc/sys/kernel/random/boot_id"]
   assert.equal(readProcessStartSync(7, { platform: "linux", read }), "linux:unknown-boot:12345", "without a boot id, the ticks alone")
   assert.equal(readProcessStartSync(8, { platform: "linux", read }), null, "no such process")
@@ -132,6 +134,14 @@ test("the synchronous readers give the values the async ones do, from the same s
   assert.equal(readProcessStartSync(7, { platform: "win32", run: () => null, env: {} }), null, "the PowerShell read failed")
   assert.equal(readProcessStartSync(0, { platform: "linux", read }), null, "not a positive PID")
   assert.equal(readProcessStartSync(7, { platform: "freebsd", read }), null, "a platform with no reader")
+  // No reader injected: the real defaults read this machine, which may have no such source (no /proc, no ps, no PowerShell here).
+  const ownLinux = readProcessStartSync(process.pid, { platform: "linux" })
+  if (process.platform === "linux") assert.match(ownLinux, /^linux:/u)
+  else assert.equal(ownLinux, null)
+  const ownDarwin = readProcessStartSync(process.pid, { platform: "darwin" })
+  assert.ok(ownDarwin === null || /^darwin:/u.test(ownDarwin))
+  const ownWin32 = readProcessStartSync(process.pid, { platform: "win32" })
+  assert.ok(ownWin32 === null || /^win32:/u.test(ownWin32))
 })
 
 test("this process's own start time is read once, and a failed read is no start time", async (t) => {
