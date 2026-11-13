@@ -80,14 +80,12 @@ function darwinStartFrom(text) {
   return Number.isFinite(when) ? `darwin:${new Date(when).toISOString()}` : null
 }
 
-const DARWIN_PS = { args: ["-o", "lstart=", "-p"], env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }
-
 async function darwinStart(pid, { run = runForText } = {}) {
-  return darwinStartFrom(await run("/bin/ps", [...DARWIN_PS.args, String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: DARWIN_PS.env }))
+  return darwinStartFrom(await run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }))
 }
 
 function darwinStartSync(pid, { run = runForTextSync } = {}) {
-  return darwinStartFrom(run("/bin/ps", [...DARWIN_PS.args, String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: DARWIN_PS.env }))
+  return darwinStartFrom(run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }))
 }
 
 /** The operating system's own Windows PowerShell, from SystemRoot (any letter case, then windir, then C:\Windows), never from PATH: a child with a trimmed environment has no System32 on its PATH. */

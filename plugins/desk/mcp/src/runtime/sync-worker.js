@@ -146,11 +146,13 @@ async function isLockLive(record, processStart, kill) {
   return current === null || current === record.start
 }
 
-// `isLockLive`'s rule for the status lock, which is taken from synchronous code: the same checks, with a blocking start-time read.
-function statusLockLive(record) {
+// `isLockLive`'s rule for the status lock, taken from synchronous code. A lock naming this process is never held by a
+// concurrent writer (status writes are synchronous), so it is stale: a release that failed left it behind.
+function statusLockLive(record, processStart) {
+  if (record.pid === process.pid) return false
   if (!pidRunning(record.pid, process.kill)) return false
   if (!hasStart(record)) return true
-  const current = readProcessStartSync(record.pid)
+  const current = processStart(record.pid)
   return current === null || current === record.start
 }
 
@@ -332,6 +334,7 @@ function olderThan(file, ms) {
   try {
     return Date.now() - statSync(file).mtimeMs > ms
   } catch {
+    // istanbul ignore next -- the lock can be released between the read that judged it and this stat; the next pass sees that
     return false
   }
 }
@@ -339,24 +342,16 @@ function olderThan(file, ms) {
 // Replaces the stale lock `seen` with ours only if the file still holds `seen`. The check and the rename are two
 // steps, so a writer that takes the lock between them can be overwritten: the same narrow window as `acquireSyncLock`.
 function replaceStatusLock(lockFile, seen, bytes, token) {
+  // istanbul ignore if -- the lock changed since the read that judged it: the next pass judges what it holds now
   if (readTextIfPresent(lockFile) !== seen) return false
   const temporary = `${lockFile}.${token}.tmp`
-  try {
-    writeFileSync(temporary, bytes, { mode: 0o600 })
-    renameWithRetry(temporary, lockFile)
-    return true
-  } catch {
-    try {
-      unlinkSync(temporary)
-    } catch {
-      // Never written, or already gone.
-    }
-    return false
-  }
+  writeFileSync(temporary, bytes, { mode: 0o600 })
+  renameWithRetry(temporary, lockFile)
+  return true
 }
 
-/** Takes `lockFile` or returns `null` once `waitMs` has passed without getting it. Never throws. */
-function acquireStatusLock(lockFile, waitMs) {
+/** Takes `lockFile` or returns `null` once `waitMs` has passed without getting it. */
+function acquireStatusLock(lockFile, waitMs, processStart) {
   const deadline = Date.now() + waitMs
   const token = randomUUID()
   const bytes = `${JSON.stringify({ token, pid: process.pid, start: ownStatusStartOnce() })}\n`
@@ -367,7 +362,8 @@ function acquireStatusLock(lockFile, waitMs) {
     const seen = readTextIfPresent(lockFile)
     if (seen !== null && seen !== judgedLive) {
       const record = parseLockRecord(seen)
-      if (record === null ? olderThan(lockFile, STATUS_LOCK_STALE_MS) : !statusLockLive(record)) {
+      if (record === null ? olderThan(lockFile, STATUS_LOCK_STALE_MS) : !statusLockLive(record, processStart)) {
+        // istanbul ignore else -- a lost race with another takeover: the next pass judges the lock as it is now
         if (replaceStatusLock(lockFile, seen, bytes, token)) return { file: lockFile, token }
       } else if (record !== null) {
         judgedLive = seen
@@ -380,10 +376,11 @@ function acquireStatusLock(lockFile, waitMs) {
 
 // Removes the lock only while it still holds our token. The read and the unlink are two steps, as in replaceStatusLock.
 function releaseStatusLock({ file, token }) {
+  if (parseLockRecord(readTextIfPresent(file))?.token !== token) return
   try {
-    if (parseLockRecord(readTextIfPresent(file))?.token === token) unlinkSync(file)
+    unlinkSync(file)
   } catch {
-    // Already gone, or not removable: nothing more to do.
+    // Windows can refuse the unlink while another process has the file open. The lock then names this process, which the next write takes over.
   }
 }
 
@@ -401,15 +398,10 @@ function pruneInvalidStatusFiles(file) {
   }
 }
 
-/** Moves an invalid status record aside, so its evidence stays, and then the fresh write replaces the file. Never throws. */
+/** Moves an invalid status record aside, so its evidence stays. Throws if it cannot, as the write that follows would fail the same way. */
 function setAsideInvalidStatus(file) {
-  try {
-    const aside = `${file}.invalid-${new Date().toISOString().replace(/:/gu, "-")}-${randomUUID().slice(0, 8)}`
-    renameWithRetry(file, aside)
-    pruneInvalidStatusFiles(file)
-  } catch {
-    // Could not be moved aside: the fresh write below still replaces it, so nothing is wedged.
-  }
+  renameWithRetry(file, `${file}.invalid-${new Date().toISOString().replace(/:/gu, "-")}-${randomUUID().slice(0, 8)}`)
+  pruneInvalidStatusFiles(file)
 }
 
 /**
@@ -435,7 +427,7 @@ function readStatusForWrite(file) {
  * Reads, merges and atomically replaces the JSON file at `file`, under the lock described above. `patch` is an object,
  * or a function of the record as it is at the moment of the write (the merge happens against that read, under the lock).
  */
-export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS } = {}) {
+export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS, processStart = readProcessStartSync } = {}) {
   try {
     assertNotRealStateUnderTest(path.dirname(file), { env })
   } catch (error) {
@@ -446,7 +438,7 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
   }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   // Without the lock, a write can still lose a concurrent update to any field; `delivered` is written only by the delivery loop, which holds the sync lock, so two delivery writes never overlap.
-  const lock = acquireStatusLock(`${file}.lock`, waitMs)
+  const lock = acquireStatusLock(`${file}.lock`, waitMs, processStart)
   try {
     const current = readStatusForWrite(file)
     const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch) }

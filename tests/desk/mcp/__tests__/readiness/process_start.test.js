@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
-  processStartReaders, readOwnProcessStart, readProcessStart, readProcessStartSync, resetOwnProcessStart, runForText, windowsPowerShellPath,
+  processStartReaders, readOwnProcessStart, readProcessStart, readProcessStartSync, resetOwnProcessStart, runForText, runForTextSync, windowsPowerShellPath,
 } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { killAndWait } from "../_kill_and_wait.js"
 
@@ -107,6 +107,31 @@ test("runForText resolves with stdout, or null when the command fails or cannot 
   assert.equal(await runForText(process.execPath, ["-e", "process.stdout.write('hi')"], { timeout: 10000, env: bareEnv }), "hi")
   assert.equal(await runForText(process.execPath, ["-e", "process.exit(3)"], { timeout: 10000, env: bareEnv }), null)
   assert.equal(await runForText("/no/such/command", [], { timeout: 10000, env: bareEnv }), null)
+  assert.equal(runForTextSync(process.execPath, ["-e", "process.stdout.write('hi')"], { timeout: 10000, env: bareEnv }), "hi")
+  assert.equal(runForTextSync(process.execPath, ["-e", "process.exit(3)"], { timeout: 10000, env: bareEnv }), null)
+})
+
+test("the synchronous readers give the values the async ones do, from the same sources, and no start time when a read fails", async () => {
+  const fields = ["S", ...Array(18).fill("0"), "12345", "0"]
+  const files = { "/proc/7/stat": `7 (node) ${fields.join(" ")}\n`, "/proc/sys/kernel/random/boot_id": "boot-1\n" }
+  const read = (file) => {
+    if (Object.hasOwn(files, file)) return files[file]
+    throw new Error(`no ${file}`)
+  }
+  assert.equal(readProcessStartSync(7, { platform: "linux", read }), "linux:boot-1:12345")
+  assert.equal(readProcessStartSync(7, { platform: "linux", read }), await readProcessStart(7, { platform: "linux", read: async (file) => read(file) }))
+  delete files["/proc/sys/kernel/random/boot_id"]
+  assert.equal(readProcessStartSync(7, { platform: "linux", read }), "linux:unknown-boot:12345", "without a boot id, the ticks alone")
+  assert.equal(readProcessStartSync(8, { platform: "linux", read }), null, "no such process")
+  files["/proc/9/stat"] = "9 (x) S"
+  assert.equal(readProcessStartSync(9, { platform: "linux", read }), null, "no start field")
+
+  assert.equal(readProcessStartSync(7, { platform: "darwin", run: () => "Fri Sep 25 10:00:00 2026\n" }), "darwin:2026-09-25T10:00:00.000Z")
+  assert.equal(readProcessStartSync(7, { platform: "darwin", run: () => null }), null, "ps failed")
+  assert.equal(readProcessStartSync(7, { platform: "win32", run: () => "2026-09-25T10:00:00Z", env: {} }), "win32:2026-09-25T10:00:00.000Z")
+  assert.equal(readProcessStartSync(7, { platform: "win32", run: () => null, env: {} }), null, "the PowerShell read failed")
+  assert.equal(readProcessStartSync(0, { platform: "linux", read }), null, "not a positive PID")
+  assert.equal(readProcessStartSync(7, { platform: "freebsd", read }), null, "a platform with no reader")
 })
 
 test("this process's own start time is read once, and a failed read is no start time", async (t) => {
