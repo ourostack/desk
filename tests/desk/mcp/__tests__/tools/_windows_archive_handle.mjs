@@ -4,6 +4,9 @@ import { promises as fs, readFileSync } from "node:fs"
 import { createHash, randomBytes } from "node:crypto"
 import path from "node:path"
 
+// Covers a cold Windows PowerShell 5.1 start plus native type setup; the start alone measured up to about 20 s on hosted runners (#573).
+const CAPTURE_READINESS_MS = 30000
+
 const PROGRAM = `
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -323,7 +326,7 @@ export async function openArchiveHandleSession({ source, destination }, {
   const receipt = { scope: "test_only_native_preadmission_session", additionalNativeAdmission: true, nodeIdentityBridge: false,
     capturedValidated: false, admissionValidated: false, cleanupConfirmed: false, cleanupFailure: false, operationFailure: false,
     helperSha256, programSha256, executedProgramSha256: null, childPid: null, runtime: null, layout: null, metadata: [],
-    bounds: { readinessMs: 5000, ackAndCloseMs: 5000, closeGraceMs: 2000, retirementMs: 2000,
+    bounds: { readinessMs: CAPTURE_READINESS_MS, ackAndCloseMs: 5000, closeGraceMs: 2000, retirementMs: 2000,
       stdoutBytes: 16384, stderrBytes: 16384, events: 128 },
     samples: { baseline: null, admitted: null, held: null, current: null }, comparisons: {}, nativeComparisons: {},
     rename: null, handles: { confirmedDisposed: false }, archiveMove: state,
@@ -619,7 +622,7 @@ export async function openArchiveHandleSession({ source, destination }, {
     const capture = expect("captured")
     event("capture_requested")
     send(JSON.stringify({ source, destination }) + "\n")
-    await bounded(capture, 5000, "capture readiness timeout")
+    await bounded(capture, CAPTURE_READINESS_MS, "capture readiness timeout")
     if (issueError || !captured) throw issueError || problem("capture missing")
     mode = "captured"
   } catch (error) {
