@@ -46,6 +46,7 @@ if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser fai
 if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
 if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waiting for the browser\\n"); setTimeout(() => {}, 10000) }
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
+if (verb === "screenshot") { fs.writeFileSync(path.join(process.cwd(), "files", "page-1.png"), "PNG"); process.stdout.write("### Result\\n- [Screenshot](files/page-1.png)\\n") }
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
 if (verb === "sleep") setTimeout(() => {}, 10000)
@@ -950,6 +951,42 @@ test("fresh opens in a private folder, runs page commands and deletes the folder
   const after = await controller.call("browser_command", { contextId, args: ["snapshot"] })
   assert.equal(after.isError, true)
   assert.match(text(after), /no open browser with that contextId/u)
+})
+
+test("a fresh browser's screenshot is copied to the evidence folder, which close leaves alone", async () => {
+  const { options, state } = await setup()
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open" }))
+  assert.equal(opened.evidence.startsWith(path.join(state, "evidence")), true)
+  assert.match(opened.note, /screenshot is also copied to the evidence folder, which stays after close/u)
+  const reply = text(await controller.call("browser_command", { contextId: opened.contextId, args: ["screenshot"] }))
+  const kept = /Kept after browser_context close: (.+)$/mu.exec(reply)[1]
+  assert.equal(path.dirname(kept), opened.evidence)
+  assert.equal(fs.readFileSync(kept, "utf8"), "PNG")
+  assert.equal((await controller.call("browser_command", { contextId: opened.contextId, args: ["snapshot"] })).content[0].text.includes("Kept after"), false)
+  await controller.call("browser_context", { action: "close", contextId: opened.contextId })
+  assert.equal(fs.existsSync(opened.files), false)
+  assert.equal(fs.readFileSync(kept, "utf8"), "PNG", "the picture outlives the context")
+})
+
+test("mine opens with an evidence folder its screenshots go to, and a later start removes only old evidence folders", async () => {
+  const { options, state, profiles } = await setup()
+  makeProfile(path.join(profiles, "edge"))
+  const evidence = path.join(state, "evidence")
+  const old = path.join(evidence, "2026-01-01T00-00-00-000Z-1")
+  const recent = path.join(evidence, "2026-11-12T00-00-00-000Z-2")
+  const other = path.join(evidence, "not-ours")
+  for (const folder of [old, recent, other]) fs.mkdirSync(folder, { recursive: true })
+  const longAgo = new Date(Date.now() - 30 * 86400000)
+  fs.utimesSync(old, longAgo, longAgo)
+  fs.utimesSync(other, longAgo, longAgo)
+  const controller = web.createController(options)
+  await controller.sweep()
+  assert.deepEqual([old, recent, other].map((folder) => fs.existsSync(folder)), [false, true, true])
+  const opened = json(await controller.call("browser_context", { action: "open", browser: "mine" }))
+  assert.equal(path.dirname(opened.evidence), evidence)
+  assert.match(opened.note, /Screenshots are saved in the evidence folder, which stays after close\./u)
+  await controller.call("browser_context", { action: "close", contextId: opened.contextId })
 })
 
 test("mine opens a private copy of the person's profile and deletes it on close", async () => {

@@ -12,7 +12,7 @@ const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 // Copilot has no setting that makes a plugin's agent the default (Claude Code takes `agent` from settings.json), and the hook
 // input does not say which agent runs, so every session is told to act as the worker unless it was started as another agent.
-const workerPointer = `Unless started with \`--agent\`, act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
+const workerPointer = `Unless started with \`--agent\` or the skip rule above applies (then skip this read too), act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
 const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
 // The same rule as BOOT_SKIP in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
 const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.";

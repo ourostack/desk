@@ -434,7 +434,7 @@ function expectedContext(host, env, desk, checks = "") {
   const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
   const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
   // Copilot's hook drops the foundation's frontmatter and adds the worker pointer, which Claude Code's agent setting makes unnecessary.
-  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\nUnless started with \`--agent\`, act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
+  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\nUnless started with \`--agent\` or the skip rule above applies (then skip this read too), act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
   // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
   return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n`
 }
