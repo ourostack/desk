@@ -13,7 +13,7 @@ import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/sessi
 const APP_OVERRIDE = { GIT_CONFIG_PARAMETERS: "'credential.https://github.com.helper=' 'credential.https://github.com.helper=copilot'", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.interactive", GIT_CONFIG_VALUE_0: "never" }
 const REMOTE = "https://arimendelow_microsoft@github.com/arimendelow_microsoft/desk.git"
 const ORG_REMOTE = "https://github.com/ourostack/desk.git"
-const TANDEM_REMOTE = "https://github.com/teams-microsoft/tandem.git"
+const OTHER_ORG_REMOTE = "https://github.com/example-org/example-app.git"
 
 function git(root, args, env) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: env ?? process.env })
@@ -93,8 +93,8 @@ test("an organization's desk fetches and pushes as the signed-in account that ca
 
 // Case: a push to an organization's repository must go as the account that holds push rights, not the one that can only read it.
 test("a push to an organization's desk goes as the account with push rights, while a fetch takes the first that can read it", async () => {
-  const root = await mkTempRoot("desk-identity-tandem-")
-  const { spawn } = fakeSpawn({ config: { "remote.origin.url": TANDEM_REMOTE }, logins: ["arimendelow", "arimendelow_microsoft"], access: { arimendelow: { pull: true, push: false }, arimendelow_microsoft: { pull: true, push: true } } })
+  const root = await mkTempRoot("desk-identity-other-org-")
+  const { spawn } = fakeSpawn({ config: { "remote.origin.url": OTHER_ORG_REMOTE }, logins: ["arimendelow", "arimendelow_microsoft"], access: { arimendelow: { pull: true, push: false }, arimendelow_microsoft: { pull: true, push: true } } })
   const pushed = remoteIdentityEnv({ root, args: ["push", "origin", "HEAD:refs/heads/main"], env: APP_OVERRIDE, spawn, cache: new Map() })
   assert.match(pushed.GIT_CONFIG_PARAMETERS, /--user arimendelow_microsoft /u)
   const fetched = remoteIdentityEnv({ root, args: ["fetch", "origin"], env: APP_OVERRIDE, spawn, cache: new Map() })
