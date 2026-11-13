@@ -399,7 +399,7 @@ test("actions pass literal data, scripts and the formerly refused commands run a
     await adapter.call(["goto", "javascript:1"])
     assert.ok(native.calls.some((call) => call[0] === "goto" && call[1] === "file:///etc/hosts"), "any address is passed on")
     assert.ok(native.calls.some((call) => call[0] === "page.once" && call[1] === "dialog"))
-    assert.ok(native.calls.some((call) => call[0] === "keyboard.down" && call[1] === "Shift") && native.calls.some((call) => call[0] === "mouse.up" && call[1].button === "right"))
+    assert.ok(native.calls.some((call) => call[0] === "keyboard.down" && call[1] === "Shift") && native.calls.some((call) => call[0] === "mouse.up" && call[1]?.button === "right"))
     for (const args of [["snapshot", "--raw"], ["snapshot", "--json"], ["snapshot", "--filename=../outside"]]) {
       const before = native.calls.length
       await assert.rejects(adapter.call(args), /AUTH_ARGUMENTS_REFUSED/u)
