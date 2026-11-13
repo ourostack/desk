@@ -219,7 +219,7 @@ test("a refused pull tells the agent the probable cause, how to look further, ho
   assert.match(tell, /^desk: sync: the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach https:\/\/github\.com\/arimendelow_microsoft\/desk\.git; /u)
   assert.match(tell, /local work continues and Desk retries with every write/u)
   assert.match(tell, /run `git -C \S+ ls-remote origin`/u)
-  assert.match(tell, /file this with its evidence run `node \S+file-desk-problem\.js --mechanism session-sync --reason '[^']*Repository not found[^']*' --host \S+`/u)
+  assert.match(tell, /file this with its evidence run `node \S+file-desk-problem\.js'? --mechanism session-sync --reason '[^']*Repository not found[^']*' --host \S+`/u)
   assert.match(tell, / Fix: gh auth login --hostname github\.com\.$/u)
 })
 
