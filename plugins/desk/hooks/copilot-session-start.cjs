@@ -155,6 +155,8 @@ async function bootSection({ folder, sessionId, source }) {
     const boot = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "startup-boot.js")).href);
     const { copilotBootRoot } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js")).href);
     if (!boot.autoBootEnabled(process.env) || !copilotBootRoot({ env: process.env, sessionFolder: folder })) return "";
+    // On Windows a hook that starts the boot holds the host's pipe open until it ends; the first-prompt hook says so and the Desk server starts it.
+    if (process.platform === "win32") return "";
     const key = boot.bootKey({ sessionId });
     if (key === null) return "";
     const { paths } = boot.startBoot({ key, folder, sessionId, env: process.env, fresh: source === "resume" });

@@ -51,7 +51,7 @@ function emit(additionalContext) {
 // Claude Code saves a hook's additionalContext to a file and shows the agent only a 2 KB preview once it passes 10,000 characters, and the foundation alone is most of that budget; so the hook carries only the head of the boot (its status, what needs the operator, the notes) and the rest comes with the first Desk tool reply.
 const BOOT_HEAD_CHARS = 1500;
 // The hook's limit is 10 s (hooks.json). The wait ends this long after the hook's process started, so a slow Node start shortens the wait instead of overrunning the limit.
-const BOOT_WAIT_UNTIL_MS = process.platform === "win32" ? 4500 : 7000;
+const BOOT_WAIT_UNTIL_MS = 7000;
 
 // Starts the session's boot (a new session in this folder, so afresh) and waits for it within the hook's budget. The boot runs
 // detached and its result is also delivered, once, by the first Desk tool reply (mcp/src/runtime/startup-boot.js). Never throws.
@@ -61,6 +61,8 @@ async function bootSection() {
     const { claudeBootRoot } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js")).href);
     const folder = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     if (!boot.autoBootEnabled(process.env) || claudeBootRoot({ env: process.env }) === null) return "";
+    // On Windows a hook that starts the boot holds the host's pipe open until it ends; the Desk server starts it with the first tool reply.
+    if (process.platform === "win32") return boot.WINDOWS_BOOT_LINE;
     const key = boot.bootKey({ folder: process.env.CLAUDE_PROJECT_DIR });
     if (key === null) return "";
     const { paths } = boot.startBoot({ key, folder, env: process.env, fresh: true });

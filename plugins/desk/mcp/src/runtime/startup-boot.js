@@ -226,6 +226,12 @@ export function bootContext({ boot, maxChars = Infinity }) {
   return { whole, text: `${frame}\n\n${boot.text.slice(0, cut > 0 ? cut : room).trimEnd()}\n\n${note}` }
 }
 
+/**
+ * What a hook says on Windows, where it starts no boot: a child it spawned would inherit the hook's own stdout pipe, and a host that
+ * waits for that pipe to close would wait for the whole boot. The Desk server starts the boot with the first Desk tool reply instead.
+ */
+export const WINDOWS_BOOT_LINE = "Desk's boot starts with your first Desk tool reply, and that reply carries its result. Call desk_status before you say anything about the desk's state."
+
 /** What a hook says when the boot has not finished within its time budget. */
 export function pendingBootLine({ seconds } = {}) {
   const ago = typeof seconds === "number" ? ` (it started ${seconds.toFixed(1)} s ago)` : ""
