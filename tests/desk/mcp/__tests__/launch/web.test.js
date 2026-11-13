@@ -11,7 +11,7 @@ import os from "node:os"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { different } from "../_file_identity.js"
 import { NO_POSIX_MODES, isWindows } from "../_platform.js"
@@ -1656,6 +1656,25 @@ async function realSetup() {
   await new Promise((resolve) => page.listen(0, "127.0.0.1", resolve))
   return { root, tmp, env, url: `http://127.0.0.1:${page.address().port}`, page }
 }
+
+test("real: fresh goto opens a file: fixture and snapshot reads it", { skip: real, timeout: 300000 }, async () => {
+  const { root, tmp, env, page } = await realSetup()
+  const fixture = path.join(root, "fixture.html")
+  fs.writeFileSync(fixture, "<title>File fixture</title><button>Local press</button>")
+  const controller = web.createController({ env, tmpDir: tmp })
+  try {
+    const { contextId } = json(await controller.call("browser_context", { action: "open", browser: "fresh" }))
+    const goto = await controller.call("browser_command", { contextId, args: ["goto", pathToFileURL(fixture).href] })
+    assert.equal(goto.isError, false, text(goto))
+    const snapshot = await controller.call("browser_command", { contextId, args: ["snapshot"] })
+    assert.match(text(snapshot), /button "Local press" \[ref=e\d+\]/u)
+    await controller.call("browser_context", { action: "close", contextId })
+  } finally {
+    await controller.closeAll()
+    page.closeAllConnections()
+    page.close()
+  }
+})
 
 test("real: fresh opens headless, loads a page, closes and its folder is gone", { skip: real, timeout: 300000 }, async () => {
   const { tmp, env, url, page } = await realSetup()
