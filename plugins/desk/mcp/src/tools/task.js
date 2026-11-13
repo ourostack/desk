@@ -57,12 +57,17 @@ import { recordArchivedDisposition } from "./task-archived-resource.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
 import { archiveDueAnswer } from "./task-archive-due.js"
 import { admitContent, assertCleanContentTarget, assertPublishedContentBase } from "../desk/content-home.js"
+import { defaultBranchForPublication } from "../util/main-publish.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
 const DESK_COMMIT_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
 // desk_commit is read before the push. A push that has to rebase onto newer desk commits gives the commit a new hash on the remote; a claude.ai run reported a hash GitHub never had.
 const DESK_COMMIT_HASH_NOTE = "desk_commit is the local commit; if the push rebases onto newer desk commits, the remote has it under a new hash, so find it there by its message."
+
+// The card of a worktree on a feature branch is published before the call returns, so these say it is already on the remote.
+const DESK_PUBLISHED_NOTE = "Desk card only: Desk published this card to the remote's default branch from this worktree, so it is already on the remote. Run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
+const DESK_PUBLISHED_HASH_NOTE = "desk_commit is the remote default branch's tip after Desk published this card; the card is in it or in a commit before it."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code", "steps"])
@@ -535,8 +540,8 @@ function reportStep(step) {
 }
 
 // The short sha of the desk's HEAD after a card commit, or null when git cannot say.
-function headSha(dir, spawnGit) {
-  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 5000 })
+function headSha(dir, spawnGit, ref = "HEAD") {
+  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", ref], { windowsHide: true, encoding: "utf8", timeout: 5000 })
   return answer?.status === 0 && typeof answer.stdout === "string" && answer.stdout.trim() !== "" ? answer.stdout.trim() : null
 }
 
@@ -1207,8 +1212,10 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"], `${track}/${slug}`, deskRoot) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON, route_around: conflictedCardRoute(filePath, track, slug) } : undefined
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
-  const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
-  if (stage && !commit) schedulePush({ root: deskRoot })
+  // A worktree on a feature branch publishes the card to the remote's default branch itself, so there is nothing left to push and its commit is that branch's tip.
+  const published = stage && !commit && defaultBranchForPublication(path.dirname(filePath), spawnGit) !== null
+  const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit, published ? "refs/remotes/origin/HEAD" : "HEAD") : null
+  if (stage && !commit && !published) schedulePush({ root: deskRoot })
   search?.noteChange(relPath(deskRoot, filePath))
   if (trackRow !== null) search?.noteChange(relPath(deskRoot, trackRow))
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
@@ -1239,9 +1246,10 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   if (deliveryCheck?.status === "not_verified") result.delivery_check = `not verified: ${deliveryCheck.reason}. The pull request's delivery was not checked; confirm it is delivered (see the repo's .desk/delivery.json) before telling the operator it shipped.`
   if (deskCommit !== null) {
     result.desk_commit = deskCommit
-    result.desk_pushed = false
-    Object.assign(result, deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE }))
-    result.desk_commit_note = DESK_COMMIT_HASH_NOTE
+    result.desk_pushed = published
+    if (published) result.desk_note = DESK_PUBLISHED_NOTE
+    else Object.assign(result, deskPushNote({ root: deskRoot, env, spawnGit, note: DESK_COMMIT_NOTE }))
+    result.desk_commit_note = published ? DESK_PUBLISHED_HASH_NOTE : DESK_COMMIT_HASH_NOTE
     if (heldChanges) result.included_uncommitted_changes = INCLUDED_CHANGES_NOTE
   }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
