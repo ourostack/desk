@@ -42,6 +42,7 @@ import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
 import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
+import { planArchiveLinks, relinkArchiveLinks, relinkCardLinks, linksReport } from "./archive-links.js"
 import { appendProgressNote, localDate, replaceNextStep, replaceSection } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
@@ -1539,6 +1540,11 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
   const trackFile = await target([track, "track.md"])
   let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
+  // Links into and out of the task are planned before anything moves; a failed plan is reported in `links`, never blocks the archive.
+  const linkWork = relocated ? null : await planArchiveLinks({ effectiveRoot, srcDir, archiveDir, track, slug, trackFile, trackPlan, spawnGit })
+  const linkPlan = linkWork ? linkWork.plan : null
+  const linkState = linkWork ? linkWork.state : null
+  if (linkWork) trackPlan = linkWork.trackPlan
   let prepared, moveSession, sessionClosed = false
   const closeSession = async () => {
     if (!moveSession || sessionClosed) return
@@ -1591,6 +1597,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     await prepared.afterMove()
     search?.noteChange(relPath(deskRoot, srcDir))
     search?.noteChange(relPath(deskRoot, archiveDir))
+    if (linkPlan) await relinkArchiveLinks({ plan: linkPlan, prepared, archiveDir, noteChange: (file) => search?.noteChange(relPath(deskRoot, file)) })
 
     const filePath = await target([track, "_archive", slug, "task.md"])
     let finalStatus = null
@@ -1631,6 +1638,11 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
         if (await writeDerivedCells(filePath, archiveBump.derived))
           search?.noteChange(relPath(deskRoot, filePath))
       }
+      if (linkPlan) {
+        const linked = await relinkCardLinks({ plan: linkPlan, text: expected, cardFile: filePath, cardRel: `${track}/_archive/${slug}/task.md` })
+        if (linked !== expected) search?.noteChange(relPath(deskRoot, filePath))
+        expected = linked
+      }
       await prepared.cardWritten(expected)
     }
     if (trackPlan) {
@@ -1651,6 +1663,8 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
     }
     Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
+    const links = linkState ? linksReport(linkState, (rel) => relPath(deskRoot, path.join(effectiveRoot, rel))) : null
+    if (links) result.links = links
     return withArchiveFocus(statusContext, { track, slug }, result)
   } catch (error) {
     try { await closeSession() } catch { attachCleanup(error) }

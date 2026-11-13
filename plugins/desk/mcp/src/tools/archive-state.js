@@ -198,6 +198,8 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
   let stagedRelocation = false
   let recoveredTrack = false
   let trackEntry = null
+  // Files outside the moved folder that the archive rewrote, keyed by Git path; they join the archive commit.
+  const inbound = new Map()
   if (git) {
     const source = gitPath(git, srcDir)
     const destination = gitPath(git, archiveDir)
@@ -335,14 +337,34 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
       if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: relocated payload changed; outside bytes retained")
     },
     assertTrack,
-    async cardWritten(expectedBytes) {
-      const real = await fs.realpath(path.join(archiveDir, "task.md"))
+    async cardWritten(expectedBytes, name = "task.md") {
+      const real = await fs.realpath(path.join(archiveDir, name))
       if (!(await fs.readFile(real)).equals(Buffer.from(expectedBytes))) throw new Error("task_archive: card bytes changed during its patch; no publication was admitted")
       if (isPathContained(await fs.realpath(archiveDir), real)) {
         const key = relative(await fs.realpath(archiveDir), real)
         const stat = await fs.lstat(real, { bigint: true })
         snapshot.set(key, { ...snapshot.get(key), identity: identity(stat), bytes: Buffer.from(expectedBytes), hash: hash(expectedBytes) })
       }
+    },
+    // Rewrites one file outside the moved folder, but only when it still holds the bytes the plan read and, in a Git desk, has no
+    // unstaged, staged or untracked work. Returns null once written, else the reason it was left alone.
+    async relinkInbound(file, before, after) {
+      let key = null, mode = null
+      if (git) {
+        key = gitPath(git, file)
+        const held = indexEntries(git.root, [key], spawnGit)
+        if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
+          return "it is not a tracked regular file in Git"
+        if ([["diff", "--name-only", "--", key], ["diff", "--cached", "--name-only", "--", key], ["ls-files", "--others", "--exclude-standard", "--", key]]
+          .some((args) => readGit(git.root, args, spawnGit).trim()))
+          return "it has unstaged, staged or untracked changes, so another session may be editing it"
+        mode = gitMode({ kind: "file", mode: Number((await fs.lstat(file, { bigint: true })).mode & 0o777n) }, held[0], git)
+      }
+      /* istanbul ignore next -- the file changed between the plan's read and this write; a test cannot time that gap, and the reason is reported. */
+      if (!(await fs.readFile(file)).equals(Buffer.from(before))) return "it changed after the archive read it"
+      await fs.writeFile(file, after)
+      if (git) inbound.set(key, { file, after, mode })
+      return null
     },
     async publish(message) {
       await fence.assert()
@@ -366,6 +388,10 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
         const stageMode = gitMode(entry, destinationIndex.get(key), git)
         expected.set(key, { sha, mode, stageMode,
           stageSha: stageMode === mode ? sha : blobHash(git, path.join(archiveDir, name), entry.bytes, stageMode) })
+      }
+      for (const [key, entry] of inbound) {
+        const sha = cleanHash(git, entry.file, Buffer.from(entry.after))
+        expected.set(key, { sha, mode: entry.mode, stageSha: sha, stageMode: entry.mode })
       }
       if (track) {
         const bytes = Buffer.from(track.after)
