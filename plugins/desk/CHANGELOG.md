@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.111 — 2026-11-13
+
+When a Desk tool's write does not finish, its result now always says how to finish it by hand. A note that did not reach its recipient, a team lesson that is not yet on the shared branch, and a pull request left open all carry `route_around`. A pull request is merged by hand and read back; a note or lesson that never landed is read for and then sent again through the same tool. A desk lesson whose improvement card did not open says how to retry it. A contract test fails when any failing result under `src/tools` has no route.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.110 — 2026-11-13
 
 The boot instruction now says when to skip the boot. It applies to desk-backed work: tasks, cards, saves, sync and memory. If the operator or a coordinating parent says not to boot, or the assignment is bounded and read-only, the agent skips it and uses Desk's tools directly. The rule is in the session-start text, the per-prompt boot pointer, the setup-mode line, the fallbacks of both session-start hooks, and the child-agent paragraph of `using-desk`. Before, a child told "don't boot, use `desk_status` and desk-web" met an unconditional "run the boot before anything else, including your first reply" and stopped to ask which to follow.
