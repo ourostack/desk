@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process"
 import { rmSync } from "node:fs"
 import * as path from "node:path"
 
-import { classifyPullFailure, gitEnv } from "../runtime/deliver.js"
+import { gitEnv } from "../runtime/deliver.js"
 import { publicationPolicy, publishPullRequest } from "../runtime/pr-publication.js"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -70,17 +70,17 @@ function fail(relPaths, what, cause, look, keep, readback = "absent") {
 
 /**
  * Commits `relPaths` (staged in the checkout at `root`) with `message` on top of `defaultBranch` on the remote, and publishes
- * it there. Returns `{ ok, stderr, readback }`; `readback` is `unknown` only when a push was cut off, since it may have landed.
- * Never throws on a Git failure.
+ * it there. Returns `{ ok, stderr, readback }`; `readback` is `unknown` only when a Git call was cut off, since it may have
+ * landed. Never throws on a Git failure.
  */
-export function publishCardCommit({ root, relPaths, message, defaultBranch, spawnGit = spawnSync, clock }) {
+export function publishCardCommit({ root, relPaths, message, defaultBranch, spawnGit, clock }) {
   const env = gitEnv()
   const probe = runner(spawnGit, root, env)
   const top = probe(["rev-parse", "--show-toplevel"]).stdout.trim()
   const prefix = probe(["rev-parse", "--show-prefix"]).stdout.trim()
   const gitDir = probe(["rev-parse", "--absolute-git-dir"]).stdout.trim()
-  if (top === "" || gitDir === "") return fail(relPaths, "Git could not locate this checkout", "the folder is not a Git checkout", `git -C ${root} status`, "the card is unchanged on disk; retry once Git works")
   const full = relPaths.map((rel) => path.posix.join(prefix, rel.split(path.sep).join("/")))
+  // A failed read must stop here: an empty entry list would publish the removal of every path.
   const staged = probe(["ls-files", "-s", "-z", "--full-name", "--", ...relPaths])
   if (staged.status !== 0) return fail(relPaths, "Git could not read the staged entries", "git ls-files failed", `git -C ${root} ls-files -s -- ${relPaths.join(" ")}`, "the card is unchanged on disk; retry the write")
   const entries = new Map()
@@ -95,52 +95,49 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const git = runner(spawnGit, top, env)
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
   try {
-    for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; ; attempt += 1) {
       const fetched = git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS)
       if (fetched.status !== 0) {
-        const cause = classifyPullFailure({ stderr: fetched.stderr, timedOut: fetched.timedOut })
-        const why = cause === "auth_failed" ? "the remote refused this machine's credentials" : cause === "unreachable" ? "the remote could not be reached" : "git fetch failed"
-        return fail(relPaths, `Desk could not fetch ${REMOTE}/${defaultBranch}`, why, `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still on disk and staged, so the next write publishes it too; retry once the remote answers", fetched.timedOut ? "unknown" : "absent")
+        return fail(relPaths, `Desk could not fetch ${REMOTE}/${defaultBranch}: ${fetched.stderr.split("\n")[0] || "git fetch failed"}`, "the remote is unreachable, refused this machine's credentials, or is not configured", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still on disk and staged, so the next write publishes it too; retry once the remote answers", fetched.timedOut ? "unknown" : "absent")
       }
       const onto = git(["rev-parse", "--verify", "--quiet", `${remoteRef}^{commit}`]).stdout.trim()
-      if (onto === "") return fail(relPaths, `${REMOTE}/${defaultBranch} has no commit`, "the remote's default branch is empty or was not fetched", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "nothing was written; retry once the default branch is fetched")
-      if (indexGit(["read-tree", onto]).status !== 0) return fail(relPaths, "Git could not read the default branch into a private index", "git read-tree failed", `git -C ${root} log -1 ${remoteRef}`, "nothing was written; retry the write")
+      if (indexGit(["read-tree", onto]).status !== 0) return fail(relPaths, `Desk could not read ${REMOTE}/${defaultBranch} into a private index`, "git read-tree failed", `git -C ${root} log -1 ${remoteRef}`, "nothing was written; retry the write")
       for (const file of full) {
         const entry = entries.get(file)
         const step = entry === undefined
           ? indexGit(["update-index", "--force-remove", "--", file])
           : indexGit(["update-index", "--add", "--cacheinfo", entry.mode, entry.sha, file])
-        if (step.status !== 0) return fail(relPaths, `Git could not stage ${file} for the default branch`, "git update-index failed", `git -C ${root} status`, "nothing was written; retry the write")
+        if (step.status !== 0) return fail(relPaths, `Desk could not stage ${file} for ${defaultBranch}`, "git update-index failed", `git -C ${root} status`, "nothing was written; retry the write")
       }
       const tree = indexGit(["write-tree"]).stdout.trim()
-      if (tree === "") return fail(relPaths, "Git could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
+      if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
       if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) return { ok: true, stderr: "" }
       const commit = git(["commit-tree", tree, "-p", onto, "-m", message]).stdout.trim()
-      if (commit === "") return fail(relPaths, "Git could not create the commit", "git commit-tree failed (check user.name and user.email)", `git -C ${root} config user.email`, "nothing was published; retry the write")
+      if (commit === "") return fail(relPaths, "Desk could not create the commit", "git commit-tree failed (check user.name and user.email)", `git -C ${root} config user.email`, "nothing was published; retry the write")
       let policy
       try {
         policy = publicationPolicy(git, onto)
       } catch (error) {
         return fail(relPaths, error.message, "the repository's publication policy cannot be read", `git -C ${root} show ${onto}:.desk/publication.json`, "nothing was published; repair the policy through a pull request")
       }
+      let target
       if (policy !== null) {
         try {
-          const target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock }).head
-          git(["update-ref", remoteRef, target])
-          return { ok: true, stderr: "" }
+          target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock }).head
         } catch (error) {
           return fail(relPaths, error.message, "the publication pull request did not merge", `gh pr list --head desk/publish/${commit} --state all`, "the card is still staged; check the pull request, then retry the write", "unknown")
         }
+      } else {
+        const pushed = git(["push", "--quiet", REMOTE, `${commit}:refs/heads/${defaultBranch}`], NETWORK_TIMEOUT_MS)
+        if (pushed.status !== 0) {
+          if (!pushed.timedOut && REJECTED.test(pushed.stderr) && attempt < PUSH_ATTEMPTS) continue
+          return fail(relPaths, `the remote refused the push to ${defaultBranch}`, pushed.timedOut ? "the push was cut off" : "the remote rejected the commit", `git -C ${root} push ${REMOTE} HEAD:refs/heads/${defaultBranch}`, "the card is still staged, so the next write retries the publication", pushed.timedOut ? "unknown" : "absent")
+        }
+        target = commit
       }
-      const pushed = git(["push", "--quiet", REMOTE, `${commit}:refs/heads/${defaultBranch}`], NETWORK_TIMEOUT_MS)
-      if (pushed.status === 0) {
-        git(["update-ref", remoteRef, commit])
-        return { ok: true, stderr: "" }
-      }
-      if (!pushed.timedOut && REJECTED.test(pushed.stderr) && attempt < PUSH_ATTEMPTS) continue
-      return fail(relPaths, `the remote refused the push to ${defaultBranch}`, pushed.timedOut ? "the push was cut off" : "the remote rejected the commit", `git -C ${root} push ${REMOTE} HEAD:refs/heads/${defaultBranch}`, "the card is still staged, so the next write retries the publication", pushed.timedOut ? "unknown" : "absent")
+      git(["update-ref", remoteRef, target])
+      return { ok: true, stderr: "" }
     }
-    return fail(relPaths, `${REMOTE}/${defaultBranch} kept moving during the push`, "other writers pushed to the default branch at the same time", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {
     rmSync(indexFile, { force: true })
   }
