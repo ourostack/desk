@@ -161,13 +161,13 @@ test("use_shipped_node shows a module ABI with no known Node major as an ABI", a
   const { createRuntimeDiagnostic } = await loadDiagnostics()
   const diagnostic = createRuntimeDiagnostic({
     reason: "no_compatible_node",
-    currentTarget: { id: "win32-x64-node-137", platform: "win32", arch: "x64", node_abi: "137" },
+    currentTarget: { id: "win32-x64-node-153", platform: "win32", arch: "x64", node_abi: "153" },
     shippedTargets: [
       { id: "win32-x64-node-137", platform: "win32", arch: "x64", node_abi: "137" },
       { id: "win32-x64-node-153", platform: "win32", arch: "x64", node_abi: "153" },
     ],
   })
   const message = diagnostic.remediation[0].message
-  assert.match(message, /^This machine runs Node 24 \(module ABI 137\), and Desk ships runtime packs for Node 24 and Node with module ABI 153 on win32-x64\./u)
+  assert.match(message, /^This machine runs Node with module ABI 153, and Desk ships runtime packs for Node 24 and Node with module ABI 153 on win32-x64\./u)
   assert.match(message, /Install Node with module ABI 153 for your user/u)
 })
