@@ -34,6 +34,8 @@ import { formatDeskProblem } from "./index-drift.js"
 import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
 import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
+import { remoteIdentityEnv } from "./remote-identity.js"
+import { shellQuote } from "../util/shell-quote.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { applyPublicationMode } from "./publication-mode.js"
 
@@ -70,7 +72,7 @@ function run(spawnGit, root, args, timeoutMs) {
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
-    env: gitEnv(),
+    env: remoteIdentityEnv({ root, args, env: gitEnv() }),
   })
 }
 
@@ -396,8 +398,15 @@ const OFFLINE = new Set(["unreachable", "auth_failed"])
 
 const TELL = {
   unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
-  auth_failed: "The remote refused this host's credentials, so `git status` will read clean: sign in again (`gh auth status`), then retry sync before pushing.",
   deadline: "Sync ran out of time before finishing: retry it before pushing.",
+}
+
+// The Ouro AX error shape: `<tool>: <thing>: <problem>. Fix: <command>.` It names the probable cause, the command that
+// shows more, the one call that files the failure with its evidence, and that work continues meanwhile.
+function credentialRefusal({ root, env, remote, error }) {
+  const evidence = argvSafeReason(`git refused the credentials for ${remote ?? "origin"}: ${error || "no message"}`)
+  const file = `node ${shellQuote(FILE_DESK_PROBLEM_SCRIPT)} --mechanism session-sync --reason ${shellQuote(evidence)} --host ${shellQuote(hostFromEnv(env))}`
+  return `desk: sync: the remote refused this host's credentials, probably because the GitHub account Git is signed in as here does not own ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${shellQuote(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth status.`
 }
 
 function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
@@ -413,6 +422,8 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
   const filing = NOT_A_DESK_DEFECT.has(cause)
     ? undefined
     : fileProblem({ root, env, reason: failed === undefined ? reason : `${reason}:${cause}`, host: hostFromEnv(env) })
+  const remote = originUrl(root, spawnGit, timeoutMs)
+  const error = firstErrorLine(failed?.stderr)
   const diagnostic = formatDeskProblem({
     mechanism: "session-sync",
     symptom: "session-start pull did not resolve",
@@ -422,9 +433,9 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
       ? "not repaired automatically: the remote cannot be used from this machine right now, so nothing was pulled or pushed; Desk delivers its local commits once it can"
       : "the checkout itself is not rebased: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once. Desk's own local commits are still delivered to the remote from a clean copy in the background, and the checkout follows once nothing local is in the way -- never stash, rebase or reset the shared checkout for this",
     file: filing?.file ?? "filing in background",
-    tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
+    tell: cause === "auth_failed" ? credentialRefusal({ root, env, remote, error }) : TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
-  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
+  const result = { state: "unresolved", reason, diagnostic, cause, remote, error, conflicted }
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result
 }
