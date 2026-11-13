@@ -198,6 +198,25 @@ test("note_leave leaves the pull request open, and says the note is not delivere
   assert.deepEqual([result.status, result.reason, result.pr], ["pr_open", "BLOCKED", PR])
   assert.equal(result.message, `Not delivered yet: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). saranya sees the note once it merges.`)
   assert.equal(branches(ws.bare), result.branch)
+  assert.deepEqual(result.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
+  assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
+})
+
+test("note_leave's failure says how to finish it by hand, with a read-back: the pull request it opened, else the same note again", async () => {
+  const ws = await workspace()
+  // No account can push, so nothing opened: the route reads whether the note landed, then calls note_leave again with the same input.
+  const none = await leave(ws, { gh: fakeGh(ws.bare).gh, chooseAccount: async () => ({ result: "no_account_can_deliver" }) })
+  assert.equal(none.status, "failed")
+  assert.deepEqual(none.route_around.landed_when, { argv: ["gh", "api", `repos/acme/cit/contents/${none.note}`, "--jq", ".path"], expect: `exits 0 and prints ${none.note}` })
+  assert.equal(none.route_around.steps[1].tool, "note_leave")
+  assert.deepEqual(none.route_around.steps[1].arguments, { to: "saranya", subject: INPUT.subject, body: INPUT.body, related: INPUT.related })
+  // A push refused after the pull request opened: the route merges that pull request by hand, then reads it back.
+  let pushes = 0
+  const spawnGit = toBare(ws.bare, (cmd, args, options) => (args.includes("push") && args.includes("--force") && (pushes += 1) === 2 ? { status: 1, stdout: "", stderr: "remote: denied" } : spawnSync(cmd, args, options)))
+  const late = await leave(ws, { gh: fakeGh(ws.bare, { merge: () => ({ code: 1 }) }).gh, spawnGit })
+  assert.equal(late.stage, "push")
+  assert.deepEqual(late.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
+  assert.deepEqual(late.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
 })
 
 test("note_leave refuses an exact duplicate of a note already in the recipient's inbox, open or acknowledged", async () => {

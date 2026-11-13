@@ -469,7 +469,20 @@ test("lesson_add desk says plainly when no improvement card opened", async () =>
   assert.equal(result.in_effect, false)
   assert.equal(result.improvement, "factory_state_unavailable")
   assert.equal(result.message, "Not in effect, and no improvement card opened (factory_state_unavailable), so nothing will act on this lesson yet. The note is in _meta/friction.md.")
+  assert.deepEqual(result.route_around.steps[0].arguments, { scope: "desk", owner: "foundation", topic: "Rule", body: "Do it." })
+  assert.equal(result.route_around.steps[0].tool, "lesson_add")
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /Lesson for `foundation`: \*\*Rule\.\*\* Do it\./u)
+})
+
+test("lesson_add desk passes on the card's own route when the card opened but its commit did not land", async () => {
+  const root = await mkTempDeskRoot()
+  const base = await mkTempDeskRoot()
+  const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
+  const card = { summary: "the card's route", steps: [] }
+  const addFriction = async () => ({ improvement: "opened", improvement_key: "k", improvement_path: "_meta/improvement/k.md", improvement_commit: "commit_failed", improvement_route_around: card })
+  const result = await lessonAdd({ deskRoot: root, env, addFriction, input: { scope: "desk", topic: "Rule", body: "Do it.", owner: "foundation" } })
+  assert.equal(result.improvement_route_around, card)
+  assert.equal(result.route_around, undefined, "an opened card has no lesson route of its own")
 })
 
 test("lesson_add desk opens a real improvement card when the factory state is ready", async () => {

@@ -14,6 +14,7 @@
 import { promises as fs, existsSync } from "node:fs"
 import * as path from "node:path"
 import { normalizeRemote } from "../factory/binding.js"
+import { pullRequestRoute } from "../util/route-around.js"
 
 const GIT_TIMEOUT_MS = 60_000
 const MERGE_TRIES = 3
@@ -82,7 +83,7 @@ export function githubStore(top, spawnGit) {
  * with `rebuilt` true, when someone else's change landed first. `prBody()` gives the pull request's text after the first build.
  *
  * Returns `{ status: "unchanged" }` (nothing to add, any pull request it opened closed with `closeComment`),
- * `{ status: "pr_open", reason }` (opened, not merged; its branch kept) or `{ status: "merged", commit }`. A failure
+ * `{ status: "pr_open", reason, route_around }` (opened, not merged; its branch kept, and the route merges it by hand) or `{ status: "merged", commit }`. A failure
  * once the remote work started throws `Failed`, and `result` gains `repo`, `account`, `pr` and `branch` as they become
  * known, so the caller can say what is left open. The temporary worktree is always removed.
  */
@@ -175,7 +176,7 @@ export async function sharedWrite({ top, origin, sparse, add, branch, title, prB
       } else if (state.mergeable === "UNKNOWN") await wait(2000)
       else break
     }
-    if (state.state !== "MERGED") return { status: "pr_open", reason: state.mergeStateStatus ?? "unknown" }
+    if (state.state !== "MERGED") return { status: "pr_open", reason: state.mergeStateStatus ?? "unknown", route_around: pullRequestRoute(url) }
     unpush(branch)
     delete result.branch
     return { status: "merged", commit: state.mergeCommit?.oid ?? null }

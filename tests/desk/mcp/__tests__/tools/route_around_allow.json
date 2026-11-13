@@ -1,0 +1,37 @@
+[
+  {
+    "file": "archive-state.js",
+    "match": "return { status: \"unknown\", reason: \"archive index could not be read\" }",
+    "reason": "publication state from archivePublicationState; task_archive attaches archiveRoute to it (task.js), so no result leaves without a route"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "return { status: \"pending\", reason: \"the directory exists, but the exact archive move",
+    "reason": "publication state from archivePublicationState; task_archive attaches archiveRoute to it (task.js)"
+  },
+  {
+    "file": "archive-state.js",
+    "match": "return { status: \"unknown\", reason: \"the existing archive's Git publication",
+    "reason": "publication state from archivePublicationState; task_archive attaches archiveRoute to it (task.js)"
+  },
+  {
+    "file": "task.js",
+    "match": "return { commit: { status: \"failed\", reason: error.message } }",
+    "reason": "refillArchivedReport's commit failure; its caller attaches refilled.commit.route_around or archiveRoute"
+  },
+  {
+    "file": "task.js",
+    "match": "commit = { status: \"failed\", reason: error.message }",
+    "reason": "refillArchivedReport's commit failure; its caller attaches refilled.commit.route_around or archiveRoute"
+  },
+  {
+    "file": "task.js",
+    "match": "status: \"unknown\", reason: error.message,",
+    "reason": "publication argument of archivePendingAnswer; the route is the archiveRoute argument on the next line"
+  },
+  {
+    "file": "task.js",
+    "match": "publication: { status: \"unknown\" }",
+    "reason": "input to archiveRoute, which is the route itself"
+  }
+]

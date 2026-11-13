@@ -24,7 +24,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { crewWorkspace, parseCrewRoster } from "../desk/crew-roster.js"
 import { INBOX, acknowledgeNote, parseNote, renderNote } from "../runtime/inbox.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
-import { commitFailureWords } from "../util/route-around.js"
+import { commitFailureWords, pullRequestRoute, retryRoute } from "../util/route-around.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
 
 // Every field each tool reads off `input`; __tests__/tool_schema_parity.test.js checks these against tool-schemas.js.
@@ -126,7 +126,8 @@ const notesIn = (dir) => {
  *
  * Returns { status: "merged" | "pr_open" | "duplicate" | "failed", to, note, repo, message, ... }: `note` is the note's
  * path (for a duplicate, the existing note's, with `note_status`); `pr`, `branch`, `commit`, `account`, `reason` and
- * `stage` as the shared write reports them. The note is left only when `status` is "merged".
+ * `stage` as the shared write reports them. The note is left only when `status` is "merged". A "failed" or "pr_open" answer
+ * carries `route_around`, which finishes it by hand (the pull request is merged, or the same note is left again).
  */
 export async function note_leave({ deskRoot, input, person = null, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = pause, now = () => new Date() }) {
   const created = localIso(now())
@@ -185,13 +186,22 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
     // Any failure once the remote work starts is reported, not thrown; anything else (a bug) is thrown.
     if (!(error instanceof Failed)) throw error
     const open = result.pr ? ` The pull request ${result.pr} is open, on branch ${result.branch}.` : ""
-    return { ...result, status: "failed", stage: error.stage, reason: error.message, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }
+    // Nothing reached the recipient's inbox: a pull request that opened is merged by hand, else the same note is left again.
+    const route = result.pr
+      ? pullRequestRoute(result.pr)
+      : retryRoute({
+        summary: `The note to ${to} did not reach the default branch of ${result.repo}, so ${to} does not see it yet.`,
+        landed: { argv: ["gh", "api", `repos/${result.repo}/contents/${result.note}`, "--jq", ".path"], expect: `exits 0 and prints ${result.note}` },
+        tool: "note_leave",
+        arguments: { to, subject, body, related },
+      })
+    return { ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }
   }
   if (outcome.status === "unchanged") {
     return { ...result, status: "duplicate", note: existing.note, note_status: existing.status, message: `Not left: ${to} already has this note from you (${existing.note}, ${existing.status}).` }
   }
   if (outcome.status === "pr_open") {
-    return { ...result, status: "pr_open", reason: outcome.reason, message: `Not delivered yet: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${outcome.reason}). ${to} sees the note once it merges.` }
+    return { ...result, status: "pr_open", reason: outcome.reason, route_around: outcome.route_around, message: `Not delivered yet: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${outcome.reason}). ${to} sees the note once it merges.` }
   }
   return { ...result, status: "merged", commit: outcome.commit, message: `Left for ${to}: merged in ${result.pr}. ${to}'s session start lists it until they acknowledge it with note_ack. Everyone in the workspace can read it.` }
 }

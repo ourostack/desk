@@ -18,6 +18,7 @@ import { printedPart } from "../runtime/agents-md.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
 import { SECTION, lead, lessonLine, oneLine, withLesson } from "./lesson-lines.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
+import { pullRequestRoute, retryRoute } from "../util/route-around.js"
 
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/u
 
@@ -140,7 +141,16 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
     // Any failure once the remote work starts is reported, not thrown; anything else (a bug) is thrown.
     if (!(error instanceof Failed)) throw error
     const open = result.pr ? ` The pull request ${result.pr} is open, on branch ${result.branch}.` : ""
-    return { ...result, status: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }
+    // The lesson is in effect only once its line is on the default branch: a pull request that opened is merged by hand, else the same lesson is written again.
+    const route = result.pr
+      ? pullRequestRoute(result.pr)
+      : retryRoute({
+        summary: `The lesson did not reach ${SECTION} in AGENTS.md on the default branch of ${result.repo}, so it is not in effect yet.`,
+        landed: { argv: ["gh", "api", "-H", "Accept: application/vnd.github.raw", `repos/${result.repo}/contents/AGENTS.md`], expect: `exits 0 and prints the lesson ${JSON.stringify(line ?? topic)}` },
+        tool: "lesson_add",
+        arguments: { scope: "team", topic, body, source, repo: top },
+      })
+    return { ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }
   }
   if (outcome.status === "unchanged") {
     const who = loaders()
@@ -148,7 +158,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
   }
   if (outcome.status === "pr_open") {
     const why = outcome.reason
-    return { ...result, status: "pr_open", reason: why, message: `Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }
+    return { ...result, status: "pr_open", reason: why, route_around: outcome.route_around, message: `Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }
   }
   result.commit = outcome.commit
   const who = loaders()

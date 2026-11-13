@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { desk_save } from "../../../../../plugins/desk/mcp/src/tools/desk-save.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { notCommitted } from "./_route_around.js"
+import { notCommitted, routedPaths } from "./_route_around.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -301,6 +301,7 @@ test("desk_save reports a commit failure as nothing_to_commit with the reason, a
 
   assert.equal(result.status, "nothing_to_commit")
   assert.deepEqual(notCommitted(result.commit), { status: "failed", reason: "commit boom" })
+  assert.deepEqual(routedPaths(result.commit.route_around), ["notes.md"])
   assert.equal(commitCount(root), 0)
   assert.equal(calls.length, 0, "schedulePush is never called after a commit failure")
 })
