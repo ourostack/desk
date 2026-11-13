@@ -21,9 +21,9 @@ const MAX_ENTRIES = 100;
 const MAX_DEPTH = 3;
 
 const MESSAGES = {
-  main: (subject) => `Desk refused this: ${subject} a git checkout (it holds a .git directory), and removing or moving it breaks every linked worktree that points at it, including other sessions' running worktrees. Leave it where it is. If it really has to go, ask its owner. To clean up your own work, remove only the files and worktrees you created.`,
-  worktree: (subject, target) => `Desk refused this: ${subject} a linked git worktree, and \`rm\` leaves git's record of it behind and can delete another session's work. If you created it in this session, run \`git worktree remove ${target}\` instead. Otherwise leave it, or ask its owner.`,
-  vm: (tool, start, stop) => `Desk refused \`${tool}\`: it deletes a whole VM and every container in it, and Desk can't tell whether you created this one in this session, so it refuses them all. Start a dedicated one with a new name (\`${start}\`), work in that, and stop it when you are done (\`${stop}\`). To delete one that already existed, ask its owner.`,
+  main: (subject) => `Leave it where it is, or ask its owner if it has to go. Desk refused this because ${subject} a git checkout (it holds a .git directory), and removing or moving one breaks every linked worktree that points at it, including other sessions' running worktrees. To clean up your own work, remove only the files and worktrees you created.`,
+  worktree: (subject, target) => `Leave this worktree, or remove it with \`git worktree remove\` if you created it. Desk refused this because ${subject} a linked git worktree, and \`rm\` leaves git's record of it behind and can delete another session's work. Run \`git worktree remove ${target}\` for one you created in this session; ask its owner about any other.`,
+  vm: (tool, start, stop) => `Use a dedicated profile with a new name (\`${start}\`), not an existing one. Desk refused \`${tool}\` because it deletes a whole VM and every container in it, and Desk can't tell whether you created this one in this session, so it refuses them all. Stop your own profile when you are done (\`${stop}\`); to delete one that already existed, ask its owner.`,
 };
 
 /** Splits `text` into simple commands (`{ words }`, each word `{ text, dynamic }`), subshell marks (`{ op }`) and the text of every `$(...)` or backtick substitution. Null when the quoting does not close. */
@@ -254,8 +254,8 @@ function decide(payload, host, env = process.env) {
   const tool = String(payload?.toolName ?? payload?.tool_name ?? "").toLowerCase();
   const reason = tool === "bash" ? judgeShellCommand(args?.command, payload?.cwd, env) : null;
   if (!reason) return {};
-  if (host === "claude") return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
-  return { permissionDecision: "deny", permissionDecisionReason: reason };
+  const denial = { permissionDecision: "deny", permissionDecisionReason: reason };
+  return host === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...denial } } : denial;
 }
 
 // The command line of the entry file `hooks/destructive-command-guard.cjs`. Any failure answers `{}`: a broken guard must not stop a shell.

@@ -3,13 +3,14 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { createRequire } from "node:module"
+import { decide, judgeShellCommand } from "../../../../../plugins/desk/hooks/lib/destructive-command-guard.cjs"
+import { assertActionable } from "./_guard_text.js"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
-const { decide, judgeShellCommand } = createRequire(import.meta.url)(path.join(plugin, "hooks", "lib", "destructive-command-guard.cjs"))
+
 
 // Forward slashes keep the commands readable to the guard's shell reader on Windows too.
 const slash = (value) => value.replaceAll("\\", "/")
@@ -37,7 +38,8 @@ test("a git main checkout is refused for rm and mv, with a reason that says what
   for (const command of [`rm -rf ${MAIN}`, `rm -rf ${MAIN}/`, `mv ${MAIN} ${ROOT}/old-main`, `/bin/rm -r -f -- ${MAIN}`, `rm -rf ${MAIN}/.git`]) {
     const message = refused(command)
     assert.match(message ?? "", /git checkout/u, command)
-    assert.match(message, /Leave it where it is\. If it really has to go, ask its owner/u)
+    assert.match(message, /^Leave it where it is, or ask its owner if it has to go\./u)
+    assertActionable(assert, message, command)
   }
 })
 
@@ -45,6 +47,7 @@ test("a linked worktree is refused for rm and points to git worktree remove", ()
   const message = refused(`rm -rf ${TREE}`)
   assert.match(message, /linked git worktree/u)
   assert.ok(slash(message).includes(`git worktree remove ${TREE}`), message)
+  assertActionable(assert, message, "worktree refusal")
 })
 
 test("cd X && rm -rf Y, relative paths, wildcards, variables, wrappers, subshells and substitutions are all resolved", () => {
@@ -107,6 +110,7 @@ test("colima delete and limactl delete are refused for every profile, with a ded
     assert.match(message ?? "", /whole VM/u, command)
     assert.match(message, /new name/u)
     assert.match(message, /ask its owner/u)
+    assertActionable(assert, message, command)
   }
 })
 
