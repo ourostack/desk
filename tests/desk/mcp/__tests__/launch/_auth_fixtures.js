@@ -204,7 +204,7 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   page.frames = () => [frame, ...main.frames.slice(1), ...(away ? away.frames : [])]
   page.isClosed = () => false
   page.url = () => "https://app.example.test/work"
-  for (const method of ["goto", "goBack", "goForward", "reload", "setViewportSize", "close", "bringToFront"]) {
+  for (const method of ["goto", "goBack", "goForward", "reload", "waitForLoadState", "setViewportSize", "close", "bringToFront"]) {
     page[method] = async (...args) => { calls.push([method, ...args]) }
   }
   page.keyboard = {
