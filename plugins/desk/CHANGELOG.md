@@ -1,5 +1,41 @@
 # desk plugin — changelog
 
+## 3.2.103 — 2026-11-13
+
+A browser action on one element, such as a click or a fill, now gets at most 30 seconds, and never more than half the command's time. Before, it could wait the whole command time for a control that stayed covered, hidden, moving or disabled, and the whole browser context closed. Now that action fails inside its own time with `AUTH_ACTION_COVERED`, `AUTH_ACTION_NOT_READY` or `AUTH_ACTION_TIMEOUT`, which says what probably happened and that the context is still open, so the agent can look at the page and act again. A command that runs out of time as a whole still closes the context, as before.
+
+### Desk failures say what probably happened, how to look, how to report and how to keep working
+
+Desk's session-start sync failures, the `content_home_unpublished_base` refusal and the blocked-push note on every write now use [Ouro AX](https://ui.ouroboros.bot/docs/ax-problem.md)'s one-line problem shape, copied into [`mcp/src/lib/ouro/ax/`](mcp/src/lib/ouro/ax/). Each line names the probable cause, the command or tool that shows more, the one call that reports the failure, and how to keep working meanwhile, so a failure no longer leaves an agent doubting its work.
+
+The report call is `friction_add` with an `error_code`, such as `friction_add {"error_code":"desk_push_blocked"}`. It records the failure as system friction on the desk with the failure's message and stack, the Desk version, the host, the desk path and the recent sync status, credentials redacted; `body` and `title` are optional then. `desk_doctor` lists the failures its process has seen.
+
+Desk's tests check every failure text in its MCP source and browser tool with Ouro AX's precise-failure check, against an allow-list of 72 texts not yet converted that can only shrink. The Ouro AX files are copied in but not yet imported by the server: they are TypeScript that Node runs from 22.18, and Desk still supports Node 20.
+
+### A known Desk problem leaves a public trace when it happens again
+
+When the Desk-problem filer finds an existing issue for a failure, it now also keeps one recurrence comment per GitHub account on that issue, updated in place rather than added to on every hit. The comment is written at most once a day, unless the Desk version rises or the issue has been closed since the last write. It holds only the number of hits recorded from that account (writes are rate-limited, so this can be lower than the hits seen), the highest Desk version seen, the host of the latest hit, the last-seen date, and whether the hit came after the issue was closed. A drain can now tell an old report that stopped happening from one that still happens, and a hit on a closed issue shows that it came back after its fix. Nothing else is published, and a failed comment write changes only the stderr output, never the filing result.
+
+### Drain status comments carry a marker so the issue watcher does not wake the drain for them
+
+The `draining-issues` skill now tells a drain to put `<!-- ouro-drain-status -->` in its own acknowledgement and status comments. Ouroboros' issue-drain watcher uses the marker to skip those comments' creation and edits, while a comment without it, from any account, still wakes the drain.
+
+`find` and `wait` now match text a person sees on the page even when it is split across elements or spaced unusually. Before, a name split across two `<span>`s, or one with a non-breaking space or a line break in it, matched nothing, although `snapshot --save` had it. Whitespace now counts as one space and case is ignored, as before. A split name is counted once, and the element that holds it is shown with its text.
+
+### Desk needs Node 22.18 or later, and takes Ouro AX from its source
+
+Desk now needs Node 22.18 or later (it was Node 20, which reached end of life in April 2026). Desk's failure lines come from Ouro AX's one-line problem shape, which is TypeScript that Node runs as it is from 22.18. A host that starts Desk on an older Node still gets the bootstrap's own answer, naming the Node to install, and the bootstrap picks a newer installed Node by itself.
+
+The Ouro AX files are no longer a hand-maintained copy inside Desk. They are vendored unmodified from [ourostack/ouro-ui](https://github.com/ourostack/ouro-ui) under `upstream-sources.lock.json`, which pins their commit and hashes and which the daily upstream check keeps current, so they cannot drift from Ouro UI.
+
+### Session start says when this folder is running an older Desk than the release
+
+A Copilot app folder keeps one Agency process, which loads Desk once, so a new session in that folder can keep an older Desk for days after a release. Boot now reads the release copy Agency has already cached, so an Agency install on the release channel learns the current release without a network call. When the Desk a session loaded is behind it, boot prints one notice: the loaded and current versions, why the folder is behind, how to keep working now (a worktree session, or the CLI with `agency copilot`), and how to pick up the release (restart the Copilot app at a quiet moment). A started background cache refresh no longer replaces that notice. A current Desk prints nothing, and an offline check prints nothing and never delays session start.
+
+Desk now ships a native runtime dependency pack for Windows x64 on Node 26 (ABI 147), so Desk starts on a Windows machine whose only Node is 26. Desk's native SQLite dependency moves to better-sqlite3 12.11.1, which builds on Node 26, and every shipped pack is rebuilt for it. The exact-host CI lane builds, verifies and loads each pack on its own runner.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.102 — 2026-11-13
 
 The Windows ACL provider now has a teardown that the factory CLI tests call when their fixture ends, so the provider no longer holds each test for its 60-second idle timeout. Desk's behavior is unchanged.
