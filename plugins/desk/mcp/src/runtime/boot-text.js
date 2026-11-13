@@ -475,8 +475,11 @@ export function formatBootText(result) {
     notes.push(`shortened the task list (${middle.length - kept} lines not shown)`)
   }
   lines.push(...shown, ...tail)
-  // The host's own copy of the desk's file is already in the model's instructions: say so in a line, not a second copy.
-  if (hostHasDeskFile) lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", "Your host already loaded this file into your instructions, so it is not printed again here.")
+  // The host's own copy of the desk's file is already in the model's instructions: say so in a line, not a second copy. The first line lets the model check that it really is there (a host can be started without custom instructions).
+  if (hostHasDeskFile) {
+    const first = (result.agents_md.text.split(/\r?\n/u).find((line) => line.trim() !== "") ?? "").trim().slice(0, 80)
+    lines.push("", `## The desk's AGENTS.md (${result.agents_md.path}); its rules bind this session`, "", `Your host already loaded this file into your instructions${first ? ` (it begins \`${first}\`)` : ""}, so it is not printed again here. If your instructions do not contain it, read it at ${result.agents_md.path} before acting.`)
+  }
   // Only when even the status, instructions and AGENTS.md files do not fit are the files cut, and that is said too.
   let left = BOOT_TEXT_MAX_CHARS - size(lines) - size(shelfLines) - BOOT_NOTE_CHARS - files.reduce((total, [md, name]) => total + frame(md, name), 0)
   const cuts = []
