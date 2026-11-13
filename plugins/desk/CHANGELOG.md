@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.114 — 2026-11-13
+
+Desk no longer has a destructive-command guard. It stopped Bash commands that removed or moved away a git checkout, removed a linked worktree with `rm`, or deleted a Colima or Lima VM, including commands from subagents. Agents are trusted to clean up after themselves, so Desk no longer checks their shell commands.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.113 — 2026-11-13
 
 Writing a task or track card no longer falls back to writing it in place when the rename over it is refused. On Windows a refused rename (another writer renaming over the same card, an editor, antivirus or OneDrive holding it) made Desk write the card in place, and two writers doing that left the tail of the longer text behind a shorter one: a card ending `body 8` followed by a stray `5`. Desk now retries the rename for a couple of seconds with a short backoff, and if the card stays held it reports the error and leaves the old card as it was, with no temporary file beside it.

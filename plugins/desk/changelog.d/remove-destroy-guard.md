@@ -1,1 +1,0 @@
-Desk no longer has a destructive-command guard. It stopped Bash commands that removed or moved away a git checkout, removed a linked worktree with `rm`, or deleted a Colima or Lima VM, including commands from subagents. Agents are trusted to clean up after themselves, so Desk no longer checks their shell commands.
