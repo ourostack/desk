@@ -5,7 +5,7 @@ import { ENUMS, LIMITS, PATTERNS, isPlainObject, validPluginSource } from "./sch
 
 export const MAX_MARKER_BYTES = 64 * 1024
 const REQUIRED = ["schema_version", "host", "session_id", "log_path", "cwd", "desk_root", "end_reason", "ended_at", "plugins", "updated_at"]
-const OPTIONAL = ["entrypoint", "person_prefix", "routing"]
+const OPTIONAL = ["entrypoint", "person_prefix", "routing", "proof"]
 const time = (value) => typeof value === "string" && PATTERNS.timestamp.test(value) && Number.isFinite(Date.parse(value))
 const unchangedFile = (left, right) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((key) => left[key] === right[key])
 export const absolutePath = (value) => typeof value === "string" && value.length <= 4096 && !/[\x00-\x1f\x7f]/u.test(value) && path.isAbsolute(value)
@@ -36,6 +36,8 @@ export function validMarker(marker) {
     && (!Object.hasOwn(marker, "entrypoint") || ENUMS.entrypoint.includes(marker.entrypoint))
     && (!Object.hasOwn(marker, "person_prefix") || (typeof marker.person_prefix === "string" && /^(?:desks\/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$/u.test(marker.person_prefix)))
     && (!Object.hasOwn(marker, "routing") || validRouting(marker.routing))
+    // `proof: true` is written only for a controlled proof session (`DESK_FACTORY_PROOF`, issue #578); any other value makes the marker invalid.
+    && (!Object.hasOwn(marker, "proof") || marker.proof === true)
 }
 
 // Metadata only: never block on a pipe or read an unbounded manifest.

@@ -681,19 +681,30 @@ export async function withNamedLock(env, name, body, { platform = process.platfo
  * `updated_at` cannot be parsed or is more than 30 days old, or 90 days for
  * a marker whose route is held (`held-route.js`; a held marker pruned is
  * counted in `status.json` `held_pruned`); a marker that
- * fails to parse as JSON is dropped the same way rather than blocking every
- * other marker. Only regular files matching the marker name shape are
+ * fails to parse as JSON or to validate is dropped the same way rather than blocking every
+ * other marker, and counted in `status.json` `markers_unreadable`. Only regular files matching the marker name shape are
  * considered; a symlink, a hard link, a leftover temp file or anything else
- * is skipped.
+ * is skipped. A proof mark (`proof: true`) is never returned and never pruned: `listProofMarkers` returns it.
  */
 export async function listMarkers(env, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
+  return (await scanMarkers(env, { now, platform, runner })).kept
+}
+
+/** The proof marks (`proof: true`, written for a `DESK_FACTORY_PROOF` session), whatever their age. They are never work: no derivation, flush or evaluation reads them. */
+export async function listProofMarkers(env) {
+  return (await scanMarkers(env, { now: defaultNow, platform: process.platform, runner: undefined })).proofs
+}
+
+async function scanMarkers(env, { now, platform, runner }) {
   const root = await factoryStateRoot(env, { platform, runner })
   const options = { env, platform, runner }
   const directory = await protectMarkerDirectory(root, options)
   const { dir } = directory
   const nowMs = Date.parse(now())
   const kept = []
+  const proofs = []
   let heldPruned = 0
+  let unreadable = 0
   const names = await listRegularFiles(dir, OUTBOX_NAME_PATTERN)
   await assertMarkerDirectory(directory)
   await primeAclFreeFiles(names.map((name) => path.join(dir, name)), platform, NAMING)
@@ -708,6 +719,10 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
       if (error.code === "ENOENT" || error.message === "metadata_unreadable" || error.message === "marker_changed") continue
       if (!(error instanceof SyntaxError)) throw error
     }
+    if (marker?.proof === true) {
+      proofs.push(marker)
+      continue
+    }
     const age = marker === null ? Infinity : nowMs - Date.parse(marker.updated_at)
     const held = marker !== null && age > MARKER_TTL_MS && heldNow(marker)
     if (marker === null || age > (held ? HELD_MARKER_TTL_MS : MARKER_TTL_MS)) {
@@ -717,17 +732,23 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
       if (before !== null && current !== null && current.isFile() && current.nlink === 1n && sameFile(current, before)) {
         const removed = await fsp.unlink(file).then(() => true, () => false)
         if (removed && held) heldPruned += 1
+        if (removed && marker === null) unreadable += 1
       }
     } else {
       kept.push(marker)
     }
   }
   await assertMarkerDirectory(directory)
-  // A held session pruned uncaptured is counted, so `desk_doctor` says it was lost rather than dropping it silently.
-  if (heldPruned > 0) {
-    await updateStatus(env, (current) => ({ ...current, held_pruned: { count: (Number.isSafeInteger(current.held_pruned?.count) ? current.held_pruned.count : 0) + heldPruned, last_at: now() } }), { platform, runner }).catch(() => {})
+  // A held session pruned uncaptured is counted, so `desk_doctor` says it was lost rather than dropping it silently. A dropped marker's
+  // session is counted as an ordinary session, so the drop is counted too, with no name, path or content.
+  if (heldPruned > 0 || unreadable > 0) {
+    await updateStatus(env, (current) => ({
+      ...current,
+      ...(heldPruned > 0 ? { held_pruned: { count: (Number.isSafeInteger(current.held_pruned?.count) ? current.held_pruned.count : 0) + heldPruned, last_at: now() } } : {}),
+      ...(unreadable > 0 ? { markers_unreadable: { count: (Number.isSafeInteger(current.markers_unreadable?.count) ? current.markers_unreadable.count : 0) + unreadable, last_at: now() } } : {}),
+    }), { platform, runner }).catch(() => {})
   }
-  return kept
+  return { kept, proofs }
 }
 
 // Whether a marker's route is held now (`session-route.js`).

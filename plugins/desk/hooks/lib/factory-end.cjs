@@ -9,6 +9,7 @@ const { spawn } = require("node:child_process");
 const compatibleNode = (options) => require("../compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..", "..");
 const headless = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_HEADLESS ?? ""); return v !== "" && v !== "0"; } };
+const proofRun = (env) => { try { return require("../../mcp/src/factory/headless-flag.cjs").isProofFactorySession(env); } catch { const v = String(env?.DESK_FACTORY_PROOF ?? ""); return v !== "" && v !== "0"; } };
 const { limitWorker, startDetached } = require("./detach-worker.cjs");
 const MAX_INPUT = 1024 * 1024;
 
@@ -186,22 +187,31 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     // that changed under the read) may hold one, so that capture leaves it as it is.
     const lockName = `marker-${marker.host}-${id}`;
     const stateRoot = await outbox.factoryStateRoot(env);
+    const file = path.join(stateRoot, "markers", `${marker.host}-${id}.json`);
+    // A proof run marks its own session (`DESK_FACTORY_PROOF`). The mark is kept on the record, so a later write without the variable keeps it too.
+    let proof = proofRun(env);
+    if (proof) marker.proof = true;
     let kept = false;
     await withAbandonedLockCleared(path.join(stateRoot, "locks", `${lockName}.lock`), () => outbox.withNamedLock(env, lockName, async () => {
+      let recorded = null;
+      let readError = null;
+      try {
+        recorded = await outbox.readMarker(env, file);
+      } catch (error) {
+        readError = error;
+      }
+      if (recorded?.proof === true) proof = true;
+      if (proof) marker.proof = true;
       if (!ended) {
-        const file = path.join(stateRoot, "markers", `${marker.host}-${id}.json`);
-        let recorded = null;
-        try {
-          recorded = await outbox.readMarker(env, file);
-          kept = recorded === null;
-        } catch (error) {
-          kept = error?.code !== "ENOENT";
-        }
+        // Only the proof mark overrides a record that exists: an unreadable one may hold an end already recorded, so it stays as it is.
+        kept = !proof && (readError === null ? recorded === null : readError?.code !== "ENOENT");
         if (kept) return;
         if (recorded?.ended_at) Object.assign(marker, { end_reason: recorded.end_reason, ended_at: recorded.ended_at });
       }
       await outbox.writeMarker(env, marker);
     }, { deskRoot }));
+    // A proof session is never derived, flushed or counted, so nothing else starts for it.
+    if (proof) return "proof";
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
     const scope = person?.status === "ok" ? { deskRoot, personPrefix: person.personPrefix } : null;

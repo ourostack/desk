@@ -63,6 +63,20 @@ test("the real-shaped scratch home reproduces the counts of its folders", () => 
   for (const host of ["claude-code", "copilot-cli"]) assert.equal(sum(hosts[host]), hosts[host].on_disk)
 }))
 
+test("a proof-marked session is left out of every coverage count, and nothing derives it", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, { ...marker, proof: true, end_reason: "complete", ended_at: recent(-3600000), updated_at: recent(-3600000) })
+  await put(claudeFile(ctx, "stray", ids[0]))
+  const summary = await sweep(ctx.env, { quietMs: 0 })
+  assert.equal(summary.written, 0)
+  const claude = (await statusOf(ctx)).coverage.hosts["claude-code"]
+  assert.equal(claude.on_disk, 1)
+  assert.deepEqual([claude.derived, claude.held, claude.pending, claude.not_seen], [0, 0, 0, 0])
+  assert.equal(claude.not_in_a_desk, 1)
+  assert.equal(sum(claude), claude.on_disk)
+}))
+
 test("coverage is rewritten each sweep and never grows the status file", { timeout: 300000 }, () => scratch(async (ctx) => {
   for (let index = 0; index < 6; index += 1) await put(claudeFile(ctx, "-Users-someone-work", ids[index]))
   await sweep(ctx.env, { quietMs: 0 })
