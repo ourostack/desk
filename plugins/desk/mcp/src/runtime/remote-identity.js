@@ -10,8 +10,6 @@
 // appended here comes last and wins. Anything less certain (no override, a remote that is not HTTPS, no account that can
 // reach it) leaves the environment untouched.
 
-import { spawnSync } from "node:child_process"
-
 const NETWORK_COMMANDS = new Set(["fetch", "pull", "push"])
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u
 const REPO = /^[A-Za-z0-9._-]+$/u
@@ -122,9 +120,9 @@ function remoteUrl({ spawn, root, args, env }) {
  * `env` for one Git command. For a fetch, pull or push whose remote is an HTTPS repository, and only when `env` already
  * overrides credential helpers, the result ends with a helper for the first signed-in `gh` account that can reach the
  * repository (the account named in the URL first, then its owner, then the rest). Any other command or situation returns
- * `env` itself. `spawn` runs both `git` and `gh` (tests only).
+ * `env` itself. `spawn` runs both `git` and `gh`.
  */
-export function remoteIdentityEnv({ root, args, env, spawn = spawnSync, cache = lookupCache, now = Date.now }) {
+export function remoteIdentityEnv({ root, args, env, spawn, cache = lookupCache, now = Date.now }) {
   if (!NETWORK_COMMANDS.has(args[0]) || !hasCredentialOverride(env)) return env
   const remote = parseHttpsRemote(remoteUrl({ spawn, root, args, env }))
   if (remote === null) return env
