@@ -29,6 +29,9 @@
 // and the marker does not, and a closed-as-shipped or closed-as-wontfix
 // issue is still "known" (refiling it would be pure noise).
 //
+// A known hit also maintains this account's recurrence comment on that issue (`recordRecurrence`): one comment per account, updated in
+// place, so a drain can see whether the problem still happens.
+//
 // Rate limit: the same shape as `kaizen-file.js`'s `MAX_CARDS_PER_DAY`, a
 // `desk_problem_filed` counter recorded in the same `status.json`
 // (`outbox.js`'s `readStatus`/`writeStatus`), over cap is `held_cap`, never
@@ -41,9 +44,10 @@ import { deskVersion } from "../package-metadata.js"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "./desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX, deskProblemCard } from "./desk-problem-template.js"
-import { beginFiling, endFiling, recordKnownHit, recordLostHit } from "./desk-problem-known.js"
+import { beginFiling, compareVersions, endFiling, recordKnownHit, recordLostHit } from "./desk-problem-known.js"
 import { endLaunch } from "./filer-launch.js"
 import { chooseAccount, ghRunner } from "./flush.js"
+import { isHeadlessFactorySession } from "./headless-flag.js"
 import { readConsent, readStatus, withNamedLock, writeStatus } from "./outbox.js"
 import { issuesClient } from "./store-issues.js"
 
@@ -57,11 +61,92 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // (`auth token`, the dedup listing, the create), never just the account lookup, so a hanging runner
 // never leaves this function running past it -- see `desk_problem_file.test.js`'s deadline test.
 const DEFAULT_DEADLINE_MS = 30000
+const RECURRENCE_MARKER = "<!-- desk-problem-recurrence -->"
+const RECURRENCE_LINES = {
+  count: /^- Hits recorded from this account: (\d+)$/u,
+  highest: /^- Highest Desk version seen: (\S+)$/u,
+  host: /^- Latest hit host: `([^`]+)`$/u,
+  date: /^- Last seen \(UTC\): (\d{4}-\d{2}-\d{2})$/u,
+  closed: /^- Came back after its fix: yes, hit after the issue was closed$/u,
+}
 
 async function recentFilings(env, now) {
   const filed = (await readStatus(env)).desk_problem_filed ?? {}
   const times = Array.isArray(filed[STORE]) ? filed[STORE].filter((at) => typeof at === "string" && now - Date.parse(at) < DAY_MS) : []
   return { filed, times }
+}
+
+const isVersion = (text) => compareVersions(text, text) !== null
+
+// The higher of two recorded Desk versions; an unreadable one never beats a readable one.
+function higherVersion(current, candidate) {
+  if (current === undefined) return candidate
+  if (!isVersion(candidate)) return current
+  return !isVersion(current) || compareVersions(candidate, current) === 1 ? candidate : current
+}
+
+function recurrenceBody({ count, highest, host, date, closedHit }) {
+  return [
+    RECURRENCE_MARKER,
+    "Desk problem recurrence recorded by one account. Each machine's own count is in its Desk status.",
+    "",
+    `- Hits recorded from this account: ${count}`,
+    `- Highest Desk version seen: ${highest}`,
+    `- Latest hit host: \`${host}\``,
+    `- Last seen (UTC): ${date}`,
+    ...(closedHit ? ["- Came back after its fix: yes, hit after the issue was closed"] : []),
+  ].join("\n")
+}
+
+// The recurrence comment's values, or `null` when the body is not exactly one this function wrote.
+function parseRecurrence(body) {
+  const lines = body.split("\n")
+  if (lines[0] !== RECURRENCE_MARKER) return null
+  const values = {}
+  for (const line of lines.slice(1)) {
+    for (const [key, pattern] of Object.entries(RECURRENCE_LINES)) {
+      const match = pattern.exec(line)
+      if (match === null) continue
+      if (values[key] !== undefined) return null
+      values[key] = match[1] ?? true
+    }
+  }
+  const count = Number(values.count)
+  if (!Number.isSafeInteger(count) || count < 1 || values.host === undefined || values.date === undefined) return null
+  if (values.highest !== "unknown" && !isVersion(values.highest)) return null
+  return { count, highest: values.highest, date: values.date, closedHit: values.closed === true }
+}
+
+/**
+ * Maintains this account's one recurrence comment on a known issue: created on the first hit, otherwise updated in place (never a new
+ * comment per hit). A write happens at most once per UTC day, unless the running Desk version is higher than the comment's recorded one
+ * or the issue is closed and the comment does not yet say it came back after its fix. Skipped writes are fine: each machine's local
+ * `status.json` count stays authoritative. Never throws: `{ recorded: true }` or `{ recorded: false, code }`.
+ */
+async function recordRecurrence(env, { runner, token, timeoutMs, number, closed, account, host, version, now }) {
+  if (isHeadlessFactorySession(env)) return { recorded: false, code: "headless_session" }
+  try {
+    const client = issuesClient({ runner, repo: STORE, token, timeoutMs })
+    const date = new Date(now()).toISOString().slice(0, 10)
+    const mine = (await client.listComments(number)).find((comment) => typeof comment.author === "string"
+      && comment.author.toLowerCase() === account.toLowerCase() && comment.body.includes(RECURRENCE_MARKER))
+    const previous = mine === undefined ? null : parseRecurrence(mine.body)
+    if (previous !== null && previous.date === date && higherVersion(previous.highest, version) === previous.highest && (!closed || previous.closedHit)) {
+      return { recorded: true }
+    }
+    const body = recurrenceBody({
+      count: (previous?.count ?? 0) + 1,
+      highest: higherVersion(previous?.highest, version),
+      host,
+      date,
+      closedHit: (previous?.closedHit ?? false) || closed,
+    })
+    if (mine === undefined) await client.createComment(number, body)
+    else await client.updateComment(mine.id, body)
+    return { recorded: true }
+  } catch (error) {
+    return { recorded: false, code: typeof error?.code === "string" ? error.code : "record_failed" }
+  }
 }
 
 /**
@@ -162,6 +247,11 @@ async function attemptFiling(env, {
         const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: runningVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
         const hitLost = !recorded.recorded && recorded.code !== "headless_session"
         if (hitLost) process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
+        // The public trace of the hit: one comment per account, which never changes the result either.
+        const noted = remaining() > 0
+          ? await recordRecurrence(env, { runner, token, timeoutMs: remaining(), number: existing.number, closed: existing.state === "closed", account: selected.account, host, version: runningVersion, now })
+          : { recorded: false, code: "deadline" }
+        if (!noted.recorded && noted.code !== "headless_session") process.stderr.write(`desk-problem: recurrence_comment_failed ${noted.code}\n`)
         return { result: "known", url: existing.url, hitLost }
       }
 
