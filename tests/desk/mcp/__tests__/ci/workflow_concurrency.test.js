@@ -18,6 +18,7 @@ test("the runtime packs are built for every shipped target", () => {
     "darwin-arm64-node-137",
     "linux-x64-node-127",
     "win32-x64-node-137",
+    "win32-x64-node-147",
   ])
 })
 
