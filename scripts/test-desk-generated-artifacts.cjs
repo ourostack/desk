@@ -16,6 +16,7 @@ const defaultPublishedRuntimePackTargets = Object.freeze([
   Object.freeze({ platform: "darwin", arch: "arm64", nodeAbi: "137" }),
   Object.freeze({ platform: "linux", arch: "x64", nodeAbi: "127" }),
   Object.freeze({ platform: "win32", arch: "x64", nodeAbi: "137" }),
+  Object.freeze({ platform: "win32", arch: "x64", nodeAbi: "147" }),
 ]);
 
 function readJson(filePath) {

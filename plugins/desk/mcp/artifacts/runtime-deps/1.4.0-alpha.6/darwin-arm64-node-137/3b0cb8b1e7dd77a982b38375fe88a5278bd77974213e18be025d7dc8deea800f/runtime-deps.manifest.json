@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "created_at": "2026-09-19T20:52:03.984Z",
+  "created_at": "2026-11-13T06:48:49.119Z",
   "plugin": {
     "name": "@ourostack/desk-mcp",
     "version": "1.4.0-alpha.6"
@@ -8,16 +8,16 @@
   "platform": {
     "os": "darwin",
     "arch": "arm64",
-    "node_abi": "127"
+    "node_abi": "137"
   },
   "package_lock": {
     "path": "plugins/desk/mcp/package-lock.json",
-    "sha256": "38490f7339e65bf6bba4ade5ee08971b6039c40bd1c0e63870784cbc0c4e7cbc",
-    "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    "sha256": "2a31491c0ccd662c99c7439797ed8c276f237cdcf0df02ef2564ebf6e1edc429",
+    "prod_dependency_lock_hash": "3b0cb8b1e7dd77a982b38375fe88a5278bd77974213e18be025d7dc8deea800f"
   },
   "archive": {
     "file": "runtime-deps.tgz",
-    "sha256": "20eded34a9894ff244647fac6141187f06cefbc4eee3407d987915175ca6ba2e",
+    "sha256": "69bc056c13385c253a733b5fc72f300c2c6e6b656f880befbfe3cba154b4a278",
     "root_entries": [
       "node_modules/",
       "package.json",
@@ -77,7 +77,7 @@
     },
     {
       "name": "better-sqlite3",
-      "version": "11.10.0",
+      "version": "12.11.1",
       "lock_path": "node_modules/better-sqlite3",
       "native": true
     },
@@ -876,6 +876,6 @@
   ],
   "provenance": {
     "builder": "runtime:deps-pack:build",
-    "source": "Metadata repack from 1.4.0-alpha.5 at 6c7cecf7cb5307e4022738e1cbb2aa1e0d8d9299, runtime dependency archive 3ad940f1ccfcb1683e7a6a96772a7701f898b5fd18d085d6ac90a169b889753f. alpha.6 changes only root package metadata; node_modules is byte-identical. No native execution occurred during this repack. Prior provenance: Metadata repack from 1.4.0-alpha.4 runtime dependency archive 09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658. Original native provenance: Built on the maintainer's Darwin ARM64 host for alpha four and verified against its native payload. Production dependency lock hash unchanged: 0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e. alpha.5 changes only root package metadata (package.json and package-lock.json). No native execution occurred during this repack."
+    "source": "runtime dependency pack build script"
   }
 }

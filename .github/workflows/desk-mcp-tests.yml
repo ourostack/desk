@@ -621,6 +621,12 @@ jobs:
             platform: win32
             arch: x64
             node_abi: "137"
+          - target: win32-x64-node-147
+            runner: windows-latest
+            node: "26.13.1"
+            platform: win32
+            arch: x64
+            node_abi: "147"
           - target: darwin-arm64-node-127
             runner: macos-latest
             node: "22.23.2"

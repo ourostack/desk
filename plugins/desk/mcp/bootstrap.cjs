@@ -23,7 +23,7 @@ var DEFAULT_RANGE = ">=20.0.0";
 var DEFAULT_PROTOCOL = "2025-06-18";
 var PROBE_SCRIPT = "process.stdout.write(process.version + \" \" + process.versions.modules)";
 // Node's module ABI for each release line it is known for; a Node from any other line is asked.
-var KNOWN_ABIS = { "16": "93", "17": "102", "18": "108", "19": "111", "20": "115", "21": "120", "22": "127", "23": "131", "24": "137" };
+var KNOWN_ABIS = { "16": "93", "17": "102", "18": "108", "19": "111", "20": "115", "21": "120", "22": "127", "23": "131", "24": "137", "26": "147" };
 // Keep in step with src/tool-names.js; a test checks it.
 var TOOL_NAMES = [
   "task_create", "task_update", "task_archive", "task_move", "task_focus", "task_signoff", "track_create", "track_update", "track_rename", "friction_add", "lesson_add", "desk_save", "note_leave", "note_ack",

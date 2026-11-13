@@ -1,0 +1,1 @@
+Desk now ships a native runtime dependency pack for Windows x64 on Node 26 (ABI 147), so Desk starts on a Windows machine whose only Node is 26. Desk's native SQLite dependency moves to better-sqlite3 12.11.1, which builds on Node 26, and every shipped pack is rebuilt for it. The exact-host CI lane builds, verifies and loads each pack on its own runner.

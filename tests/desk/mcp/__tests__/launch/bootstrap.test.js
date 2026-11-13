@@ -184,7 +184,7 @@ test("the bootstrap reads engines.node and the runtime pack ABIs from the same f
   for (const [platform, arch, abis] of [
     ["darwin", "arm64", ["127", "137"]],
     ["linux", "x64", ["127"]],
-    ["win32", "x64", ["137"]],
+    ["win32", "x64", ["137", "147"]],
   ]) {
     assert.deepEqual(bootstrap.packAbis(mcpRoot, packageJson.version, platform, arch), abis)
   }
@@ -313,7 +313,7 @@ test("on a fake Windows layout the bootstrap picks the packed Node, not the newe
     arch: "x64",
     env: { APPDATA: appData, PATH: "" },
   }))
-  assert.deepEqual(selection.packAbis, ["137"])
+  assert.deepEqual(selection.packAbis, ["137", "147"])
   assert.equal(selection.node.path, packed)
   assert.equal(selection.node.version, "24.9.0")
 })
@@ -345,7 +345,7 @@ test("selection prefers the newest Node whose ABI has a runtime pack, then the n
   assert.equal(selection.node.path, nvm("25.1.0"))
 
   // A major the bootstrap has no ABI for, and a path with no version, are asked.
-  const unknown = fakeNode(path.join(root, "path-bin", "node"), "26.0.0", "127")
+  const unknown = fakeNode(path.join(root, "path-bin", "node"), "27.0.0", "127")
   selection = bootstrap.selectNode(machine(root, { env: { PATH: path.join(root, "path-bin") } }))
   assert.equal(realpathSync.native(selection.node.path), realpathSync.native(unknown))
   assert.equal(selection.node.abi, "127")
@@ -396,6 +396,7 @@ test("the install command installs the Node major Desk ships a runtime pack for,
   assert.equal(bootstrap.packedMajor(["127"]), "22")
   assert.equal(bootstrap.packedMajor(["115", "127", "999"]), "22")
   assert.equal(bootstrap.packedMajor(["137"]), "24")
+  assert.equal(bootstrap.packedMajor(["137", "147"]), "26")
   assert.equal(bootstrap.packedMajor(["999"]), null)
   assert.equal(bootstrap.packedMajor([]), null)
 
