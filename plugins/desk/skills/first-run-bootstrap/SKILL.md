@@ -1,6 +1,6 @@
 ---
 name: first-run-bootstrap
-description: Set up a new desk, or upgrade a V1 desk in place. Use when no desk is bound or the boot finds a V1 workspace.
+description: Set up a new desk, or upgrade an Epoch 1 desk in place. Use when no desk is bound or the boot finds an Epoch 1 workspace.
 ---
 
 # First-run bootstrap
@@ -9,7 +9,7 @@ Use this skill when the startup hook or `session-start` routes into Path 1. Cons
 
 ## Path 1 — start or upgrade a Desk
 
-Choose exactly one entrance from current workspace evidence. Entrance A owns fresh bootstrap choices. Entrance B owns in-place V1 migration and must not execute any fresh-bootstrap choice. Both converge on one readiness and first-job endpoint without forking durable work.
+Choose exactly one entrance from current workspace evidence. Entrance A owns fresh bootstrap choices. Entrance B owns in-place Epoch 1 migration and must not execute any fresh-bootstrap choice. Both converge on one readiness and first-job endpoint without forking durable work.
 
 ### Entrance A — new to Desk
 
@@ -52,28 +52,28 @@ If nothing was found, lead with creating a fresh desk. Never offer "continue wit
 - **Operator-provided path or URL:** bind an existing path without copying it; clone a URL.
 - **Skip:** warn that task lifecycle, recall, resumption, friction and lesson persistence are unavailable for this session, and offer bootstrap again next session.
 
-#### A5. Bind, activate and verify V2
+#### A5. Bind, activate and verify Epoch 2
 
 Make the binding survive new sessions and plugin updates:
 
 - **Claude Code:** write `{"schema_version": 1, "desk": {"root": "<absolute desk path>"}}` to the `binding_path` that `desk_status` with `{ detail: true }` reports (`$CLAUDE_PLUGIN_DATA/desk.activation.json`). Opening the desk folder itself as the project also binds it.
 - **Copilot and other hosts:** a desk at `~/desk` (or `~/worker-workspace`) needs nothing set; Desk finds it, and opening the desk folder as the session's folder also binds it. Set `DESK`, user-wide, only for a desk somewhere else. A Crew workspace clone that a session starts in outranks `DESK`, so a user-wide value never pulls a member's team session into the personal desk.
 
-MCP servers resolve the desk when a session starts, so ask the operator to start a new session. In it, `desk_status` must report the chosen root and its source, and `desk:session-start` runs normally. Check the browser as well, because browser access is part of the default install: `browser_context` and `browser_command` are listed, and a `fresh` browser running `["goto","https://example.com"]` shows the title "Example Domain"; close it afterwards. The first open on a machine can take a minute while Desk installs `playwright-core`. Every failure is a plain sentence that says what to do. Apply the fix and retry once. If it still fails, or `example.com` is unreachable, record the browser as not verified, with the error, in the first-run report and the completion evidence, and continue; never block onboarding on it. Desk's browser runs in the background; for pages that need the operator's own sign-ins, open it with `browser: "mine"`. Declare and activate the reviewed V2 plugin chain supplied by the selected runtime or overlay, verify the selected roots, confirm admitted MCPs and startup foundations are available, and route to the first real job.
+MCP servers resolve the desk when a session starts, so ask the operator to start a new session. In it, `desk_status` must report the chosen root and its source, and `desk:session-start` runs normally. Check the browser as well, because browser access is part of the default install: `browser_context` and `browser_command` are listed, and a `fresh` browser running `["goto","https://example.com"]` shows the title "Example Domain"; close it afterwards. The first open on a machine can take a minute while Desk installs `playwright-core`. Every failure is a plain sentence that says what to do. Apply the fix and retry once. If it still fails, or `example.com` is unreachable, record the browser as not verified, with the error, in the first-run report and the completion evidence, and continue; never block onboarding on it. Desk's browser runs in the background; for pages that need the operator's own sign-ins, open it with `browser: "mine"`. Declare and activate the reviewed Epoch 2 plugin chain supplied by the selected runtime or overlay, verify the selected roots, confirm admitted MCPs and startup foundations are available, and route to the first real job.
 
-### Entrance B — existing V1 Desk
+### Entrance B — existing Epoch 1 Desk
 
-Use this entrance only when the Desk workspace already exists and current evidence shows V1 declarations or missing V2 startup foundations. This branch is an in-place migration of that existing workspace.
+Use this entrance only when the Desk workspace already exists and current evidence shows Epoch 1 declarations or missing Epoch 2 startup foundations. This branch is an in-place migration of that existing workspace.
 
-1. Detect and inventory the existing workspace and Git state, durable task state, active V1 declarations, installed or linked capabilities, selected runtime roots, MCP configuration, startup surfaces, ignored files, and untracked files.
+1. Detect and inventory the existing workspace and Git state, durable task state, active Epoch 1 declarations, installed or linked capabilities, selected runtime roots, MCP configuration, startup surfaces, ignored files, and untracked files.
 2. Record rollback evidence before mutation: capture the current commit or other rollback ref, origin and branch relationship, status and inventory, active declarations, and any machine-local bindings needed to restore the pre-migration state.
 3. Preserve the same workspace, Git history, durable records, task identity, and local path throughout the migration.
-4. Replace V1 declarations with the reviewed V2 chain for the selected runtime or overlay; remove superseded declarations rather than layering a second active chain beside them.
-5. Reconcile retired V1-only capabilities by mapping them to reviewed V2 owners, removing them when obsolete, or explicitly retaining them with a recorded reason and authority boundary.
-6. Activate and verify V2 by loading the selected roots, proving the active plugin chain, confirming admitted Desk MCP readiness, checking startup readiness and foundation presence, and verifying that the existing durable state remains readable.
-7. Resume the existing task or start the first V2 job in that workspace, recording migration evidence on the same durable work record when one already exists.
+4. Replace Epoch 1 declarations with the reviewed Epoch 2 chain for the selected runtime or overlay; remove superseded declarations rather than layering a second active chain beside them.
+5. Reconcile retired Epoch 1-only capabilities by mapping them to reviewed Epoch 2 owners, removing them when obsolete, or explicitly retaining them with a recorded reason and authority boundary.
+6. Activate and verify Epoch 2 by loading the selected roots, proving the active plugin chain, confirming admitted Desk MCP readiness, checking startup readiness and foundation presence, and verifying that the existing durable state remains readable.
+7. Resume the existing task or start the first Epoch 2 job in that workspace, recording migration evidence on the same durable work record when one already exists.
 
-Entrance B must never route into Entrance A choices or initialize over the existing V1 workspace.
+Entrance B must never route into Entrance A choices or initialize over the existing Epoch 1 workspace.
 
 ### Converged endpoint
 
@@ -85,7 +85,7 @@ The public RFC stays optional and on demand. Use it when the operator wants desi
 
 ## Completion evidence
 
-Record which entrance ran, the source and destination state, the active V2 roots and declarations, MCP (including `desk-web`) and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
+Record which entrance ran, the source and destination state, the active Epoch 2 roots and declarations, MCP (including `desk-web`) and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
 
 ## Cross-references
 

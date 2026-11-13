@@ -10,7 +10,7 @@ A plugin that renames its workspace folder, moves its clone or changes a link le
 - **It lives in Desk, not an overlay,** so an overlay's own rename migration never renames the framework out from under itself.
 - **Detect inspects real state** (`[ -d ~/old-dir ]`, a link's target), never a "has run" marker that a restored backup could make wrong.
 
-Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. This skill owns stale-path repair only; if a workspace is already present at the canonical path but still needs the V1-to-V2 Desk bootstrap, `desk:session-start` routes that same workspace through `desk:first-run-bootstrap` Entrance B before ordinary resumption. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption.
+Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. This skill owns stale-path repair only; if a workspace is already present at the canonical path but still needs the Epoch 1-to-Epoch 2 Desk bootstrap, `desk:session-start` routes that same workspace through `desk:first-run-bootstrap` Entrance B before ordinary resumption. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption.
 
 ## When this skill fires
 

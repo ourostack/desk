@@ -43,7 +43,7 @@ my-desk/
   _meta/friction.md        # what got in the way, so it gets fixed
 ```
 
-Desk is the product; **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md)** is the way of working it carries, and this repository is its home.
+Desk is the product; **[Agentic Engineering Epoch 2](AGENTIC-ENGINEERING-V2.md)** is the way of working it carries, and this repository is its home.
 
 ## Plugins
 

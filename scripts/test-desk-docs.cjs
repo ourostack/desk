@@ -472,7 +472,7 @@ function validateCanonicalRfc(errors, {
 } = {}) {
   assert.equal(exists(path.join(repoRoot, canonicalRfc)), true);
   const rfc = readFile(canonicalRfc);
-  assert.match(rfc, /^# Agentic Engineering V2\s*$/mu);
+  assert.match(rfc, /^# Agentic Engineering Epoch 2\s*$/mu);
   assert.equal(
     rfc.split(CANONICAL_RFC_MARKER).length - 1,
     1,
@@ -485,7 +485,7 @@ function validateCanonicalRfc(errors, {
   assert.deepStrictEqual(
     findCanonicalRfcCopies({ repoRoot, readFile, markdownFiles }),
     [canonicalRfc],
-    "exactly one active canonical Agentic Engineering V2 RFC must exist",
+    "exactly one active canonical Agentic Engineering Epoch 2 RFC must exist",
   );
 }
 

@@ -2,7 +2,7 @@
 
 This playbook sets up a new factory store: the GitHub repository that receives a boundary's published session facts, validates them, merges them and publishes the job reports. A maintainer with temporary admin rights on the repository can finish it in one sitting. Every step below was proven on the public [`ourostack/factory`](https://github.com/ourostack/factory) store, whose pull requests 1 to 6 are the receipts; the one exception is the private-store fork setting in step 4.
 
-The store design, the published schema and the "no who, no when, just how" stance are in section 4 of the [Agentic Engineering V2 RFC](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work). The store-side commands are described in [Factory local session capture](factory-local-capture.md#store-side-validation-and-reports).
+The store design, the published schema and the "no who, no when, just how" stance are in section 4 of the [Agentic Engineering Epoch 2 RFC](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work). The store-side commands are described in [Factory local session capture](factory-local-capture.md#store-side-validation-and-reports).
 
 ## What you end with
 

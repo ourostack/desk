@@ -53,7 +53,7 @@ const topLevelRfcPointer = "AGENTIC-ENGINEERING-V2.md"
 function canonicalRfcBody({ marker = canonicalRfcMarker, extraSection = "" } = {}) {
   return [
     marker,
-    "# Agentic Engineering V2",
+    "# Agentic Engineering Epoch 2",
     "",
     "## Purpose",
     "",
