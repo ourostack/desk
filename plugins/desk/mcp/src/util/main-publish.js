@@ -71,37 +71,27 @@ export function deliveryIsPublication(root, spawnGit = spawnSync) {
 /** The commit the remote's default branch holds when it contains `commit`, else null. Reads the remote, so a cut-off call is judged by what landed. */
 function landedOn(git, commit, defaultBranch) {
   const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
-  if (git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS).status !== 0) return null
-  if (git(["merge-base", "--is-ancestor", commit, remoteRef]).status !== 0) return null
-  const tip = git(["rev-parse", "--verify", "--quiet", `${remoteRef}^{commit}`]).stdout.trim()
-  return tip === "" ? null : tip
+  const fetched = git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS)
+  return fetched.status === 0 && git(["merge-base", "--is-ancestor", commit, remoteRef]).status === 0 ? git(["rev-parse", `${remoteRef}^{commit}`]).stdout.trim() : null
 }
 
 /**
  * Brings the checkout up to the commit it just published, so the card it staged is not left staged against an older HEAD.
  * A branch that is behind the published commit fast-forwards to it (Git refuses when that would overwrite local changes).
- * A branch with commits of its own stays where it is, and only the entries Desk staged and published are unstaged; the files on disk are untouched.
- * Returns `current`, `fast-forwarded` or `left-on-own-commits`; never throws.
+ * Otherwise the branch stays where it is, and the entries Desk staged and published are unstaged if they are still what Desk staged; the files on disk are untouched.
+ * `staged` maps each published path to the "mode sha" Desk staged for it, and has no entry for a removed path.
  */
-function catchUp(git, top, full, entries, target) {
-  try {
-    const head = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).stdout.trim()
-    if (head === target) return "current"
-    if (head !== "" && git(["merge-base", "--is-ancestor", head, target]).status === 0 &&
-        git(["merge", "--ff-only", "--quiet", target], NETWORK_TIMEOUT_MS).status === 0) return "fast-forwarded"
-    const held = git(["ls-files", "-s", "-z", "--full-name", "--", ...full])
-    const heldEntries = new Map()
-    for (const record of held.stdout.split("\0").filter(Boolean)) {
-      const [meta, file] = record.split("\t")
-      const [mode, sha, stage] = meta.split(" ")
-      if (stage === "0") heldEntries.set(file, `${mode} ${sha}`)
-    }
-    const unchanged = full.every((file) => heldEntries.get(file) === (entries.get(file) === undefined ? undefined : `${entries.get(file).mode} ${entries.get(file).sha}`))
-    if (held.status === 0 && unchanged) git(["reset", "--quiet", "--", ...full])
-  } catch {
-    // The card is published either way; the worktree just keeps what it had.
+function catchUp(git, full, staged, target) {
+  const head = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).stdout.trim()
+  if (head === target) return
+  if (head !== "" && git(["merge-base", "--is-ancestor", head, target]).status === 0 &&
+      git(["merge", "--ff-only", "--quiet", target], NETWORK_TIMEOUT_MS).status === 0) return
+  const held = new Map()
+  for (const record of git(["ls-files", "-s", "-z", "--full-name", "--", ...full]).stdout.split("\0").filter(Boolean)) {
+    const [meta, file] = record.split("\t")
+    held.set(file, meta.split(" ").slice(0, 2).join(" "))
   }
-  return "left-on-own-commits"
+  if (full.every((file) => held.get(file) === staged.get(file))) git(["reset", "--quiet", "--", ...full])
 }
 
 function fail(relPaths, what, cause, look, keep, readback = "absent") {
@@ -122,15 +112,16 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
   const gitDir = probe(["rev-parse", "--absolute-git-dir"]).stdout.trim()
   const full = relPaths.map((rel) => path.posix.join(prefix, rel.split(path.sep).join("/")))
   // A failed read must stop here: an empty entry list would publish the removal of every path.
-  const staged = probe(["ls-files", "-s", "-z", "--full-name", "--", ...relPaths])
-  if (staged.status !== 0) return fail(relPaths, "Git could not read the staged entries", "git ls-files failed", `git -C ${root} ls-files -s -- ${relPaths.join(" ")}`, "the card is unchanged on disk; retry the write")
+  const listed = probe(["ls-files", "-s", "-z", "--full-name", "--", ...relPaths])
+  if (listed.status !== 0) return fail(relPaths, "Git could not read the staged entries", "git ls-files failed", `git -C ${root} ls-files -s -- ${relPaths.join(" ")}`, "the card is unchanged on disk; retry the write")
   const entries = new Map()
-  for (const record of staged.stdout.split("\0").filter(Boolean)) {
+  for (const record of listed.stdout.split("\0").filter(Boolean)) {
     const [meta, file] = record.split("\t")
     const [mode, sha, stage] = meta.split(" ")
     if (stage !== "0") return fail(relPaths, `${file} has a merge conflict in the index`, "an earlier merge left the file unresolved", `git -C ${root} status`, "resolve the conflict in the checkout, then retry the write")
     entries.set(file, { mode, sha })
   }
+  const staged = new Map([...entries].map(([file, { mode, sha }]) => [file, `${mode} ${sha}`]))
   const indexFile = path.join(gitDir, PRIVATE_INDEX)
   const indexGit = runner(spawnGit, top, { ...env, GIT_INDEX_FILE: indexFile })
   const git = runner(spawnGit, top, env)
@@ -152,7 +143,10 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       }
       const tree = indexGit(["write-tree"]).stdout.trim()
       if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
-      if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) return { ok: true, stderr: "", published: onto, worktree: catchUp(git, top, full, entries, onto) }
+      if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) {
+        catchUp(git, full, staged, onto)
+        return { ok: true, stderr: "" }
+      }
       const commit = git(["commit-tree", tree, "-p", onto, "-m", message]).stdout.trim()
       if (commit === "") return fail(relPaths, "Desk could not create the commit", "git commit-tree failed (check user.name and user.email)", `git -C ${root} config user.email`, "nothing was published; retry the write")
       let policy
@@ -180,7 +174,8 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
         } else target = commit
       }
       git(["update-ref", remoteRef, target])
-      return { ok: true, stderr: "", published: target, worktree: catchUp(git, top, full, entries, target) }
+      catchUp(git, full, staged, target)
+      return { ok: true, stderr: "" }
     }
     return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {

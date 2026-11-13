@@ -226,3 +226,51 @@ test("a publication pull request that merged before the call was cut off is a la
   assert.equal(written.ok, true, written.stderr)
   assert.equal(remoteFile(origin, "notes.md").stdout, "hi\n")
 })
+
+test("a worktree that cannot fast-forward without overwriting local work keeps that work, and the published card is unstaged", async () => {
+  const { root, worktree } = await mainAndWorktree()
+  await fs.writeFile(path.join(root, "README.md"), "moved on\n", "utf8")
+  git(root, ["commit", "-q", "-am", "main moved"])
+  git(root, ["push", "-q", "origin", "main"])
+  await fs.writeFile(path.join(worktree, "README.md"), "my local edit\n", "utf8")
+  await fs.writeFile(path.join(worktree, "notes.md"), "hi\n", "utf8")
+  git(worktree, ["add", "notes.md"])
+  const head = git(worktree, ["rev-parse", "HEAD"])
+
+  assert.equal(commitPaths(worktree, ["notes.md"], "notes", spawnSync).ok, true)
+
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), head, "the branch did not move over the local edit")
+  assert.equal(await fs.readFile(path.join(worktree, "README.md"), "utf8"), "my local edit\n")
+  assert.equal(git(worktree, ["diff", "--cached", "--name-only"]), "")
+})
+
+test("a staged card that changed since Desk published it stays staged", async () => {
+  const { worktree } = await mainAndWorktree()
+  await fs.writeFile(path.join(worktree, "own.txt"), "mine\n", "utf8")
+  git(worktree, ["add", "own.txt"])
+  git(worktree, ["commit", "-q", "-m", "own work"])
+  await fs.writeFile(path.join(worktree, "notes.md"), "hi\n", "utf8")
+  git(worktree, ["add", "notes.md"])
+  let listings = 0
+  const changedMeanwhile = (command, args, options) => (gitCall("ls-files")(command, args) && (listings += 1) === 2 ? { status: 0, stdout: "", stderr: "" } : spawnSync(command, args, options))
+
+  assert.equal(commitPaths(worktree, ["notes.md"], "notes", changedMeanwhile).ok, true)
+
+  assert.equal(git(worktree, ["diff", "--cached", "--name-only"]), "notes.md")
+})
+
+test("a push cut off when the remote cannot be read back is still reported as unknown", async () => {
+  const { worktree } = await mainAndWorktree()
+  await fs.writeFile(path.join(worktree, "notes.md"), "hi\n", "utf8")
+  git(worktree, ["add", "notes.md"])
+  let fetches = 0
+  const unreachable = (command, args, options) => {
+    if (gitCall("push")(command, args)) return { status: null, stdout: "", stderr: "" }
+    return gitCall("fetch")(command, args) && (fetches += 1) === 2 ? { status: 128, stdout: "", stderr: "unreachable" } : spawnSync(command, args, options)
+  }
+
+  const refused = commitPaths(worktree, ["notes.md"], "notes", unreachable)
+
+  assert.equal(refused.ok, false)
+  assert.equal(refused.readback, "unknown")
+})
