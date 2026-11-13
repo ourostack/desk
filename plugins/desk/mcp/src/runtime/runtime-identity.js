@@ -6,7 +6,7 @@ import { deskPluginRoot, deskVersion } from "../package-metadata.js"
  * attach it to every answer even when the slow runtime status misses its budget. `plugin_root` is the plugin folder the tools
  * load from (the newest release's copy when Desk runs that), and `loaded` is false until the runtime's source mirror is.
  */
-export function runtimeIdentity({ env = process.env, runtime = null } = {}) {
+export function runtimeIdentity({ env, runtime }) {
   const loadedRoot = typeof runtime?.plugin_root === "string" && runtime.plugin_root !== "" ? runtime.plugin_root : null
   const pluginRoot = loadedRoot ?? deskPluginRoot(env)
   const mirror = runtime?.source_mirror_path ?? runtime?.sourceMirrorPath ?? null
