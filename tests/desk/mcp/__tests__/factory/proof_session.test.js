@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { markProofSession } from "../../../../../plugins/desk/mcp/src/factory/proof-session.js"
-import { factoryStateRoot, markSessionProof, pendingFiles, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, markSessionProof, pendingFiles, pendingLabels, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { main } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, recent, scratch } from "./_session_helpers.js"
@@ -96,12 +96,13 @@ test("a proof session's queued labels are moved out of the outbox and never publ
   assert.equal(await heldHas(ctx, `labels/${LABELS.job}/${sessionId(1)}.json`), true)
 }))
 
-test("pendingFiles skips a proof-marked session even without a precomputed set", () => scratch(async (ctx) => {
+test("pendingFiles and pendingLabels skip a proof-marked session even without a precomputed set", () => scratch(async (ctx) => {
   await queuedSession(ctx)
   await mark(ctx, 1)
   await another(ctx)
   const pending = await pendingFiles(ctx.env, STORE, { publishedBytesFor: (facts) => Buffer.from(JSON.stringify(facts)) })
   assert.deepEqual(pending.map(({ name }) => name), [nameOf(9)])
+  assert.deepEqual(await pendingLabels(ctx.env, STORE, { publishedBytesFor: (labels) => Buffer.from(JSON.stringify(labels)) }), [])
 }))
 
 test("marking twice is idempotent and audited as already marked", () => scratch(async (ctx) => {
