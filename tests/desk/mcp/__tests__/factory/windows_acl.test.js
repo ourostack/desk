@@ -587,6 +587,27 @@ function runnerReturning(response, { code = 0, stderr = "" } = {}) {
   return runner
 }
 
+test("closeWindowsAclSessions ends the provider a protect call started, and the next call starts a new one", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    await mkProvider(base, `
+const readline = require("node:readline")
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const results = JSON.parse(line).paths.map(entry => ({ ...entry, owner_sid: "S-1-5-21-" + process.pid, owner_reassigned: false, protected: true, rule_count: 1 }))
+  process.stdout.write(JSON.stringify({ status: "ok", results }) + "\\n")
+})
+`)
+    const env = { SystemRoot: base }
+    const first = pidOf((await protectWindowsPaths([DIR_ENTRY], { env, memoize: false, idleMs: 60000 }))[0])
+    windowsAcl.closeWindowsAclSessions()
+    assert.ok(await untilDead(first), "the provider ends at the close, not at its idle timeout")
+    const second = pidOf((await protectWindowsPaths([DIR_ENTRY], { env, memoize: false, idleMs: 60000 }))[0])
+    assert.notEqual(second, first)
+    windowsAcl.closeWindowsAclSessions()
+    assert.ok(await untilDead(second))
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
 test("assertWindowsAclAvailable resolves the fixed provider under SystemRoot", async () => {
   const base = await mkBase()
   try {

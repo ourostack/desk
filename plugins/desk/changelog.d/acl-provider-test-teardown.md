@@ -1,0 +1,1 @@
+The Windows ACL provider now has a teardown that the factory CLI tests call when their fixture ends, so the provider no longer holds each test for its 60-second idle timeout. Desk's behavior is unchanged.
