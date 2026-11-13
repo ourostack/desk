@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.106 — 2026-11-13
+
+### The skills list every session carries is shorter
+
+Copilot lists every installed skill with its description in the system prompt of every model call, so each long description is paid for on each call. The descriptions of 32 Desk, Crew and Plain Language skills now state their trigger in one sentence; each skill's body, and so every rule, is unchanged. The `humanize` pointer skill is retired. It held only a link to [`human-voice.md`](skills/operator-voice-comments/human-voice.md), which `operator-voice-comments` already loads when asked to humanize text, and nothing in Desk calls it by name.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.105 — 2026-11-13
 
 ### Session start no longer prints the AGENTS.md a Copilot host already loaded
