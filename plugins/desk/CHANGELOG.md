@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.116 — 2026-11-13
+
+`node scripts/skill-evals.cjs validate` now refuses a skill eval whose fingerprint moved without evidence of a real run, so refreshing `reviewedSourceFingerprint` alone no longer passes CI. A suite must either carry a current, passing run receipt at `evals/receipts/<suite id>.json` or record a `knownFailure` with an issue. The new `record` command writes that receipt from an external harness result (`record evals/<suite>.json --result <harness-result.json>`, or `-` to read it from a pipe), stamps the suite id and both fingerprints, and applies `verify`'s checks before writing. The error names the exact command to run. Existing suites are grandfathered at their committed state in `evals/receipts/_baseline.json`, and no receipts were invented for them. See the [evals README](../../../evals/README.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.115 — 2026-11-13
 
 desk-web now handles every site that tries to open a desktop app the same way, instead of Teams only. When a page points itself at an app address (`zoomus:`, `msteams:`, `slack:`, `figma:` and the rest), desk-web still refuses the launch, which fails the way an app that is not installed fails, so a page with a timer fallback takes its web path by itself. A page that only offers a button now gets it followed: after a `goto`, `click`, `reload`, `go-back` or `go-forward`, desk-web finds the page's own web option by role and name ("Join from browser", "Continue on this browser", "Use the web app instead") and clicks it once. Downloads, "Open in the app" and "switch browsers" are never taken.
