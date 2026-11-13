@@ -304,7 +304,8 @@ function launchConfig(kind, browser, profileDir, profileName, outputDir) {
     launch.ignoreDefaultArgs = ["--use-mock-keychain", "--password-store=basic"];
     launch.args.push("--profile-directory=" + profileName, "--disable-sync");
   }
-  return { browser: { browserName: "chromium", isolated: false, userDataDir: profileDir, launchOptions: launch }, outputDir: outputDir };
+  // The Playwright CLI refuses file: addresses, and file paths outside its folders, unless this is set. desk-web runs what the agent asks, so both are allowed.
+  return { browser: { browserName: "chromium", isolated: false, userDataDir: profileDir, launchOptions: launch }, outputDir: outputDir, allowUnrestrictedFileAccess: true };
 }
 
 // ---- the Playwright CLI ----
