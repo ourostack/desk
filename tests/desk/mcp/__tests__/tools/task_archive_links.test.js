@@ -280,6 +280,20 @@ test("task_archive leaves an inbound file whose link it cannot rewrite safely as
   assert.equal(await fs.readFile(path.join(root, "t", "zeta", "escaped.md"), "utf8"), before)
 })
 
+test("task_archive leaves Markdown under _cache and node_modules alone, even when it links into the task", async () => {
+  const root = await mkTempDeskRoot()
+  await buildDesk(root, { gitDesk: false })
+  const stray = "# Stray\n\nSee [card](../book-flights/task.md).\n"
+  await writeFiles(root, { "t/_cache/stray-2026/stray.md": stray, "t/node_modules/pkg/readme.md": stray })
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, ...NO_PUSH })
+
+  assert.equal(result.status, "archived")
+  assert.deepEqual((result.links?.rewritten ?? []).filter((file) => file.includes("_cache") || file.includes("node_modules")), [])
+  assert.equal(await fs.readFile(path.join(root, "t", "_cache", "stray-2026", "stray.md"), "utf8"), stray)
+  assert.equal(await fs.readFile(path.join(root, "t", "node_modules", "pkg", "readme.md"), "utf8"), stray)
+})
+
 test("task_archive reports a Markdown file that is not UTF-8 and never rewrites its bytes", async () => {
   const root = await mkTempDeskRoot()
   const invalid = Buffer.from([0xff, 0xfe, 0x20])
