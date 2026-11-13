@@ -33,7 +33,7 @@ import {
   runEvaluateCommand,
   runJobLinkCommand,
   runStatusCommand,
-  runValidatePrCommand as runValidatePrCommandWithGit,
+  runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { factoryStateRoot, readConsent, readMachineSecret, setConsent, updateStatus, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
@@ -47,28 +47,6 @@ import { removeTree } from "../_remove_tree.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
-
-// validate-pr asks Git the same read-only questions many times, and each ask starts a process. Its arguments are commit or tree IDs,
-// which never change meaning, so the first answer per checkout and argument list is reused. Failures are not cached.
-const CACHEABLE_GIT = new Set(["version", "rev-list", "merge-tree", "diff", "ls-tree", "show"])
-const probeCache = new Map()
-function gitWithProbeCache(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
-  const cacheable = CACHEABLE_GIT.has(args[0])
-  const key = `${cwd}\0${encoding}\0${args.join("\0")}`
-  if (cacheable && probeCache.has(key)) return probeCache.get(key)
-  let output
-  try {
-    output = execFileSync("git", args, { windowsHide: true, cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
-  } catch (error) {
-    // Same failure the command reports for a Git error, so the error cases keep their message.
-    const failure = new Error("factory.js validate-pr: Git data could not be read")
-    failure.status = typeof error?.status === "number" ? error.status : null
-    throw failure
-  }
-  if (cacheable) probeCache.set(key, output)
-  return output
-}
-const runValidatePrCommand = (options) => runValidatePrCommandWithGit({ git: gitWithProbeCache, ...options })
 
 test("the requested context CLI requires one exact store and job", async () => {
   const { runContextRequestCommand } = await import("../../../../../plugins/desk/mcp/scripts/factory.js")
