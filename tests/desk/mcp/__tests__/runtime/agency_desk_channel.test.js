@@ -206,26 +206,30 @@ test("a refused rename is retried when agency.toml still holds what was read, an
   assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
 })
 
-test("before a retry, a target that cannot be read stops the move, but a read that is only busy does not", async () => {
+// An fsp whose reads of agency.toml follow `script` in order: undefined is a real read, an object throws that error code.
+// Reads past the script are real, so a changed file is what the disk holds.
+function scriptedReads(script) {
+  let reads = 0
+  return {
+    ...fsPromises,
+    readFile: async (file, encoding) => {
+      const step = script[reads++]
+      if (step === undefined) return fsPromises.readFile(file, encoding)
+      throw Object.assign(new Error(step.code), { code: step.code })
+    },
+  }
+}
+
+test("before a retry, a target that cannot be read stops the move, and a rename refused for another reason is thrown", async () => {
   const fixture = await agencyHome(entry(MAIN_SPEC))
   const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
   // Reads: 1 before the temporary file, 2 before the swap, 3 before the retry.
-  const failingOnRead = (code) => {
-    let reads = 0
-    return {
-      ...fsPromises,
-      readFile: async (file, encoding) => {
-        if (reads++ === 2) throw Object.assign(new Error(code), { code })
-        return fsPromises.readFile(file, encoding)
-      },
-    }
-  }
   let attempts = 0
   const refusedOnce = async (from, to) => {
     if (attempts++ === 0) throw Object.assign(new Error("busy"), { code: "EBUSY" })
     return fsPromises.rename(from, to)
   }
-  assert.equal(await replaceIfUnchanged({ ...args, fsp: failingOnRead("ENOENT"), rename: refusedOnce }), "changed")
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: scriptedReads([undefined, undefined, { code: "ENOENT" }]), rename: refusedOnce }), "changed")
   assert.equal(attempts, 1)
   assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
   assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
@@ -235,10 +239,55 @@ test("before a retry, a target that cannot be read stops the move, but a read th
   await assert.rejects(replaceIfUnchanged({ ...args, rename: full }), { code: "ENOSPC" })
   assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
   assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+})
 
-  attempts = 0
-  assert.equal(await replaceIfUnchanged({ ...args, fsp: failingOnRead("EBUSY"), rename: refusedOnce }), "written")
+test("a busy read before a retry, then another writer's content, gives changed and keeps that content", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  const other = `${entry(MAIN_SPEC)}# added by Agency\n`
+  let attempts = 0
+  // The first rename is refused while another writer (Agency) replaces agency.toml; the re-read before the retry is busy.
+  const racing = async (from, to) => {
+    if (attempts++ === 0) {
+      writeFileSync(fixture.file, other)
+      throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    }
+    return fsPromises.rename(from, to)
+  }
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: scriptedReads([undefined, undefined, { code: "EBUSY" }]), rename: racing }), "changed")
+  assert.equal(attempts, 1)
+  assert.equal(readFileSync(fixture.file, "utf8"), other)
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+  assert.equal(existsSync(`${fixture.file}${LOCK_SUFFIX}`), false)
+})
+
+test("a read that stays busy through every retry gives changed, and the rename is not retried", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  let attempts = 0
+  const refusedOnce = async (from, to) => {
+    if (attempts++ === 0) throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    return fsPromises.rename(from, to)
+  }
+  const alwaysBusy = [undefined, undefined, ...Array.from({ length: 50 }, () => ({ code: "EBUSY" }))]
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: scriptedReads(alwaysBusy), rename: refusedOnce }), "changed")
+  assert.equal(attempts, 1)
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+})
+
+test("a busy read before a retry, then a matching read, lets the retry write", async () => {
+  const fixture = await agencyHome(entry(MAIN_SPEC))
+  const args = { target: fixture.file, seen: entry(MAIN_SPEC), next: entry(RELEASE_SPEC), backup: `${fixture.file}${BACKUP_SUFFIX}`, holdLock, platform: "win32", sleep: async () => {} }
+  let attempts = 0
+  const refusedOnce = async (from, to) => {
+    if (attempts++ === 0) throw Object.assign(new Error("busy"), { code: "EBUSY" })
+    return fsPromises.rename(from, to)
+  }
+  assert.equal(await replaceIfUnchanged({ ...args, fsp: scriptedReads([undefined, undefined, { code: "EBUSY" }]), rename: refusedOnce }), "written")
+  assert.equal(attempts, 2)
   assert.equal(readFileSync(fixture.file, "utf8"), entry(RELEASE_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
 })
 
 test("Desk alone moves to release; an entry another plugin covers on every engine gives way", async () => {

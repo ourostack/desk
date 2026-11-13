@@ -1,0 +1,3 @@
+### A busy agency.toml that cannot be re-read no longer lets the release-channel move through
+
+When Desk moves the explicit Agency entry for Desk to the release channel and Windows refuses the rename, Desk re-reads agency.toml before each retry. A read that Windows refuses while Agency has the file open is now retried in the same short waits as the rename. If the file still cannot be read, or its content changed, Desk leaves agency.toml as it is and the move is tried again at a later session start. Before, a busy read was skipped, so the retried rename could replace a write Agency made in that window.

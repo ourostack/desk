@@ -47,9 +47,23 @@ export async function renameWithRetryAsync(source, destination, { rename = renam
   }
 }
 
-/** True for the codes Windows gives while another process holds the file open. */
-export function isTransientError(error) {
+// True for the codes Windows gives while another process holds the file open.
+function isTransientError(error) {
   return TRANSIENT.has(error.code)
+}
+
+/**
+ * readFile, retried the way renameWithRetryAsync retries a rename: the same waits and attempts, only on Windows, only on the
+ * busy codes. Every other error, and the last busy one, is thrown unchanged.
+ */
+export async function readFileWithRetryAsync(file, encoding, { readFile, sleep, platform }) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await readFile(file, encoding)
+    } catch (error) {
+      await sleep(retryWait(error, attempt, platform))
+    }
+  }
 }
 
 // How long to wait before the next attempt; throws `error` when it is not one to retry.
