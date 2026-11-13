@@ -121,15 +121,15 @@ export function describe({ trees, current, home, now }) {
   return [head, ...listed.map((tree) => line(tree, trees.indexOf(tree))), ...(more > 0 ? [`- and ${plural(more, "more worktree")}, quiet for a day or more or past this list; \`git worktree list\` shows them`] : []), rules]
 }
 
-async function sessionsByWorktree({ trees, current, env, platform, exec }) {
+async function sessionsByWorktree({ trees, current, env, platform, inspect }) {
   const counts = new Map(trees.map((tree) => [tree.dir, { sessions: 0, upMs: null }]))
   if (platform === "win32") return counts
-  const listed = await exec("ps", ["-axo", "pid=,ppid=,etime=,command="])
+  const listed = await inspect("ps", ["-axo", "pid=,ppid=,etime=,command="])
   const hostPid = Number.parseInt(env.DESK_SESSION_HOST_PID ?? "", 10)
   const ownKnown = Number.isInteger(hostPid)
   const candidates = sessionProcesses(parseProcesses(listed), { hostPid: ownKnown ? hostPid : null })
   if (candidates.length === 0) return counts
-  const cwds = await exec("lsof", ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"])
+  const cwds = await inspect("lsof", ["-a", "-p", candidates.map((row) => row.pid).join(","), "-d", "cwd", "-Fpn"])
   const cwdOf = new Map()
   let pid = null
   for (const line of cwds.split(/\r?\n/u)) {
@@ -156,16 +156,16 @@ async function sessionsByWorktree({ trees, current, env, platform, exec }) {
  * `{ lines, worktrees, sessions }` for boot, or null when there is nobody else (one worktree and no other running session), no
  * repo, or nothing could be read in `budgetMs`. Never rejects.
  */
-export async function otherSessions({ cwd, env, now, platform, home, budgetMs = BUDGET_MS, exec }) {
+export async function otherSessions({ cwd, env, now, platform, home, budgetMs = BUDGET_MS, inspect }) {
   let timer
   const hard = new Promise((resolve) => { timer = setTimeout(() => resolve(null), budgetMs) })
   const work = (async () => {
-    const call = exec ?? (async (file, args, options = {}) => (await run(file, args, { cwd, timeout: budgetMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...options })).stdout)
+    const call = inspect ?? (async (file, args, options = {}) => (await run(file, args, { cwd, timeout: budgetMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...options })).stdout)
     const trees = parseWorktrees(await call("git", ["worktree", "list", "--porcelain"])).filter((tree) => !tree.bare)
     const top = path.resolve((await call("git", ["rev-parse", "--show-toplevel"])).trim())
     let counts = new Map(trees.map((tree) => [tree.dir, { sessions: 0, upMs: null }]))
     try {
-      counts = await sessionsByWorktree({ trees, current: top, env, platform, exec: (file, args) => call(file, args) })
+      counts = await sessionsByWorktree({ trees, current: top, env, platform, inspect: (file, args) => call(file, args) })
     } catch {
       // No ps or lsof here: worktrees alone still say who else may be about.
     }

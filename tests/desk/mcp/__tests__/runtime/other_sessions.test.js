@@ -48,7 +48,7 @@ test("boot lists the other worktrees and sessions here, this one first, and the 
   const trees = [["/r/main", "main"], ["/r/wt/me", "mine"], ["/r/wt/other", "theirs"]]
   const result = await otherSessions({
     cwd: "/r/wt/me", env: { DESK_SESSION_HOST_PID: "501" }, platform: "linux", home: "/h", now: () => Date.parse("2026-11-13T12:00:00Z"),
-    exec: machine({
+    inspect: machine({
       trees,
       processes: "  500     1 02:00:00 /bin/agency copilot --server\n  501   500    01:00:00 /cache/copilot-runtime --server\n  600     1 03:30 /bin/agency copilot --server\n  700     1 04:00 /bin/agency copilot --server\n",
       cwds: { 600: "/r/wt/other/src", 700: "/r/main" },
@@ -65,22 +65,22 @@ test("boot lists the other worktrees and sessions here, this one first, and the 
 })
 
 test("a lone session says nothing, and a machine without ps still names the other worktrees", async () => {
-  const alone = await otherSessions({ cwd: "/r/main", env: {}, now: Date.now, home: "/h", platform: "linux", exec: machine({ trees: [["/r/main", "main"]], processes: "  500     1 02:00 /bin/agency copilot --server\n", cwds: { 500: "/r/main" } }) })
+  const alone = await otherSessions({ cwd: "/r/main", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: machine({ trees: [["/r/main", "main"]], processes: "  500     1 02:00 /bin/agency copilot --server\n", cwds: { 500: "/r/main" } }) })
   assert.equal(alone, null, "the only session in the only worktree: nobody else")
-  const crowded = await otherSessions({ cwd: "/r/main", env: {}, now: Date.now, home: "/h", platform: "linux", exec: machine({ trees: [["/r/main", "main"]], processes: "  500     1 02:00 /bin/agency copilot --server\n  501     1 03:00 /bin/agency copilot --server\n", cwds: { 500: "/r/main", 501: "/r/main" } }) })
+  const crowded = await otherSessions({ cwd: "/r/main", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: machine({ trees: [["/r/main", "main"]], processes: "  500     1 02:00 /bin/agency copilot --server\n  501     1 03:00 /bin/agency copilot --server\n", cwds: { 500: "/r/main", 501: "/r/main" } }) })
   assert.equal(crowded.sessions, 1, "two sessions in one shared checkout: one of them is this one")
   assert.match(crowded.lines[1], /^- \/r\/main \(the shared main checkout, main\): you are here; 1 session besides yours$/u)
-  const noPs = await otherSessions({ cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "linux", exec: machine({ trees: [["/r/main", "main"], ["/r/wt/me", "mine"]], throwPs: true }) })
+  const noPs = await otherSessions({ cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: machine({ trees: [["/r/main", "main"], ["/r/wt/me", "mine"]], throwPs: true }) })
   assert.equal(noPs.worktrees, 2)
   assert.equal(noPs.sessions, 0)
-  const windows = await otherSessions({ cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "win32", exec: machine({ trees: [["/r/main", "main"], ["/r/wt/me", "mine"]], throwPs: true }) })
+  const windows = await otherSessions({ cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "win32", inspect: machine({ trees: [["/r/main", "main"], ["/r/wt/me", "mine"]], throwPs: true }) })
   assert.equal(windows.worktrees, 2)
 })
 
 test("a git that cannot answer in time, or a folder that is no repo, leaves boot unhindered", async () => {
-  const slow = await otherSessions({ cwd: "/r", env: {}, now: Date.now, home: "/h", platform: "linux", budgetMs: 50, exec: () => new Promise(() => {}) })
+  const slow = await otherSessions({ cwd: "/r", env: {}, now: Date.now, home: "/h", platform: "linux", budgetMs: 50, inspect: () => new Promise(() => {}) })
   assert.equal(slow, null)
-  const notRepo = await otherSessions({ cwd: "/nowhere", env: {}, now: Date.now, home: "/h", platform: "linux", exec: async () => { throw new Error("not a git repository") } })
+  const notRepo = await otherSessions({ cwd: "/nowhere", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: async () => { throw new Error("not a git repository") } })
   assert.equal(notRepo, null)
 })
 
@@ -139,11 +139,11 @@ test("time spans read in minutes, hours and days, and a worktree with a session 
 test("a session whose folder is unknown, or outside every worktree, is not counted, and a machine with no sessions skips the folder lookup", async () => {
   const trees = [["/r/main", "main"], ["/r/wt/me", "mine"]]
   const base = { cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "linux" }
-  const result = await otherSessions({ ...base, exec: machine({ trees, processes: "  600     1 03:30 /bin/agency copilot --server\n  601     1 03:30 /bin/agency copilot --server\n", cwds: { 601: "/elsewhere" } }) })
+  const result = await otherSessions({ ...base, inspect: machine({ trees, processes: "  600     1 03:30 /bin/agency copilot --server\n  601     1 03:30 /bin/agency copilot --server\n", cwds: { 601: "/elsewhere" } }) })
   assert.equal(result.sessions, 0)
   const calls = []
   const quiet = machine({ trees, processes: "" })
-  await otherSessions({ ...base, exec: async (file, args) => { calls.push(file); return quiet(file, args) } })
+  await otherSessions({ ...base, inspect: async (file, args) => { calls.push(file); return quiet(file, args) } })
   assert.equal(calls.includes("lsof"), false)
 })
 
@@ -152,7 +152,7 @@ test("a worktree whose .git file names no folder has no git activity to report",
   const wt = path.join(base, "wt")
   mkdirSync(wt)
   writeFileSync(path.join(wt, ".git"), "not a pointer\n")
-  const result = await otherSessions({ cwd: wt, env: {}, now: Date.now, home: base, platform: "win32", exec: async (file, args) => (args[0] === "worktree" ? porcelain([path.join(base, "main"), "main"], [wt, "mine"]) : `${wt}\n`) })
+  const result = await otherSessions({ cwd: wt, env: {}, now: Date.now, home: base, platform: "win32", inspect: async (file, args) => (args[0] === "worktree" ? porcelain([path.join(base, "main"), "main"], [wt, "mine"]) : `${wt}\n`) })
   assert.equal(result.lines[1], "- ~/wt (mine): you are here", "no activity fact for a worktree git cannot read")
   assert.match(result.lines[2], /^- and 1 more worktree, quiet/u)
 })
