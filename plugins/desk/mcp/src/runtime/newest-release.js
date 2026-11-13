@@ -9,13 +9,14 @@
 // desk_status, and the stale-Desk line boot prints). Nothing here sends credentials or runs fetched code outside the pack
 // verification the runtime already applies; the copy is `ourostack/desk`'s own release branch over HTTPS, as Agency fetches it.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { promisify } from "node:util"
 import { gunzip } from "node:zlib"
 import { resolveDeskChannel } from "./desk-channel.js"
 import { compareVersions, latestPluginUrl, parseVersion } from "./stale-desk.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 import { looksLikeNodeTestRunner } from "./test-state-guard.js"
 
 const gunzipAsync = promisify(gunzip)
@@ -245,7 +246,7 @@ export async function ensureNewestRelease({ env = process.env, pluginRoot, runni
       const target = path.join(copiesDir, got)
       if (copyMcpRoot({ copiesDir, version: got }) === null) {
         rmSync(target, { recursive: true, force: true })
-        renameSync(stage, target)
+        renameWithRetry(stage, target)
       }
       prune(copiesDir, got)
       return { state: "loaded", running, latest: got, mcpRoot: copyMcpRoot({ copiesDir, version: got }) }
