@@ -532,7 +532,8 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   assert.match(degraded.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u)
   git(fixture.desk, "push", "origin", "HEAD:refs/heads/rescue-work")
   // Only the first admission attempt switches on its own; after it, the doctor repair does.
-  assert.equal((await session.call("desk_status", { detail: true })).payload.state, "degraded:state_branch_detached")
+  const afterPush = (await session.call("desk_status", { detail: true })).payload
+  assert.equal(afterPush.state, "degraded:state_branch_detached", JSON.stringify({ summary: afterPush.summary, diagnostic: afterPush.diagnostic }))
   const doctored = (await session.call("desk_doctor", { repair: "switch_state_branch" })).payload
   assert.equal(doctored.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
   const ready = await session.statusUntil((payload) => payload.state === "ready")
