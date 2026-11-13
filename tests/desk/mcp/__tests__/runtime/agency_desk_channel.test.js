@@ -239,6 +239,11 @@ test("a plugin with no engines line covers only the engines its cached manifest 
   assert.match((await run(["--migrate"], narrowed)).stdout, /plugins\.default now selects github:ourostack\/desk:plugins\/desk@release for claude; another plugin there brings Desk on the other engines/u)
   assert.equal(readFileSync(narrowed.file, "utf8"), [entry(RELEASE_SPEC, 'engines = ["claude"]\n'), entry(MS_DESK)].join("\n"))
 
+  // A cached plugin in two lists gives each list the same answer, read from the cache once.
+  const lists = [entry(MAIN_SPEC), entry(MS_DESK), "[profiles.p.plugins]\n", `[[profiles.p.plugins.default]]\nplugin = "${MAIN_SPEC}"\n`, `[[profiles.p.plugins.default]]\nplugin = "${MS_DESK}"\n`].join("\n")
+  const twoLists = await agencyHome(lists, { [MS_DESK]: { dependencies: [MAIN_SPEC], engines: ["copilot"] } })
+  assert.deepEqual(plan({ text: lists, cacheDir: twoLists.cacheDir }).actions.map((action) => [action.block.table, action.engines]), [["plugins.default", ["claude"]], ["profiles.p.plugins.default", ["claude"]]])
+
   // A cached copy with no engines field that holds both manifests supports both engines, so the entry gives way.
   const both = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK)].join("\n"), { [MS_DESK]: { dependencies: [MAIN_SPEC], claude: true } })
   assert.match((await run(["--migrate"], both)).stdout, /removed the plugins\.default entry/u)
