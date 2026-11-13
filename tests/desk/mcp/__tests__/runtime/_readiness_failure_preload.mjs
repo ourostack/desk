@@ -280,7 +280,7 @@ export function annotateTestError(error, stderr) {
   const message = Object.getOwnPropertyDescriptor(error, "message")
   const code = Object.getOwnPropertyDescriptor(error, "code")
   if (!message?.writable || typeof message.value !== "string" ||
-      code?.value !== "ERR_ASSERTION" && !message.value.startsWith("desk_status did not reach the expected state within 20000 ms;") ||
+      code?.value !== "ERR_ASSERTION" && !/^desk_status did not reach the expected state within \d+ ms;/u.test(message.value) ||
       message.value.startsWith("[readiness-failure ")) return error
   try { Object.defineProperty(error, "message", { ...message, value: failurePrefix(stderr) + message.value }) } catch { /* preserve the test error */ }
   return error
