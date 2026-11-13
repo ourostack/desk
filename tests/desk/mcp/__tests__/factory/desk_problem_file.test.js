@@ -197,12 +197,13 @@ const DAY_ONE = "2026-10-01T00:00:00Z"
 const DAY_TWO = "2026-10-02T00:00:00Z"
 const writes = (calls) => calls.filter((call) => call.args[2] === "POST" || call.args[2] === "PATCH").length
 const hasLine = (body, line) => body.split("\n").includes(line)
+const recurrenceText = (lines) => [RECURRENCE, "Desk problem recurrence recorded by one account.", "", ...lines].join("\n")
 const hit = (env, runner, now) => fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected twice", runner, now: clock(now) })
 
-/** Runs `run` with the running Desk version read from a temporary `plugin.json` that says `version`. */
+/** Runs `run` with the running Desk version read from a temporary `plugin.json` that says `version` (`null`: a file that is not JSON). */
 async function atDeskVersion(version, run) {
   const root = await mkTempRoot("desk-problem-recurrence-version-")
-  await fs.writeFile(path.join(root, "plugin.json"), JSON.stringify({ version }))
+  await fs.writeFile(path.join(root, "plugin.json"), version === null ? "not json" : JSON.stringify({ version }))
   const saved = process.env.DESK_PLUGIN_ROOT
   process.env.DESK_PLUGIN_ROOT = root
   try {
@@ -277,20 +278,70 @@ test("another account's recurrence comment is never edited: this account gets it
     user: { login: "someone-else" },
     body: [RECURRENCE, "Desk problem recurrence recorded by one account.", "", "- Hits recorded from this account: 9", "- Highest Desk version seen: 1.0.0", "- Latest hit host: `claude`", "- Last seen (UTC): 2026-09-30"].join("\n"),
   }
-  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, comments: [other] })
+  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, comments: [other, { id: 9, user: null, body: `${RECURRENCE}\nnot anyone's record` }] })
   await hit(env, gh.runner, DAY_ONE)
-  assert.equal(gh.comments.length, 2)
+  assert.equal(gh.comments.length, 3)
   assert.equal(gh.comments[0].body, other.body)
-  assert.equal(gh.comments[1].user.login, "contributor")
-  assert.ok(hasLine(gh.comments[1].body, "- Hits recorded from this account: 1"))
+  assert.equal(gh.comments[2].user.login, "contributor")
+  assert.ok(hasLine(gh.comments[2].body, "- Hits recorded from this account: 1"))
 }))
 
-test("this account's own comment that cannot be read is updated in place from count 1", () => scratch(async ({ env }) => {
-  const own = { id: 8, user: { login: "contributor" }, body: `${RECURRENCE}\nthe counts were lost` }
-  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, comments: [own] })
-  await hit(env, gh.runner, DAY_ONE)
-  assert.equal(gh.comments.length, 1)
-  assert.ok(hasLine(gh.comments[0].body, "- Hits recorded from this account: 1"))
+test("a Desk version that cannot be read neither lowers nor replaces the recorded highest; an 'unknown' recorded highest yields to a readable one", () => scratch(async ({ env }) => {
+  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES })
+  await atDeskVersion("3.2.100", () => hit(env, gh.runner, DAY_ONE))
+  const afterFirst = writes(gh.calls)
+  await atDeskVersion(null, () => withStderr(() => hit(env, gh.runner, DAY_ONE)))
+  assert.equal(writes(gh.calls), afterFirst, "an unreadable version the same day writes nothing")
+  assert.ok(hasLine(gh.comments[0].body, "- Highest Desk version seen: 3.2.100"))
+  const unknownHighest = recurrenceText(["- Hits recorded from this account: 4", "- Highest Desk version seen: unknown", "- Latest hit host: `claude`", "- Last seen (UTC): 2026-09-30"])
+  const seeded = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, comments: [{ id: 3, user: { login: "contributor" }, body: unknownHighest }] })
+  await atDeskVersion("3.2.1", () => hit(env, seeded.runner, DAY_ONE))
+  assert.ok(hasLine(seeded.comments[0].body, "- Hits recorded from this account: 5"))
+  assert.ok(hasLine(seeded.comments[0].body, "- Highest Desk version seen: 3.2.1"))
+}))
+
+test("a comment that carries the marker but is not a readable recurrence record is updated in place from count 1", () => scratch(async ({ env }) => {
+  const [count, highest, host, date] = ["- Hits recorded from this account: 4", "- Highest Desk version seen: 3.2.100", "- Latest hit host: `claude`", "- Last seen (UTC): 2026-09-30"]
+  const damaged = [
+    `a stray line\n${RECURRENCE}`,
+    recurrenceText([count, count, highest, host, date]),
+    recurrenceText([highest, host, date]),
+    recurrenceText(["- Hits recorded from this account: 0", highest, host, date]),
+    recurrenceText([count, "- Highest Desk version seen: soon", host, date]),
+    recurrenceText([count, highest, date]),
+    recurrenceText([count, highest, host]),
+  ]
+  for (const body of damaged) {
+    const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, comments: [{ id: 3, user: { login: "contributor" }, body }] })
+    await hit(env, gh.runner, DAY_ONE)
+    assert.equal(gh.comments.length, 1)
+    assert.ok(hasLine(gh.comments[0].body, "- Hits recorded from this account: 1"), body)
+  }
+}))
+
+test("a comment write that throws a plain error is reported as record_failed, and the result stays 'known'", () => scratch(async ({ env }) => {
+  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES })
+  const runner = async (args, options) => {
+    if (args[0] === "api" && /\/comments(\?|$)/u.test(String(args[7]))) throw new Error("socket hung up")
+    return gh.runner(args, options)
+  }
+  const { value, lines } = await withStderr(() => hit(env, runner, DAY_ONE))
+  assert.deepEqual(value, { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  assert.deepEqual(lines, ["desk-problem: recurrence_comment_failed record_failed\n"])
+}))
+
+test("a recurrence comment that would start after the filing deadline is skipped with a stable code, and the result stays 'known'", () => scratch(async ({ env }) => {
+  let time = Date.parse(DAY_ONE)
+  const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES })
+  const runner = async (args, options) => {
+    // The dedup listing takes longer than the whole deadline.
+    if (args[0] === "api" && String(args[7]).startsWith(`repos/${STORE}/issues?`)) time += 60000
+    return gh.runner(args, options)
+  }
+  const { value, lines } = await withStderr(() => fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected twice", runner, now: () => time, deadlineMs: 30000 }))
+  assert.deepEqual(value, { result: "known", url: `https://github.com/${STORE}/issues/5` })
+  assert.deepEqual(lines, ["desk-problem: recurrence_comment_failed deadline\n"])
+  assert.equal(gh.comments.length, 0)
 }))
 
 test("a failing comment call still returns 'known', keeps the local count, and logs one stable code", () => scratch(async ({ env }) => {
@@ -547,6 +598,7 @@ test("two concurrent filings for the same new fingerprint create only one issue;
       const route = args[7]
       if (route === `repos/${STORE}`) return { code: 0, stdout: JSON.stringify(PUSH), stderr: "" }
       if (route.startsWith(`repos/${STORE}/issues?`)) return { code: 0, stdout: JSON.stringify(issues), stderr: "" }
+      if (/\/comments(\?|$)/u.test(route)) return { code: 0, stdout: method === "GET" ? "[]" : "{\"id\":1}", stderr: "" }
       if (method === "POST" && route === `repos/${STORE}/issues`) {
         createCalls += 1
         // A slow create widens the check-then-act window a missing lock would let a second racer slip through.

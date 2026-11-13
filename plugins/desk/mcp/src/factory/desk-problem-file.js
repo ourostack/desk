@@ -100,7 +100,7 @@ function recurrenceBody({ count, highest, host, date, closedHit }) {
 
 // The recurrence comment's values, or `null` when the body is not exactly one this function wrote.
 function parseRecurrence(body) {
-  const lines = typeof body === "string" ? body.split("\n") : []
+  const lines = body.split("\n")
   if (lines[0] !== RECURRENCE_MARKER) return null
   const values = {}
   for (const line of lines.slice(1)) {
