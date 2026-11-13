@@ -1889,6 +1889,49 @@ test("find and snapshot --interactive narrow a snapshot whose refs stay usable",
   } finally { await adapter.close() }
 })
 
+test("find and wait match visible text with unusual spacing or split across elements, once each", async () => {
+  const root = await mkTempRoot("auth-native-split-")
+  const packet = nativeSnapshot()
+  const table = packet.documents[0].nodes
+  const layout = packet.documents[0].layout
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const add = (parent, type, name, value, backend) => {
+    const at = table.parentIndex.length
+    table.parentIndex.push(parent); table.nodeType.push(type); table.nodeName.push(s(name))
+    table.nodeValue.push(value === null ? -1 : s(value)); table.backendNodeId.push(backend); table.attributes.push([])
+    layout.nodeIndex.push(at); layout.styles.push(layout.styles[0].slice()); layout.bounds.push([0, 0, 10, 10]); layout.text.push(-1)
+    return at
+  }
+  const nbsp = add(2, 1, "DIV", null, 201)
+  add(nbsp, 3, "#text", "Ari\u00a0Mendelow", 202)
+  const lines = add(2, 1, "P", null, 203)
+  add(lines, 3, "#text", "\n      Grace\n    Hopper\n", 204)
+  const card = add(2, 1, "DIV", null, 205)
+  const first = add(card, 1, "SPAN", null, 206)
+  add(first, 3, "#text", "Linus", 207)
+  add(card, 3, "#text", " ", 208)
+  const last = add(card, 1, "SPAN", null, 209)
+  add(last, 3, "#text", "Torvalds", 210)
+  const adapter = adapterFor(fakeDriver({ packet }), root)
+  try {
+    const nbspFound = await adapter.call(["find", "Ari Mendelow"])
+    assert.equal(nbspFound.matches, 1)
+    assert.ok(nbspFound.text.includes("Ari\u00a0Mendelow"), "the line that holds the name is shown")
+    const newlineFound = await adapter.call(["find", "grace   hopper"])
+    assert.equal(newlineFound.matches, 1)
+    assert.ok(newlineFound.text.includes("Grace"), "a name broken across lines is found")
+    const split = await adapter.call(["find", "Linus Torvalds"])
+    assert.equal(split.matches, 1, "a name split across two spans counts once")
+    assert.ok(split.text.includes("\"Linus\"") && split.text.includes("\"Torvalds\""), "the split text is shown")
+    assert.equal((await adapter.call(["find", "Linus"])).matches, 1, "a name inside one span still counts once")
+    const waited = await adapter.call(["wait", "Linus Torvalds"])
+    assert.equal(waited.waited.found, true)
+    const hidden = await adapter.call(["find", "FAKE_PROPERTY"])
+    assert.equal(hidden.matches, 0, "a redacted value is not found through the text around it")
+    noPassword(hidden)
+  } finally { await adapter.close() }
+})
+
 test("a page too long to read in one reply says how to see the rest, in every view", async () => {
   const root = await mkTempRoot("auth-native-long-")
   const packet = nativeSnapshot()

@@ -510,43 +510,19 @@ function rowsOf(packet, scope, frameId, key, secret, budget) {
 // A view narrows it: find keeps lines holding the text and the lines that contain them; interactive keeps lines with
 // a ref or a name. Past TEXT_BUDGET characters, named and non-generic lines stay, then the rest in page order.
 function renderText(node, view) {
-  var entries = [];
-  // A wrapper that gives way to the one thing it holds hands that thing its ref, so the text stays clickable.
-  (function walk(n, depth, parent, carried) {
-    var children = n.children || [];
-    var plain = (n.role === "generic" && !n.name && n.text === undefined) || n.role === "text";
-    var ref = n.ref || (plain ? carried : undefined);
-    if (n.role === "text" && ref) {
-      entries.push({ depth: depth, parent: parent, ref: true, key: false, field: false, words: n.text, line: "- generic [ref=" + ref + "]: " + quote(n.text) });
-      return;
-    }
-    if (n.role === "generic" && plain) {
-      if (!children.length) return;
-      if (children.length === 1) { walk(children[0], depth, parent, ref); return; }
-      if (!ref) { children.forEach(function (child) { walk(child, depth, parent); }); return; }
-    }
-    var line = "- " + n.role;
-    if (ref) line += " [ref=" + ref + "]";
-    if (n.name) line += " " + quote(n.name);
-    if (n.text !== undefined) line += ": " + quote(n.text);
-    var index = entries.length;
-    entries.push({ depth: depth, parent: parent, ref: Boolean(ref), key: Boolean(n.name) || ["generic", "text"].indexOf(n.role) === -1,
-      field: ["textbox", "combobox", "heading"].indexOf(n.role) !== -1,
-      words: [n.name, n.text].filter(function (value) { return typeof value === "string"; }).join(" "), line: line });
-    children.forEach(function (child) { walk(child, depth + 1, index); });
-  })(node, 0, -1);
+  var entries = textLines(node);
   var keep = entries.map(function () { return !view; });
   var matches = 0;
   if (view && view.find !== undefined) {
-    var needle = view.find.toLowerCase();
-    entries.forEach(function (entry, index) {
-      if (entry.words.toLowerCase().indexOf(needle) === -1) return;
-      matches++;
-      for (var at = index; at !== -1 && !keep[at]; at = entries[at].parent) keep[at] = true;
-    });
+    var found = matchLines(entries, view.find);
+    keep = found.keep;
+    matches = found.count;
   }
   if (view && view.interactive) entries.forEach(function (entry, index) { keep[index] = entry.ref || entry.key; });
-  var full = entries.reduce(function (sum, entry) { return sum + entry.depth * 2 + entry.line.length + 1 + Math.max(0, entry.words.length - LINE_CHARS); }, 0);
+  entries.forEach(function (entry, index) { if (entry.virtual) keep[index] = false; });
+  var full = entries.reduce(function (sum, entry) {
+    return entry.virtual ? sum : sum + entry.depth * 2 + entry.line.length + 1 + Math.max(0, entry.words.length - LINE_CHARS);
+  }, 0);
   var size = function (entry) { return entry.depth * 2 + entry.line.length + 1; };
   // Choose lines for a budget: fields and headings first, other named lines up to half of it, then the rest in page
   // order, so a page full of named buttons still shows its text.
@@ -594,6 +570,88 @@ function renderText(node, view) {
 
 function quote(text) { return JSON.stringify(text.length > LINE_CHARS ? text.slice(0, LINE_CHARS) + "\u2026" : text); }
 
+// The lines of a snapshot in page order, each with the index of its parent line and the index just past its last
+// descendant. A wrapper that gives way to several children gets a virtual line: it prints nothing, but it is where text
+// split across those children is found (see matchLines).
+function textLines(node) {
+  var entries = [];
+  function add(entry) { entries.push(entry); return entries.length - 1; }
+  // A wrapper that gives way to the one thing it holds hands that thing its ref, so the text stays clickable.
+  (function walk(n, depth, parent, carried) {
+    var children = n.children || [];
+    var plain = (n.role === "generic" && !n.name && n.text === undefined) || n.role === "text";
+    var ref = n.ref || (plain ? carried : undefined);
+    if (n.role === "text" && ref) {
+      var leaf = add({ depth: depth, parent: parent, ref: true, key: false, field: false, virtual: false, words: n.text, line: "- generic [ref=" + ref + "]: " + quote(n.text) });
+      entries[leaf].end = entries.length;
+      return;
+    }
+    if (n.role === "generic" && plain) {
+      if (!children.length) return;
+      if (children.length === 1) { walk(children[0], depth, parent, ref); return; }
+      if (!ref) {
+        var wrapper = add({ depth: depth, parent: parent, ref: false, key: false, field: false, virtual: true, words: "", line: "" });
+        children.forEach(function (child) { walk(child, depth, wrapper); });
+        entries[wrapper].end = entries.length;
+        return;
+      }
+    }
+    var line = "- " + n.role;
+    if (ref) line += " [ref=" + ref + "]";
+    if (n.name) line += " " + quote(n.name);
+    if (n.text !== undefined) line += ": " + quote(n.text);
+    var index = add({ depth: depth, parent: parent, ref: Boolean(ref), key: Boolean(n.name) || ["generic", "text"].indexOf(n.role) === -1,
+      field: ["textbox", "combobox", "heading"].indexOf(n.role) !== -1, virtual: false,
+      words: [n.name, n.text].filter(function (value) { return typeof value === "string"; }).join(" "), line: line });
+    children.forEach(function (child) { walk(child, depth + 1, index); });
+    entries[index].end = entries.length;
+  })(node, 0, -1);
+  return entries;
+}
+
+// Whitespace runs (no-break spaces and line breaks included) read as one space, and case does not matter.
+function normalizeText(text) { return text.replace(/\s+/g, " ").trim().toLowerCase(); }
+
+// Which lines hold the text. A line holds it when its own words do. A line whose words, with everything under it read
+// in page order, hold it (text split across elements) holds it too, but only the innermost such line counts, so one
+// split name counts once; that line and everything under it is kept, so the split text shows. Lines holding the text
+// are kept with their ancestors.
+function matchLines(entries, find) {
+  var needle = normalizeText(find);
+  var direct = entries.map(function (entry) { return normalizeText(entry.words).indexOf(needle) !== -1; });
+  var holds = direct.slice();
+  entries.forEach(function (entry, index) {
+    if (direct[index] || entry.end - index < 2) return;
+    var words = [];
+    for (var at = index; at < entry.end; at++) words.push(entries[at].words);
+    holds[index] = normalizeText(words.join(" ")).indexOf(needle) !== -1;
+  });
+  var nested = entries.map(function () { return false; });
+  entries.forEach(function (entry, index) {
+    if (!holds[index]) return;
+    for (var at = entry.parent; at !== -1 && !nested[at]; at = entries[at].parent) nested[at] = true;
+  });
+  var count = 0;
+  var selected = entries.map(function () { return false; });
+  entries.forEach(function (entry, index) {
+    if (direct[index]) { count++; selected[index] = true; }
+    else if (holds[index] && !nested[index]) {
+      count++;
+      for (var at = index; at < entry.end; at++) selected[at] = true;
+    }
+  });
+  var ancestor = entries.map(function () { return false; });
+  selected.forEach(function (on, index) {
+    if (!on) return;
+    for (var at = entries[index].parent; at !== -1 && !ancestor[at]; at = entries[at].parent) ancestor[at] = true;
+  });
+  return { count: count, keep: selected.map(function (on, index) { return on || ancestor[index]; }) };
+}
+
+function shows(node, text) {
+  return matchLines(textLines(node), text).count > 0;
+}
+
 function checkArgs(args) {
   requireTrue(Array.isArray(args) && args.length > 0 && args.every(function (arg) {
     return typeof arg === "string" && arg.length <= 65536;
@@ -638,14 +696,6 @@ function waitPlan(args) {
   // Text that starts with "-" (a negative number, an unknown option) needs --text in front of it.
   requireTrue(value.length <= 200 && value.trim().length > 0 && (flag !== null || value[0] !== "-"), "AUTH_ARGUMENTS_REFUSED");
   return { text: value, gone: flag === "--gone" };
-}
-
-function shows(node, text) {
-  var needle = text.toLowerCase();
-  return (function visit(n) {
-    return [n.name, n.text].some(function (value) { return typeof value === "string" && value.toLowerCase().indexOf(needle) !== -1; }) ||
-      (n.children || []).some(visit);
-  })(node);
 }
 
 function LEFT_OUT(count) {
