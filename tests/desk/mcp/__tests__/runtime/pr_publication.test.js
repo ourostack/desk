@@ -283,8 +283,9 @@ test("recovery commands preserve simple and metacharacter paths in POSIX shells 
       const args = platform === "win32"
         ? ["-NoProfile", "-NonInteractive", "-Command", `function node { ConvertTo-Json -Compress -InputObject @($args) }; ${command}`]
         : ["-c", `node() { printf '%s\\0' "$@"; }; ${command}`]
-      const result = spawnSync(platform === "win32" ? "pwsh" : "bash", args, { encoding: "utf8", timeout: 10_000 })
-      assert.equal(result.status, 0, result.stderr)
+      // A cold PowerShell start on a loaded runner can take tens of seconds (#573, #798).
+      const result = spawnSync(platform === "win32" ? "pwsh" : "bash", args, { encoding: "utf8", timeout: 60_000 })
+      assert.equal(result.status, 0, JSON.stringify({ error: result.error?.code ?? null, signal: result.signal, stderr: result.stderr }))
       const actual = platform === "win32" ? JSON.parse(result.stdout) : result.stdout.split("\0").slice(0, -1)
       assert.equal(actual.length, 3)
       assert.equal(actual[1], "--root")
