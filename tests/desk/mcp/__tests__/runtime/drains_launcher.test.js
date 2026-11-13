@@ -1,7 +1,7 @@
 // The launcher a wake runner calls: it finds the released Desk through Agency's plugin cache, falls back to the last good path and says so.
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -89,6 +89,34 @@ test("falls back to the last good path when the cache cannot be read, and logs o
     assert.ok(r.err[0].endsWith(`); using the last good path ${script}\n`), r.err[0])
   }
   assert.equal(readFileSync(first.log, "utf8").split("\n").filter(Boolean).length, 2)
+})
+
+test("keeps a private copy of the resolved release and runs it when Agency drops the cache entry and its index line", async () => {
+  const root = await mkTempRoot("desk-launcher-")
+  const cache = cacheOf(root, [["a", SPEC("release"), 1, true]])
+  const entry = path.join(cache, "entries", "a")
+  mkdirSync(path.join(entry, "mcp", "src", "runtime"), { recursive: true })
+  writeFileSync(path.join(entry, "mcp", "src", "runtime", "drains.js"), "export {}\n")
+  writeFileSync(path.join(entry, "mcp", "package.json"), '{"type":"module"}\n')
+  const first = run(root, cache)
+  const kept = path.join(path.dirname(first.log), "release")
+  for (const file of ["scripts/drains.js", "src/runtime/drains.js", "package.json"]) assert.ok(existsSync(path.join(kept, "mcp", file)), file)
+  assert.equal(readFileSync(path.join(kept, "source"), "utf8"), `${path.join(entry, "mcp", "scripts", "drains.js")}\n`)
+  // The same release is not copied again; a new one replaces the copy.
+  writeFileSync(path.join(kept, "mcp", "stale"), "")
+  run(root, cache)
+  assert.ok(existsSync(path.join(kept, "mcp", "stale")))
+  const newer = cacheOf(root, [["b", SPEC("release"), 2, true]])
+  run(root, newer)
+  assert.equal(existsSync(path.join(kept, "mcp", "stale")), false)
+  assert.equal(existsSync(path.join(kept, "mcp", "src")), false)
+  // The cache loses everything: the remembered path is gone too, so the copy runs and the line says so.
+  rmSync(path.join(root, "cache"), { recursive: true, force: true })
+  const r = run(root, path.join(root, "cache"))
+  const copy = path.join(kept, "mcp", "scripts", "drains.js")
+  assert.equal(r.status, 0)
+  assert.deepEqual(r.calls[0].slice(0, 2), ["/node", [copy, "poll"]])
+  assert.ok(r.err[0].endsWith(`); using the kept copy ${copy}\n`), r.err[0])
 })
 
 test("an index with no entries is an unresolved Desk, not a crash", async () => {

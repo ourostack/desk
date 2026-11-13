@@ -220,6 +220,34 @@ test("a cross-reference never wakes the drain, whoever made it, including the on
   assert.equal(w.sent.length, 1)
 })
 
+test("a cross-reference from the drain's own marked status comment on another issue wakes nobody, whether the issue is open or closed by then", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0)), issue(3, T(0))])
+  await w.poll()
+  // The drain's marked comment on issue 2 names issues 1 and 3, so GitHub adds a cross-referenced event to each, carrying that comment.
+  const fromStatusComment = (id, created_at) => ({ id, event: "cross-referenced", created_at, actor: { login: "maintainer" }, source: { type: "issue", issue: { number: 2 }, comment: statusComment(900, created_at) } })
+  w.issues[0] = issue(1, T(5))
+  w.issues[2] = issue(3, T(5))
+  w.comments = async (_repo, n) => (n === 2 ? [statusComment(900, T(5))] : [])
+  w.events = async (_repo, n) => (n === 1 || n === 3 ? [fromStatusComment(n, T(5))] : [])
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  // Issue 3 closes before the next poll: the later reference still wakes nobody, and nothing for it is left waiting.
+  w.issues.splice(2, 1)
+  await w.poll(NOW + 60_000)
+  assert.deepEqual(w.sent, [])
+  assert.deepEqual(w.state().pending, [])
+})
+
+test("a poll records when it last read GitHub without an error, and a failed poll keeps that time", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  assert.equal(w.state().lastOkAt, new Date(NOW).toISOString())
+  w.connect = async () => { throw new Error("GitHub answered HTTP 502") }
+  const out = await w.poll(NOW + 30 * 60_000)
+  matches(w.state(), { lastOkAt: new Date(NOW).toISOString(), lastPollAt: new Date(NOW + 30 * 60_000).toISOString(), lastError: "GitHub answered HTTP 502" })
+  assert.match(out.status[0], /last ok poll 2026-11-13T06:00:00\.000Z \(lag 30m\), polled just now, 1 open, 0 waiting, last wake never, last error: GitHub answered HTTP 502$/u)
+})
+
 test("a closed issue whose only later changes are the drain's own label edits never wakes the drain, even when a wake for it was waiting", async () => {
   const w = await world([issue(1, T(0)), issue(2, T(0))])
   await w.poll()
@@ -262,6 +290,49 @@ test("forgets a closed issue's marker after a month", async () => {
   assert.ok(w.state().seen["1"])
   await w.poll(NOW + 31 * 24 * HOUR)
   assert.deepEqual(w.state().seen, {})
+})
+
+const budget = (id, updated_at, body = "CI's critical path took 14 min", login = "automation[bot]") => ({ id, body, updated_at, user: { login } })
+
+test("a comment by an ignored author that matches the rule's pattern wakes nobody, new or edited, while any other comment by that author still does", async () => {
+  const quiet = { ...DRAIN, ignoreComments: [{ author: "Automation[bot]", match: "^CI's critical path took" }] }
+  const w = await world([issue(1, T(0))], { drain: quiet })
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  w.comments = async () => [budget(10, T(5))]
+  await w.poll()
+  w.issues[0] = issue(1, T(10))
+  w.comments = async () => [budget(10, T(10), "CI's critical path took 31 min"), budget(11, T(9))]
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  matches(w.state().seen["1"], seenAt(T(10)))
+  w.issues[0] = issue(1, T(15))
+  w.comments = async () => [budget(12, T(15), "Heads up: the release job is red")]
+  await w.poll()
+  assert.equal(w.sent.length, 1)
+})
+
+test("an ignore rule skips only its author and its pattern: the same text from someone else, and a body or author that does not fit, still wake", async () => {
+  const quiet = { ...DRAIN, ignoreComments: [{ author: "automation[bot]", match: "^CI's critical path took" }, { author: "chatty[bot]" }] }
+  for (const [name, comment] of [
+    ["the pattern's text from a person", budget(1, T(5), "CI's critical path took 14 min", "someone")],
+    ["the pattern's text from a comment with no author", { id: 1, body: "CI's critical path took 14 min", updated_at: T(5) }],
+    ["a body that merely contains the pattern's text", budget(1, T(5), "Re: CI's critical path took 14 min")],
+    ["a comment with no body from the pattern's author", { id: 1, updated_at: T(5), user: { login: "automation[bot]" } }],
+  ]) {
+    const w = await world([issue(1, T(0))], { drain: quiet })
+    await w.poll()
+    w.issues[0] = issue(1, T(5))
+    w.comments = async () => [comment]
+    await w.poll()
+    assert.equal(w.sent.length, 1, name)
+  }
+  const w = await world([issue(1, T(0))], { drain: quiet })
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  w.comments = async () => [budget(1, T(5), "anything at all", "Chatty[bot]"), { id: 2, updated_at: T(5), user: { login: "chatty[bot]" } }]
+  await w.poll()
+  assert.deepEqual(w.sent, [], "a rule with no pattern skips every comment by its author")
 })
 
 test("an ignored label, and the drain: prefix beside it, wake nobody; any other label still does", async () => {
@@ -425,7 +496,7 @@ test("keeps recorded events when the wake is refused, then sends them with the n
   w.refuse = "the app did not answer in time"
   await w.poll()
   matches(w.state(), { lastError: "the wake was not delivered: the app did not answer in time" })
-  assert.deepEqual(w.state().pending, [{ number: 1, title: "Issue 1", updatedAt: "2026-11-13T02:00:00Z" }])
+  assert.deepEqual(w.state().pending, [{ number: 1, title: "Issue 1", updatedAt: "2026-11-13T02:00:00Z", seenAt: new Date(NOW).toISOString() }])
   w.issues[0] = issue(1, "2026-11-13T03:00:00Z", "Issue 1", "v3")
   w.issues.push(issue(2, "2026-11-13T03:00:00Z"))
   await w.poll()
@@ -510,24 +581,27 @@ test("wakeMessage shortens long titles and long lists", () => {
   assert.match(text, /#20 t, and 2 more\. Drain them\.$/u)
 })
 
-test("status lines show last poll, open count, events waiting, last wake and last error per drain", () => {
-  const drains = [DRAIN, { repo: "acme/gadgets", session: "48a0f0ab-56ad-406d-8831-5352815be337" }, { repo: "a/b", session: "12345678-0000" }, { repo: "c/d", session: "abcdefgh-1" }]
+test("status lines show the last successful poll and its lag, the last attempt, open count, events waiting and for how long, last wake and last error per drain", () => {
+  const drains = [DRAIN, { repo: "acme/gadgets", session: "48a0f0ab-56ad-406d-8831-5352815be337" }, { repo: "a/b", session: "12345678-0000" }, { repo: "c/d", session: "abcdefgh-1" }, { repo: "e/f", session: "fedcba98-2" }]
+  const iso = (ago) => new Date(NOW - ago).toISOString()
   const states = {
-    [DRAIN.repo]: { seeded: true, seen: {}, pending: [{ number: 1, title: "t", updatedAt: "u" }], lastPollAt: new Date(NOW - 20_000).toISOString(), openCount: 7, lastWakeAt: new Date(NOW - 12 * 60_000).toISOString(), lastWakeCount: 1, lastError: "GitHub answered HTTP 502" },
-    "acme/gadgets": { seeded: true, seen: {}, pending: [], lastPollAt: new Date(NOW - 4 * HOUR).toISOString(), lastWakeAt: new Date(NOW - 3 * HOUR).toISOString(), lastWakeCount: 3 },
-    "c/d": { seeded: true, seen: {}, pending: [], lastPollAt: new Date(NOW).toISOString(), openCount: 0 },
+    [DRAIN.repo]: { seeded: true, seen: {}, pending: [{ number: 1, title: "t", updatedAt: "u", seenAt: iso(2 * HOUR) }, { number: 2, title: "t", updatedAt: "u" }], lastPollAt: iso(20_000), lastOkAt: iso(25 * 60_000), openCount: 7, lastWakeAt: iso(12 * 60_000), lastWakeCount: 1, lastError: "GitHub answered HTTP 502" },
+    "acme/gadgets": { seeded: true, seen: {}, pending: [], lastPollAt: iso(4 * HOUR), lastWakeAt: iso(3 * HOUR), lastWakeCount: 3 },
+    "c/d": { seeded: true, seen: {}, pending: [], lastPollAt: iso(0), lastOkAt: iso(0), openCount: 0 },
+    "e/f": { seeded: true, seen: {}, pending: [], lastPollAt: iso(0), lastError: "no token", openCount: 3 },
   }
   assert.deepEqual(drainStatusLines(drains, states, NOW), [
-    "issue drain acme/widgets -> 58fbd57e: polled just now, 7 open, 1 waiting, last wake 12m ago (1 issue), last error: GitHub answered HTTP 502",
-    "issue drain acme/gadgets -> 48a0f0ab: polled 4h ago, ? open, 0 waiting, last wake 3h ago (3 issues)",
+    `issue drain acme/widgets -> 58fbd57e: last ok poll ${iso(25 * 60_000)} (lag 25m), polled just now, 7 open, 2 waiting (oldest 2h), last wake 12m ago (1 issue), last error: GitHub answered HTTP 502`,
+    `issue drain acme/gadgets -> 48a0f0ab: last ok poll ${iso(4 * HOUR)} (lag 4h), polled 4h ago, ? open, 0 waiting, last wake 3h ago (3 issues)`,
     "issue drain a/b -> 12345678: not polled yet",
-    "issue drain c/d -> abcdefgh: polled just now, 0 open, 0 waiting, last wake never",
+    `issue drain c/d -> abcdefgh: last ok poll ${iso(0)} (lag under 1m), polled just now, 0 open, 0 waiting, last wake never`,
+    "issue drain e/f -> fedcba98: no ok poll recorded, polled just now, 3 open, 0 waiting, last wake never, last error: no token",
   ])
 })
 
 test("the config is validated, never silently trimmed to fewer drains", () => {
-  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "] }, { repo: "c/d", session: "t" }] }), "config.json")
-  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"] }, { repo: "c/d", session: "t" }])
+  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "], ignoreComments: [{ author: " ci[bot] ", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }] }), "config.json")
+  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"], ignoreComments: [{ author: "ci[bot]", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }])
   for (const [entry, message] of [
     [null, "drains[0] is not an object"],
     [{ repo: "no-slash", session: "s" }, "drains[0].repo"],
@@ -538,6 +612,11 @@ test("the config is validated, never silently trimmed to fewer drains", () => {
     [{ repo: "a/b", session: "s", ignoredBodyTrailers: [3] }, "drains[0].ignoredBodyTrailers"],
     [{ repo: "a/b", session: "s", ignoredLabels: "agent:drain" }, "drains[0].ignoredLabels"],
     [{ repo: "a/b", session: "s", ignoredLabels: [" "] }, "drains[0].ignoredLabels"],
+    [{ repo: "a/b", session: "s", ignoreComments: "ci[bot]" }, "drains[0].ignoreComments is not a list"],
+    [{ repo: "a/b", session: "s", ignoreComments: [null] }, "drains[0].ignoreComments[0].author"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: " " }] }, "drains[0].ignoreComments[0].author"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: "ci[bot]", match: 3 }] }, "drains[0].ignoreComments[0].match is not a regular expression"],
+    [{ repo: "a/b", session: "s", ignoreComments: [{ author: "ci[bot]", match: "(" }] }, "drains[0].ignoreComments[0].match is not a valid regular expression"],
   ]) assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [entry] }), "config.json"), (error) => error.message.includes(message), message)
   assert.throws(() => parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: "s" }, { repo: "a/b", session: "t" }] }), "config.json"), /listed twice/u)
   assert.throws(() => parseDrainConfig("{", "config.json"), /not valid JSON/u)
@@ -704,7 +783,7 @@ test("poll, ack and status run end to end through the command line, with the sta
   assert.equal(readDrainStates(state)[DRAIN.repo].lastError, "the wake was not delivered: no answer")
   assert.equal(readDrainStates(state)[DRAIN.repo].pending.length, 1)
   const status = JSON.parse((await cli(["status", ...flags], { now: () => NOW })).out)
-  assert.match(status.status[0], /1 waiting, last wake never, last error: the wake was not delivered: no answer$/u)
+  assert.match(status.status[0], /last ok poll \S+ \(lag [^)]+\), polled .*1 waiting \(oldest [^)]+\), last wake never, last error: the wake was not delivered: no answer$/u)
   const delivered = await cli(second.wakes[0].done.slice(2), { now: () => NOW })
   assert.equal(JSON.parse(delivered.out).changed, true)
   assert.deepEqual(readDrainStates(state)[DRAIN.repo].pending, [])

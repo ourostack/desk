@@ -1,0 +1,5 @@
+A drain's config can list `ignoreComments` rules, each with an `author` (a login, matched case-insensitively) and an optional `match` (a regular expression tested against the comment body): a new or edited comment that fits a rule no longer wakes the drain, so a bot's routine report on a long-lived issue stops costing a model turn. A rule without `match` skips every comment by its author; any comment that fits no rule still wakes the drain. An invalid rule fails the command with the reason. See [issue drains](docs/issue-drains.md).
+
+The `status` lines now show each drain's last successful poll and its lag (`last ok poll … (lag 2m)`) and how long the oldest waiting event has waited, so a poll that has quietly stopped or a wake that never lands is visible; recorded events carry `seenAt`. A cross-reference, including the one a drain's own marked comment creates on another issue, is documented and pinned as never waking a drain.
+
+The launcher keeps a private copy of the release it resolved and runs it when Agency drops the cache entry and its index line during a refresh, so a refresh no longer stops the poll.
