@@ -1901,35 +1901,51 @@ test("a timed-out command keeps a picture and its diagnosis before its context c
 })
 
 test("a picture that hangs cannot hold a timed-out context open past its bound, and one that arrives late is removed", async () => {
+  // The command's own read stays open until the test ends it, so the command times out without a clock race; ending it
+  // by failure leaves no staged file for a slow disk to finish after close() starts.
+  function heldFirstRead(driver) {
+    let end
+    const held = new Promise((_, reject) => { end = () => reject(new Error("read ended")) })
+    const send = driver.cdp.send
+    let first = true
+    driver.cdp.send = async (...args) => {
+      if (args[0] === "DOMSnapshot.captureSnapshot" && first) { first = false; await held }
+      return send(...args)
+    }
+    return end
+  }
+  const drained = () => new Promise(resolve => setImmediate(resolve))
+
   const root = await mkTempRoot("auth-timeout-hung-")
   const native = fakeDriver()
   native.page.screenshot = () => new Promise(() => {})
-  const send = native.cdp.send
-  native.cdp.send = async (...args) => {
-    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
-    return send(...args)
-  }
+  const endRead = heldFirstRead(native)
   const adapter = auth.create(native.context, root, 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
-  const started = Date.now()
   await assert.rejects(adapter.call(["snapshot", "--save"]), error => /^AUTH_TIMEOUT: .*; evidence kept before the close: no screenshot was kept; /u.test(error.message))
-  assert.ok(native.calls.some(call => call[0] === "context.close"), "the context closed")
-  assert.ok(Date.now() - started < 1000, "the close followed the 50 ms bound, not the hung picture")
+  assert.ok(native.calls.some(call => call[0] === "context.close"), "the context closed, though the picture never finished")
+  endRead()
+  await drained()
   await adapter.close()
 
   const late = fakeDriver()
+  let arrive
+  const arriving = new Promise(resolve => { arrive = resolve })
+  let written
+  const wrote = new Promise(resolve => { written = resolve })
   late.page.screenshot = async (options) => {
-    await new Promise(resolve => setTimeout(resolve, 150))
+    await arriving
     fs.writeFileSync(options.path, "FAKE_PNG")
+    written()
   }
-  const lateSend = late.cdp.send
-  late.cdp.send = async (...args) => {
-    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
-    return lateSend(...args)
-  }
+  const endLateRead = heldFirstRead(late)
   const lateRoot = await mkTempRoot("auth-timeout-late-")
   const slow = auth.create(late.context, lateRoot, 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
   await assert.rejects(slow.call(["snapshot", "--save"]), error => /no screenshot was kept/u.test(error.message))
-  await new Promise(resolve => setTimeout(resolve, 800))
+  endLateRead()
+  await drained()
+  arrive()
+  await wrote
+  for (const giveUp = Date.now() + 10000; fs.readdirSync(lateRoot).length && Date.now() < giveUp;) await new Promise(resolve => setTimeout(resolve, 10))
   assert.deepEqual(fs.readdirSync(lateRoot), [], "a picture that arrives after its bound is removed")
   await slow.close()
 })
