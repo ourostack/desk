@@ -361,23 +361,16 @@ function deferPackVerification() {
 async function loadNewestOrCached(options) {
   const { activation, env, homeDir, mcpRoot, runtimeImporter, newestRelease } = options
   const cached = () => loadRuntime(options)
-  if (runtimeImporter !== importRuntimeServer && newestRelease === undefined) return cached()
-  if (activation.sourceIdentity != null || activation.runtimeCacheDir != null) return cached()
-  let release
-  try {
-    const ensure = newestRelease ?? (await import("./src/runtime/newest-release.js")).ensureNewestRelease
-    const pluginRoot = path.resolve(mcpRoot, "..")
-    release = await ensure({ env, pluginRoot, running: deskVersion({ DESK_PLUGIN_ROOT: pluginRoot }), homeDir })
-  } catch {
-    return cached()
-  }
-  const withRelease = (loaded, summary) => (loaded.runtimeStatus === undefined ? loaded : { ...loaded, runtimeStatus: { ...loaded.runtimeStatus, newest_release: summary } })
-  const summary = ({ state, running, latest, reason }) => ({ state, plugin_copy: running ?? null, newest: latest ?? null, ...(reason === undefined ? {} : { reason }) })
-  if (release.state !== "loaded") return withRelease(await cached(), summary(release))
+  if ((runtimeImporter !== importRuntimeServer && newestRelease === undefined) || activation.sourceIdentity != null || activation.runtimeCacheDir != null) return cached()
+  const ensure = newestRelease ?? (await import("./src/runtime/newest-release.js")).ensureNewestRelease
+  const pluginRoot = path.resolve(mcpRoot, "..")
+  const release = await ensure({ env, pluginRoot, running: deskVersion({ DESK_PLUGIN_ROOT: pluginRoot }), homeDir })
+  const withRelease = (loaded, { state, running, latest, reason }) => ({ ...loaded, runtimeStatus: { ...loaded.runtimeStatus, newest_release: { state, plugin_copy: running, newest: latest, reason } } })
+  if (release.state !== "loaded") return withRelease(await cached(), release)
   options.onPhase("loading_newest_release")
   const newer = await loadRuntime({ ...options, mcpRoot: release.mcpRoot })
-  if (newer.runtimeServer !== undefined) return withRelease(newer, summary(release))
-  return withRelease(await cached(), summary({ state: "fell_back", running: release.running, latest: release.latest, reason: `the ${release.latest} copy did not load` }))
+  if (newer.runtimeServer !== undefined) return withRelease(newer, release)
+  return withRelease(await cached(), { ...release, state: "fell_back", reason: `the ${release.latest} copy did not load` })
 }
 
 // Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.

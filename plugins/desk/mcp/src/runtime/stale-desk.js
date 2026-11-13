@@ -192,20 +192,21 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
   const file = path.join(dir, VERSION_CACHE_FILE)
   const home = homeDir ?? os.homedir()
   const { channel, spec, agency } = resolveDeskChannel({ env, agentHost, pluginRoot, running, homeDir: home, readFile })
-  // On Agency's release channel the server loads the newest release itself (`./newest-release.js`), so the finding says which version the tools run.
-  const releaseFinding = async (finding) => {
-    if (finding === null || !agency || channel !== "release") return finding
-    if (newestReleaseFn === undefined && looksLikeNodeTestRunner(env)) return finding
+  // On Agency's release channel the server loads the newest release itself (`./newest-release.js`): ask it the same question, so the finding says which version the tools run (and warms the copy the server is about to want).
+  if (agency && channel === "release" && (newestReleaseFn !== undefined || !looksLikeNodeTestRunner(env))) {
     const { ensureNewestRelease, newestReleaseLine } = await import("./newest-release.js")
-    const result = await (newestReleaseFn ?? ensureNewestRelease)({ env, pluginRoot, running, agentHost, homeDir: home, readFile, budgetMs: RELEASE_BUDGET_MS })
-    if (result.state === "current") return null
-    const line = newestReleaseLine(result)
-    return line === "" ? finding : { ...finding, line }
+    // istanbul ignore next -- outside a node:test run the real step is used; every test hands its own.
+    const ensure = newestReleaseFn ?? ensureNewestRelease
+    const result = await ensure({ env, pluginRoot, running, agentHost, homeDir: home, readFile, budgetMs: RELEASE_BUDGET_MS })
+    if (result.latest !== undefined) {
+      const finding = staleDeskFinding({ running, latest: result.latest, agentHost, channel, agency, spec })
+      return finding === null ? null : { ...finding, line: newestReleaseLine(result) }
+    }
   }
   // Agency's cached release copy already names the release, so an Agency install on that channel asks no one.
   if (agency && channel === "release") {
     const known = cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir: home, readFile })
-    if (known !== null) return releaseFinding(staleDeskFinding({ running, latest: known, agentHost, channel, agency, spec }))
+    if (known !== null) return staleDeskFinding({ running, latest: known, agentHost, channel, agency, spec })
   }
   let latest = readCache(file, now, channel)
   if (latest === undefined) {
@@ -219,5 +220,5 @@ export async function checkStaleDesk({ env, pluginRoot, agentHost, now = Date.no
     latest = await Promise.race([fetchLatest(doFetch, budgetMs, channel), hard]).finally(() => clearTimeout(timer))
     writeCache(dir, file, latest, now, env, channel)
   }
-  return latest === null ? null : releaseFinding(staleDeskFinding({ running, latest, agentHost, channel, agency, spec }))
+  return latest === null ? null : staleDeskFinding({ running, latest, agentHost, channel, agency, spec })
 }

@@ -311,7 +311,7 @@ test("server.startServer registers list/call handlers and forwards status contex
   }
   const statusContext = {
     root: { source: "unit-test", tried: [{ source: "unit-test", path: root }] },
-    runtime: { runtime_cache_dir: "/tmp/runtime", source_mirror_path: "/tmp/runtime/source-mirror/hash" },
+    runtime: { runtime_cache_dir: "/tmp/runtime", source_mirror_path: "/tmp/runtime/source-mirror/hash", newest_release: { state: "loaded", plugin_copy: "3.2.116", newest: "3.2.117" } },
   }
 
   await startServer({ deskRoot: root, person: "ari", statusContext, server, transport })
@@ -332,6 +332,7 @@ test("server.startServer registers list/call handlers and forwards status contex
   assert.equal(body.root.source, "unit-test")
   assert.equal(body.runtime.runtime_cache_dir, "/tmp/runtime")
   assert.equal(body.runtime.loaded_from_source_mirror, true)
+  assert.deepEqual(body.runtime.newest_release, { state: "loaded", plugin_copy: "3.2.116", newest: "3.2.117" })
   assert.deepEqual(body.write_scope, {
     mode: "person",
     person: "ari",
