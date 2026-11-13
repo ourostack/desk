@@ -70,7 +70,7 @@ test("runtime diagnostic vocabulary distinguishes every recoverable first-boot f
     assert.ok(diagnostic.remediation.some(({ action }) => action === "refresh_plugin"))
     if (diagnostic.code === "runtime_unsupported") {
       assert.ok(diagnostic.remediation.some(({ action, message }) =>
-        action === "use_shipped_node" && message.includes("127")))
+        action === "use_shipped_node" && message.includes("Install Node 22")))
     }
     if (reason === "runtime_restore_failed") {
       assert.ok(diagnostic.remediation.some(({ action, message }) =>
@@ -116,4 +116,58 @@ test("runtime diagnostics provide safe defaults for unknown failures", async () 
   assert.deepEqual(diagnostic.automatic_actions, [])
   assert.equal(diagnostic.status, "degraded")
   assert.ok(diagnostic.remediation.some(({ action }) => action === "refresh_plugin"))
+})
+
+test("use_shipped_node names this platform's Node majors and a per-user install", async () => {
+  const { createRuntimeDiagnostic } = await loadDiagnostics()
+  const diagnostic = createRuntimeDiagnostic({
+    reason: "no_compatible_node",
+    currentTarget: { id: "win32-x64-node-147", platform: "win32", arch: "x64", node_abi: "147" },
+    shippedTargets: [
+      { id: "darwin-arm64-node-127", platform: "darwin", arch: "arm64", node_abi: "127" },
+      { id: "win32-x64-node-137", platform: "win32", arch: "x64", node_abi: "137" },
+    ],
+  })
+  const message = diagnostic.remediation.find(({ action }) => action === "use_shipped_node").message
+  assert.equal(
+    message.split(". Install ")[0],
+    "This machine runs Node 26 (module ABI 147), and Desk ships runtime packs for Node 24 on win32-x64",
+  )
+  assert.match(message, /Install Node 24 for your user: a per-user install is enough and needs no administrator rights/u)
+  assert.match(message, /reconnect the Desk MCP server \(in Claude Code run \/mcp and reconnect desk\)/u)
+  assert.doesNotMatch(message, /darwin|module ABI 137|module ABI 127/u)
+  assert.equal(diagnostic.fix, diagnostic.remediation[0].message)
+})
+
+test("use_shipped_node says Desk ships no pack for a platform it does not support", async () => {
+  const { createRuntimeDiagnostic } = await loadDiagnostics()
+  const diagnostic = createRuntimeDiagnostic({
+    reason: "no_compatible_node",
+    currentTarget: { id: "win32-arm64-node-147", platform: "win32", arch: "arm64", node_abi: "147" },
+    shippedTargets: [
+      { id: "darwin-arm64-node-137", platform: "darwin", arch: "arm64", node_abi: "137" },
+      { id: "win32-x64-node-137", platform: "win32", arch: "x64", node_abi: "137" },
+    ],
+  })
+  const message = diagnostic.remediation[0].message
+  assert.equal(
+    message,
+    "Desk ships no runtime pack for this platform and architecture (win32-arm64) yet. Desk ships packs for darwin-arm64 and win32-x64, so use one of those platforms until a pack ships for this one.",
+  )
+  assert.doesNotMatch(message, /Install Node/u)
+})
+
+test("use_shipped_node shows a module ABI with no known Node major as an ABI", async () => {
+  const { createRuntimeDiagnostic } = await loadDiagnostics()
+  const diagnostic = createRuntimeDiagnostic({
+    reason: "no_compatible_node",
+    currentTarget: { id: "win32-x64-node-153", platform: "win32", arch: "x64", node_abi: "153" },
+    shippedTargets: [
+      { id: "win32-x64-node-137", platform: "win32", arch: "x64", node_abi: "137" },
+      { id: "win32-x64-node-153", platform: "win32", arch: "x64", node_abi: "153" },
+    ],
+  })
+  const message = diagnostic.remediation[0].message
+  assert.match(message, /^This machine runs Node with module ABI 153, and Desk ships runtime packs for Node 24 and Node with module ABI 153 on win32-x64\./u)
+  assert.match(message, /Install Node with module ABI 153 for your user/u)
 })

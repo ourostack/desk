@@ -35,6 +35,58 @@ const reasonDetails = {
   },
 }
 
+// Node major for each module ABI Desk has shipped or may ship a runtime pack for.
+const nodeMajorByAbi = { 115: 20, 127: 22, 137: 24, 147: 26 }
+
+function nodeMajor(abi) {
+  return nodeMajorByAbi[String(abi)]
+}
+
+function shippedNodeName(abi) {
+  const major = nodeMajor(abi)
+  return major === undefined ? `Node with module ABI ${abi}` : `Node ${major}`
+}
+
+function currentNodeName(abi) {
+  const major = nodeMajor(abi)
+  return major === undefined
+    ? `Node with module ABI ${abi}`
+    : `Node ${major} (module ABI ${abi})`
+}
+
+function joinWords(words) {
+  if (words.length === 1) {
+    return words[0]
+  }
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`
+}
+
+function useShippedNodeMessage({ currentTarget, shippedTargets }) {
+  if (shippedTargets.length === 0) {
+    return "Check Desk's runtime support matrix and install a supported local Node runtime, then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher picks that Node itself."
+  }
+  const platform = currentTarget?.platform
+  const arch = currentTarget?.arch
+  const scoped = typeof platform === "string" && typeof arch === "string"
+  const machineTargets = scoped
+    ? shippedTargets.filter((target) => target.platform === platform && target.arch === arch)
+    : shippedTargets
+  if (machineTargets.length === 0) {
+    const platforms = [...new Set(shippedTargets.map((target) => `${target.platform}-${target.arch}`))].sort()
+    return `Desk ships no runtime pack for this platform and architecture (${platform}-${arch}) yet. Desk ships packs for ${joinWords(platforms)}, so use one of those platforms until a pack ships for this one.`
+  }
+  const abis = [...new Set(machineTargets.map((target) => target.node_abi).filter(Boolean).map(String))]
+    .sort((a, b) => Number(a) - Number(b))
+  const where = scoped ? ` on ${platform}-${arch}` : ""
+  const names = joinWords(abis.map(shippedNodeName))
+  const currentAbi = currentTarget?.node_abi
+  const opening = currentAbi === undefined || currentAbi === null
+    ? `Desk ships runtime packs for ${names}${where}.`
+    : `This machine runs ${currentNodeName(currentAbi)}, and Desk ships runtime packs for ${names}${where}.`
+  const newest = abis[abis.length - 1]
+  return `${opening} Install ${shippedNodeName(newest)} for your user: a per-user install is enough and needs no administrator rights (for example with fnm or nvm; on Windows, fnm with FNM_DIR under %LOCALAPPDATA% works). Then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher finds that Node by itself.`
+}
+
 export function createRuntimeDiagnostic({
   reason,
   failureKind,
@@ -66,12 +118,9 @@ export function createRuntimeDiagnostic({
     message: "Refresh or reinstall Desk from its trusted source to restore the committed runtime support matrix and verified dependency packs, then call desk_status: Desk rechecks its runtime pack in place (and on its own after 1, 2, 5, 10 and 30 s, then every 60 s). A refresh that installs Desk into a new folder takes effect when the host reconnects the Desk MCP server.",
   }]
   if (details.code === "runtime_unsupported") {
-    const abis = [...new Set(shippedTargets.map((target) => target.node_abi).filter(Boolean))]
     remediation.unshift({
       action: "use_shipped_node",
-      message: abis.length > 0
-        ? `Install a local Node runtime matching a shipped platform, architecture, and module ABI (${abis.join(", ")}), then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher picks that Node itself.`
-        : "Check Desk's runtime support matrix and install a supported local Node runtime, then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher picks that Node itself.",
+      message: useShippedNodeMessage({ currentTarget, shippedTargets }),
     })
   }
   if (reason === "runtime_restore_failed") {
