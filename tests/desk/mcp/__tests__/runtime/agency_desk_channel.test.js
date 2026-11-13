@@ -32,18 +32,25 @@ const CREW = "github:ourostack/desk:plugins/crew@main"
 const entry = (spec, extra = "") => `[[plugins.default]]\nplugin = "${spec}"\n${extra}cache_policy = "auto"\n`
 const copilotOnly = 'engines = ["copilot"]\n'
 
-// An Agency data folder: agency.toml and a cache whose entries hold the given manifests (`null` for a copy without agency.json).
+// An Agency data folder: agency.toml and a cache whose entries hold the given manifests. A cached value is the dependencies a
+// copy declares (`null` for a copy without agency.json), or `{ dependencies, engines, claude }`: `engines` is written into
+// agency.json when given, and `claude` adds `.claude-plugin/plugin.json` to the copy.
 async function agencyHome(toml, cached = {}) {
   const home = realpathSync(await mkTempRoot("desk-agency-channel-"))
   const dir = path.join(home, ".local", "agency")
   const entries = {}
   let n = 0
-  for (const [spec, dependencies] of Object.entries(cached)) {
+  for (const [spec, value] of Object.entries(cached)) {
+    const { dependencies, engines, claude = false } = Array.isArray(value) || value === null ? { dependencies: value } : value
     n += 1
     const folder = path.join(dir, "plugins", "cache", "entries", `e${n}`)
     mkdirSync(folder, { recursive: true })
     writeFileSync(path.join(folder, "plugin.json"), "{}")
-    if (dependencies !== null) writeFileSync(path.join(folder, "agency.json"), JSON.stringify({ dependencies }))
+    if (claude) {
+      mkdirSync(path.join(folder, ".claude-plugin"))
+      writeFileSync(path.join(folder, ".claude-plugin", "plugin.json"), "{}")
+    }
+    if (dependencies !== null) writeFileSync(path.join(folder, "agency.json"), JSON.stringify(engines === undefined ? { dependencies } : { dependencies, engines }))
     entries[`copilot:${spec}`] = { dir_name: `e${n}` }
   }
   mkdirSync(path.join(dir, "plugins", "cache"), { recursive: true })
@@ -199,6 +206,28 @@ test("an entry waits while a plugin that might bring Desk is not cached, or name
 
   const target = await agencyHome(entry(MAIN_SPEC, 'engines = ["copilot",\n'))
   assert.match((await run(["--detect"], target)).stdout, /has an engines value this migration cannot read/u)
+})
+
+test("a plugin with no engines line covers only the engines its cached manifest supports", async () => {
+  // MS Desk's cached agency.json supports copilot only, so Claude still needs Desk from the main entry's release channel.
+  const narrowed = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK)].join("\n"), { [MS_DESK]: { dependencies: [MAIN_SPEC], engines: ["copilot"] } })
+  assert.deepEqual(plan({ text: readFileSync(narrowed.file, "utf8"), cacheDir: narrowed.cacheDir }).actions.map((action) => [action.action, action.engines]), [["release", ["claude"]]])
+  assert.match((await run(["--migrate"], narrowed)).stdout, /plugins\.default now selects github:ourostack\/desk:plugins\/desk@release for claude; another plugin there brings Desk on the other engines/u)
+  assert.equal(readFileSync(narrowed.file, "utf8"), [entry(RELEASE_SPEC, 'engines = ["claude"]\n'), entry(MS_DESK)].join("\n"))
+
+  // A cached copy with no engines field that holds both manifests supports both engines, so the entry gives way.
+  const both = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK)].join("\n"), { [MS_DESK]: { dependencies: [MAIN_SPEC], claude: true } })
+  assert.match((await run(["--migrate"], both)).stdout, /removed the plugins\.default entry/u)
+  assert.equal(readFileSync(both.file, "utf8"), entry(MS_DESK))
+})
+
+test("another plugin whose cached engines value is not an array of strings holds the entry", async () => {
+  const fixture = await agencyHome([entry(MAIN_SPEC), entry(MS_DESK)].join("\n"), { [MS_DESK]: { dependencies: [MAIN_SPEC], engines: "copilot" } })
+  const detect = await run(["--detect"], fixture)
+  assert.equal(detect.status, 1)
+  assert.match(detect.stdout, /^held: in plugins\.default, Desk cannot yet tell on which engines github:shared-internal-tools\/ms-desk:plugins\/ms-desk@main brings Desk/u)
+  await run(["--migrate"], fixture)
+  assert.equal(readFileSync(fixture.file, "utf8"), [entry(MAIN_SPEC), entry(MS_DESK)].join("\n"))
 })
 
 test("only the same list and overlapping engines count, and each list is its own", async () => {
