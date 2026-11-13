@@ -3,9 +3,14 @@
 // A worktree cannot switch to the default branch while the main checkout holds it, so Desk does not commit on the
 // worktree's own branch. The files are staged as usual in the worktree, then one commit is built on the remote's
 // default branch from those staged entries. A private index in the worktree's own Git folder does the building, so the
-// worktree's index and working tree, and the main checkout, are never touched. The commit is published the way delivery
-// publishes: through the pull-request policy when the repository has one, otherwise by a fast-forward push. A rejected
-// push means the remote moved, so the commit is rebuilt on the new default branch a bounded number of times.
+// main checkout is never touched. The commit is published the way delivery publishes: through the pull-request policy
+// when the repository has one, otherwise by a fast-forward push. A rejected push means the remote moved, so the commit
+// is rebuilt on the new default branch a bounded number of times.
+//
+// Once the card is published the worktree catches up (`catchUp`), so no staged copy of it is left against an older HEAD
+// and a repository's content-home check, which needs HEAD to be the published commit, passes on the next write. A call
+// that was cut off after the remote took the commit is read back from the remote, so a landed write is never reported
+// as a failure.
 //
 // `spawnGit` is a test seam over `spawnSync`; real callers never pass it.
 
@@ -63,6 +68,42 @@ export function deliveryIsPublication(root, spawnGit = spawnSync) {
   return merge !== `refs/heads/${branch}`
 }
 
+/** The commit the remote's default branch holds when it contains `commit`, else null. Reads the remote, so a cut-off call is judged by what landed. */
+function landedOn(git, commit, defaultBranch) {
+  const remoteRef = `refs/remotes/${REMOTE}/${defaultBranch}`
+  if (git(["fetch", "--quiet", "--no-tags", REMOTE, `+refs/heads/${defaultBranch}:${remoteRef}`], NETWORK_TIMEOUT_MS).status !== 0) return null
+  if (git(["merge-base", "--is-ancestor", commit, remoteRef]).status !== 0) return null
+  const tip = git(["rev-parse", "--verify", "--quiet", `${remoteRef}^{commit}`]).stdout.trim()
+  return tip === "" ? null : tip
+}
+
+/**
+ * Brings the checkout up to the commit it just published, so the card it staged is not left staged against an older HEAD.
+ * A branch that is behind the published commit fast-forwards to it (Git refuses when that would overwrite local changes).
+ * A branch with commits of its own stays where it is, and only the entries Desk staged and published are unstaged; the files on disk are untouched.
+ * Returns `current`, `fast-forwarded` or `left-on-own-commits`; never throws.
+ */
+function catchUp(git, top, full, entries, target) {
+  try {
+    const head = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).stdout.trim()
+    if (head === target) return "current"
+    if (head !== "" && git(["merge-base", "--is-ancestor", head, target]).status === 0 &&
+        git(["merge", "--ff-only", "--quiet", target], NETWORK_TIMEOUT_MS).status === 0) return "fast-forwarded"
+    const held = git(["ls-files", "-s", "-z", "--full-name", "--", ...full])
+    const heldEntries = new Map()
+    for (const record of held.stdout.split("\0").filter(Boolean)) {
+      const [meta, file] = record.split("\t")
+      const [mode, sha, stage] = meta.split(" ")
+      if (stage === "0") heldEntries.set(file, `${mode} ${sha}`)
+    }
+    const unchanged = full.every((file) => heldEntries.get(file) === (entries.get(file) === undefined ? undefined : `${entries.get(file).mode} ${entries.get(file).sha}`))
+    if (held.status === 0 && unchanged) git(["reset", "--quiet", "--", ...full])
+  } catch {
+    // The card is published either way; the worktree just keeps what it had.
+  }
+  return "left-on-own-commits"
+}
+
 function fail(relPaths, what, cause, look, keep, readback = "absent") {
   const files = relPaths.join(", ")
   return { ok: false, readback, stderr: `Desk did not commit ${files}: ${what}. Probable cause: ${cause}. Look further: ${look}. Keep working: ${keep}` }
@@ -111,7 +152,7 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
       }
       const tree = indexGit(["write-tree"]).stdout.trim()
       if (tree === "") return fail(relPaths, "Desk could not write the tree", "git write-tree failed", `git -C ${root} status`, "nothing was written; retry the write")
-      if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) return { ok: true, stderr: "" }
+      if (tree === git(["rev-parse", `${onto}^{tree}`]).stdout.trim()) return { ok: true, stderr: "", published: onto, worktree: catchUp(git, top, full, entries, onto) }
       const commit = git(["commit-tree", tree, "-p", onto, "-m", message]).stdout.trim()
       if (commit === "") return fail(relPaths, "Desk could not create the commit", "git commit-tree failed (check user.name and user.email)", `git -C ${root} config user.email`, "nothing was published; retry the write")
       let policy
@@ -125,18 +166,21 @@ export function publishCardCommit({ root, relPaths, message, defaultBranch, spaw
         try {
           target = publishPullRequest({ git, spawnGit, root: top, upstream: { remote: REMOTE, merge: `refs/heads/${defaultBranch}`, tracking: remoteRef }, head: commit, onto, policy, clock }).head
         } catch (error) {
-          return fail(relPaths, error.message, "the publication pull request did not merge", `gh pr list --head desk/publish/${commit} --state all`, "the card is still staged; check the pull request, then retry the write", "unknown")
+          // A call cut off after GitHub merged the pull request still published the card.
+          target = landedOn(git, commit, defaultBranch)
+          if (target === null) return fail(relPaths, error.message, "the publication pull request did not merge", `gh pr list --head desk/publish/${commit} --state all`, "the card is still staged; check the pull request, then retry the write", "unknown")
         }
       } else {
         const pushed = git(["push", "--quiet", REMOTE, `${commit}:refs/heads/${defaultBranch}`], NETWORK_TIMEOUT_MS)
-        if (pushed.status !== 0) {
+        const landed = pushed.timedOut ? landedOn(git, commit, defaultBranch) : null
+        if (landed !== null) target = landed
+        else if (pushed.status !== 0) {
           if (!pushed.timedOut && REJECTED.test(pushed.stderr)) continue
           return fail(relPaths, `the remote refused the push to ${defaultBranch}`, pushed.timedOut ? "the push was cut off" : "the remote rejected the commit", `git -C ${root} push ${REMOTE} HEAD:refs/heads/${defaultBranch}`, "the card is still staged, so the next write retries the publication", pushed.timedOut ? "unknown" : "absent")
-        }
-        target = commit
+        } else target = commit
       }
       git(["update-ref", remoteRef, target])
-      return { ok: true, stderr: "" }
+      return { ok: true, stderr: "", published: target, worktree: catchUp(git, top, full, entries, target) }
     }
     return fail(relPaths, `the remote kept rejecting the push to ${defaultBranch} after ${PUSH_ATTEMPTS} tries`, "other writers pushed to the default branch at the same time, or a hook declined the commit", `git -C ${root} fetch ${REMOTE} ${defaultBranch}`, "the card is still staged; retry the write")
   } finally {

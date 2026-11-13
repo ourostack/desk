@@ -46,13 +46,12 @@ test("a card written from a worktree on a feature branch lands on origin/main, a
   await fs.writeFile(path.join(root, "unrelated.txt"), "not mine\n", "utf8")
   const mainHead = git(root, ["rev-parse", "HEAD"])
   const mainStatus = git(root, ["status", "--porcelain"])
-  const featureHead = git(worktree, ["rev-parse", "HEAD"])
-
   const result = await friction_add({ deskRoot: worktree, input: { body: "## 2026-11-12 — worktree write\n\nLands on main." }, schedulePush: noPush })
 
   assert.equal(result.commit, undefined, `committed on the default branch: ${JSON.stringify(result.commit)}`)
   assert.match(remoteFile(origin, "_meta/friction.md").stdout, /Lands on main\./u, "origin/main holds the card")
-  assert.equal(git(worktree, ["rev-parse", "HEAD"]), featureHead, "the feature branch got no commit")
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), git(worktree, ["rev-parse", "origin/main"]), "the feature branch has no commit of its own: it fast-forwards to the published one")
+  assert.equal(git(worktree, ["status", "--porcelain"]), "", "nothing is left staged in the worktree")
   assert.equal(git(root, ["rev-parse", "HEAD"]), mainHead, "the main checkout's HEAD did not move")
   assert.equal(git(root, ["status", "--porcelain"]), mainStatus, "the main checkout's working tree and index are as they were")
   assert.equal(await fs.readFile(path.join(root, "unrelated.txt"), "utf8"), "not mine\n")
@@ -168,4 +167,62 @@ test("a card write that changes nothing on the default branch succeeds without a
   git(worktree, ["rm", "-q", "README.md"])
   assert.equal(commitPaths(worktree, ["README.md"], "remove", spawnSync).ok, true)
   assert.notEqual(spawnSync("git", ["--git-dir", origin, "cat-file", "-e", "main:README.md"], { encoding: "utf8" }).status, 0, "the removal reached main")
+})
+
+test("a worktree branch with commits of its own keeps them, and the published card is not left staged", async () => {
+  const { worktree } = await mainAndWorktree()
+  await fs.writeFile(path.join(worktree, "own.txt"), "mine\n", "utf8")
+  git(worktree, ["add", "own.txt"])
+  git(worktree, ["commit", "-q", "-m", "own work"])
+  const head = git(worktree, ["rev-parse", "HEAD"])
+
+  const result = await friction_add({ deskRoot: worktree, input: { body: "## 2026-11-12 — own commits\n\nStill published." }, schedulePush: noPush })
+
+  assert.equal(result.commit, undefined)
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), head, "the branch's own commit stays where it was")
+  assert.equal(git(worktree, ["diff", "--cached", "--name-only"]), "", "the published card is no longer staged")
+  assert.match(await fs.readFile(path.join(worktree, "_meta", "friction.md"), "utf8"), /Still published\./u, "the card on disk is untouched")
+})
+
+// Runs the call for real, then reports it cut off, as a client's timeout would look from the tool.
+const cutOffAfter = (matches, extra) => (command, args, options) => {
+  const result = spawnSync(command, args, options)
+  return matches(command, args) ? (extra?.(args), { status: null, stdout: "", stderr: "" }) : result
+}
+
+test("a push cut off after the remote took the commit is a landed write, not a failure", async () => {
+  const { origin, worktree } = await mainAndWorktree()
+  await fs.writeFile(path.join(worktree, "notes.md"), "hi\n", "utf8")
+  git(worktree, ["add", "notes.md"])
+
+  const written = commitPaths(worktree, ["notes.md"], "notes", cutOffAfter(gitCall("push")))
+
+  assert.equal(written.ok, true, written.stderr)
+  assert.equal(remoteFile(origin, "notes.md").stdout, "hi\n")
+  assert.equal(git(worktree, ["status", "--porcelain"]), "")
+})
+
+test("a publication pull request that merged before the call was cut off is a landed write", async () => {
+  const { root, origin, worktree } = await mainAndWorktree()
+  await fs.mkdir(path.join(root, ".desk"))
+  await fs.writeFile(path.join(root, ".desk", "publication.json"), JSON.stringify({ schema_version: 1, mode: "pull-request", required_checks: ["ci"] }), "utf8")
+  git(root, ["add", ".desk"])
+  git(root, ["commit", "-q", "-m", "policy"])
+  git(root, ["push", "-q", "origin", "main"])
+  git(worktree, ["merge", "-q", "--ff-only", "origin/main"])
+  await fs.writeFile(path.join(worktree, "notes.md"), "hi\n", "utf8")
+  git(worktree, ["add", "notes.md"])
+  // Desk reads the remote as a GitHub repository; GitHub then merges the branch Desk pushed, and the gh call that would have said so is cut off.
+  const merging = (command, args, options) => {
+    if (gitCall("get-url")(command, args)) return { status: 0, stdout: "https://github.com/sample/context.git\n", stderr: "" }
+    if (command !== "gh") return spawnSync(command, args, options)
+    const branch = args.find((word) => word.startsWith("desk/publish/"))
+    if (branch !== undefined) spawnSync("git", ["--git-dir", origin, "update-ref", "refs/heads/main", branch.replace("desk/publish/", "")], { encoding: "utf8" })
+    return { status: null, stdout: "", stderr: "" }
+  }
+
+  const written = commitPaths(worktree, ["notes.md"], "notes", merging)
+
+  assert.equal(written.ok, true, written.stderr)
+  assert.equal(remoteFile(origin, "notes.md").stdout, "hi\n")
 })
