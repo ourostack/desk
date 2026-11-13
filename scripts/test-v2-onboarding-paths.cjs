@@ -16,7 +16,7 @@ const OPERATIONAL_ONBOARDING_SKILLS = [
 ];
 const PATH_1_HEADINGS = [
   "Entrance A — new to Desk",
-  "Entrance B — existing V1 Desk",
+  "Entrance B — existing Epoch 1 Desk",
   "Converged endpoint",
 ];
 const PATH_2_HEADINGS = [
@@ -86,7 +86,7 @@ function listTrackedMarkdownFiles() {
 }
 
 function findCanonicalRfcCopies() {
-  return listTrackedMarkdownFiles().filter((file) => /^# Agentic Engineering V2\s*$/mu.test(read(file)));
+  return listTrackedMarkdownFiles().filter((file) => /^# Agentic Engineering Epoch 2\s*$/mu.test(read(file)));
 }
 
 function main() {
@@ -129,23 +129,23 @@ function main() {
   assert.match(entranceAText, /clone or fresh-create/iu);
   assert.match(entranceAText, /operator-provided path/iu);
   assert.match(entranceAText, /skip/iu);
-  const entranceB = findHeading(firstRunHeadings, 3, "Entrance B — existing V1 Desk");
+  const entranceB = findHeading(firstRunHeadings, 3, "Entrance B — existing Epoch 1 Desk");
   assert.ok(entranceB, "Path 1 must define Entrance B");
   const entranceBText = sectionText(firstRun, firstRunHeadings, entranceB);
   assertOrderedPhrases(entranceBText, "Entrance B", [
     "1. Detect and inventory",
     "2. Record rollback evidence",
     "3. Preserve the same workspace",
-    "4. Replace V1 declarations",
-    "5. Reconcile retired V1-only capabilities",
-    "6. Activate and verify V2",
-    "7. Resume the existing task or start the first V2 job",
+    "4. Replace Epoch 1 declarations",
+    "5. Reconcile retired Epoch 1-only capabilities",
+    "6. Activate and verify Epoch 2",
+    "7. Resume the existing task or start the first Epoch 2 job",
   ]);
   for (const phrase of [
     "workspace and Git state",
     "durable task state",
     "rollback ref",
-    "reviewed V2 chain",
+    "reviewed Epoch 2 chain",
     "selected roots",
     "MCP readiness",
     "startup readiness",
@@ -167,9 +167,9 @@ function main() {
     "1. Detect legacy layout and repository identity",
     "2. Inventory repository state",
     "3. Record rollback evidence",
-    "4. Reconcile the V2 layout",
-    "5. Reconcile V1-only machinery",
-    "6. Declare the reviewed V2 dependency chain",
+    "4. Reconcile the Epoch 2 layout",
+    "5. Reconcile Epoch 1-only machinery",
+    "6. Declare the reviewed Epoch 2 dependency chain",
     "7. Verify preservation and authority",
     "8. Mark repository migration complete",
     "9. Continue directly to existing-member activation",
@@ -183,7 +183,7 @@ function main() {
     "origin",
     "read-across/write-own",
     "conflict-safe shared writes",
-    "Only a workspace proven to be current V2",
+    "Only a workspace proven to be current Epoch 2",
   ]) {
     assert.match(repositoryMigrationText, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "iu"), `Crew-v1 migration must bind ${phrase}`);
   }
@@ -195,16 +195,16 @@ function main() {
   const joinCrewStep1Text = sectionText(joinCrew, joinCrewHeadings, joinCrewStep1);
   assert.match(joinCrewStep1Text, /legacy Crew-v1 local workspace/iu);
   assert.match(joinCrewStep1Text, /Phase 1 repository migration/iu);
-  assert.match(joinCrewStep1Text, /current V2 layout/iu);
+  assert.match(joinCrewStep1Text, /current Epoch 2 layout/iu);
   assert.match(joinCrewStep1Text, /session-start sync\s+and\s+scan/iu);
   assert.match(joinCrewStep1Text, /do not continue to Step 2/iu);
 
-  // session-start routes an existing V1 workspace by content, not by "Step N" labels (#146 removed them: the boot script now does the sync, and one workspace check remains).
-  const existingWorkspaceUpgrade = sessionStartHeadings.find((heading) => heading.level === 3 && heading.title === "Existing-workspace V1 upgrade branch");
-  assert.ok(existingWorkspaceUpgrade, "session-start must route existing V1 workspaces explicitly");
+  // session-start routes an existing Epoch 1 workspace by content, not by "Step N" labels (#146 removed them: the boot script now does the sync, and one workspace check remains).
+  const existingWorkspaceUpgrade = sessionStartHeadings.find((heading) => heading.level === 3 && heading.title === "Existing-workspace Epoch 1 upgrade branch");
+  assert.ok(existingWorkspaceUpgrade, "session-start must route existing Epoch 1 workspaces explicitly");
   const workspaceCheck = [...sessionStartHeadings].reverse().find((heading) => heading.level === 2 && heading.index < existingWorkspaceUpgrade.index);
-  assert.match(workspaceCheck?.title ?? "", /workspace/iu, "the V1 upgrade branch must sit under the workspace check, which routes an existing workspace");
-  assert.deepStrictEqual(childHeadingTitles(sessionStart, sessionStartHeadings, workspaceCheck, 3), ["Existing-workspace V1 upgrade branch"]);
+  assert.match(workspaceCheck?.title ?? "", /workspace/iu, "the Epoch 1 upgrade branch must sit under the workspace check, which routes an existing workspace");
+  assert.deepStrictEqual(childHeadingTitles(sessionStart, sessionStartHeadings, workspaceCheck, 3), ["Existing-workspace Epoch 1 upgrade branch"]);
   const existingWorkspaceUpgradeText = sectionText(sessionStart, sessionStartHeadings, existingWorkspaceUpgrade);
   assert.match(existingWorkspaceUpgradeText, /first-run-bootstrap/iu, "the branch must hand off to first-run-bootstrap");
   assert.match(existingWorkspaceUpgradeText, /Entrance B/iu);
@@ -216,7 +216,7 @@ function main() {
   assert.match(sessionStartMigrations, /before any path-dependent startup scans/iu);
   assert.match(sessionStartMigrations, /completed onboarding is not replayed during normal resumption/iu);
 
-  console.log("V2 onboarding path contract passed.");
+  console.log("Epoch 2 onboarding path contract passed.");
 }
 
 main();

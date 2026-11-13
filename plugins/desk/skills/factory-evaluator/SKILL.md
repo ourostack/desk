@@ -15,7 +15,7 @@ The plugin starts this evaluator itself, headlessly, from the loop's evaluate st
 
 ## When not to use it
 
-- Evaluating a V2 release with a human evaluator: use `desk:evaluate-release`.
+- Evaluating an Epoch 2 release with a human evaluator: use `desk:evaluate-release`.
 - Reviewing a pull request or a change: use `superpowers:requesting-code-review` or `desk:peer-pr-review`.
 - A job you did or helped with, or one whose working conversation is in your own context. Stop and say so; labels need an evaluator who did not do the work.
 

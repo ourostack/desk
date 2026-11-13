@@ -1248,7 +1248,7 @@ contract("the evaluation packet names channels, never commits", () => {
 contract("the evaluation packet covers who it is for, V2, setup, scenarios and recording", () => {
   const packet = text(evaluationPacket);
   const headings = packet.split("\n").filter((line) => /^#{2,3} /u.test(line)).map((line) => line.replace(/^#+ /u, ""));
-  for (const heading of ["Who this is for", "What V2 is", "Set up from nothing", "The scenarios", "Record what you find"]) {
+  for (const heading of ["Who this is for", "What Epoch 2 is", "Set up from nothing", "The scenarios", "Record what you find"]) {
     assert.ok(headings.includes(heading), `missing section ${heading}`);
   }
   const scenarios = headings.filter((heading) => /^\d\. /u.test(heading)).map((heading) => heading.replace(/ \(lands by the evaluation\)$/u, ""));
@@ -1294,10 +1294,10 @@ contract("the evaluation packet isolates the desk under test and proves it befor
   // A signed-in profile carries the account's connectors, so the preflight names which Desk tool must answer.
   assert.match(setup, /connectors and synced plugins[\s\S]+full name of the tool that answered[\s\S]+`mcp__plugin_desk_desk__`[\s\S]+`desk-desk_status`[\s\S]+`mcp__claude_ai_`/u);
   // The overlay's V2 channel, and what a launcher run must isolate.
-  assert.match(setup, /from the overlay's `v2-alpha` channel[\s\S]+default branch[\s\S]+still install V1/u);
+  assert.match(setup, /from the overlay's `v2-alpha` channel[\s\S]+default branch[\s\S]+still install Epoch 1/u);
   assert.match(setup, /`AGENCY_GLOBAL_CONFIG_PATH`[^.]+names a directory, not a file[\s\S]+shared download cache[^.]+acceptable/u);
   assert.match(setup, /prove four things point into `\$EVAL`[\s\S]+If you cannot prove all four[\s\S]+shared download cache and logs are not on that list/u);
-  assert.match(setup, /If V2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
+  assert.match(setup, /If Epoch 2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
   assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
 });
 contract("the evaluation packet's scenarios run against the throwaway desk with reachable outcomes", () => {
@@ -1316,7 +1316,7 @@ contract("the evaluation packet's scenarios run against the throwaway desk with 
   assert.match(scenario(5), /status --porcelain[\s\S]+push -q origin main[\s\S]+switch -q --detach[\s\S]+another terminal[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
   assert.doesNotMatch(scenario(5), /root_unavailable|#L\d/u);
   assert.match(scenario(6), /`ourostack\/factory`[\s\S]+`reports` branch[\s\S]+`jobs\/<job>\.md`[\s\S]+factory\.js job-link/u);
-  assert.match(scenario(7), /V2 design's section 6, "Kaizen"[\s\S]+not yet public/u);
+  assert.match(scenario(7), /Epoch 2 design's section 6, "Kaizen"[\s\S]+not yet public/u);
   assert.doesNotMatch(scenario(7), /RFC §4/u);
 });
 // Review fix round 2: every command block that writes fails closed and stays inside $EVAL.

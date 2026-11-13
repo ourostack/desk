@@ -27,7 +27,7 @@
     {
       "name": "superpowers",
       "source": "./plugins/superpowers",
-      "description": "Superpowers 6.4.2, vendored from upstream as V2's engineering method.",
+      "description": "Superpowers 6.4.2, vendored from upstream as Epoch 2's engineering method.",
       "version": "7.0.2",
       "category": "workflow",
       "tags": ["engineering", "planning", "test-driven-development"]
@@ -36,7 +36,7 @@
       "name": "crew",
       "source": "./plugins/crew",
       "description": "The multi-person shared-workspace layer on top of desk: starting a team workspace (monorepo or dual-repo), crew onboarding through an overlay-supplied identity, read-across/write-own desks/<alias>/ subtrees, the facts-vs-perspectives-vs-decisions attribution taxonomy, the conflict-safe write protocol, and perspective queries. Vendor-neutral.",
-      "version": "0.2.17",
+      "version": "0.2.18",
       "category": "workflow",
       "tags": [
         "collaboration",

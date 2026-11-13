@@ -1,23 +1,23 @@
 <!-- canonical-agentic-engineering-v2-rfc -->
-# Agentic Engineering V2
+# Agentic Engineering Epoch 2
 
-Agentic Engineering V2 is a way of working in which humans hand agents whole engineering outcomes and agents carry them to an accepted result: planned together, executed autonomously, verified at the level of the claim, remembered across sessions, and measured so the work itself can be designed. This document is the reason the pieces exist and the contract they keep. It is written for the people who adopt V2 and, just as much, for the agents who do the work.
+Agentic Engineering Epoch 2 is a way of working in which humans hand agents whole engineering outcomes and agents carry them to an accepted result: planned together, executed autonomously, verified at the level of the claim, remembered across sessions, and measured so the work itself can be designed. This document is the reason the pieces exist and the contract they keep. It is written for the people who adopt Epoch 2 and, just as much, for the agents who do the work.
 
 **How to read it:** with your agent. Start a session and ask it to walk you through this RFC and how it applies to what you're doing. The agents are the ones doing the work, and the agent living inside a system often sees what is broken better than we do ([The work spoke back](https://ouroboros.bot/blog/designing-with-your-agent/)), so its reading matters as much as yours. Agents load short foundations at the start of every session, one per layer; this document is the longer “why” behind them, read when someone wants the conversation, not on every boot.
 
-**Agent, if you are reading this with someone:** relate each section to the work in front of you rather than explaining it in general. Say plainly where the way you two work matches a pattern in section 2, and where V2 itself looks wrong or confusing; that feedback is how V2 improves.
+**Agent, if you are reading this with someone:** relate each section to the work in front of you rather than explaining it in general. Say plainly where the way you two work matches a pattern in section 2, and where Epoch 2 itself looks wrong or confusing; that feedback is how Epoch 2 improves.
 
-**Contract and status.** Sections 1 to 8 describe how V2 works when it is complete. Section 9 says what runs today; nothing in sections 1 to 8 should be described as working if section 9 lists it as being built. V2 lives at https://github.com/ourostack/desk, and its channel is that repository's `main` branch.
+**Contract and status.** Sections 1 to 8 describe how Epoch 2 works when it is complete. Section 9 says what runs today; nothing in sections 1 to 8 should be described as working if section 9 lists it as being built. Epoch 2 lives at https://github.com/ourostack/desk, and its channel is that repository's `main` branch.
 
-**Where things stand today, before you read the design.** As of 28 September 2026, V2 is stable (Desk 3.2.0 and later) and an outside engineer can evaluate it end to end. Install, the startup foundations, channel-based updates, the public factory store and its [public site](https://ourostack.github.io/factory/) all run today. The kaizen loop, andon alarms and cross-job rollups are merged but not yet proven live end to end, and a self-review of the factory's own data caught and fixed two data-quality problems in it (details in section 9). A handful of gaps are still open, including draining recorded friction into kaizen cards and a separate factory store for work done under a company overlay. Section 9 is the complete, current account; treat nothing elsewhere in this document as already working where section 9 says otherwise.
+**Where things stand today, before you read the design.** As of 28 September 2026, Epoch 2 is stable (Desk 3.2.0 and later) and an outside engineer can evaluate it end to end. Install, the startup foundations, channel-based updates, the public factory store and its [public site](https://ourostack.github.io/factory/) all run today. The kaizen loop, andon alarms and cross-job rollups are merged but not yet proven live end to end, and a self-review of the factory's own data caught and fixed two data-quality problems in it (details in section 9). A handful of gaps are still open, including draining recorded friction into kaizen cards and a separate factory store for work done under a company overlay. Section 9 is the complete, current account; treat nothing elsewhere in this document as already working where section 9 says otherwise.
 
 **See it.** The public factory site is built live from the store: https://ourostack.github.io/factory/.
 
 [![The public factory site: the three longest agent sessions in the store, with their merged pull requests](images/factory-site.png)](https://ourostack.github.io/factory/)
 
-## Direction: V3 (agreed 2026-11-10)
+## Direction: Epoch 3 (agreed 2026-11-10)
 
-V2 grew heavy. Desk is evolving toward V3 on `main`, one small merged change at a time; there is no separate V3 to switch to. Where a section below conflicts with these principles, the principles show where Desk is heading, and section 9 still says what runs today.
+Epoch 2 grew heavy. Desk is evolving toward Epoch 3 on `main`, one small merged change at a time; there is no separate Epoch 3 to switch to. Where a section below conflicts with these principles, the principles show where Desk is heading, and section 9 still says what runs today.
 
 1. **Many people and many agents.** Desk serves individuals, groups working together on Crew, and agents; agents are users too.
 2. **One contract, two signals.** A conversation settles intent and a measurable definition of done. After release, the agent works in silence except "ready for you" and "done". An agent that needs a human mid-task points to a gap in the conversation, not in the execution.
@@ -29,7 +29,7 @@ V2 grew heavy. Desk is evolving toward V3 on `main`, one small merged change at 
 8. **Homes come from meaning, not rules.** Say clearly what each kind of thing is, and let people and agents choose where it lives. Most tasks are a folder with only a `task.md`.
 9. **Always-on context is small and says what system this is,** and where its reasons live: this document.
 
-## 1. Why V2 exists
+## 1. Why Epoch 2 exists
 
 An agent can produce plausible local progress while still failing the actual job. It starts from the wrong source, splits one outcome across competing records, stops at a command that printed success, delegates without a bounded return, or treats a passing proxy as proof that an installed or rendered result works. Humans compensate by supervising: narrating steps, re-briefing every session, carrying context between tools, reading every line of every diff. The agent becomes a typewriter that needs supervising, and the human becomes the bottleneck twice over.
 
@@ -41,9 +41,9 @@ We think about the path out in three acts:
 
 That progression rests on a two-step claim. First, given durable context and a real engineering lifecycle, an agent can carry a long-horizon engineering task to a high-quality, merged result. Most people have not yet found a way to delegate work that runs for hours or days, so this has to be shown rather than asserted, and the [public factory site](https://ourostack.github.io/factory/) shows it with real sessions: as of this writing, the longest ran 69 hours in one session, with 50 of the 53 pull requests it referenced merged. Second, once that holds, the next problem is industrial-engineering-style work design: understanding what an agent actually does across a stretch that long, and whether the system around it can be improved. That is what the factory measures (section 4).
 
-V1 of this system was built for weaker models and accumulated workflow machinery to compensate. V2 re-bases on current models: it keeps what nobody else provides (durable work state, authority and attribution), takes the engineering method from a maintained open-source provider, [Superpowers](https://github.com/obra/superpowers), instead of owning one, and adds a permanent way to answer the question every adopter eventually gets asked: *how much is this actually helping?*
+Epoch 1 of this system was built for weaker models and accumulated workflow machinery to compensate. Epoch 2 re-bases on current models: it keeps what nobody else provides (durable work state, authority and attribution), takes the engineering method from a maintained open-source provider, [Superpowers](https://github.com/obra/superpowers), instead of owning one, and adds a permanent way to answer the question every adopter eventually gets asked: *how much is this actually helping?*
 
-V2 is an opt-in, measurable and replaceable experiment on the agent hosts people already use, not a claim that everyone should adopt one team's way of working. V2 applies keep-it-simple, build-only-what-is-needed and don't-repeat-yourself to itself: no mechanism without a real user, each rule stated in one place, and anything a shared runtime or a better provider replaces gets deleted. Its components earn their place by evidence.
+Epoch 2 is an opt-in, measurable and replaceable experiment on the agent hosts people already use, not a claim that everyone should adopt one team's way of working. Epoch 2 applies keep-it-simple, build-only-what-is-needed and don't-repeat-yourself to itself: no mechanism without a real user, each rule stated in one place, and anything a shared runtime or a better provider replaces gets deleted. Its components earn their place by evidence.
 
 ## 2. Working together: the human and the agent
 
@@ -67,7 +67,7 @@ People own the work they authorize, so ordinary accounts of that work name the p
 
 Coaching happens once, stays short and actionable, and never becomes a recurring gate. Communication and trust are the two halves of delegation: trust without communication is “go figure it out”, and communication without trust is a micromanaged checklist. Before sending a request, read it from the agent's seat.
 
-**Confidence without reading code.** Humans read every line of a change today because nothing else gives them confidence. V2 aims for evidence good enough that a human ideally never needs to: verification at the altitude of the claim, visual proof, receipts, and a measured account of how the work went.
+**Confidence without reading code.** Humans read every line of a change today because nothing else gives them confidence. Epoch 2 aims for evidence good enough that a human ideally never needs to: verification at the altitude of the claim, visual proof, receipts, and a measured account of how the work went.
 
 ## 3. Layers and ownership
 
@@ -98,11 +98,11 @@ Desk does not become a second engineering method; Superpowers does not become a 
 
 A factory is only a factory if it measures and designs the work. Sharing a place to work is orientation; designing it is the third act.
 
-This section is the contract for how V2 measures work and the public method it grades by. The pipeline that runs it is being built; section 9 says how far.
+This section is the contract for how Epoch 2 measures work and the public method it grades by. The pipeline that runs it is being built; section 9 says how far.
 
 **The unit of flow is the whole accepted job:** one outcome from intent to accepted result, including every session, machine, subagent, review round and retry it took. Output that is never accepted is inventory, scrap or rework, not progress. A job is one outcome; the desk records it as one durable task (section 5).
 
-**Every stretch of work is value-adding, necessary support, or waste.** Value-adding work moves the accepted outcome forward in a way the requester would recognize. Necessary support is required by authority, safety, verification or policy, and adds no value the requester sees but cannot be skipped. Waste is neither. Where the evidence cannot tell, the stretch is unavailable. The waste types are the eight classic Lean wastes, translated for agent work: rework, overproduction, waiting, unused capability, handoffs, work in progress, context switching and overprocessing. The evaluator records unevenness in the flow and overburden where they explain waste. (Lean calls these three muda, mura and muri; V2's reports use the plain words.) Waste is never an action count or a stopwatch: optimizing those proxies rewards skipped proof and hidden rework. Necessary exploration and verification are not waste.
+**Every stretch of work is value-adding, necessary support, or waste.** Value-adding work moves the accepted outcome forward in a way the requester would recognize. Necessary support is required by authority, safety, verification or policy, and adds no value the requester sees but cannot be skipped. Waste is neither. Where the evidence cannot tell, the stretch is unavailable. The waste types are the eight classic Lean wastes, translated for agent work: rework, overproduction, waiting, unused capability, handoffs, work in progress, context switching and overprocessing. The evaluator records unevenness in the flow and overburden where they explain waste. (Lean calls these three muda, mura and muri; Epoch 2's reports use the plain words.) Waste is never an action count or a stopwatch: optimizing those proxies rewards skipped proof and hidden rework. Necessary exploration and verification are not waste.
 
 **Quality, flow and cost stay separate,** with quality floors checked first and no composite score. Flow is measured with established work-measurement statistics: lead time (start to acceptance), active time (time actually worked), waits (time blocked on someone or something else), work in progress (how many jobs are open at once), rework (work redone after it was thought finished), first-pass yield (the share accepted with no rework) and flow efficiency (active time as a share of lead time).
 
@@ -126,7 +126,7 @@ This section is the contract for how V2 measures work and the public method it g
 
 **One durable task per outcome.** A task is how the desk records one job, the factory's unit of flow. It carries the work through changed requirements, corrections, review findings, verification and cleanup. A material requirement that arrives mid-work updates the same task and invalidates only the evidence it affects; it does not become a side quest or a silent restart. A replacement session reconciles the same task, source, authority and uncertain side effects before it writes.
 
-**Channels, never commits.** A channel is the branch consumers track; V2's channel is `main` of its repository. Everything tracks a channel: plugin dependencies, installs, setup links, docs, tests, fixtures, evaluations, review packets, handoffs and a task's recorded source. Dependency constraints are version ranges, never exact versions. A pinned commit silently freezes everyone downstream and keeps fixes from reaching them. There is no frozen candidate: reviewers and outside evaluators work on the channel as it is when they run, and record the commit they saw as evidence. A commit hash appears only as that kind of evidence. A note or handoff that says to freeze or pin something is wrong; correct it. Desks and shared workspace state live on their repository's default branch.
+**Channels, never commits.** A channel is the branch consumers track; Epoch 2's channel is `main` of its repository. Everything tracks a channel: plugin dependencies, installs, setup links, docs, tests, fixtures, evaluations, review packets, handoffs and a task's recorded source. Dependency constraints are version ranges, never exact versions. A pinned commit silently freezes everyone downstream and keeps fixes from reaching them. There is no frozen candidate: reviewers and outside evaluators work on the channel as it is when they run, and record the commit they saw as evidence. A commit hash appears only as that kind of evidence. A note or handoff that says to freeze or pin something is wrong; correct it. Desks and shared workspace state live on their repository's default branch.
 
 Upstream providers such as Superpowers are vendored from their own default branch and refreshed as it moves; the record of which upstream commit a copy came from is evidence, not a pin.
 
@@ -142,33 +142,33 @@ Upstream providers such as Superpowers are vendored from their own default branc
 
 **Delivery policy is known up front** from the repository and the work, not chosen after implementation. When the recorded gates pass, the agent delivers and cleans up.
 
-## 7. Getting V2 and staying current
+## 7. Getting Epoch 2 and staying current
 
 **On Claude Code,** give your agent the link https://github.com/ourostack/desk/blob/main/SETUP.md and say “set this up.” It installs Desk, Superpowers and Plain Language, sets the host defaults, turns the host's configuration folder into a thin pointer, and finds your existing desk or creates a fresh one.
 
 **On a managed launcher** that installs plugins from repository branches (for example the GitHub Copilot CLI through a company launcher), install the top-most plugin you use; its dependencies bring the rest of the stack from their channels. Some launchers refresh only the plugin you name, not its dependencies; if yours does, install the Desk plugins explicitly with the same refresh policy so their updates arrive right away.
 
-**Updates reach everyone.** Claude Code updates a plugin when its version string changes; a launcher that installs from branches updates when the branch's contents change. V2 serves both: every plugin change ships on its channel as a new version, and CI enforces it. Desk takes its new version on `main` after the merge, from the changelog fragment the pull request adds, so parallel pull requests do not conflict.
+**Updates reach everyone.** Claude Code updates a plugin when its version string changes; a launcher that installs from branches updates when the branch's contents change. Epoch 2 serves both: every plugin change ships on its channel as a new version, and CI enforces it. Desk takes its new version on `main` after the merge, from the changelog fragment the pull request adds, so parallel pull requests do not conflict.
 
 **Your first job.** After setup, start a session and describe the outcome you want and why, not the steps. Your agent talks it through with you, records it as a task in your desk, and asks for go. After go, leave it to work: it comes back for a real decision, for authority it lacks, or with the result and its evidence. If you catch yourself relaying output, re-explaining context or narrating steps, expect your agent to suggest a reset, and take it.
 
-**V2 replaces V1; it never runs alongside it.** V2 is opt-in: you get it by installing from this repository. Promotion moves V1 users over; there is no parallel installation and no separate rollback package, because Git already holds the history. Existing early users who installed from the earlier repository move to this one automatically. V1's plugins in `ourostack/ouroboros-skills` keep working until promotion and retire with it.
+**Epoch 2 replaces Epoch 1; it never runs alongside it.** Epoch 2 is opt-in: you get it by installing from this repository. Promotion moves Epoch 1 users over; there is no parallel installation and no separate rollback package, because Git already holds the history. Existing early users who installed from the earlier repository move to this one automatically. Epoch 1's plugins in `ourostack/ouroboros-skills` keep working until promotion and retire with it.
 
 ## 8. Limits
 
-V2 grants no repository, publication, destructive or rollout authority beyond what the human gave. Hosts differ in background, visual, review and recovery capabilities, and V2 does not promise every host supports every one. Desk supports Claude Code and Copilot CLI; it ships nothing for Codex. Structural tests are not a substitute for installed behavior or editorial judgment. One successful job is not proof of a productivity improvement; the factory exists so that claims like that can be made honestly, or honestly withheld.
+Epoch 2 grants no repository, publication, destructive or rollout authority beyond what the human gave. Hosts differ in background, visual, review and recovery capabilities, and Epoch 2 does not promise every host supports every one. Desk supports Claude Code and Copilot CLI; it ships nothing for Codex. Structural tests are not a substitute for installed behavior or editorial judgment. One successful job is not proof of a productivity improvement; the factory exists so that claims like that can be made honestly, or honestly withheld.
 
 Public, generic policy lives here and in the layer foundations. Environment-specific rules belong in consumer overlays, product behavior in the product's repository, and each operator's preferences in their own desk.
 
 ## 9. Status
 
-**As of 28 September 2026: ready for evaluation. Desk 3.2.0 and later are stable.** An engineer outside the team can now evaluate V2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
+**As of 28 September 2026: ready for evaluation. Desk 3.2.0 and later are stable.** An engineer outside the team can now evaluate Epoch 2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
 
 **Browser status updated October 14, 2026.** The browser entries below distinguish the carried alpha.322 direct-stock change from the [undelivered effortless-browser target](#31-effortless-browser-contract). Other status entries retain their September evidence; this bounded update does not re-certify fresh setup, host composition, recovery, organization or the work factory store. The [packet](evaluation-packet.md#how-the-evaluation-works) starts those cold-run gates unrun, and evaluation and promotion remain human decisions.
 
 **Works today.**
 
-- **Install from the channel.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and V2 installs from its `main` branch on Claude Code ([setup](../../../SETUP.md)) and through a managed launcher with a company overlay ([#1](https://github.com/ourostack/desk/pull/1)). Alpha users who installed from the earlier repository move here automatically ([#3](https://github.com/ourostack/desk/pull/3)). Every plugin change bumps its version, and CI enforces it ([release check](../../../scripts/check-release-integrity.cjs)).
+- **Install from the channel.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and Epoch 2 installs from its `main` branch on Claude Code ([setup](../../../SETUP.md)) and through a managed launcher with a company overlay ([#1](https://github.com/ourostack/desk/pull/1)). Alpha users who installed from the earlier repository move here automatically ([#3](https://github.com/ourostack/desk/pull/3)). Every plugin change bumps its version, and CI enforces it ([release check](../../../scripts/check-release-integrity.cjs)).
 - **Startup foundations.** On both kinds of host, each layer's foundation loads exactly once at startup (Superpowers, Plain Language, Desk and the overlay's own), and the agent body carries identity only ([#4](https://github.com/ourostack/desk/pull/4), [#5](https://github.com/ourostack/desk/pull/5), [#7](https://github.com/ourostack/desk/pull/7)).
 - **The RFC pointer.** The Desk foundation gives the agent this document's installed path, so an agent can open it from any repository ([#5](https://github.com/ourostack/desk/pull/5)). The repository root keeps a short [pointer](../../../AGENTIC-ENGINEERING-V2.md) to it.
 - **Channels, never commits.** Plugin dependencies track `main`, never an exact commit, and CI enforces it ([#1](https://github.com/ourostack/desk/pull/1), [dependency check](../../../scripts/check-dependency-channels.cjs)). The docs and skills say there is no frozen candidate ([#8](https://github.com/ourostack/desk/pull/8)).

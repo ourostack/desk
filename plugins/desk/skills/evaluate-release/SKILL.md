@@ -5,7 +5,7 @@ description: For `desk:observer` only. Evaluate a Desk release by working throug
 
 # Evaluate a release
 
-Work through an evaluation packet, such as the [V2 evaluation packet](../../docs/evaluation-packet.md), on one named host, starting from nothing. Record what each step did, with evidence, and how long each scenario took. Classify every problem you see. Report it for someone else to fix and judge. The finished report is evidence for the human evaluator's release call; it is never a verdict of yours.
+Work through an evaluation packet, such as the [Epoch 2 evaluation packet](../../docs/evaluation-packet.md), on one named host, starting from nothing. Record what each step did, with evidence, and how long each scenario took. Classify every problem you see. Report it for someone else to fix and judge. The finished report is evidence for the human evaluator's release call; it is never a verdict of yours.
 
 ## When to use it
 
@@ -64,8 +64,8 @@ Record each scenario's elapsed time, measured, never estimated. Take the start a
 
 Every problem gets exactly one class. Give the class and one sentence saying why.
 
-- **Defect.** V2 does not do what its packet, docs or RFC say it does: a step fails as written, a command errors, a result is wrong or missing, a promised outcome does not appear.
-- **Confusion.** V2 does what it was designed to do, but the packet, a doc, a prompt or the agent's own words misled the evaluator or left them unsure what to do next or whether it worked. Conflicting instructions are a confusion.
+- **Defect.** Epoch 2 does not do what its packet, docs or RFC say it does: a step fails as written, a command errors, a result is wrong or missing, a promised outcome does not appear.
+- **Confusion.** Epoch 2 does what it was designed to do, but the packet, a doc, a prompt or the agent's own words misled the evaluator or left them unsure what to do next or whether it worked. Conflicting instructions are a confusion.
 - **Gap.** Something the evaluation needs, or that the packet or RFC promises for this stage, does not exist yet: a missing capability, a missing step, no way to see the evidence. A scenario marked as landing by the evaluation whose feature is not on the channel is a gap, with the channel state as evidence.
 
 When a problem fits two classes, pick the one whose fix would remove it: a defect over a confusion when the behavior is wrong, a confusion over a defect when the behavior is right and only its explanation misleads. For each problem, also record whether it blocked the scenario.

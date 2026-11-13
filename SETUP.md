@@ -1,4 +1,4 @@
-# Set up Agentic Engineering V2
+# Set up Agentic Engineering Epoch 2
 
 **Operator:** give your agent the link to this file and say "set this up". Nothing else is needed.
 
@@ -78,7 +78,7 @@ Never delete Claude's own runtime state: session transcripts under `$CLAUDE_DIR/
 
 Follow `plugins/desk/skills/first-run-bootstrap/SKILL.md`, Entrance A, from this repository. It looks for an existing local desk, then the operator's desk repository on GitHub.
 
-**Ask:** present what Entrance A found and let a human choose among it, most likely first; with nothing found, offer a fresh desk. A working directory that already has the desk shape is one candidate in that ask, never an automatic bind. A session with no human able to answer stops right at this Ask: it reports the question and everything found, and does not pick an option, bind a desk, write `desk.activation.json`, or report this step complete — that report and stop is what finishing this step looks like for such a session, not something to read past on the way to binding anyway. See the skill's A3 for the exact rule. If the operator already has a V1 desk, use Entrance B instead.
+**Ask:** present what Entrance A found and let a human choose among it, most likely first; with nothing found, offer a fresh desk. A working directory that already has the desk shape is one candidate in that ask, never an automatic bind. A session with no human able to answer stops right at this Ask: it reports the question and everything found, and does not pick an option, bind a desk, write `desk.activation.json`, or report this step complete — that report and stop is what finishing this step looks like for such a session, not something to read past on the way to binding anyway. See the skill's A3 for the exact rule. If the operator already has an Epoch 1 desk, use Entrance B instead.
 
 Only once a human has answered this Ask, bind the chosen desk by writing this file, with the absolute desk path:
 

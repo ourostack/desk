@@ -1,6 +1,6 @@
 # Retired private feedback storage
 
-The V2 Desk tool surface has **no qualitative feedback tool**. `desk_feedback` was retired: it is not advertised in `tools/list`, and a call to that name gets the ordinary unknown-tool response. Preview feedback a participant chooses to offer is written as attributed Markdown in their own desk at `_meta/preview-feedback.md`, deliberately not an iteration's `feedback.md`, which is the PR-review record for one iteration directory. The `preview-feedback` skill owns the exact path, entry, correction and tombstone format.
+The Epoch 2 Desk tool surface has **no qualitative feedback tool**. `desk_feedback` was retired: it is not advertised in `tools/list`, and a call to that name gets the ordinary unknown-tool response. Preview feedback a participant chooses to offer is written as attributed Markdown in their own desk at `_meta/preview-feedback.md`, deliberately not an iteration's `feedback.md`, which is the PR-review record for one iteration directory. The `preview-feedback` skill owns the exact path, entry, correction and tombstone format.
 
 ## What is left on disk
 
