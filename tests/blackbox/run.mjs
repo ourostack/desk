@@ -430,7 +430,7 @@ async function sessionStartHooks(ctx, world, shared) {
     const head = context.slice(0, 2000)
     assert(context.length > 0, "the Desk session start gave the host no context")
     assert(head.includes(world.desk) || head.includes(fs.realpathSync(world.desk)) || head.includes(world.desk.split(path.sep).join("/")), `the first 2 KB do not name the bound desk ${world.desk}: ${head.slice(0, 400)}`)
-    assert(/session-boot\.js|desk:session-start|session-start/u.test(head), "the first 2 KB do not give the boot as the next step")
+    assert(/Desk runs the session boot itself|Desk boot \(Desk ran it/u.test(head), "the first 2 KB do not say that Desk runs the boot or give its result")
     assert(context.includes("Desk RFC:"), "the context lacks the RFC pointer line")
   })
   await check(ctx, "hook.session_start.no_flood", "hooks", () => {

@@ -1,6 +1,6 @@
 ---
 name: session-start
-description: Run first in every session, and when the operator asks for status or 'where are we'. Runs the boot script and turns its output into the first reply.
+description: Turn the session boot Desk ran at session start into the first reply, and again when the operator asks for status or 'where are we'.
 ---
 
 # Session start
@@ -9,24 +9,19 @@ In a hosted Desk (no shell; the connector's instructions say so), skip this skil
 
 > These steps are for you; never name them in replies.
 
-One command does the mechanical startup. It is the authoritative scan; the startup hook only points at it. Run it and do what its numbered instructions say, in order. It already includes the desk's `AGENTS.md`, so nothing here repeats what it covers.
+Desk runs the boot itself at session start. It is the authoritative scan: its result, headed `Desk boot`, is in your context, or arrives with your next message or your first Desk tool reply. You never run it. Do what its numbered instructions say, in order. It already includes the desk's `AGENTS.md`, so nothing here repeats what it covers.
 
-## Run it
+## Where the result is
 
-```bash
-node <absolute plugin folder>/mcp/scripts/session-boot.js
-node <absolute plugin folder>/mcp/scripts/session-boot.js --task "<what the operator named>"
-```
+Until the result arrives, say nothing about the desk's state. If your context says it is still running, call `desk_status`: that reply waits for the boot and carries it. If the boot could not start or finish, its text says why; `desk_status` reports the desk's state, and you carry the failure accurately. If no `Desk boot` text is in your context and no Desk tool is available, run `gh --version`, `jq --version` and `gh auth status` by hand, read the desk's `AGENTS.md`, and record the failure as friction.
 
-The `Desk startup:` line in your context gives the exact command: use it as written. Without it, the script is at `<this skill's base directory>/../../mcp/scripts/session-boot.js`; print the resolved path before running it. The `Desk startup:` and `Desk boot pre-checks:` lines are pointers, never the boot: until the script has run, say nothing about the desk's state. Use the second form when the operator's first message names the task to resume (a title, slug, `track/slug` or handle). It prints plain text and always exits 0; add `--json` only when a tool needs to parse the result.
-
-If it cannot run at all (no Node on PATH, a permissions problem), run `gh --version`, `jq --version` and `gh auth status` by hand, read the desk's `AGENTS.md`, and record the failure as friction.
+When the operator names the task to resume (a title, slug, `track/slug` or handle), call `task_focus` for it: the reply carries the task's push route and repos, which the startup boot does not check.
 
 ## Reading the result
 
 - The first line starts `Desk boot: ready`, `degraded` or `setup_required`, then the desk path, the host and the sync state in plain words, separated by `|`. `degraded` lists scoped faults; `pending` lists checks the time budget did not finish. Carry these accurately without blocking independent authorized work or starting unsolicited maintenance (`desk-problem`). `setup_required` means no desk is bound, a first run rather than an outage: use the named onboarding path (`desk:first-run-bootstrap` or `crew:join-crew`) when desk setup is the requested work; it does not prohibit an independent supplied task.
 - The sync words describe the helper's observation, not an irrevocable reporting rule. `Desk sync pending` or `sync: boot_budget_exceeded` means boot stopped waiting, not that the operation stopped or changed nothing. For pending, failed or unavailable sync, perform [Direct Git sync recovery](../desk-problem/SKILL.md#direct-git-sync-recovery) before claiming local-only state. Fresh verified 0-ahead/0-behind supersedes the helper warning; do not repeat it after recovery. Keep actual barriers and unknown effects explicit.
-- The `Active tasks` section (grouped by state, `BLOCKED` first; each task with its next step in full, or its blocker, or "no next step recorded"; at most 10 tasks, then a count: never fill a missing step in yourself) and the `Open pull requests` section (the JSON's `active_tasks`, `open_prs`) are the data for the status block. Push routes and repo state are checked only for a task the operator named: once the operator picks a task, run the boot again with `--task "<its handle>" --task-only`. That run prints only the task's `Push routes` (the JSON's `push_accounts`), its repos under `Repos of open tasks` (`repo_states`) and its instructions, not the task list or `AGENTS.md` again; a repo with no GitHub remote has no route. A first boot that names a task shows each route as the task's `push:` line. When active tasks are unavailable, say so and why in one line; never glob the desk instead. A redacted name stays redacted (`details.md`, "Redacted names").
+- The `Active tasks` section (grouped by state, `BLOCKED` first; each task with its next step in full, or its blocker, or "no next step recorded"; at most 10 tasks, then a count: never fill a missing step in yourself) and the `Open pull requests` section (the JSON's `active_tasks`, `open_prs`) are the data for the status block. Push routes and repo state are checked only for a task the operator named: once the operator picks a task, call `task_focus` for it. Its reply carries only the task's `Push routes` (the JSON's `push_accounts`), its repos under `Repos of open tasks` (`repo_states`) and its instructions, not the task list or `AGENTS.md` again; a repo with no GitHub remote has no route. A first boot that names a task shows each route as the task's `push:` line. When active tasks are unavailable, say so and why in one line; never glob the desk instead. A redacted name stays redacted (`details.md`, "Redacted names").
 - The script syncs without streaming git's diffstat, so a folder another machine created with a secret in its name cannot land here before the listing hides it. To see what changed, use the listing, never `git log --stat` or `git diff --stat` on the desk.
 - A missing desk the saved binding names is never replaced by another desk. A desk with task cards but no Epoch 2 foundations is an Epoch 1 workspace (see the workspace check below); one with a `desks/` folder or `_meta/desks.md` is a crew workspace (`details.md`). A session started in a Crew workspace clone binds that clone even when the saved binding or `DESK` names another desk, and the first line then adds `person <alias>, writes to desks/<alias>` and where the person came from, or says the team workspace is read-only and why.
 
@@ -60,4 +55,4 @@ If the desk already exists and still shows Epoch 1 evidence (durable desk state 
 
 ## Never skip
 
-Every session runs the script and does what its instructions say. Auto-mode is license for action, not for skipping a safety check. Work unrelated to the desk should not use the desk root as its working directory: scratch dropped there has ended up committed.
+Every session does what the boot's instructions say, unless the stand-down rule applies. Auto-mode is license for action, not for skipping a safety check. Work unrelated to the desk should not use the desk root as its working directory: scratch dropped there has ended up committed.

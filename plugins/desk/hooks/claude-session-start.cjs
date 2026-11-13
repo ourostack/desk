@@ -16,9 +16,7 @@ const { pathToFileURL } = require("node:url");
 
 const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = process.argv[2] || `${pluginRoot}/skills/using-desk/SKILL.md`;
-const bootScript = `${pluginRoot}/mcp/scripts/session-boot.js`;
-// The same rule as BOOT_SKIP in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
-const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.";
+const BOOT_STAND_DOWN = "The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them.";
 
 // A shell command substitution strips trailing newlines; the output this hook replaces was built from such substitutions.
 function stripTrailingNewlines(text) {
@@ -50,6 +48,34 @@ function emit(additionalContext) {
   process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } })}\n`, () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref());
 }
 
+// Claude Code saves a hook's additionalContext to a file and shows the agent only a 2 KB preview once it passes 10,000 characters, and the foundation alone is most of that budget; so the hook carries only the head of the boot (its status, what needs the operator, the notes) and the rest comes with the first Desk tool reply.
+const BOOT_HEAD_CHARS = 1500;
+// The hook's limit is 10 s (hooks.json).
+const BOOT_WAIT_MS = 7000;
+
+// Starts the session's boot (a new session in this folder, so afresh) and waits for it within the hook's budget. The boot runs
+// detached and its result is also delivered, once, by the first Desk tool reply (mcp/src/runtime/startup-boot.js). Never throws.
+async function bootSection() {
+  try {
+    const boot = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "startup-boot.js")).href);
+    const { claudeBootRoot } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js")).href);
+    const folder = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    if (!boot.autoBootEnabled(process.env) || claudeBootRoot({ env: process.env }) === null) return "";
+    const key = boot.bootKey({ folder: process.env.CLAUDE_PROJECT_DIR });
+    if (key === null) return "";
+    const { paths } = boot.startBoot({ key, folder, env: process.env, fresh: true });
+    if (paths === null) return "";
+    const result = await boot.awaitBoot({ paths, waitMs: BOOT_WAIT_MS });
+    if (result.boot !== null) {
+      const context = boot.bootContext({ boot: result.boot, maxChars: BOOT_HEAD_CHARS });
+      return context.whole && !boot.claimDelivery(paths) ? "" : context.text;
+    }
+    return result.reason === "running" ? boot.pendingBootLine({ seconds: boot.bootAgeSeconds(paths) }) : "";
+  } catch {
+    return "";
+  }
+}
+
 (async () => {
   try {
     // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
@@ -65,19 +91,21 @@ function emit(additionalContext) {
     try {
       foundation = stripTrailingNewlines(fs.readFileSync(foundationPath, "utf8"));
     } catch {
-      emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node "${bootScript}" before other work, then desk:session-start explains its result. ${BOOT_SKIP}`);
+      emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`);
       return;
     }
+    const bootResult = bootSection();
     let direction = await startupDirection();
     if (!direction) {
-      direction = `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node "${bootScript}" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. ${BOOT_SKIP}`;
+      direction = `Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot. Desk starts it with your first Desk tool reply; desk_status reports the root Desk actually bound. ${BOOT_STAND_DOWN}`;
     }
+    const bootText = await bootResult;
     // The foundation points at the RFC through this line: the installed copy, which the agent can open from any repository.
     // A Windows plugin root keeps its backslash separators, so the separator follows the root's own spelling.
     const sep = pluginRoot.includes("\\") ? "\\" : "/";
     const rfc = `Desk RFC: ${pluginRoot}${sep}docs${sep}agentic-engineering-v2-rfc.md`;
-    // The startup line goes first. Claude Code saves a hook's additionalContext to a file and shows the agent only a preview of its first 2 KB once it passes 10,000 characters, and the foundation alone is most of that budget. The boot imperative has to sit inside the preview, so the foundation and the RFC line come after it.
-    emit(`${direction}\n\n${foundation}\n\n${rfc}\n`);
+    // The startup line goes first, then the head of the boot: they have to sit inside the 2 KB preview, so the foundation and the RFC line come after them.
+    emit(`${direction}\n\n${bootText ? `${bootText}\n\n` : ""}${foundation}\n\n${rfc}\n`);
   } catch {
     // Nothing may fail a session start.
   } finally {

@@ -434,7 +434,7 @@ function expectedContext(host, env, desk, checks = "") {
   const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
   const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
   // Copilot's hook drops the foundation's frontmatter and adds the worker pointer, which Claude Code's agent setting makes unnecessary.
-  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\nUnless started with \`--agent\` or the skip rule above applies (then skip this read too), act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
+  if (host === "copilot") return `${copilotStartupDirection({ env, sessionFolder: desk })}${checks}\n\nUnless started with \`--agent\` or the stand-down rule above applies (then skip this read too), act as Desk's worker: read ${path.join(PLUGIN, "agents", "worker.agent.md")} first.\n\n${skill.replace(/^---\n[\s\S]*?\n---\n\s*/u, "").trimEnd()}\n\nDesk RFC: ${rfc}`
   // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
   return `${claudeStartupDirection({ env })}${checks}\n\n${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n`
 }
@@ -565,7 +565,7 @@ module.exports = {
   startFactory: async () => true,
 };
 `)
-    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk }, overrides)
+    const hookEnv = bootFixtureEnv({ ...env, PLUGIN_ROOT: root, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: desk, DESK: desk, DESK_AUTO_BOOT: "0" }, overrides)
     const run = host === "copilot"
       ? spawnSync(process.execPath, [path.join(root, "hooks", "copilot-session-start.cjs")], { env: hookEnv, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
       : spawnSync(process.execPath, [path.join(root, "hooks", "claude-session-start.cjs"), path.join(root, "skills", "using-desk", "SKILL.md")], { env: hookEnv, encoding: "utf8" })
@@ -579,7 +579,7 @@ module.exports = {
     const CACHE_ROOT = "/Users/someone.long-name/.claude/plugins/cache/ourostack/desk/3.2.0-alpha.196"
     const LONG_DESK = "/Users/someone.long-name/code/organization-engineering/personal-workspaces/operator-desk-checkout"
     const measured = [[desk, LONG_DESK], [root, CACHE_ROOT], [await fs.realpath(PLUGIN), CACHE_ROOT]].reduce((text, [from, to]) => text.split(from).join(to), context)
-    assert.ok(measured.indexOf("session-boot.js") >= 0 && measured.indexOf("session-boot.js") < 2000, "the boot script is named inside the first 2,000 characters, where Claude Code's preview reaches")
+    assert.ok(measured.indexOf("Desk runs the session boot itself") >= 0 && measured.indexOf("Desk runs the session boot itself") < 2000, "the boot is explained inside the first 2,000 characters, where Claude Code's preview reaches")
     if (pending === 1) assert.ok(measured.length <= CONTEXT_BUDGET, `the SessionStart context is ${measured.length} characters with typical long paths; it must stay at most ${CONTEXT_BUDGET} so Claude Code (limit 10,000) shows all of it. Tighten the foundation or the startup line.`)
   }))
 }

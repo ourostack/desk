@@ -94,7 +94,7 @@ function withStartupSandbox(body) {
     }
     const malformed = path.join(scratch, "bad-binding.json");
     fs.writeFileSync(malformed, "{");
-    const env = { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: path.join(home, ".copilot"), CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: path.join(home, ".copilot"), CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot, DESK_AUTO_BOOT: "0" };
     // These cases qualify the foundation and root direction, not migration or factory work.
     const bootFixture = path.join(scratch, "quiet-boot.cjs");
     fs.writeFileSync(bootFixture, 'module.exports = { checks: [], migrationLine: async () => "", startFactory: async () => false };');
@@ -150,7 +150,7 @@ function checkStartupHooks(skill) {
     // Claude Code keeps only the first 2 KB of a SessionStart context that passes 10,000 characters (round AJ: with the foundation 400 characters longer, 13 of 17 runs
     // over the limit never ran the boot, against 1 of 99 under it), so the boot imperative opens the context and the foundation follows it.
     assert.ok(contexts.claude.startsWith("Desk startup:"), "claude startup must open with the Desk startup line, ahead of the foundation");
-    assert.ok(contexts.claude.indexOf("session-boot.js") < 2000, "claude startup must name the boot script inside the first 2 KB");
+    assert.ok(contexts.claude.indexOf("Desk runs the session boot itself") < 2000, "claude startup must explain the boot inside the first 2 KB");
     // Copilot's hook drops the frontmatter (the host's skill list already carries the name and description) to pay for its
     // worker pointer; Claude's keeps the file as is.
     const foundations = { claude: foundation, copilot: foundation.replace(/^---\n[\s\S]*?\n---\n\s*/u, "") };
@@ -166,7 +166,8 @@ function checkStartupHooks(skill) {
       const line = startupLine(context);
       assert.match(line, new RegExp(`\\$DESK is ${escapeRegExp(fallback)} \\(a home-folder fallback\\)`, "u"), `${host} must say the root came from a home-folder fallback`);
       assert.match(line, /desk_status reports the root Desk actually bound/u, `${host} must defer to desk_status for the bound root`);
-      assert.match(line, /The boot has not run yet:.*[Rr]un `node \S*session-boot\.js`/u);
+      assert.match(line, /Desk runs the session boot itself, so there is nothing for you to run/u);
+      assert.doesNotMatch(line, /session-boot/u, `${host} must never tell the agent to run the boot script`);
     }
 
     // Overlay case on Claude: the Desk server also receives CLAUDE_PROJECT_DIR, so the crew-shaped project folder is
@@ -209,7 +210,7 @@ function checkStartupHooks(skill) {
 
     // When the hook cannot run Desk's resolver, both hosts say so and still carry the RFC line. On Windows the
     // Claude plugin root uses backslashes, so the RFC path keeps that separator.
-    const couldNot = /^Desk startup: Desk could not resolve its root in this hook\. The boot has not run: run node "?\S*session-boot\.js"? now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound\. The boot is for desk-backed work \(tasks, cards, saves, sync, memory\)\. Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context\.$/u;
+    const couldNot = /^Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot\. Desk starts it with your first Desk tool reply; desk_status reports the root Desk actually bound\. The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them\.$/u;
     const bare = path.join(codeRepo, "bare-plugin");
     fs.mkdirSync(path.join(bare, "skills", "using-desk"), { recursive: true });
     fs.copyFileSync(skillPath, path.join(bare, "skills", "using-desk", "SKILL.md"));

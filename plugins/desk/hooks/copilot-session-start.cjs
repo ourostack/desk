@@ -12,10 +12,9 @@ const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
 // Copilot has no setting that makes a plugin's agent the default (Claude Code takes `agent` from settings.json), and the hook
 // input does not say which agent runs, so every session is told to act as the worker unless it was started as another agent.
-const workerPointer = `Unless started with \`--agent\` or the skip rule above applies (then skip this read too), act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
-const bootScript = path.join(pluginRoot, "mcp", "scripts", "session-boot.js");
-// The same rule as BOOT_SKIP in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
-const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.";
+const workerPointer = `Unless started with \`--agent\` or the stand-down rule above applies (then skip this read too), act as Desk's worker: read ${path.join(pluginRoot, "agents", "worker.agent.md")} first.`;
+// The same rule as BOOT_STAND_DOWN in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
+const BOOT_STAND_DOWN = "The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them.";
 // The foundation points at the RFC through this line: the installed copy, which
 // the agent can open from any repository. Computed, never read at startup.
 const rfcPath = path.join(pluginRoot, "docs", "agentic-engineering-v2-rfc.md");
@@ -147,6 +146,27 @@ async function standingAuthorityLines(sessionFolder) {
   }
 }
 
+// Starts the session's boot at once (it runs detached, in the background) and hands over its result when it finishes inside the hook's
+// budget. Copilot runs the first-prompt hook before this one on a new session, which has usually started it and delivered it already;
+// then this adds nothing. A resumed session boots afresh. A result that is not ready is left for the next message or the first Desk tool
+// reply (mcp/src/runtime/startup-boot.js). Never throws.
+async function bootSection({ folder, sessionId, source }) {
+  try {
+    const boot = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "startup-boot.js")).href);
+    const { copilotBootRoot } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js")).href);
+    if (!boot.autoBootEnabled(process.env) || !copilotBootRoot({ env: process.env, sessionFolder: folder })) return "";
+    const key = boot.bootKey({ sessionId });
+    if (key === null) return "";
+    const { paths } = boot.startBoot({ key, folder, sessionId, env: process.env, fresh: source === "resume" });
+    if (paths === null || boot.wasDelivered(paths)) return "";
+    const result = await boot.awaitBoot({ paths, waitMs: Math.max(0, OPTIONAL_LINES_DEADLINE_MS - performance.now()) });
+    if (result.boot !== null) return boot.claimDelivery(paths) ? boot.bootContext({ boot: result.boot }).text : "";
+    return result.reason === "running" ? boot.pendingBootLine({ seconds: boot.bootAgeSeconds(paths) }) : "";
+  } catch {
+    return "";
+  }
+}
+
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
 // project folder, so the line never names a root the server will not use.
 async function startupDirection() {
@@ -157,6 +177,9 @@ async function startupDirection() {
     const sessionFolder = session.folder;
     await recordSession(session);
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
+    // The boot starts now, before the slower checks below, so it runs while they do.
+    const bootResult = bootSection({ folder: sessionFolder, sessionId: session.sessionId, source: session.source });
+    bootResult.catch(() => {});
     // The boot checks add one agent line only when one of them has something to say.
     const { runBootChecks, migrationLine } = require("./lib/boot-checks.cjs");
     // Desk's own migration Detect blocks run alongside the boot checks, and
@@ -179,9 +202,10 @@ async function startupDirection() {
     const [lines, standingLine] = await Promise.all([Promise.race([optional, late]), Promise.race([personLine, late])]);
     clearTimeout(timer);
     if (lines === null) optionalLinesTimedOut = true;
-    return [direction, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
+    const bootText = await bootResult;
+    return [direction, bootText, standingLine || standing.deskOnly, ...(lines ?? [])].filter(Boolean).join("\n\n");
   } catch {
-    return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. ${BOOT_SKIP}`;
+    return `Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot. Desk starts it with your first Desk tool reply; desk_status reports the root Desk actually bound. ${BOOT_STAND_DOWN}`;
   }
 }
 
@@ -223,6 +247,6 @@ function emit(additionalContext) {
     if (!optionalLinesTimedOut) await startFactory();
     emit(output);
   } catch {
-    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node ${bootScript} before other work, then desk:session-start explains its result. ${BOOT_SKIP}`);
+    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. ${BOOT_STAND_DOWN}`);
   }
 })();

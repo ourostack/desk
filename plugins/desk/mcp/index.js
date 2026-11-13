@@ -37,6 +37,7 @@ import { importInChunks } from "./src/runtime/chunked-import.js"
 import { watchCopilotSessionRecord } from "./src/runtime/copilot-session.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
 import { startFrontDoor } from "./src/runtime/front-door.js"
+import { withStartupBoot } from "./src/runtime/startup-boot.js"
 import { hostedInstructions, isHosted, withHostedStartup } from "./src/runtime/hosted.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "./src/runtime/last-start.js"
 import {
@@ -301,7 +302,7 @@ export async function main({
     serverVersion,
     instructions: hostedInstructionsText,
     serverIcons: hosted && hasText(env.DESK_MCP_ICON_URL) ? [{ src: env.DESK_MCP_ICON_URL }] : undefined,
-    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : (call) => session.callTool(call),
+    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : withStartupBoot({ callTool: (call) => session.callTool(call), env, stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }) }),
     onHandshake: () => {
       handshakeMs = Math.round(performance.now())
       kick()

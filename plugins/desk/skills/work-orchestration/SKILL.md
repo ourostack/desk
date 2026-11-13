@@ -5,7 +5,7 @@ description: Use to align new work before go (batch every decision that needs th
 
 # Work orchestration
 
-> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). If it ran with no task named and a task was picked since, run it again with `--task "<handle>" --task-only`: that prints the task's push route and repos. A child agent with a bounded brief follows its brief and skips this.
+> Boot: Desk ran its boot at session start; its result is the `Desk boot` text in your context or in your first Desk tool reply. When the operator picks a task, call `task_focus` for it: its reply carries the task's push route and repos. A child agent with a bounded brief follows its brief and ignores the boot's instructions.
 
 Invoke `desk:using-superpowers-with-desk`. This Desk adapter selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
 

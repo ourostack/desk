@@ -32,11 +32,10 @@ function bashCommands(ctx) {
   return ctx.toolCalls.filter((t) => t.name === "Bash").map((t) => String(t.input?.command ?? ""))
 }
 
-// The new boot: the agent runs `session-boot.js` (one JSON result), follows its
-// `instructions`, and never asks for factory consent (a `claude -p` run is
-// noninteractive, so the script emits no consent instruction at all).
+// The boot: Desk runs `session-boot.js` itself at session start and hands the agent its result (`ctx.autoBoot`, read from the run's own Desk state by
+// run.mjs), so an agent that runs the script anyway is told to do so by something it should not be. The agent follows the boot's `instructions` and never
+// asks for factory consent (a `claude -p` run is noninteractive, so the script emits no consent instruction at all).
 const BOOT_SCRIPT = /session-boot\.js/
-const TASK_FLAG = /session-boot\.js[^\n]*--task/
 
 /**
  * What the agent told the operator: the final reply of the scenario turn.
@@ -239,8 +238,15 @@ function sharedChecks(ctx, { allowDone = false, operatorWord = "" } = {}) {
   const allCalls = [...ctx.toolCalls, ...(ctx.critiqueToolCalls ?? [])]
   const allCommands = allCalls.filter((t) => t.name === "Bash").map((t) => String(t.input?.command ?? ""))
   const ranBoot = commands.some((c) => BOOT_SCRIPT.test(c))
-  if (ranBoot) notes.push("ran session-boot.js")
-  else failures.push("never ran session-boot.js")
+  if (ctx.autoBoot === undefined) {
+    // A saved run from before Desk ran the boot itself: the agent had to run it.
+    if (ranBoot) notes.push("ran session-boot.js")
+    else failures.push("never ran session-boot.js")
+  } else {
+    if (ranBoot) failures.push("ran session-boot.js itself, though Desk runs the boot and hands the agent its result")
+    if (ctx.autoBoot === false) failures.push("never got the boot: Desk's own boot left no result for the agent")
+    else notes.push("Desk ran the boot and handed the agent its result")
+  }
 
   // Consent is never asked of the operator in a noninteractive session. Only the operator-facing reply counts, and only an actual question or request: the critique may discuss consent freely.
   const recordedConsent = allCommands.some((c) => /factory\.js[^\n]*\bconsent\b/.test(c))
@@ -304,7 +310,7 @@ function claimsCloneMissing(ctx) {
 export const SCENARIOS = [
   {
     id: "say-hi",
-    description: `Operator opens with a bare "hi": the agent runs the boot script, acts on it, and answers with the open work, not a status dump.`,
+    description: `Operator opens with a bare "hi": Desk runs the boot and hands the agent its result, and the agent answers with the open work, not a status dump.`,
     prompt: "hi",
     inject: null,
     check(ctx) {
@@ -340,8 +346,8 @@ export const SCENARIOS = [
       const failures = []
       const notes = []
       const commands = bashCommands(ctx)
-      if (commands.some((c) => TASK_FLAG.test(c))) notes.push("passed the named task to the boot script (--task)")
-      else notes.push("did not pass --task to the boot script")
+      if (ctx.toolCalls.some((t) => /task_focus$/u.test(t.name) && /watering-schedule-api/u.test(inputText(t)))) notes.push("declared the named task with task_focus")
+      else notes.push("did not declare the named task with task_focus")
       const mentionsNextStep = /raindelaypolicy|should_delay|shoulddelay|rain-delay|rain delay|test_rain_delay_boundary|30%/i.test(operatorPart(ctx))
       if (!mentionsNextStep) failures.push("did not tell the operator the task's recorded next step or what was done on it")
       const readUnrelated = ctx.toolCalls.some((t) => /beacon-uptime-alerts|soil-sensor-dashboard|beacon-relay-push-check/.test(inputText(t)))

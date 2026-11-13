@@ -14,7 +14,7 @@ Path migrations must complete before any path-dependent startup scans run, inclu
 
 ## When this skill fires
 
-At the top of `desk:session-start`, before the boot script (whose checks assume `$DESK/` resolves) and every other scan, on every session start. A migration that already ran fails its `Detect` next time and is skipped silently.
+At the top of `desk:session-start`, before the boot (whose checks assume `$DESK/` resolves) and every other scan, on every session start. A migration that already ran fails its `Detect` next time and is skipped silently.
 
 ## Migration file format
 

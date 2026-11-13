@@ -1,4 +1,4 @@
-// The Claude SessionStart hook is Node, so it never depends on which `bash` is first on PATH. It must say what the shell script it replaced said (kept as a fixture for this comparison), exit 0 on every path, and honour the headless flag.
+// The Claude SessionStart hook is Node, so it never depends on which `bash` is first on PATH. It exits 0 on every path and honours the headless flag.
 // Every run gets its own throwaway HOME and desk, a registry with no checks, and a factory start that does nothing.
 import "../_isolated_env.mjs"
 import { test } from "node:test"
@@ -10,11 +10,9 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { bootFixtureEnv } from "../_boot_fixture.js"
-import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)).replace(/[\\/]$/u, "")
 const hook = path.join(plugin, "hooks", "claude-session-start.cjs")
-const legacy = fileURLToPath(new URL("../fixtures/hooks/legacy-session-start.sh", import.meta.url))
 const foundationPath = path.join(plugin, "skills", "using-desk", "SKILL.md")
 const ROOT = realpathSync(mkdtempSync(path.join(tmpdir(), "claude-start-")))
 test.after(() => rmSync(ROOT, { recursive: true, force: true }))
@@ -40,6 +38,8 @@ function scratch(extra = {}, bootFixture = fixture) {
     XDG_CONFIG_HOME: path.join(home, ".config"),
     DESK: desk,
     CLAUDE_PLUGIN_ROOT: plugin,
+    // The hook's own boot has its own tests below; every other test runs without one.
+    DESK_AUTO_BOOT: "0",
     ...extra,
   }
   return { dir, env: bootFixtureEnv(env, bootFixture) }
@@ -60,7 +60,7 @@ test("the hook prints the SessionStart envelope: the startup line first, then th
   const text = payload.hookSpecificOutput.additionalContext
   const foundation = text.indexOf("The human supplies intent")
   assert.ok(text.startsWith("Desk startup:"), "the startup line leads")
-  assert.ok(text.indexOf("The boot has not run yet") < foundation)
+  assert.ok(text.indexOf("Desk runs the session boot itself") < foundation)
   // The separator follows the plugin root's own spelling: a Windows root keeps its backslashes.
   const sep = plugin.includes("\\") ? "\\" : "/"
   assert.ok(text.endsWith(`Desk RFC: ${plugin}${sep}docs${sep}agentic-engineering-v2-rfc.md\n`))
@@ -78,12 +78,12 @@ test("the foundation path defaults to the plugin's own when the host passes none
   assert.ok(text.endsWith(`Desk RFC: ${root}${sep}docs${sep}agentic-engineering-v2-rfc.md\n`))
 })
 
-test("a foundation that cannot be read prints the boot-pointer fallback and still exits 0", () => {
+test("a foundation that cannot be read prints the boot fallback, which names no script, and still exits 0", () => {
   const { env, dir } = scratch()
   const missing = path.join(dir, "no-such-SKILL.md")
   const result = runNode([missing], env)
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(context(result.stdout), `desk worker boot — the Desk foundation could not be read from ${missing}. The boot has not run: run node "${plugin}/mcp/scripts/session-boot.js" before other work, then desk:session-start explains its result. The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.`)
+  assert.equal(context(result.stdout), `desk worker boot — the Desk foundation could not be read from ${missing}. Desk runs its own boot; its result comes with your first Desk tool reply, and desk:session-start explains it. The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them.`)
 })
 
 test("a plugin root whose Desk modules cannot be loaded gets the could-not-resolve line, with the foundation and RFC line after it", () => {
@@ -94,7 +94,7 @@ test("a plugin root whose Desk modules cannot be loaded gets the could-not-resol
   const result = runNode([], { ...env, CLAUDE_PLUGIN_ROOT: bare })
   assert.equal(result.status, 0, result.stderr)
   const text = context(result.stdout)
-  assert.ok(text.startsWith(`Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node "${bare}/mcp/scripts/session-boot.js" now`))
+  assert.ok(text.startsWith("Desk startup: Desk could not resolve its root in this hook, so the hook did not start the boot. Desk starts it with your first Desk tool reply;"))
   assert.match(text, /The human supplies intent/u)
 })
 
@@ -133,43 +133,6 @@ function spawnRead() {
   return spawnSync(process.execPath, ["-e", "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", path.join(plugin, "hooks", "hooks.json")], { encoding: "utf8" }).stdout
 }
 
-// Golden comparison against the shell script this hook replaced, for the same fixtures. It needs a working bash (found the way Desk finds one, never the WSL relay) and jq. Without jq the old script escaped its JSON by hand, which is not the output it was written to give, so a host with no jq skips these cases on purpose rather than comparing against that fallback.
-const bash = resolveBash()
-const haveReference = bash !== null && (() => { try { return spawnSync(bash, ["-c", "command -v jq >/dev/null"], { encoding: "utf8" }).status === 0 } catch { return false } })()
-const golden = { skip: haveReference ? false : "needs a working bash and jq for the reference script" }
-
-// The one difference allowed on Windows: jq.exe writes its final newline as CRLF (its output is in text mode), where the Node hook writes LF. Both are JSON whitespace; only the CR directly before the final LF is dropped, and nothing else is normalised.
-const lineEnding = (stdout) => (process.platform === "win32" ? stdout.replace(/\r\n$/u, "\n") : stdout)
-
-function both(label, { extra = {}, args = [foundationPath], prepare = () => ({}), bootFixture = fixture } = {}) {
-  test(`golden: ${label} matches the shell script's output`, golden, () => {
-    const { env, dir } = scratch(extra, bootFixture)
-    const withPrepared = { ...env, ...prepare(dir) }
-    const reference = spawnSync(bash, [legacy, ...args], { env: withPrepared, encoding: "utf8", cwd: ROOT })
-    const actual = runNode(args, withPrepared)
-    assert.equal(reference.status, 0, reference.stderr)
-    assert.equal(actual.status, 0, actual.stderr)
-    if (reference.stdout === "") return assert.equal(actual.stdout, "")
-    assert.deepEqual(JSON.parse(actual.stdout), JSON.parse(reference.stdout))
-    assert.equal(actual.stdout, lineEnding(reference.stdout), "byte for byte, including the trailing newline")
-  })
-}
-
-both("a bound desk (foundation, startup line, RFC line)")
-both("an unreadable foundation", { args: [path.join(ROOT, "no-such-SKILL.md")] })
-both("a headless session", { extra: { DESK_FACTORY_HEADLESS: "1" } })
-both("a not-headless flag value", { extra: { DESK_FACTORY_HEADLESS: "0" } })
-both("a plugin root without Desk's modules (the could-not-resolve line)", {
-  prepare: (dir) => {
-    const bare = path.join(dir, "bare-plugin")
-    mkdirSync(path.join(bare, "skills", "using-desk"), { recursive: true })
-    cpSync(foundationPath, path.join(bare, "skills", "using-desk", "SKILL.md"))
-    return { CLAUDE_PLUGIN_ROOT: bare }
-  },
-  args: [],
-})
-both("a Windows plugin root keeps its backslashes in the RFC line", { extra: { CLAUDE_PLUGIN_ROOT: "C:\\Users\\someone\\desk-plugin" } })
-
 // Whatever line the migration check returns (pending, or could not be checked) is passed through as the resolver composed it; this does not depend on its wording.
 const migrationFixture = path.join(ROOT, "migration-fixture.cjs")
 writeFileSync(migrationFixture, 'module.exports = { checks: [], startFactory: async () => true, migrationLine: async () => "Desk migrations: sentinel-migration is reported by the check." };\n')
@@ -183,8 +146,6 @@ test("a migration line from the check is passed through, after the startup line 
   assert.ok(line > text.indexOf("Desk startup:"))
   assert.ok(line < text.indexOf("The human supplies intent"))
 })
-
-both("a migration line from the check", { bootFixture: migrationFixture })
 
 test("a host that closes the output pipe early does not make the hook fail", async () => {
   const { env } = scratch()
