@@ -428,8 +428,13 @@ export class McpSession {
     const ms = performance.now() - started
     if (response.error) return { isError: true, protocolError: response.error, text: response.error.message ?? "", json: null, ms }
     const content = response.result.content ?? []
-    const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n")
+    const texts = content.filter((part) => part.type === "text").map((part) => part.text)
+    const text = texts.join("\n")
     let json = response.result.structuredContent ?? null
+    // Desk appends its session boot to the first reply that has none yet as a further text part, so the tool's own JSON is the first part.
+    if (json === null) {
+      try { json = JSON.parse(texts[0] ?? "") } catch { json = null }
+    }
     if (json === null) {
       try { json = JSON.parse(text) } catch { json = null }
     }
