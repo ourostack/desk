@@ -85,7 +85,8 @@ test("falls back to the last good path when the cache cannot be read, and logs o
     assert.equal(r.status, 0)
     assert.deepEqual(r.calls[0].slice(0, 2), ["/node", [script, "poll"]])
     assert.equal(r.err.length, 1)
-    assert.match(r.err[0], new RegExp(`^2026-11-13T22:00:00.000Z could not resolve the released Desk \\(.+\\); using the last good path ${script.replaceAll("/", "\\/")}\\n$`, "u"))
+    assert.ok(r.err[0].startsWith("2026-11-13T22:00:00.000Z could not resolve the released Desk ("), r.err[0])
+    assert.ok(r.err[0].endsWith(`); using the last good path ${script}\n`), r.err[0])
   }
   assert.equal(readFileSync(first.log, "utf8").split("\n").filter(Boolean).length, 2)
 })
