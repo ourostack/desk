@@ -10,7 +10,7 @@
     "plugins/desk/skills/task-lifecycle/SKILL.md",
     "plugins/desk/skills/fast-honest-ci/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "f5bac30d5544731bc2bc16cb6b4d0ad2fc564d5332aec3cbc81c9563d8871a3f",
+  "reviewedSourceFingerprint": "7cb01f36361a070e55ef83b0c030cc707a5594080e8272df3bc23fce40749185",
   "requirements": [
     {
       "id": "experience-first-status",
