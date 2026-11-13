@@ -242,8 +242,8 @@ test("the public workflow reports relevant-revision status without carrying any 
   for (const trigger of ["evals/offline/cases/v2-alpha-v1/dataset.json", "evals/engineering-v2-kernel.json", "AGENTIC-ENGINEERING-V2.md"]) {
     assert.ok(!ignored.some(pattern => triggerMatches(pattern, trigger)), trigger);
   }
-  // The single existing verified-pack upload stays last; the status step publishes no second artifact.
-  assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
+  // The verified-pack upload and its one retry stay last; the status step publishes no second artifact.
+  assert.equal(job.split("uses: actions/upload-artifact@v4").length, 3);
 });
 
 // A bounded model of the GitHub path-filter syntax these filters actually use: whole-path anchoring from the

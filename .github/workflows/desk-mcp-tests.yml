@@ -207,13 +207,24 @@ jobs:
         # Two repeats in alternating host order, so neither host always pays a cold machine's first start.
         run: node tests/blackbox/run.mjs --repeat 2 --out "$RUNNER_TEMP/blackbox" --cache-dir "$RUNNER_TEMP/desk-blackbox-cache" --label "ci-${{ runner.os }}"
       - name: Keep the results
+        id: keep-results
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: blackbox-${{ runner.os }}
           path: ${{ runner.temp }}/blackbox
           if-no-files-found: warn
           retention-days: 14
+      - name: Keep the results (retry)
+        if: ${{ !cancelled() && steps.keep-results.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackbox-${{ runner.os }}
+          path: ${{ runner.temp }}/blackbox
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
       - name: Show the results table
         if: ${{ !cancelled() }}
         shell: bash
@@ -289,7 +300,18 @@ jobs:
 
       # A failed shard still writes its manifest with its status, so it is uploaded too and the merge names it.
       - name: Retain the shard's raw coverage
+        id: retain-coverage
         if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-coverage-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/desk-coverage-shard
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+      - name: Retain the shard's raw coverage (retry)
+        if: ${{ !cancelled() && steps.retain-coverage.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: desk-coverage-shard-${{ matrix.shard }}
@@ -552,12 +574,23 @@ jobs:
           '
 
       - name: Retain verified runtime dependency pack
+        id: retain-runtime-deps
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: desk-runtime-deps-${{ runner.os }}-${{ runner.arch }}
           path: ${{ runner.temp }}/desk-runtime-deps
           if-no-files-found: error
           retention-days: 7
+      - name: Retain verified runtime dependency pack (retry)
+        if: ${{ steps.retain-runtime-deps.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-runtime-deps-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/desk-runtime-deps
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   desk-runtime-packs:
     name: desk runtime pack (${{ matrix.target }})
@@ -756,12 +789,23 @@ jobs:
           tests/desk/mcp/__tests__/runtime/production_runtime_pack.test.js
 
       - name: Retain the verified native runtime dependency pack
+        id: retain-runtime-pack
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: desk-runtime-pack-${{ matrix.target }}
           path: ${{ runner.temp }}/desk-runtime-deps
           if-no-files-found: error
           retention-days: 7
+      - name: Retain the verified native runtime dependency pack (retry)
+        if: ${{ steps.retain-runtime-pack.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-runtime-pack-${{ matrix.target }}
+          path: ${{ runner.temp }}/desk-runtime-deps
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   desk-native-windows:
     name: desk on native Windows

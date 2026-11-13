@@ -150,7 +150,9 @@ test("the workflow has a single job named Windows suite that needs the shards an
   const workflow = readFileSync(path.resolve(path.dirname(runner), "..", "workflows", "desk-windows-suite.yml"), "utf8")
   assert.match(workflow, /name: Windows suite\n\s+needs: windows-suite\n\s+if: \$\{\{ always\(\) \}\}/u)
   assert.match(workflow, /windows-suite-verdict\.mjs shard-results \d+ /u)
-  // Each attempt keeps its own results; overwriting would lose the earlier attempt's evidence.
+  // Each attempt keeps its own results; overwriting would lose the earlier attempt's evidence. Only a retry step may overwrite, and only the partial upload of the same attempt it retries.
   assert.match(workflow, /name: windows-\$\{\{ matrix\.mode \}\}-shard-\$\{\{ matrix\.shard \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u)
-  assert.doesNotMatch(workflow, /overwrite: true/u)
+  for (const step of workflow.split(/\n(?=      - name: )/u).filter((block) => /overwrite: true/u.test(block))) {
+    assert.match(step, /^      - name: .*\(retry\)$/mu, "only a retry step may overwrite an artifact")
+  }
 })
