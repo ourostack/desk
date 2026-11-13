@@ -36,7 +36,7 @@
 // whatever Node the host puts first on PATH.
 
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { spawn as spawnChild, spawnSync } from "node:child_process"
+import { execFile as execFileChild, spawn as spawnChild, spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
@@ -126,7 +126,8 @@ export function readMigrations(pluginRoot) {
  * exists), bash failed to start, or the WSL relay answered with its own error
  * instead of running the block (a distro-less relay exits 1, which a Detect would
  * otherwise read as "not needed"); `timedOut` means the block ran out of time, and then its
- * whole process group is killed, so a `node` it started does not outlive it.
+ * whole process group is killed, so a `node` it started does not outlive it. On Windows the tree is ended with taskkill instead; when that is not
+ * confirmed within `treeBudgetMs`, the timed-out result also carries `cleanup: "unqualified"`. It resolves in every case and never rejects.
  * Each stream stops growing once it reaches `outputChars`: the hooks keep a
  * bounded amount for one line, and the command line keeps everything.
  */
@@ -135,54 +136,120 @@ export function readMigrations(pluginRoot) {
 // prints only the localized "no installed distributions" sentence, which cannot be matched across languages, so a relay is also recognised by its path.
 const RELAY_FAILURE = /execvpe\(.*\) failed/iu
 
-export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform, bash = resolveBash({ platform }) }) {
+// Hosted Windows runners start PowerShell in up to about 7 s at p99 and 20 s at worst, so a timed-out block's tree gets this long to end.
+const WINDOWS_TREE_BUDGET_MS = 30_000
+
+function windowsTaskkill() {
+  const root = ["systemroot", "windir"].map((name) => {
+    const key = Object.keys(process.env).find((candidate) => candidate.toLowerCase() === name)
+    return key === undefined ? "" : process.env[key].trim()
+  }).find((value) => path.win32.isAbsolute(value)) ?? "C:\\Windows"
+  return path.win32.join(root, "System32", "taskkill.exe")
+}
+
+export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, execFile = execFileChild, platform = process.platform, bash = resolveBash({ platform }), treeBudgetMs = WINDOWS_TREE_BUDGET_MS }) {
   return new Promise((resolve) => {
     if (bash === null) {
       resolve({ status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
       return
     }
-    // On Windows there are no process groups to kill; the block itself is killed.
+    // On Windows there are no process groups: the tree is ended with taskkill, and only the launcher is killed if that cannot be confirmed.
     const posix = platform !== "win32"
     // The block runs from a file, never as `-c <block>`: Windows hands a child its arguments as one command line, and bash garbles a block's
-    // quotes when it splits that line back up. A file path has no quotes to garble.
+    // quotes when it splits that line back up. A file path has no quotes to garble. The file is created exclusively and readable only by its owner.
     const dir = mkdtempSync(path.join(os.tmpdir(), "desk-migration-"))
     const file = path.join(dir, "block.sh")
-    writeFileSync(file, block)
-    const cleanUp = () => rmSync(dir, { recursive: true, force: true })
+    writeFileSync(file, block, { flag: "wx", mode: 0o600 })
+    // Windows keeps the file while a process in the tree still holds it, so a refused removal is left as a private temporary file.
+    const cleanUp = () => {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch {
+        // Still held by the block's tree.
+      }
+    }
     const child = spawn(bash, [file], { env, cwd, detached: posix, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     let timedOut = false
+    let closed = false
+    let closeCode = null
+    let treeEnding = false
+    let settled = false
+    let timer
+    let budget
     const keep = (text, chunk) => (text.length < outputChars ? text + chunk : text)
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
     child.stdout.on("data", (chunk) => { stdout = keep(stdout, chunk) })
     child.stderr.on("data", (chunk) => { stderr = keep(stderr, chunk) })
-    const timer = setTimeout(() => {
-      timedOut = true
-      try {
-        process.kill(posix ? -child.pid : child.pid, "SIGKILL")
-      } catch {
-        // Already gone between the timer and its close event.
-      }
-    }, Math.max(1, Math.floor(timeoutMs)))
-    child.once("error", () => {
+    const finish = (result) => {
       clearTimeout(timer)
+      clearTimeout(budget)
+      settled = true
+      child.removeListener("error", onError)
+      child.removeListener("close", onClose)
       cleanUp()
-      resolve({ status: null, stdout, stderr, timedOut: false, unavailable: true })
-    })
-    child.once("close", (code) => {
-      clearTimeout(timer)
-      cleanUp()
+      resolve(result)
+    }
+    // Never rejects: the caller gets the timed-out result, and `cleanup` says the tree may still be running.
+    const unqualified = () => {
+      child.kill("SIGKILL")
+      finish({ status: null, stdout, stderr, timedOut: true, unavailable: false, cleanup: "unqualified" })
+    }
+    const complete = () => {
+      if (!closed || treeEnding) return
       // A relay with a working distro runs the block for real: exit 0, or a non-zero exit that printed something, is a genuine result. A relay that
       // failed with nothing on stdout is treated as unavailable, even though a distro that has bash and a Detect that legitimately exits 1 with no
       // output looks the same. That ambiguity resolves toward the loud degraded state ("could not be checked") over a silent "not needed", because
       // a skipped migration nobody hears about is the worse failure. Desk never picks the relay itself (`resolveBash` returns null instead), so
       // this only matters when a caller injects one. Any other bash is judged by the relay's debug line alone.
-      const failed = !timedOut && code !== 0
+      const failed = !timedOut && closeCode !== 0
       const relay = failed && ((isWslRelay(bash) && stdout === "") || RELAY_FAILURE.test(`${stderr}\n${stdout}`))
-      resolve({ status: timedOut ? null : code, stdout, stderr, timedOut, unavailable: relay })
-    })
+      finish({ status: timedOut ? null : closeCode, stdout, stderr, timedOut, unavailable: relay })
+    }
+    // Kill the tree before its launcher: once the launcher dies, its shell loses that ancestry.
+    const endTree = () => {
+      try {
+        execFile(windowsTaskkill(), ["/PID", String(child.pid), "/T", "/F"], {
+          timeout: treeBudgetMs, killSignal: "SIGKILL", maxBuffer: 16_384, encoding: "utf8", windowsHide: true,
+        }, (error) => {
+          if (settled) return
+          if (error !== null) {
+            unqualified()
+            return
+          }
+          treeEnding = false
+          complete()
+        })
+      } catch {
+        unqualified()
+      }
+    }
+    const onError = () => {
+      finish({ status: null, stdout, stderr, timedOut: false, unavailable: true })
+    }
+    const onClose = (code) => {
+      closed = true
+      closeCode = code
+      complete()
+    }
+    timer = setTimeout(() => {
+      timedOut = true
+      if (posix) {
+        try {
+          process.kill(-child.pid, "SIGKILL")
+        } catch {
+          // Already gone between the timer and its close event.
+        }
+        return
+      }
+      treeEnding = true
+      budget = setTimeout(unqualified, treeBudgetMs)
+      endTree()
+    }, Math.max(1, Math.floor(timeoutMs)))
+    child.once("error", onError)
+    child.once("close", onClose)
   })
 }
 
