@@ -61,6 +61,7 @@ A final job needs every other job and writes each job's minutes to the step summ
 
 - **One change per pull request.** A big change is slower to test, harder to verify and harder to bisect or revert.
 - **Release each proven fix the same day,** without waiting for other fixes. Never batch fixes behind a daily or weekly schedule. A scheduled release may still run, but only to sweep up what's left; nothing waits for it.
+- **A merged change reaches its live surface in seconds.** Measure from merge to live and treat a slow deploy as a pipeline defect to fix, not a wait to accept: a site, tracker or page update that takes 40 minutes to appear is broken (Ari, 2026-11-11 15:51 PT: "these tracker updates/deployments need to take seconds, not this crazy 40+ minutes LOL"; 2026-11-10 15:18 PT: "any value you ship should be deployed within seconds"). Prefer a merge queue with auto-merge over waiting to press merge (Ari, 2026-11-12 12:37 PT: "don't we want merge queue + auto merge?").
 - **Fast CI makes this cheap.** If a release takes too long to ship one fix at a time, fix the pipeline, not the cadence. A worked release train is in [`examples.md`](examples.md#a-private-desktop-app-windows-and-macos).
 
 ## Done when
