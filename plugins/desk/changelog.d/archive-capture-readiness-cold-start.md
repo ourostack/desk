@@ -1,0 +1,1 @@
+On Windows, `task_archive` gives a cold PowerShell start up to 30 s to become ready instead of 5 s, so a slow first start no longer fails the archive with "native handle capture readiness timeout" ([#573](https://github.com/ourostack/desk/issues/573)).
