@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.113 — 2026-11-13
+
+Writing a task or track card no longer falls back to writing it in place when the rename over it is refused. On Windows a refused rename (another writer renaming over the same card, an editor, antivirus or OneDrive holding it) made Desk write the card in place, and two writers doing that left the tail of the longer text behind a shorter one: a card ending `body 8` followed by a stray `5`. Desk now retries the rename for a couple of seconds with a short backoff, and if the card stays held it reports the error and leaves the old card as it was, with no temporary file beside it.
+
+A task card whose commit did not finish in time, such as a `task_update` that a slow pre-commit hook cut off, now gets a route that finishes it. The route reads back what the commit held, then commits exactly that change once through Desk's finish script and publishes it. Desk keeps a private record of the change in its state folder, and the finish takes the change from that record alone, so the card guard lets through only a commit Desk recorded: a hand edit of a card is still refused. A record is removed once its commit lands and pruned after a week. A card whose record cannot be written keeps the route that only reads, which says the change is held.
+
+A desk-web screenshot now survives closing its context. It is saved in an evidence folder under Desk's browser state folder (`evidence/<session>/`), outside the context's private files, and the reply says so: `screenshot` is the path, `survivesClose` is `true`, and `note` says where it lives. A fresh browser's screenshot is also copied there and the reply names the copy. `browser_context` open returns the folder as `evidence`. Before, an agent that asked for a screenshot and then closed the context found the returned path gone. A timed-out or stuck wait's evidence picture is kept the same way. Evidence folders older than a week are removed when a later Desk process starts. The protected-profile masking is unchanged.
+
+Every `mine` reply is now consistent with the `page` and `change` fields added in the last release. `screenshot` carries `page` (`url` and `title`, scrubbed as a snapshot's are). `goto`, `go-back`, `go-forward`, `reload`, `fill`, `type`, `resize`, `mousewheel` and `wait` report `change` (`navigated`, `changed` or `none`) and a one-sentence `changeNote`, as `click` does. A `wait` is measured against the read before it. A navigation that was still loading and could not be read says so in the same fields. `tab-list` gives each tab's `url`, and `tab-close` says which tab is now in front.
+
+The Copilot startup text no longer tells a bounded read-only executor to read the worker agent file: "Unless started with `--agent` or the skip rule above applies (then skip this read too), act as Desk's worker". It sits next to the boot-skip sentence, so a session told not to boot is not also told to read the worker file first. Claude Code takes the worker through its agent setting and never had this line.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.112 — 2026-11-13
 
 A controlled proof run that sets `DESK_FACTORY_PROOF` to `1` no longer enters Factory. Its session's end writes only a private mark, so nothing is captured, derived or flushed for it, and the capture coverage counts leave it out. The mark is kept with the session, so a later run without the variable, or a sweep past the 30-day marker window, still leaves it out. An unattended run without the variable counts as before, and a mark that names another session or cannot be read counts the session as ordinary, with a count of unreadable markers in `status.json` and no name or content. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the variable. Proof sessions that were already published are not withdrawn by this change.
