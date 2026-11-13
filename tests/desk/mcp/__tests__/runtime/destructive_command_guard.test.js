@@ -44,7 +44,7 @@ test("a git main checkout is refused for rm and mv, with a reason that says what
 test("a linked worktree is refused for rm and points to git worktree remove", () => {
   const message = refused(`rm -rf ${TREE}`)
   assert.match(message, /linked git worktree/u)
-  assert.match(message, new RegExp(`git worktree remove ${TREE}`, "u"))
+  assert.ok(slash(message).includes(`git worktree remove ${TREE}`), message)
 })
 
 test("cd X && rm -rf Y, relative paths, wildcards, variables, wrappers, subshells and substitutions are all resolved", () => {
@@ -72,7 +72,7 @@ test("cd X && rm -rf Y, relative paths, wildcards, variables, wrappers, subshell
 
 test("a folder that holds a checkout is refused, and the reason names the checkout", () => {
   const message = refused(`rm -rf ${ROOT}`)
-  assert.match(message, new RegExp(`${ROOT} holds ${MAIN}`, "u"))
+  assert.ok(slash(message).includes(`${ROOT} holds ${MAIN}, which is a git checkout`), message)
 })
 
 test("ordinary removal is allowed: temp files, scratch folders, a folder inside a checkout, git's own commands, text that only mentions rm", () => {
