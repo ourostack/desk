@@ -50,6 +50,7 @@
   "coverage/coverage_shards.test.js": 4.4,
   "crew/crew_cli.test.js": 2.3,
   "crew/crew_cli_adopt.test.js": 0.3,
+  "crew/initiative.test.js": 11.5,
   "crew/workspace_adoption.test.js": 208,
   "crew/workspace_edges.test.js": 48.7,
   "crew/workspace_join.test.js": 39.1,
