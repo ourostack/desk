@@ -19,6 +19,8 @@ var WAIT_MAX_MS = 60000;
 var WAIT_POLL_MS = 1000;
 // Evidence for a page that never became ready (a screenshot, and the diagnosis of its requests) is given this long at most.
 var EVIDENCE_MS = 5000;
+// What a reply keeps back from a command's time for the evidence it sends, so a late poll cannot end past the command.
+var REPLY_MARGIN_MS = 200;
 // The latest requests a page's recorder keeps.
 var RECENT = 200;
 var RESOURCE_TYPES = ["document", "script", "stylesheet", "image", "font", "xhr", "fetch", "websocket", "media"];
@@ -1398,6 +1400,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   }
   // A wait reads nothing new: it pauses, or reads ordinary snapshots until text shows (or goes), and returns the last.
   async function wait(reader, plan) {
+    var started = Date.now();
     var limit = Math.min(WAIT_MAX_MS, Math.floor(timeoutMs / 2));
     if (plan.ms !== undefined) {
       var ms = Math.min(plan.ms, limit);
@@ -1426,8 +1429,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (last && Date.now() >= deadline) {
         counted(reader, pending);
         last.waited = { text: plan.text, found: false };
-        // The picture must fit in what is left of the command's time after the wait.
-        last.diagnosis = await diagnose(reader.page, reader, Math.max(1, Math.min(evidenceMs, timeoutMs - limit)));
+        // The picture must fit in the command's time that is left, less a margin for the reply: the last poll can end late.
+        var left = timeoutMs - (Date.now() - started) - REPLY_MARGIN_MS;
+        last.diagnosis = await diagnose(reader.page, reader, Math.max(1, Math.min(evidenceMs, left)));
         last.hint = notReadyHint(last.diagnosis, plan.text, plan.gone, limit / 1000);
         return last;
       }
