@@ -6,7 +6,7 @@ import { redactCredentialLikeText } from "../util/redact.js"
 import { recentFailure } from "./desk-failure.js"
 import { hostFromEnv, readSyncStatus } from "./sync-worker.js"
 
-export function failureEvidence({ code, deskRoot, env = process.env }) {
+export function failureEvidence({ code, deskRoot, env }) {
   const failure = recentFailure(code)
   const sync = readSyncStatus({ root: deskRoot, env })
   const lines = [
