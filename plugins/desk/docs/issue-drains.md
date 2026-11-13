@@ -12,7 +12,7 @@ node <desk>/plugins/desk/mcp/scripts/drains.js status    # one health line per d
 
 Every `drains.js` command (`poll`, `status`; `ack` skips it) first refreshes `drains/run.mjs` in the state folder below. It is a copy of [drains-launcher.mjs](../mcp/scripts/drains-launcher.mjs), so the file at that stable path always matches the Desk that wrote it, and a new machine gets it from its first `drains.js status`. The command's JSON names the installed path and its SHA-256 under `launcher`. A runner calls `node <state>/ouroboros-skills/desk/drains/run.mjs poll` instead of a path inside a Desk checkout.
 
-The launcher finds the newest `ourostack/desk` `plugins/desk@release` entry in Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`, then `entries/<dir_name>/mcp/scripts/drains.js`) and runs it with the same arguments. If that cannot be resolved, it runs the last path that worked (`last-good-script`) and logs one line to stderr and `resolve.log`; with no last good path it exits 1.
+The launcher finds the newest `ourostack/desk` `plugins/desk@release` entry in Agency's plugin cache (`~/.local/agency/plugins/cache/cache_index.json`, then `entries/<dir_name>/mcp/scripts/drains.js`) and runs it with the same arguments. If that cannot be resolved, it runs the last path that worked (`last-good-script`), or when Agency has dropped that entry too (it does while it refreshes), the private copy of the last resolved release kept in `release/` beside the launcher, and logs one line to stderr and `resolve.log`; with neither it exits 1.
 
 ## Config and state
 
@@ -38,14 +38,18 @@ An issue is news when something other than the drain changed it since the revisi
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
 - comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
-- closes and assignments.
+- closes and assignments, and cross-references: a `cross-referenced` event is never news, including the one the drain's own marked comment on another issue creates when it names this one. A closed issue is not polled at all.
+
+## Seeing a gap
+
+`status` (and the `status` lines `poll` prints) show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it.
 
 ## Delivering a wake
 
 `poll` prints one JSON value:
 
 ```json
-{ "at": "…", "status": ["issue drain owner/name -> 58fbd57e: polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
+{ "at": "…", "status": ["issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
   "errors": [{ "repo": "owner/name", "error": "GitHub answered HTTP 502" }],
   "wakes": [{ "id": "…", "repo": "owner/name", "session": "…", "message": "New or changed issues in owner/name: #12 Title. Drain them.", "events": [], "done": ["node", ".../drains.js", "ack", "--repo", "owner/name", "--wake", "…"] }] }
 ```

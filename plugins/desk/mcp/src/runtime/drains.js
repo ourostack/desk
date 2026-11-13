@@ -267,7 +267,7 @@ export async function pollDrain(drain, states, { connect, now }) {
       const digest = digestOf(issue, trailers)
       seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
       if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-      if (await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at })
+      if (await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString() })
     }
     for (const [key, entry] of Object.entries(state.seen)) {
       const gone = seenIssue(entry)
@@ -280,6 +280,7 @@ export async function pollDrain(drain, states, { connect, now }) {
     state.seen = seen
     state.seeded = true
     state.openCount = issues.length
+    state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
   } catch (error) {
     state.lastError = error.message
@@ -287,19 +288,31 @@ export async function pollDrain(drain, states, { connect, now }) {
   state.lastPollAt = new Date(now).toISOString()
 }
 
-function ago(iso, now) {
-  const minutes = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000))
-  return minutes < 1 ? "just now" : minutes < 90 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`
+function span(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  return minutes < 1 ? "under 1m" : minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
 }
 
-/** One line per drain: its last poll, open issues, events waiting, last wake and last error. */
+function ago(iso, now) {
+  const text = span(now - Date.parse(iso))
+  return text === "under 1m" ? "just now" : `${text} ago`
+}
+
+/** When the last poll that read GitHub without an error finished. A state from before this was recorded counts its last poll when that had no error. */
+const lastOk = (state) => state.lastOkAt ?? (state.lastError ? null : state.lastPollAt)
+
+/** One line per drain: its last successful poll and how far behind that is, the last attempt, open issues, events waiting and for how long, last wake and last error. */
 export function drainStatusLines(drains, states, now) {
   return drains.map((drain) => {
     const state = states[drain.repo]
     const head = `issue drain ${drain.repo} -> ${drain.session.slice(0, 8)}`
     if (!state?.lastPollAt) return `${head}: not polled yet`
+    const ok = lastOk(state)
+    const good = ok ? `last ok poll ${ok} (lag ${span(now - Date.parse(ok))})` : "no ok poll recorded"
+    const since = state.pending.map((event) => Date.parse(event.seenAt)).filter(Number.isFinite)
+    const waiting = `${state.pending.length} waiting${since.length ? ` (oldest ${span(now - Math.min(...since))})` : ""}`
     const wake = state.lastWakeAt ? `${ago(state.lastWakeAt, now)} (${state.lastWakeCount} issue${state.lastWakeCount === 1 ? "" : "s"})` : "never"
-    return `${head}: polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${state.pending.length} waiting, last wake ${wake}${state.lastError ? `, last error: ${state.lastError}` : ""}`
+    return `${head}: ${good}, polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${waiting}, last wake ${wake}${state.lastError ? `, last error: ${state.lastError}` : ""}`
   })
 }
 
