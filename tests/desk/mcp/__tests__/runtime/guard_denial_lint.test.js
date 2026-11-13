@@ -91,7 +91,7 @@ test("every file under plugins/desk that emits a denial is accounted for in this
   // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
-    "hooks/lib/delivery-stop.cjs": 1, "hooks/lib/destructive-command-guard.cjs": 2,
+    "hooks/lib/delivery-stop.cjs": 1,
     "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.

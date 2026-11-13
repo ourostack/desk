@@ -86,7 +86,7 @@ test("every Desk session disables explicitly enabled native memory and injects t
 test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const commands = (event) => hooks[event].map((entry) => entry.bash)
-  assert.deepEqual(commands("preToolUse"), ['node "${PLUGIN_ROOT}/hooks/destructive-command-guard.cjs" copilot'], "the one hook on the host's tool calls is the destructive-command guard")
+  assert.equal(hooks.preToolUse, undefined, "Desk registers no hook on the host's tool calls")
   assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs"'])
   assert.equal(hooks.postToolUse[0].matcher, "skill")
   assert.deepEqual(commands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot'])
