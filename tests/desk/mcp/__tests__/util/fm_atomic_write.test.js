@@ -1,4 +1,4 @@
-// writeMarkdown with `atomic`: the card is written beside itself and renamed over, and a failed write leaves no temporary file.
+// writeMarkdown with `atomic`: the card is written beside itself and renamed over (retried while something holds it, never written in place), and a failed write leaves no temporary file.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -46,17 +46,66 @@ test("an atomic write keeps the card's file mode", { skip: NO_POSIX_MODES }, asy
   assert.equal((await fs.stat(file)).mode & 0o777, 0o640)
 })
 
-test("a rename refused because the card is held open falls back to writing it in place, and any other failure surfaces even when cleanup fails too", async () => {
-  const root = await mkTempDeskRoot()
-  const file = path.join(root, "card.md")
-  await fs.writeFile(file, "old")
-  const { rename, rm } = fs
-  try {
-    for (const code of ["EPERM", "EBUSY", "EACCES"]) {
-      fs.rename = async () => { throw Object.assign(new Error("held"), { code }) }
-      await writeMarkdown(file, { code }, "fallback\n", { atomic: true })
-      assert.match(await fs.readFile(file, "utf8"), new RegExp(`code: ${code}[\\s\\S]*fallback`, "u"))
+// Windows refuses a rename over a card another writer is renaming over. Standing in for it: a rename onto a card that is mid-rename gets EPERM.
+function refuseOverlappingRenames() {
+  const { rename } = fs
+  const renaming = new Set()
+  fs.rename = async (from, to) => {
+    if (renaming.has(to)) throw Object.assign(new Error("held"), { code: "EPERM" })
+    renaming.add(to)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      return await rename(from, to)
+    } finally {
+      renaming.delete(to)
     }
+  }
+  return () => { fs.rename = rename }
+}
+
+test("concurrent writes of different lengths never write the card in place, and leave one whole card", async () => {
+  const root = await mkTempDeskRoot()
+  const file = path.join(await fs.realpath(root), "card.md")
+  await fs.writeFile(file, "old")
+  const { writeFile } = fs
+  const inPlace = []
+  const restore = refuseOverlappingRenames()
+  fs.writeFile = async (target, ...rest) => {
+    if (target === file) inPlace.push(target)
+    return writeFile(target, ...rest)
+  }
+  try {
+    await Promise.all(Array.from({ length: 30 }, (_, index) => writeMarkdown(file, { n: index * 11 }, `body ${"x".repeat(index)}${index}\n`, { atomic: true })))
+  } finally {
+    fs.writeFile = writeFile
+    restore()
+  }
+  assert.deepEqual(inPlace, [])
+  assert.match(await fs.readFile(file, "utf8"), /^---\n'?n'?: \d+\n---\n\nbody (x*)\d+\n$/u)
+  assert.deepEqual(await fs.readdir(root), ["card.md"])
+})
+
+test("a rename refused because the card is held open is retried until it goes through, and any other failure surfaces even when cleanup fails too", async () => {
+  const root = await mkTempDeskRoot()
+  const file = path.join(await fs.realpath(root), "card.md")
+  await fs.writeFile(file, "old")
+  const { rename, rm, writeFile } = fs
+  const inPlace = []
+  try {
+    fs.writeFile = async (target, ...rest) => {
+      if (target === file) inPlace.push(target)
+      return writeFile(target, ...rest)
+    }
+    for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+      let refusals = 3
+      fs.rename = async (from, to) => {
+        if (refusals-- > 0) throw Object.assign(new Error("held"), { code })
+        return rename(from, to)
+      }
+      await writeMarkdown(file, { code }, "retried\n", { atomic: true })
+      assert.match(await fs.readFile(file, "utf8"), new RegExp(`code: ${code}[\\s\\S]*retried`, "u"))
+    }
+    assert.deepEqual(inPlace, [])
     assert.deepEqual(await fs.readdir(root), ["card.md"])
     fs.rename = async () => { throw Object.assign(new Error("disk on fire"), { code: "EIO" }) }
     fs.rm = async () => { throw new Error("cleanup failed") }
@@ -64,5 +113,21 @@ test("a rename refused because the card is held open falls back to writing it in
   } finally {
     fs.rename = rename
     fs.rm = rm
+    fs.writeFile = writeFile
   }
+})
+
+test("a card held open past every retry keeps its old text and leaves no temporary file", async () => {
+  const root = await mkTempDeskRoot()
+  const file = path.join(root, "card.md")
+  await fs.writeFile(file, "old")
+  const { rename } = fs
+  fs.rename = async () => { throw Object.assign(new Error("held"), { code: "EPERM" }) }
+  try {
+    await assert.rejects(writeMarkdown(file, { a: 1 }, "b", { atomic: true }), /held/u)
+  } finally {
+    fs.rename = rename
+  }
+  assert.equal(await fs.readFile(file, "utf8"), "old")
+  assert.deepEqual(await fs.readdir(root), ["card.md"])
 })
