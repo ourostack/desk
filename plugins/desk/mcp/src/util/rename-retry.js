@@ -49,7 +49,7 @@ export async function renameWithRetryAsync(source, destination, { rename = renam
 
 /** True for the codes Windows gives while another process holds the file open. */
 export function isTransientError(error) {
-  return TRANSIENT.has(error?.code)
+  return TRANSIENT.has(error.code)
 }
 
 // How long to wait before the next attempt; throws `error` when it is not one to retry.

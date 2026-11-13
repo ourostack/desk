@@ -230,6 +230,12 @@ test("before a retry, a target that cannot be read stops the move, but a read th
   assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
   assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
 
+  // A rename refused for any other reason is thrown as it is, and leaves no temporary file or change behind.
+  const full = async () => { throw Object.assign(new Error("no space left"), { code: "ENOSPC" }) }
+  await assert.rejects(replaceIfUnchanged({ ...args, rename: full }), { code: "ENOSPC" })
+  assert.equal(readFileSync(fixture.file, "utf8"), entry(MAIN_SPEC))
+  assert.deepEqual(readdirSync(path.dirname(fixture.file)).filter((name) => name.endsWith(".tmp")), [])
+
   attempts = 0
   assert.equal(await replaceIfUnchanged({ ...args, fsp: failingOnRead("EBUSY"), rename: refusedOnce }), "written")
   assert.equal(readFileSync(fixture.file, "utf8"), entry(RELEASE_SPEC))
