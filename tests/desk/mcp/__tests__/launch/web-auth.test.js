@@ -3032,6 +3032,8 @@ test("every read says where the tab is: its address without query or fragment, a
     noPassword(titled.page)
     const ref = titled.snapshot.children[0].children[0].children[0].ref
     assert.equal((await adapter.call(["click", ref])).page.url, "https://synthetic.invalid/work/item")
+    at.title = -1
+    assert.equal((await adapter.call(["snapshot"])).page.title, "", "a page with no title reads as an empty one")
   } finally { await adapter.close() }
 })
 
@@ -3051,10 +3053,18 @@ test("a click says whether the page navigated, changed in place or stayed as it 
     assert.equal(changed.change, "changed")
     assert.match(changed.changeNote, /The click changed the page without navigating: 2 lines added and 0 lines removed since your last read\./u)
     assert.equal((await adapter.call(["hover", refOf(changed)])).change, "none", "the change is measured against the read before each action")
+    native.packet.strings[native.packet.strings.indexOf("Opened panel")] = "Closed panel"
+    const swapped = await adapter.call(["press", "Enter"])
+    assert.equal(swapped.change, "changed")
+    assert.match(swapped.changeNote, /1 line added and 1 line removed since your last read\./u)
     native.packet.strings[native.packet.documents[0].documentURL] = "https://synthetic.invalid/next"
-    const moved = await adapter.call(["click", refOf(changed)])
+    const moved = await adapter.call(["click", refOf(swapped)])
     assert.equal(moved.change, "navigated")
     assert.match(moved.changeNote, /^The click navigated: the page is now https:\/\/synthetic\.invalid\/next \(Sign in\)\.$/u)
+    native.packet.strings[native.packet.documents[0].documentURL] = "https://synthetic.invalid/untitled"
+    native.packet.strings[native.packet.documents[0].title] = ""
+    const bare = await adapter.call(["click", refOf(moved)])
+    assert.match(bare.changeNote, /^The click navigated: the page is now https:\/\/synthetic\.invalid\/untitled\.$/u)
     assert.equal((await adapter.call(["snapshot"])).change, undefined, "only an action reports a change")
   } finally { await adapter.close() }
 })
@@ -3071,6 +3081,8 @@ test("a wait for text that has not shown stops early, saying why, once nothing h
     assert.match(stuck.hint, /^The text did not show, and the page has been still for [\d.]+ s \(no request and no change on it\), so waiting longer will not help\. Probably the page finished loading without that text/u)
     assert.match(stuck.hint, /\["find","<part of the text>"\]/u)
     assert.equal(stuck.page.title, "Sign in")
+    const gone = await adapter.call(["wait", "--gone", "Password"])
+    assert.match(gone.hint, /^The text did not go, and the page has been still for /u)
   } finally { await adapter.close() }
 })
 

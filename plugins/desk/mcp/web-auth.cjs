@@ -688,8 +688,7 @@ function textLines(node) {
 function lookOf(prepared, loader) {
   var counts = new Map();
   var whole = crypto.createHash("sha1");
-  textLines(prepared.tree).forEach(function (entry) {
-    if (entry.virtual) return;
+  textLines(prepared.tree).filter(function (entry) { return !entry.virtual; }).forEach(function (entry) {
     var key = crypto.createHash("sha1").update(entry.line.replace(/ \[ref=e\d+\]/u, "")).digest("base64").slice(0, 12);
     counts.set(key, (counts.get(key) || 0) + 1);
     whole.update(key);
