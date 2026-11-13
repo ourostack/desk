@@ -23,6 +23,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js"
   ],
   "reviewedSourceFingerprint": "7c29e9eebd0ba80446f55aa6e73ce14e43f1bbce2153295abb2288783466d95e",
+  "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/876", "case": "v2-new-work-alignment", "observed": "2026-11-13"},
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
     {"id": "v2-explicit-go", "description": "New engineering work needs explicit agreement and go before implementation; contribution permission is not enough."},
