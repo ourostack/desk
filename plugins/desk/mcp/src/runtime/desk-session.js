@@ -24,6 +24,7 @@ import { deskSkill } from "./skills.js"
 import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
+import { runtimeIdentity } from "./runtime-identity.js"
 import { GATE_WAIT_MS } from "./gate-wait.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { removeReadinessLeftovers } from "../readiness/leftovers.js"
@@ -938,7 +939,13 @@ export function createDeskSession(deps) {
     // Search status comes straight from the session's search engine, which answers at once. The runtime status run
     // also carries it, but on a large desk that run rarely finishes within this call's budget.
     if (context.search) payload = { ...payload, search: context.search.searchStatus() }
-    const full = withAdmission(payload, stamped ?? statusSnapshot())
+    const admitted = withAdmission(payload, stamped ?? statusSnapshot())
+    // Who is serving comes from this process, never from the slow runtime status, so every answer carries it; only the fields that status fills can be pending, and the answer names them.
+    const full = {
+      ...admitted,
+      runtime: { ...admitted.runtime, ...runtimeIdentity({ env, runtime: context.runtime }) },
+      ...(payload.detail_pending === true ? { pending: PENDING_STATUS_FIELDS.filter((field) => payload[field] === undefined) } : {}),
+    }
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     return jsonResult(input?.detail === true ? full : compactStatus(full))
   }
@@ -1041,8 +1048,10 @@ export function createDeskSession(deps) {
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       payload = JSON.parse((await runtimeCall("desk_doctor", { format }, signal)).content[0].text)
     }
+    const admitted = withAdmission(payload, snapshot)
     return jsonResult({
-      ...withAdmission(payload, snapshot),
+      ...admitted,
+      runtime: { ...admitted.runtime, ...runtimeIdentity({ env, runtime: context.runtime }) },
       repairs_available: DOCTOR_REPAIRS,
     })
   }
@@ -1206,6 +1215,9 @@ function degradedResult(name, fields, needs) {
     isError: true,
   }
 }
+
+// The desk_status fields only the runtime's status computation fills.
+const PENDING_STATUS_FIELDS = ["activation", "write_scope", "sync", "active_tasks", "factory"]
 
 function baseDiagnostic(snapshot) {
   return snapshot.diagnostic ?? {

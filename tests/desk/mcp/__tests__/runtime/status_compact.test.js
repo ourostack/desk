@@ -91,6 +91,15 @@ test("a ready desk answers in one word with nothing to fix and pointers to the r
   assert.ok(JSON.stringify(compact).length < 800)
 })
 
+test("the compact answer carries who is serving, and only the pending fields it shows", () => {
+  const identity = { plugin: { name: "desk", version: "1.2.3" }, plugin_root: "/p", source_mirror_path: null, source_mirror_hash: null, loaded: false }
+  const compact = compactStatus({ ...ready, runtime: { ...identity, node: { abi: "1" } }, detail_pending: true, pending: ["activation", "sync", "active_tasks"] })
+  assert.deepEqual(compact.runtime, identity)
+  assert.deepEqual(compact.pending, ["activation", "sync"])
+  assert.equal(compactStatus({ ...ready, runtime: { ...identity, newest_release: { state: "current" } } }).runtime.newest_release.state, "current")
+  assert.ok(!("pending" in compactStatus(ready)))
+})
+
 test("search that is still preparing never makes the state degraded, and the old index's removal is a note", () => {
   const preparing = "Search is preparing 3 of 10 sections for meaning-based search; exact-word search is ready."
   const removed = "Desk removed its old search index (9.7 GB), which this version no longer uses."
