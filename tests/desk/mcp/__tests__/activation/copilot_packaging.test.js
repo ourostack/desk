@@ -271,24 +271,26 @@ test("Copilot root plugin metadata exposes the observer agent beside worker", ()
   assert.equal(observer["user-invocable"], true)
 })
 
-test("Copilot enrollment resolves the bundled native label entry from additive plugin metadata", () => {
+// An extension that registers hooks makes the Copilot app ask a person to allow it in every new session folder, so an unattended session never starts.
+test("Desk ships no Copilot extension that needs a permission prompt", () => {
   const deskPlugin = loadJson("plugins", "desk", "plugin.json")
-  assert.equal(deskPlugin.extensions, "./extensions/")
-  const extensionRoot = path.resolve(repoRoot, "plugins/desk", deskPlugin.extensions)
-  assert.equal(existsSync(path.join(extensionRoot, "session-label", "extension.mjs")), true)
-  assert.equal(existsSync(path.join(extensionRoot, "session-label", "consumer.mjs")), true)
+  assert.equal(deskPlugin.extensions, undefined)
+  assert.equal(existsSync(path.join(repoRoot, "plugins/desk/extensions")), false)
   assert.deepEqual(validateCopilotPackagingContract(currentCopilotPackagingInput()), [])
+  const shipped = spawnSync("git", ["ls-files", "plugins/desk"], { cwd: repoRoot, encoding: "utf8" }).stdout
+    .split("\n").filter((file) => /\.(mjs|js|cjs)$/.test(file) && !file.startsWith("plugins/desk/optional/"))
+  for (const file of shipped) {
+    assert.doesNotMatch(readFileSync(path.join(repoRoot, file), "utf8"), /@github\/copilot-sdk\/extension/, `${file} must not join a session as an extension`)
+  }
 })
 
-for (const declaration of [undefined, "./missing-extensions/", { paths: ["./extensions/"], exclusive: true }]) {
-  test(`Copilot packaging rejects missing or non-additive extension enrollment (${JSON.stringify(declaration)})`, () => {
-    const input = clone(currentCopilotPackagingInput())
-    input.deskPlugin.extensions = declaration
-    assert.deepEqual(validateCopilotPackagingContract(input), [
-      "Copilot root plugin metadata must expose additive ./extensions/ discovery",
-    ])
-  })
-}
+test("Copilot packaging rejects a declared extension", () => {
+  const input = clone(currentCopilotPackagingInput())
+  input.deskPlugin.extensions = "./extensions/"
+  assert.deepEqual(validateCopilotPackagingContract(input), [
+    "Copilot root plugin metadata must not declare extensions",
+  ])
+})
 
 test("Copilot root packaging declares a generated flattened dependency closure", () => {
   assertFileExists(...copilotBundlePath.split("/"))

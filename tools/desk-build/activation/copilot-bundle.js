@@ -114,8 +114,9 @@ export function validateCopilotPackagingContract(input) {
   if (deskPlugin.hooks !== "./hooks/copilot-hooks.json") {
     errors.push("Copilot root plugin metadata must expose ./hooks/copilot-hooks.json")
   }
-  if (deskPlugin.extensions !== "./extensions/") {
-    errors.push("Copilot root plugin metadata must expose additive ./extensions/ discovery")
+  // A declared extension makes the Copilot app ask a person to allow it in every new session folder, which freezes unattended sessions.
+  if (deskPlugin.extensions !== undefined) {
+    errors.push("Copilot root plugin metadata must not declare extensions")
   }
   if (deskPlugin.version !== activation.version) {
     errors.push(`Copilot root Desk version must match activation version ${activation.version}`)

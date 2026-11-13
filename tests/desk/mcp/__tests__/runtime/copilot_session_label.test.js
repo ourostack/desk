@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { readFileSync, promises as fs } from "node:fs"
 import path from "node:path"
 import { makeSessionLabelProposal } from "../../../../../plugins/desk/mcp/src/runtime/session-label.js"
-import { attachCopilotSessionLabels } from "../../../../../plugins/desk/extensions/session-label/consumer.mjs"
+import { attachCopilotSessionLabels } from "../../../../../plugins/desk/optional/session-label/consumer.mjs"
 const task = { track: "engineering", slug: "workflow-review" }
 const other = { track: "engineering", slug: "browser-boundary" }
 const expectedSessionId = "owned-main-session"
