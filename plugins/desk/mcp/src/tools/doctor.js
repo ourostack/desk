@@ -5,6 +5,7 @@ import { operatorNames } from "../desk/naming.js"
 import { personPrefix } from "../util/paths.js"
 import { legacyLedgerPartitions, legacyLedgerSummary } from "../protected/legacy-ledger.js"
 import { factoryStatus, factorySummary } from "./factory-context.js"
+import { recentFailures } from "../runtime/desk-failure.js"
 
 // Every code `organizationFindings` can return — printed in this fixed
 // order regardless of which codes actually fired, so the section's shape is
@@ -87,8 +88,10 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
   const factory = organizationResult === null ? null : factoryStatus({ env, deskRoot })
   // The retired manual ledger's leftover private partitions, counted and never opened (M3-12).
   const legacyLedger = legacyLedgerPartitions({ env })
+  const failures = recentFailures()
   const sections = [
     "Desk MCP runtime dependencies are ready.",
+    ...(failures.length === 0 ? [] : [["Recent Desk failures", ...failures.map(({ code, at, message }) => `  ${code} at ${at}: ${message}`)].join("\n")]),
     ...(organizationResult === null ? [] : [organizationSection(organization), factorySummary(factory)]),
     legacyLedgerSummary(legacyLedger),
   ].filter((section) => section !== null)

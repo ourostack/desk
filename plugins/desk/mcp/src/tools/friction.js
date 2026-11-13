@@ -33,6 +33,7 @@ import { cardKey, openImprovement } from "../desk/improvement-cards.js"
 import { FRICTION_CLASSES, fileKaizenCard, fingerprintOf } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
 import { factoryStateRoot } from "../factory/outbox.js"
+import { failureEvidence } from "../runtime/failure-evidence.js"
 
 const ABOUT = new Set(["setup", "system"])
 
@@ -51,6 +52,7 @@ export const FRICTION_ADD_FIELDS = [
   "friction_class",
   "signal",
   "evidence_jobs",
+  "error_code",
 ]
 
 function relPath(deskRoot, absPath) {
@@ -138,6 +140,7 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
  *     signal?: string,   // "system": the rollups measure the friction moves, when known
  *     evidence_jobs?: string[],  // "system": factory job ids that show it, when known
  *     file_card?: true,  // "system": also file the store's kaizen issue now (the immediate mirror)
+ *     error_code?: string,  // the code of a Desk failure line: the one call that reports it. Defaults `about` to "system" and `title` to "Desk error <code>", makes `body` optional, and appends the failure's evidence (its message and stack, the Desk version, host, desk path and recent sync status, credentials redacted) to the entry on the desk
  *   }
  *
  * Side effects: appends to the resolved friction file. Track-local files begin
@@ -171,23 +174,30 @@ async function openCard({ deskRoot, person, card, fingerprint, lesson, now, comm
 export async function friction_add({ deskRoot, input, person = null, search, env = process.env, now, fileCard = fileKaizenCard, commitCard = writeCardCommitted, spawnGit = spawnSync, schedulePush = schedulePushDefault, lesson }) {
   const values = input ?? {}
   const { track, theme } = values
-  const { body } = values
-  if (!body || typeof body !== "string") {
+  const errorCode = values.error_code
+  if (errorCode !== undefined && (typeof errorCode !== "string" || !/^[a-z][a-z0-9_]*$/u.test(errorCode))) {
+    throw new Error("friction_add: `error_code` must be the code a Desk failure line gave in its friction_add call, such as desk_push_blocked")
+  }
+  const reporting = errorCode !== undefined
+  if (!reporting && (!values.body || typeof values.body !== "string")) {
     throw new Error("friction_add: `body` is required (string)")
   }
-  const about = values.about ?? "setup"
+  if (reporting && values.body !== undefined && typeof values.body !== "string") throw new Error("friction_add: `body` must be a string")
+  const body = reporting ? [values.body?.trim(), failureEvidence({ code: errorCode, deskRoot, env })].filter(Boolean).join("\n\n") : values.body
+  const about = values.about ?? (reporting ? "system" : "setup")
   if (!ABOUT.has(about)) throw new Error("friction_add: `about` must be \"setup\" or \"system\"")
   const fileNow = values.file_card === true
   if (values.file_card !== undefined && values.file_card !== false && !fileNow) throw new Error("friction_add: `file_card` must be true or false")
   if (fileNow && about !== "system") throw new Error("friction_add: `file_card` is only for system friction")
   let card = null
   if (about === "system") {
-    if (typeof values.title !== "string" || values.title.trim() === "" || /[\r\n]/u.test(values.title)) throw new Error("friction_add: `title` is required for system friction, on one line")
+    const title = values.title ?? (reporting ? `Desk error ${errorCode}` : undefined)
+    if (typeof title !== "string" || title.trim() === "" || /[\r\n]/u.test(title)) throw new Error("friction_add: `title` is required for system friction, on one line")
     const plugin = values.plugin ?? "desk"
     if (typeof plugin !== "string" || !PATTERNS.pluginName.test(plugin)) throw new Error("friction_add: `plugin` must be a plugin name")
     const frictionClass = values.friction_class ?? "other"
     if (!FRICTION_CLASSES.includes(frictionClass)) throw new Error(`friction_add: \`friction_class\` must be one of ${FRICTION_CLASSES.join(", ")}`)
-    card = { title: values.title.trim(), plugin, frictionClass, signal: values.signal ?? null, evidenceJobs: values.evidence_jobs ?? [] }
+    card = { title: title.trim(), plugin, frictionClass, signal: values.signal ?? null, evidenceJobs: values.evidence_jobs ?? [] }
   }
 
   let filePath

@@ -30,12 +30,12 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { formatDeskProblem } from "./index-drift.js"
+import { commandArgument } from "./pr-publication.js"
+import { deskFailure } from "./desk-failure.js"
 import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, readSyncStatus, recordPullOutcome, schedulePush } from "./sync-worker.js"
 import { NOT_A_DESK_DEFECT, classifyPullFailure, namedUntrackedPaths, undeliveredCommits } from "./deliver.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { remoteIdentityEnv } from "./remote-identity.js"
-import { commandArgument } from "./pr-publication.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { applyPublicationMode } from "./publication-mode.js"
 
@@ -396,18 +396,38 @@ function withRepair(result, repair) {
 // Causes that stop delivery too: no push is started for them.
 const OFFLINE = new Set(["unreachable", "auth_failed"])
 
-const TELL = {
-  unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
-  deadline: "Sync ran out of time before finishing: retry it before pushing.",
-}
-
-// The Ouro AX error shape: `<tool>: <thing>: <problem>. Fix: <command>.` It names the probable cause, the command that
-// shows more, the one call that files the failure with its evidence, and that work continues meanwhile.
-function credentialRefusal({ root, env, remote, error }) {
-  // The remote's path stays out of the evidence: the argv narrowing would read a repository path as a desk path.
-  const evidence = argvSafeReason(`git refused the credentials: ${error}`)
-  const file = `node ${commandArgument(FILE_DESK_PROBLEM_SCRIPT)} --mechanism session-sync --reason ${commandArgument(evidence)} --host ${commandArgument(hostFromEnv(env))}`
-  return `desk: sync: the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${commandArgument(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth login --hostname github.com.`
+// Each cause's failure: what probably happened, how to look further, how to keep working and the fix. `git status` reads clean when the remote could not be asked.
+function syncFailure({ cause, root, remote, reason, conflicted }) {
+  const git = (...args) => `\`git -C ${commandArgument(root)} ${args.join(" ")}\``
+  const delivery = "Desk delivers its local commits once it can, so never stash, rebase or reset the shared checkout for this"
+  const causes = {
+    auth_failed: {
+      probably: `the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach ${remote ?? "the desk's remote"}`,
+      look: `run ${git("ls-remote", "origin")} to see git's own answer`,
+      keepWorking: "the remote cannot be used from this machine right now, so nothing was pulled or pushed and `git status` will read clean; local work continues and Desk retries with every write",
+      fix: "gh auth login --hostname github.com",
+    },
+    unreachable: {
+      probably: "the remote could not be reached, probably because this machine is offline or the host is down",
+      look: `run ${git("ls-remote", "origin")} to see whether it answers`,
+      keepWorking: "the remote cannot be used from this machine right now, so `git status` will read clean; work continues on local state, and Desk delivers its local commits once it can",
+      fix: null,
+    },
+    deadline: {
+      probably: "sync ran out of time before it finished, probably because the remote or the network was slow",
+      look: "call desk_status and read its sync section",
+      keepWorking: "retry sync before pushing; local work is untouched",
+      fix: null,
+    },
+  }
+  const found = causes[cause] ?? {
+    probably: "`git pull --rebase --autostash` did not finish, probably because local changes are in its way",
+    look: `run ${git("status")} to see what is in the way`,
+    keepWorking: `the checkout itself is not rebased and only untracked files git named are moved aside, then the pull is retried once; ${delivery}`,
+    fix: null,
+  }
+  const what = `${reason}${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`
+  return deskFailure({ code: "session_sync_unresolved", thing: "sync", ...found, probably: `${found.probably} (${what})` })
 }
 
 function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
@@ -420,22 +440,10 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
   // A network outage, an expired sign-in and a ran-out budget are the host's state, not Desk defects: they still
   // surface to the agent below, but no Desk problem is filed. A failed pull's filed reason names its cause, so the
   // issue says what happened and each cause gets its own title and fingerprint.
-  const filing = NOT_A_DESK_DEFECT.has(cause)
-    ? undefined
-    : fileProblem({ root, env, reason: failed === undefined ? reason : `${reason}:${cause}`, host: hostFromEnv(env) })
+  if (!NOT_A_DESK_DEFECT.has(cause)) fileProblem({ root, env, reason: failed === undefined ? reason : `${reason}:${cause}`, host: hostFromEnv(env) })
   const remote = originUrl(root, spawnGit, timeoutMs)
   const error = firstErrorLine(failed?.stderr)
-  const diagnostic = formatDeskProblem({
-    mechanism: "session-sync",
-    symptom: "session-start pull did not resolve",
-    broke: `git pull --rebase --autostash failed (${reason})${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`,
-    means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
-    fix: OFFLINE.has(cause)
-      ? "not repaired automatically: the remote cannot be used from this machine right now, so nothing was pulled or pushed; Desk delivers its local commits once it can"
-      : "the checkout itself is not rebased: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once. Desk's own local commits are still delivered to the remote from a clean copy in the background, and the checkout follows once nothing local is in the way -- never stash, rebase or reset the shared checkout for this",
-    file: filing?.file ?? "filing in background",
-    tell: cause === "auth_failed" ? credentialRefusal({ root, env, remote, error }) : TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
-  })
+  const diagnostic = syncFailure({ cause, root, remote, reason, conflicted })
   const result = { state: "unresolved", reason, diagnostic, cause, remote, error, conflicted }
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result

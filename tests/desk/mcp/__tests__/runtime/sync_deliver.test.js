@@ -621,7 +621,7 @@ test("a write tool's note says the work is only local, how much and why, while t
   const blocked = deskPushNote({ root: desk, note })
   assert.equal(blocked.desk_unpushed, 2)
   assert.equal(blocked.desk_push_blocked, "auth_failed")
-  assert.match(blocked.desk_note, /NOT on the remote yet: the last push failed because the remote refused this machine's credentials, so 2 local Desk commit\(s\) are only on this machine/u)
+  assert.match(blocked.desk_note, /not on the remote yet: the last push failed because the remote refused this machine's credentials, so 2 local Desk commit\(s\) are only on this machine; to look further, call desk_status.*friction_add with \{"error_code":"desk_push_blocked"\}/u)
   assert.doesNotMatch(blocked.desk_note, /pushing it in the background/u)
   updateSyncStatus(desk, process.env, { blocked: true, reason: null, paths: "state.json" })
   assert.equal(deskPushNote({ root: desk, note }).desk_push_blocked, null)
@@ -637,7 +637,7 @@ test("desk_save's reply says its commit is only local, never that it is pushing,
   const result = await desk_save({ deskRoot: desk, input: { files: [{ path: "tasks/notes.md", content: "notes\n" }], message: "save notes" }, schedulePush: () => {} })
   assert.equal(result.desk_pushed, false)
   assert.equal(result.desk_unpushed, 1)
-  assert.match(result.desk_note, /^Desk committed this, but it is NOT on the remote yet: the last push failed because the remote could not be reached/u)
+  assert.match(result.desk_note, /^desk: push: Desk committed this, but it is not on the remote yet: the last push failed because the remote could not be reached/u)
 })
 
 test("boot starts delivery for local commits unless the remote cannot be used, and says how many and why", async () => {

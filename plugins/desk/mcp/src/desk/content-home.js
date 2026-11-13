@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
+import { deskFailure } from "../runtime/desk-failure.js"
+import { commandArgument } from "../runtime/pr-publication.js"
 
 const POLICY = ".desk/content-home.json"
 const repository = /^[\w.-]+\/[\w.-]+$/u
@@ -73,7 +75,14 @@ export function assertPublishedContentBase(root, admission, tool) {
   if (admission === null) return
   const head = git(root, ["rev-parse", "--verify", "HEAD^{commit}"])
   if (head.status !== 0 || head.stdout.trim() !== admission.policy_commit) {
-    refuse(tool, "content_home_unpublished_base", "This checkout has an unpublished or different base; do not replay held commits. Use the existing qualified published checkout or finish its already-owned publication")
+    throw new Error(deskFailure({
+      code: "content_home_unpublished_base",
+      thing: `${tool}: content_home_unpublished_base`,
+      probably: "this checkout's HEAD is not the commit the published purpose policy came from, probably because it holds commits that were never published or sits on a different base",
+      look: `call desk_doctor, or run \`git -C ${commandArgument(root)} log --oneline @{upstream}..HEAD\` to list the commits held here`,
+      keepWorking: "your input and the existing sources are untouched and nothing was written or committed, so keep working in the published checkout and never replay the held commits",
+      fix: "use the existing qualified published checkout, or finish the publication it already owns",
+    }))
   }
 }
 
