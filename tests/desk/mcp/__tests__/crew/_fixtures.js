@@ -69,6 +69,36 @@ export async function teamRepo(files = {}, { origin = `${ORIGIN}.git`, cloneConf
   return { base, bare, clone, spawnGit: toBare(bare) }
 }
 
+const startedTemplates = new Map()
+
+/**
+ * A CIT-shaped repository after `startWorkspace` published it as a workspace (the founder is a placeholder), and its clone; the same shape as `teamRepo`.
+ * The start runs once per test file and tooling setting, and every call copies the result: a start is about ninety Git processes, which dominate a Windows run, and a copy is a few hundred files.
+ * Nothing in the copy names the template's folder (checked when the template is made), so a test can never change it.
+ */
+export async function startedTeamRepo(tooling = { repo: "acme/team-tooling" }) {
+  const key = JSON.stringify(tooling)
+  if (!startedTemplates.has(key)) {
+    startedTemplates.set(key, (async () => {
+      const { startWorkspace } = await import("../../../../../plugins/desk/mcp/src/crew/workspace.js")
+      const template = await teamRepo(CIT_SHAPED)
+      const result = await startWorkspace({ repo: template.clone, spawnGit: template.spawnGit, gh: fakeGh(template.bare).gh, wait: noWait, now: () => 1767225600000, apply: true, tooling, founder: { alias: "test-founder", identity: "test-founder-placeholder" } })
+      assert.equal(result.state, "published", result.message)
+      for (const dir of [template.bare, template.clone]) {
+        const config = await fs.readFile(path.join(dir, dir === template.bare ? "config" : path.join(".git", "config")), "utf8")
+        assert.ok(!config.replaceAll("\\", "/").includes(template.base.replaceAll("\\", "/")), `the started repository's Git config names its own folder, so a copy of it would share state with the template: ${dir}`)
+      }
+      return template
+    })())
+  }
+  const template = await startedTemplates.get(key)
+  const base = await mkTempRoot("crew-workspace-")
+  const bare = path.join(base, "origin.git")
+  const clone = path.join(base, "clone")
+  await Promise.all([fs.cp(template.bare, bare, { recursive: true }), fs.cp(template.clone, clone, { recursive: true })])
+  return { base, bare, clone, spawnGit: toBare(bare) }
+}
+
 /** A second clone of the same bare repository, as a teammate's machine. */
 export async function secondClone(repo) {
   const other = path.join(repo.base, `other-${Math.random().toString(36).slice(2, 8)}`)

@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, teamRepo } from "./_fixtures.js"
+import { CIT_SHAPED, ORIGIN, bareGit, fakeGh, git, mainFiles, noWait, onMain, plantPullRequest, startedTeamRepo, teamRepo } from "./_fixtures.js"
 import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 
 const NOW = () => 1767225600000
@@ -26,10 +26,7 @@ function memberClone(repo, name) {
 }
 
 async function started() {
-  const repo = await teamRepo(CIT_SHAPED)
-  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING, founder: { alias: "test-founder", identity: "test-founder-placeholder" } })
-  assert.equal(result.state, "published", result.message)
-  return repo
+  return startedTeamRepo(TOOLING)
 }
 
 const headOf = (repo, branch) => bareGit(repo.bare, ["rev-parse", `refs/heads/${branch}`])

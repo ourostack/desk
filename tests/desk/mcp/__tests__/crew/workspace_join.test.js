@@ -8,8 +8,8 @@ import { strict as assert } from "node:assert"
 import { appendFileSync, mkdirSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
-import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, teamRepo } from "./_fixtures.js"
-import { crewStatus, joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+import { CIT_SHAPED, PR, bareGit, branches, fakeGh, git, mainFiles, noWait, onMain, pushFromElsewhere, startedTeamRepo, teamRepo } from "./_fixtures.js"
+import { crewStatus, joinWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
 const NOW = () => 1767225600000
@@ -26,11 +26,7 @@ function memberClone(repo) {
 
 // A CIT-shaped repository started as a dual-repo workspace with a placeholder founder, as the end-to-end run leaves it.
 async function adopted({ tooling = { repo: "acme/team-tooling" } } = {}) {
-  const repo = await teamRepo(CIT_SHAPED)
-  const { gh } = fakeGh(repo.bare)
-  const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, wait: noWait, now: NOW, apply: true, tooling, founder: { alias: "test-founder", identity: "test-founder-placeholder" } })
-  assert.equal(result.state, "published", result.message)
-  return memberClone(repo)
+  return memberClone(await startedTeamRepo(tooling))
 }
 
 const join = (repo, extra = {}) => ({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, identity: "newbie_example", alias: "newbie", wait: noWait, now: NOW, ...extra })

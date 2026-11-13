@@ -4,7 +4,9 @@
 param(
   [Parameter(Mandatory = $true)][string]$WorkDir,
   [Parameter(Mandatory = $true)][string]$Command,
-  [string]$LogDir = (Join-Path $env:RUNNER_TEMP 'standard-user-logs')
+  [string]$LogDir = (Join-Path $env:RUNNER_TEMP 'standard-user-logs'),
+  # The runner's D: drive is a separate, faster disk than the system drive: five git-heavy test files took about a third less time there (2026-11-13). Fall back to C: where there is no D:.
+  [string]$TempDir = $(if (Test-Path 'D:\') { 'D:\deskstd-tmp' } else { 'C:\deskstd-tmp' })
 )
 $ErrorActionPreference = 'Stop'
 $userName = 'deskstd'
@@ -21,7 +23,7 @@ if (Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue |
   throw "$userName must not be an administrator"
 }
 $workspace = (Resolve-Path $WorkDir).Path
-$tmp = 'C:\deskstd-tmp'
+$tmp = $TempDir
 New-Item -ItemType Directory -Force -Path $tmp, $LogDir | Out-Null
 foreach ($dir in @($workspace, $tmp, $LogDir)) {
   icacls $dir /grant "${userName}:(OI)(CI)M" /T /C /Q | Out-Null

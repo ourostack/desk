@@ -10,8 +10,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { pathToFileURL } from "node:url"
-import { CIT_SHAPED, bareGit, fakeGh, git, noWait, onMain, pushFromElsewhere, secondClone, teamRepo } from "./_fixtures.js"
-import { joinWorkspace, startWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
+import { bareGit, fakeGh, git, noWait, onMain, pushFromElsewhere, secondClone, startedTeamRepo, teamRepo } from "./_fixtures.js"
+import { joinWorkspace } from "../../../../../plugins/desk/mcp/src/crew/workspace.js"
 import { readCrewRoster } from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
 const NOW = () => 1767225600000
@@ -22,9 +22,7 @@ const COMPLETE = { [`${DESK}/AGENTS.md`]: "# mine\n", [`${DESK}/README.md`]: "# 
 
 // A CIT-shaped repository started as a dual-repo workspace, and the new member's own clone of it.
 async function startWorkspaceFixture() {
-  const repo = await teamRepo(CIT_SHAPED)
-  const started = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: { repo: "acme/team-tooling" }, founder: { alias: "test-founder", identity: "test-founder-placeholder" } })
-  assert.equal(started.state, "published", started.message)
+  const repo = await startedTeamRepo()
   const clone = path.join(repo.base, "member")
   run(["clone", "-q", repo.bare, clone])
   git(clone, ["config", "user.email", "new@example.com"])
