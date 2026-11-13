@@ -1,7 +1,7 @@
 // The `drains` command line: `poll`, `ack` and `status`. Output is one JSON value on stdout; a usage error is one line on stderr
 // (exit 2) and a failure is a Desk failure line on stderr (exit 1).
 import * as path from "node:path"
-import { ackWake, connectGithub, drainPaths, drainStatusLines, pollDrains, readDrainConfig, readDrainStates, withDrainLock } from "./drains.js"
+import { ackWake, connectGithub, drainPaths, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, withDrainLock } from "./drains.js"
 
 const USAGE = [
   "Usage: drains.js poll [--config <file>] [--state <file>]",
@@ -30,6 +30,16 @@ export function parseDrainsArgs(argv) {
   return { command, flags }
 }
 
+// A launcher that cannot be refreshed (a read-only state folder) never stops a poll; the output says so.
+function refreshLauncher(env) {
+  try {
+    const { path: installed, sha256 } = installLauncher({ env })
+    return { path: installed, sha256 }
+  } catch (error) {
+    return { error: String(error.code) }
+  }
+}
+
 export async function runDrainsCli({ argv, script, env = process.env, io = process, now = Date.now, connect = connectGithub }) {
   const parsed = parseDrainsArgs(argv)
   if (parsed.help) {
@@ -53,6 +63,7 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
     } else {
       result = { status: drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()) }
     }
+    if (command !== "ack") result = { ...result, launcher: refreshLauncher(env) }
     io.stdout.write(`${JSON.stringify(result, null, 1)}\n`)
     return 0
   } catch (error) {

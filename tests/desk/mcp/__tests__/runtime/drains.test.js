@@ -1,6 +1,7 @@
 // Issue drains: what the poll records, what it ignores and what it hands a runner to deliver. The GitHub side is a fake; every
 // state, config and lock file lives under a temporary root.
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { promises as fs, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import path from "node:path"
@@ -8,7 +9,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, drainStatusLines, parseDrainConfig, pollDrain, pollDrains,
+  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { parseDrainsArgs, runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -697,5 +698,46 @@ test("the script runs as a program and prints the poll's JSON", async () => {
   const home = path.join(dir, "state")
   const run = spawnSync(process.execPath, [SCRIPT, "status"], { encoding: "utf8", env: { ...process.env, HOME: dir, XDG_STATE_HOME: home } })
   assert.equal(run.status, 0, run.stderr)
-  assert.deepEqual(JSON.parse(run.stdout), { status: [] })
+  const printed = JSON.parse(run.stdout)
+  assert.deepEqual(printed.status, [])
+  assert.equal(printed.launcher.path, path.join(home, "ouroboros-skills", "desk", "drains", "run.mjs"))
+  assert.equal(printed.launcher.sha256, sha256Of(LAUNCHER))
+  assert.equal(sha256Of(printed.launcher.path), sha256Of(LAUNCHER))
+})
+
+const LAUNCHER = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/drains-launcher.mjs", import.meta.url))
+const sha256Of = (file) => createHash("sha256").update(readFileSync(file)).digest("hex")
+
+test("the launcher is installed at the stable path, kept identical to the shipped source and restored when it drifts", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const env = { XDG_STATE_HOME: dir }
+  const first = installLauncher({ env })
+  assert.equal(first.path, path.join(dir, "ouroboros-skills", "desk", "drains", "run.mjs"))
+  assert.equal(first.changed, true)
+  assert.equal(first.sha256, sha256Of(LAUNCHER))
+  assert.equal(sha256Of(first.path), first.sha256)
+  assert.equal(installLauncher({ env }).changed, false)
+  writeFileSync(first.path, "// edited by hand\n")
+  assert.equal(installLauncher({ env }).changed, true)
+  assert.equal(sha256Of(first.path), first.sha256)
+  const other = path.join(dir, "other-launcher.mjs")
+  writeFileSync(other, "// a newer launcher\n")
+  const updated = installLauncher({ env, source: other })
+  assert.equal(updated.sha256, sha256Of(other))
+  assert.equal(sha256Of(first.path), sha256Of(other))
+  assert.equal(installLauncher({ env: {}, homeDir: dir, source: other }).path, path.join(dir, ".local", "state", "ouroboros-skills", "desk", "drains", "run.mjs"))
+  assert.equal(installLauncher().sha256, first.sha256)
+})
+
+test("a launcher that cannot be refreshed never stops a command, and the output says why", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  writeFileSync(path.join(dir, "blocker"), "x")
+  const out = []
+  const io = { stdout: { write: (text) => out.push(text) }, stderr: { write: () => {} } }
+  const config = path.join(dir, "config.json")
+  const state = path.join(dir, "state.json")
+  writeFileSync(config, JSON.stringify({ drains: [] }))
+  const code = await runDrainsCli({ argv: ["status", "--config", config, "--state", state], script: SCRIPT, io, env: { XDG_STATE_HOME: path.join(dir, "blocker") }, now: () => NOW })
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(out.join("")), { status: [], launcher: { error: "ENOTDIR" } })
 })

@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import * as os from "node:os"
 import * as path from "node:path"
 import { deskFailure } from "./desk-failure.js"
@@ -34,6 +35,32 @@ export function drainsHome({ env = process.env, homeDir = os.homedir() } = {}) {
 export function drainPaths(options = {}) {
   const home = drainsHome(options)
   return { config: path.join(home, "config.json"), state: path.join(home, "state.json"), lock: path.join(home, "poll.lock") }
+}
+
+const LAUNCHER_SOURCE = fileURLToPath(new URL("../../scripts/drains-launcher.mjs", import.meta.url))
+
+/**
+ * Keeps `run.mjs` in Desk's drains folder identical to the launcher this Desk ships, the one stable path a wake runner needs.
+ * Every command refreshes it, so a new machine gets it from its first `drains.js status` and a Desk update replaces it.
+ */
+export function installLauncher({ env = process.env, homeDir = os.homedir(), source = LAUNCHER_SOURCE } = {}) {
+  const target = path.join(drainsHome({ env, homeDir }), "run.mjs")
+  const wanted = readFileSync(source)
+  const sha256 = createHash("sha256").update(wanted).digest("hex")
+  let current = ""
+  try {
+    current = createHash("sha256").update(readFileSync(target)).digest("hex")
+  } catch {
+    // Not installed yet.
+  }
+  if (current !== sha256) {
+    assertNotRealStateUnderTest(path.dirname(target), { env })
+    mkdirSync(path.dirname(target), { recursive: true })
+    const temporary = `${target}.${process.pid}.tmp`
+    writeFileSync(temporary, wanted)
+    renameSync(temporary, target)
+  }
+  return { path: target, sha256, changed: current !== sha256 }
 }
 
 function problem(code, thing, probably, look, fix) {
