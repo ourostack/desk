@@ -66,7 +66,7 @@ test("a session start that sets only the question form says so in its own line a
 
 test("every Copilot session is told to act as Desk's worker unless it was started as another agent", () => {
   const { context } = start({ sessionId: "sess-worker", cwd: ROOT, source: "new" }, "worker")
-  assert.match(context, /\n\nUnless started with `--agent`, act as Desk's worker: read \S+worker\.agent\.md first\.\n\n# Using Desk/u, "the pointer comes just before the foundation, whose frontmatter is dropped")
+  assert.match(context, /\n\nUnless started with `--agent` or the skip rule above applies \(then skip this read too\), act as Desk's worker: read \S+worker\.agent\.md first\.\n\n# Using Desk/u, "the pointer comes just before the foundation, whose frontmatter is dropped")
   assert.doesNotMatch(context, /^name: using-desk$/mu)
 })
 

@@ -6,6 +6,7 @@ import { createRequire } from "node:module"
 import { deskFailure } from "../../../../../plugins/desk/mcp/src/runtime/desk-failure.js"
 import { vagueFailuresIn } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/precise-copy.ts"
 import { mkTempRoot } from "../_temp_roots.js"
+import { NO_POSIX_MODES } from "../_platform.js"
 import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
@@ -838,7 +839,7 @@ test("tab selection retains Page identity when an unrelated earlier page closes"
   try {
     await adapter.call(["tab-select", "1"])
     await natives[0].page.close()
-    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }, { index: 1, selected: false }] })
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true, url: "https://app.example.test/work" }, { index: 1, selected: false, url: "https://app.example.test/work" }] })
     await adapter.call(["goto", "https://synthetic.invalid/"])
     assert.equal(natives[1].calls.filter(call => call[0] === "goto").length, 1)
     assert.equal(natives[2].calls.filter(call => call[0] === "goto").length, 0)
@@ -2471,6 +2472,8 @@ test("a navigation whose page is still loading reports that it went through and 
       const result = await adapter.call(args)
       assert.equal(result.navigated, true, String(args))
       assert.match(result.hint, /\["wait"/u)
+      assert.equal(result.change, "navigated", String(args))
+      assert.match(result.changeNote, new RegExp(`^The ${args[0]} navigated: the page is now https://app\\.example\\.test/\\S*, still loading\\.$`, "u"))
       assert.match(result.page.url, /^https:\/\/app\.example\.test\//u, "a navigation that was not read still says where the tab is")
     }
     await assert.rejects(adapter.call(["mousewheel", "0", "10"]), /AUTH_SNAPSHOT_INVALIDATED.*wait/u, "other actions still refuse an unread page")
@@ -2578,7 +2581,7 @@ test("tab-select brings the tab to the front, and refs from its snapshot act the
     natives[1].page.bringToFront = async () => { blocked = true }
     await assert.rejects(adapter.call(["tab-select", "1"]), (error) => /AUTH_RUNTIME_POLICY_REFUSED/u.test(error.message) && !error.message.includes(PASSWORD))
     blocked = false
-    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }, { index: 1, selected: false }] })
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true, url: "https://app.example.test/work" }, { index: 1, selected: false, url: "https://app.example.test/work" }] })
     natives[1].page.bringToFront = front
     const selected = await adapter.call(["tab-select", "1"])
     assert.equal(natives[1].calls.filter((call) => call[0] === "bringToFront").length, 1)
@@ -2587,14 +2590,15 @@ test("tab-select brings the tab to the front, and refs from its snapshot act the
     assert.equal(natives[0].calls.some((call) => call[0] === "click"), false)
     natives[0].page.bringToFront = async () => { throw new Error(PASSWORD) }
     await assert.rejects(adapter.call(["tab-select", "0"]), (error) => /AUTH_TAB_ACTION_FAILED/u.test(error.message) && !error.message.includes(PASSWORD))
-    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: false }, { index: 1, selected: true }] }, "a tab that cannot come forward is not selected")
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: false, url: "https://app.example.test/work" }, { index: 1, selected: true, url: "https://app.example.test/work" }] }, "a tab that cannot come forward is not selected")
     const kept = inputRef(await adapter.call(["snapshot"]))
-    assert.deepEqual(await adapter.call(["tab-close", "0"]), { closed: true })
+    assert.deepEqual(await adapter.call(["tab-close", "0"]), { closed: true, page: { url: "https://app.example.test/work" } }, "the reply says which tab is now in front")
     assert.deepEqual(pages, [natives[1].page])
-    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true }] })
+    assert.deepEqual(await adapter.call(["tab-list"]), { tabs: [{ index: 0, selected: true, url: "https://app.example.test/work" }] })
     await adapter.call(["click", kept])
     assert.equal(natives[1].calls.filter((call) => call[0] === "click").length, 2, "closing another tab keeps this tab's refs")
     for (const args of [["tab-close", "5"], ["tab-close", "-1"], ["tab-close", "x"]]) await assert.rejects(adapter.call(args), /AUTH_(TAB|ARGUMENTS)_REFUSED/u)
+    assert.deepEqual(await adapter.call(["tab-close", "0"]), { closed: true }, "closing the last tab leaves no tab to name")
   } finally { await adapter.close() }
 })
 
@@ -2604,7 +2608,10 @@ test("screenshot saves the tab or one element in the private files folder, with 
   const adapter = adapterFor(native, root)
   try {
     const page = await adapter.call(["screenshot"])
-    assert.deepEqual(Object.keys(page), ["screenshot"])
+    assert.deepEqual(Object.keys(page), ["screenshot", "page"])
+    assert.equal(typeof page.page.url, "string")
+    assert.equal(typeof page.page.title, "string")
+    assert.equal(JSON.stringify(page.page).includes(PASSWORD), false)
     assert.equal(path.dirname(page.screenshot), root)
     assert.match(path.basename(page.screenshot), /^screenshot-[0-9a-f-]{36}\.png$/u)
     assert.ok(fs.existsSync(page.screenshot))
@@ -3069,10 +3076,67 @@ test("a click says whether the page navigated, changed in place or stayed as it 
   } finally { await adapter.close() }
 })
 
+test("every action says what it did, goto and the typing and viewport commands included", async () => {
+  const native = fakeDriver()
+  const adapter = adapterFor(native, await mkTempRoot("auth-change-all-"))
+  try {
+    const at = native.packet.documents[0]
+    native.packet.strings[at.documentURL] = "https://synthetic.invalid/first"
+    const moved = await adapter.call(["goto", "https://synthetic.invalid/first"])
+    assert.equal(moved.change, "navigated", "a goto with no earlier read still navigated")
+    assert.match(moved.changeNote, /^The goto navigated: the page is now https:\/\/synthetic\.invalid\/first \(Sign in\)\.$/u)
+    const again = await adapter.call(["goto", "https://synthetic.invalid/first"])
+    assert.equal(again.change, "none", "the same document back is said to be unchanged")
+    assert.match(again.changeNote, /^The goto left the page as your last read showed it: the same document and no visible change\./u)
+    native.packet.strings[at.documentURL] = "https://synthetic.invalid/next"
+    const next = await adapter.call(["reload"])
+    assert.equal(next.change, "navigated")
+    assert.equal((await adapter.call(["go-back"])).change, "none")
+    const ref = next.snapshot.children[0].children[0].children[0].ref
+    const typed = await adapter.call(["fill", ref, "hello"])
+    assert.equal(typed.change, "none")
+    assert.match(typed.changeNote, /typed values are never shown; typed\.verified says whether the field holds the text\./u)
+    assert.equal(typeof typed.typed.verified, "boolean")
+    const waited = await adapter.call(["wait", "0.2"])
+    assert.equal(waited.change, "none")
+    assert.equal(waited.changeNote, "The wait left the page as your last read showed it: nothing it shows changed while waiting.")
+    addParagraph(native.packet, "Loaded later", 302)
+    const found = await adapter.call(["wait", "Loaded later"])
+    assert.equal(found.change, "changed", "a wait is measured against the read before it, not its own polls")
+    assert.equal(found.waited.found, true)
+    for (const args of [["resize", "800", "600"], ["mousewheel", "0", "100"]]) {
+      const result = await adapter.call(args)
+      assert.equal(result.change, "none", String(args))
+      assert.match(result.changeNote, new RegExp(`^The ${args[0]} left the page as your last read showed it`, "u"))
+      assert.equal(result.page.url, "https://synthetic.invalid/next")
+    }
+  } finally { await adapter.close() }
+})
+
+test("a screenshot is saved in the evidence folder, outside the context's files, and says it survives close", async () => {
+  const root = await mkTempRoot("auth-evidence-files-")
+  const evidence = path.join(await mkTempRoot("auth-evidence-"), "session")
+  const native = framedDriver()
+  const adapter = auth.create(native.context, root, 5000, () => {}, { ...ONCE, evidenceDir: evidence })
+  try {
+    const shot = await adapter.call(["screenshot"])
+    assert.equal(path.dirname(shot.screenshot), evidence)
+    assert.equal(shot.survivesClose, true)
+    assert.match(shot.note, /saved in this session's evidence folder, outside the browser context's files, so it is still there after browser_context close\./u)
+    assert.deepEqual(fs.readdirSync(root), [], "nothing is left in the context's files folder")
+    assert.equal(native.calls.find((call) => call[0] === "page.screenshot")[1].mask.length > 0, true, "the masking rules are unchanged")
+    if (!NO_POSIX_MODES) assert.equal(fs.statSync(evidence).mode & 0o777, 0o700)
+    await adapter.close()
+    fs.rmSync(root, { recursive: true, force: true })
+    assert.ok(fs.existsSync(shot.screenshot), "the picture is there after the context's folder is gone")
+  } finally { await adapter.close().catch(() => {}) }
+})
+
 test("a wait for text that has not shown stops early, saying why, once nothing has moved on the page for a while", async () => {
   const native = fakeDriver()
   const adapter = auth.create(native.context, await mkTempRoot("auth-stuck-"), 40000, () => {}, { snapshotAttempts: 1, stuckMs: 1500 })
   try {
+    await adapter.call(["snapshot"])
     const started = Date.now()
     const stuck = await adapter.call(["wait", "never shows"])
     assert.ok(Date.now() - started < 8000, "it did not sit for the wait's full limit")
@@ -3081,6 +3145,9 @@ test("a wait for text that has not shown stops early, saying why, once nothing h
     assert.match(stuck.hint, /^The text did not show, and the page has been still for [\d.]+ s \(no request and no change on it\), so waiting longer will not help\. Probably the page finished loading without that text/u)
     assert.match(stuck.hint, /\["find","<part of the text>"\]/u)
     assert.equal(stuck.page.title, "Sign in")
+    assert.equal(stuck.change, "none", "a stuck wait says the page did not change while it waited")
+    assert.deepEqual(stuck.diagnosis.network.pending, [])
+    assert.equal(stuck.diagnosis.screenshotSkipped, false)
     const gone = await adapter.call(["wait", "--gone", "Password"])
     assert.match(gone.hint, /^The text did not go, and the page has been still for /u)
   } finally { await adapter.close() }

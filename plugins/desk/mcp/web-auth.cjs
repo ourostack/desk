@@ -22,7 +22,7 @@ var WAIT_POLL_MS = 1000;
 // A wait for text gives up early once the page has been still this long: no request started or ended and no line of it changed.
 var STUCK_MS = 10000;
 // A command that acts on the page then reports whether it changed what the last read showed.
-var ACTS = ["click", "dblclick", "hover", "check", "uncheck", "select", "press"];
+var ACTS = ["click", "dblclick", "hover", "check", "uncheck", "select", "press", "fill", "type", "resize", "mousewheel", "wait"].concat(NAVIGATIONS);
 // Evidence for a page that never became ready (a screenshot, and the diagnosis of its requests) is given this long at most.
 var EVIDENCE_MS = 5000;
 // What a reply keeps back from a command's time for the evidence it sends, so a late poll cannot end past the command.
@@ -705,6 +705,15 @@ function difference(seen, now) {
   return { navigated: seen.url !== now.url || seen.loader !== now.loader, added: added, removed: removed };
 }
 
+// What an action that left the page as the last read showed it tells the agent to do next.
+function noChangeNote(command) {
+  if (command === "fill" || command === "type") return "The " + command + " left the visible page as your last read showed it, as typed values are never shown; typed.verified says whether the field holds the text.";
+  if (command === "wait") return "The wait left the page as your last read showed it: nothing it shows changed while waiting.";
+  if (command === "resize" || command === "mousewheel") return "The " + command + " left the page as your last read showed it: nothing it shows moved. If the page loads more after a " + command + ", run [\"wait\",\"<text you expect>\"].";
+  if (NAVIGATIONS.indexOf(command) !== -1) return "The " + command + " left the page as your last read showed it: the same document and no visible change. If you expected another page, check the address, or run [\"wait\",\"<text you expect>\"] if it is still loading.";
+  return "The " + command + " left the page as your last read showed it: no navigation and no visible change. Doing it again will not help; act on another ref from [\"snapshot\",\"--interactive\"], or run [\"wait\",\"<text you expect>\"] if the page is still loading.";
+}
+
 function plural(count, noun) { return count + " " + noun + (count === 1 ? "" : "s"); }
 
 // Whitespace runs (no-break spaces and line breaks included) read as one space, and case does not matter.
@@ -1020,6 +1029,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   var attempts = options && integer(options.snapshotAttempts, 1, SNAPSHOT_ATTEMPTS) ? options.snapshotAttempts : SNAPSHOT_ATTEMPTS;
   // Tests give their own forms; otherwise WEB_FORMS applies.
   var webForms = options && Array.isArray(options.webForms) ? options.webForms : undefined;
+  // Where screenshots are kept: a folder the context's close does not delete. Without one they go in the context's files folder.
+  var evidenceDir = options && typeof options.evidenceDir === "string" && options.evidenceDir ? options.evidenceDir : undefined;
   var closed = false;
   // Set once a command timed out: its context is closed, but its evidence is still read before the close.
   var evidencing = false;
@@ -1379,7 +1390,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       packet = null;
       outside.forEach(function (frame) { frame.packet = null; });
     }
-    return prepared.masks.map(function (mask) {
+    var found = prepared.masks.map(function (mask) {
       var session = mask.key ? mask.key.session : reader;
       var scope = mask.key ? mask.key.read.scope : before.scope;
       var entry = scope.nodes.get(mask.id);
@@ -1391,13 +1402,16 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         entry.raw.attributes.some(function (name, index) { return index % 2 === 0 && name === "contenteditable"; }));
       return { session: session, scope: scope, id: mask.id, region: region, marked: marked };
     });
+    // Where the tab was at this read, scrubbed as a snapshot's is.
+    found.page = prepared.page;
+    return found;
   }
   function maskOf(reader, found) {
     var at = found.session === reader ? reader.page.mainFrame() : found.session.frame;
     found.region.chain.forEach(function (id) { at = at.frameLocator("css=" + found.scope.nodes.get(id).path); });
     return at.locator("css=" + found.region.path);
   }
-  // A picture of the tab, or of one element, in the context's private files folder. Every input, textarea and editable
+  // A picture of the tab, or of one element, in the evidence folder (else the context's private files folder). Every input, textarea and editable
   // region is painted over in every frame, as a snapshot redacts them. The tab is read before and after the picture; an
   // opaque region the first read did not mask (one markup alone does not mark) means the picture is taken again.
   // `limitMs` bounds the browser's wait for the picture (the command's time when none is given).
@@ -1408,10 +1422,12 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       record = refs.get(picked);
       requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
     } else live(reader);
-    var file = path.join(outputDir, "screenshot-" + crypto.randomUUID() + ".png");
+    var file = path.join(evidenceDir || outputDir, "screenshot-" + crypto.randomUUID() + ".png");
     var bound;
     var written = false;
+    var page;
     try {
+      if (evidenceDir) await fs.promises.mkdir(evidenceDir, { recursive: true, mode: 448 });
       if (record) bound = await bind(reader, record, "screenshot");
       for (var attempt = 1; ; attempt++) {
         var regions = await opaqueRegions(reader);
@@ -1428,13 +1444,18 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         var covered = after.every(function (found) {
           return found.marked || regions.some(function (old) { return old.session === found.session && old.region.id === found.region.id; });
         });
-        if (covered) break;
+        if (covered) { page = after.page; break; }
         await fs.promises.unlink(file);
         written = false;
         requireTrue(attempt < BIND_ATTEMPTS, "AUTH_SNAPSHOT_INVALIDATED");
       }
       requireTrue(evidencing || !closed, "AUTH_CONTEXT_REFUSED");
-      return { screenshot: file };
+      var picture = { screenshot: file, page: page };
+      if (evidenceDir) {
+        picture.survivesClose = true;
+        picture.note = "The screenshot is saved in this session's evidence folder, outside the browser context's files, so it is still there after browser_context close.";
+      }
+      return picture;
     } catch (error) {
       if (written) { try { await fs.promises.unlink(file); } catch (unlinkError) { /* never written */ } }
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_SCREENSHOT_FAILED");
@@ -1553,6 +1574,20 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       await sleep(WAIT_POLL_MS);
     }
   }
+  // Says in `change` and `changeNote` how the page now differs from the read before the command; returns the reply.
+  function reportChange(command, seen, outcome) {
+    if (!seen && NAVIGATIONS.indexOf(command) === -1) return outcome;
+    // A navigation with no earlier read to compare against still navigated.
+    var change = seen ? difference(seen, looks.get(outcome)) : { navigated: true };
+    var kind = change.navigated ? "navigated" : change.added || change.removed ? "changed" : "none";
+    outcome.change = kind;
+    outcome.changeNote = kind === "navigated" ?
+      "The " + command + " navigated: the page is now " + outcome.page.url + (outcome.page.title ? " (" + outcome.page.title + ")" : "") + "." :
+      kind === "changed" ?
+        "The " + command + " changed the page without navigating: " + plural(change.added, "line") + " added and " + plural(change.removed, "line") + " removed since your last read." :
+        noChangeNote(command);
+    return outcome;
+  }
   async function execute(args) {
     checkRuntime();
     checkArgs(args);
@@ -1572,7 +1607,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       try { checkRuntime(); page = await context.newPage(); checkRuntime(); selected = page; }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
-    if (command === "tab-list") return { tabs: context.pages().map(function (tab, index) { return { index: index, selected: tab === selected }; }) };
+    if (command === "tab-list") return { tabs: context.pages().map(function (tab, index) { return { index: index, selected: tab === selected, url: pageAddress(tab.url()) }; }) };
     if (command === "tab-close") {
       try {
         if (args.length === 2) {
@@ -1582,7 +1617,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         requireTrue(page && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_TAB_REFUSED");
         checkRuntime(); await page.close(); checkRuntime();
         if (page === selected || context.pages().indexOf(selected) === -1) selected = context.pages()[0];
-        dropRefs(page); checkRuntime(); return { closed: true };
+        dropRefs(page); checkRuntime();
+        return selected ? { closed: true, page: { url: pageAddress(selected.url()) } } : { closed: true };
       }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
@@ -1594,7 +1630,11 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     if (command === "snapshot" && args[1] === "--interactive") return narrow(await settled(reader, false, false), { interactive: true });
     if (command === "find") return narrow(await settled(reader, false, false), { find: args[1] });
     if (command === "snapshot" || command === "tab-select" || command === "tab-new") return settled(reader, args[1] === "--save", command === "tab-new");
-    if (command === "wait") return wait(reader, waitPlan(args));
+    if (command === "wait") {
+      // The polls move reader.last, so the read to compare with is taken first.
+      var before = reader.last;
+      return reportChange(command, before, await wait(reader, waitPlan(args)));
+    }
     if (command === "screenshot") return screenshot(reader, args);
     var applied = false;
     // What the agent last saw of this tab, before the action changes it.
@@ -1674,19 +1714,11 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         // A page still loading changes faster than it can be read. The navigation itself went through, so it says so
         // and how to read the page, rather than refusing what already happened.
         if (NAVIGATIONS.indexOf(command) === -1 || closed || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
-        return { navigated: true, page: { url: pageAddress(page.url()) }, hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
+        var loading = pageAddress(page.url());
+        return { navigated: true, page: { url: loading }, change: "navigated", changeNote: "The " + command + " navigated: the page is now " + loading + ", still loading.", hint: "The page is still loading, so it was not read yet. Run [\"wait\",\"<text you expect>\"] (or [\"wait\",\"3\"]) to read it once it settles." };
       }
       if (typed) outcome.typed = typed;
-      if (seen && ACTS.indexOf(command) !== -1) {
-        var change = difference(seen, looks.get(outcome));
-        var kind = change.navigated ? "navigated" : change.added || change.removed ? "changed" : "none";
-        outcome.change = kind;
-        outcome.changeNote = kind === "navigated" ?
-          "The " + command + " navigated: the page is now " + outcome.page.url + (outcome.page.title ? " (" + outcome.page.title + ")" : "") + "." :
-          kind === "changed" ?
-            "The " + command + " changed the page without navigating: " + plural(change.added, "line") + " added and " + plural(change.removed, "line") + " removed since your last read." :
-            "The " + command + " left the page as your last read showed it: no navigation and no visible change. Doing it again will not help; act on another ref from [\"snapshot\",\"--interactive\"], or run [\"wait\",\"<text you expect>\"] if the page is still loading.";
-      }
+      reportChange(command, seen, outcome);
       return outcome;
     } catch (error) {
       throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_ACTION_FAILED", applied);

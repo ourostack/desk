@@ -78,6 +78,31 @@ function stateDir(env, homeDir) {
   return path.join(env.XDG_STATE_HOME || path.join(homeDir, ".local", "state"), "ouroboros-skills", "desk", "browser");
 }
 
+// Screenshots the agent asked for are kept here, one folder per Desk process, outside every context folder, so closing a context keeps them.
+// Folders older than a week are removed when a later Desk process starts.
+var EVIDENCE_ID = /^\d{4}-\d{2}-\d{2}T[\d-]+Z-\d+$/;
+var EVIDENCE_DAYS = 7;
+var PICTURE = /\.(?:png|jpe?g)$/i;
+
+function evidenceDir(s) {
+  return path.join(s.stateRoot, "evidence", s.evidenceId);
+}
+
+function pruneEvidence(s) {
+  var root = path.join(s.stateRoot, "evidence");
+  if (!fs.existsSync(root)) return;
+  fs.readdirSync(root).forEach(function (name) {
+    if (!EVIDENCE_ID.test(name) || name === s.evidenceId) return;
+    var folder = path.join(root, name);
+    if (Date.now() - fs.statSync(folder).mtimeMs > EVIDENCE_DAYS * 86400000) removeDir(folder);
+  });
+}
+
+// The picture files directly in a folder, by name.
+function pictures(folder) {
+  return fs.readdirSync(folder).filter(function (name) { return PICTURE.test(name); });
+}
+
 // The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.
 function npmCli(node, platform, fileExists) {
   var real = node;
@@ -125,6 +150,7 @@ function settings(o) {
       return { execArgv: process.execArgv, inspectorActive: Boolean(require("node:inspector").url()) };
     },
     contexts: {},
+    evidenceId: new Date().toISOString().replace(/[:.]/g, "-") + "-" + process.pid,
     exitWaitMs: o.exitWaitMs || 5000,
     processTable: o.processTable || function () {
       return readProcessTable(platform, env);
@@ -407,10 +433,10 @@ async function openAuth(s) {
     var context = await driver.chromium.launchPersistentContext(profileDir, launch);
     s.contexts[id].context = context;
     checkAuthLogging(s);
-    s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); });
+    s.contexts[id].adapter = authBrowser.create(context, outputDir, s.commandMs, function () { checkAuthLogging(s); }, { evidenceDir: evidenceDir(s) });
     var opened = {
-      contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir,
-      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks every input/textarea/editable region; raw commands are refused. Close this context when done."
+      contextId: id, browser: "mine", app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
+      note: "Owned native output: all input/textarea/editable values are opaque. Pages are read with their child frames, refs act in any frame, and screenshot masks every input/textarea/editable region; raw commands are refused. Screenshots are saved in the evidence folder, which stays after close. Close this context when done."
     };
     if (copied.skipped.length) opened.copyLimitations = "Some nonessential profile files were omitted because their regular-file identity, single-link ownership or readable bytes could not be qualified.";
     return opened;
@@ -453,8 +479,8 @@ function open(s, kind) {
     if (result.timedOut) throw plain("The browser did not start within " + s.openMs / 1000 + " seconds and was stopped. Try again, or use a fresh browser." + (result.text ? " Details: " + result.text.slice(-1500) : ""));
     if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
     var opened = {
-      contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
-      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, so copy out any screenshot you need first."
+      contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir, evidence: evidenceDir(s),
+      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, but a screenshot is also copied to the evidence folder, which stays after close."
     };
     return opened;
   }).catch(function (error) {
@@ -659,11 +685,32 @@ function command(s, id, args) {
   }
   checkArgs(args);
   if (args[0] === "goto" && args.length > 1) args = [args[0], authBrowser.webFormOf(args[1])].concat(args.slice(2));
+  var folders = [path.join(dir, "files"), dir];
+  var known = args[0] === "screenshot" ? folders.map(pictures) : [];
   return runCli(s, dir, args, s.commandMs).then(function (result) {
     if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
     if (result.code !== 0) throw plain(result.text || "The command failed.");
-    return result.text;
+    if (args[0] !== "screenshot") return result.text;
+    return result.text + keepPictures(s, folders, known);
   });
+}
+
+// Copies each picture a screenshot command just wrote to the evidence folder; returns the line that says where, or "".
+function keepPictures(s, folders, known) {
+  var kept = [];
+  folders.forEach(function (folder, index) {
+    pictures(folder).filter(function (name) { return known[index].indexOf(name) === -1; }).forEach(function (name) {
+      try {
+        fs.mkdirSync(evidenceDir(s), { recursive: true, mode: 448 });
+        var copy = path.join(evidenceDir(s), crypto.randomUUID() + "-" + name);
+        fs.copyFileSync(path.join(folder, name), copy);
+        kept.push(copy);
+      } catch (error) {
+        // The original is still in the files folder; only its survival is unconfirmed.
+      }
+    });
+  });
+  return kept.length ? "\nKept after browser_context close: " + kept.join(", ") : "";
 }
 
 function ownerGone(file) {
@@ -683,6 +730,7 @@ function sweep(s) {
     return name.indexOf(PREFIX) === 0 && ID.test(name.slice(PREFIX.length)) && owner.browser === "fresh" &&
       ownerGone(path.join(s.tmpDir, name, "owner.json"));
   });
+  try { pruneEvidence(s); } catch (error) { /* old pictures are retried at the next start */ }
   return stale.reduce(function (chain, name) {
     return chain.then(function () {
       return close(s, name.slice(PREFIX.length));
