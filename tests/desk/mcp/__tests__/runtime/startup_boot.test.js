@@ -3,7 +3,7 @@ import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,6 +16,7 @@ import {
   bootKey,
   bootPaths,
   claimDelivery,
+  defaultTaskBoot,
   pendingBootLine,
   serverBootKey,
   startBoot,
@@ -343,4 +344,79 @@ test("the Claude hook starts the boot and carries its head after the startup lin
   assert.doesNotMatch(text, /session-boot/u)
   const paths = bootPaths({ stateDir: path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk"), key: `f:${desk}` })
   assert.ok((await awaitBoot({ paths, waitMs: 120_000 })).boot, "the boot's own result lands on disk for the first tool reply")
+})
+
+test("a start leaves old boot files behind, tolerates a spawn that fails or has no pid, and gives up on a key it cannot use", () => {
+  const dir = stateDir()
+  const old = bootPaths({ stateDir: dir, key: "s:old" })
+  mkdirSync(path.dirname(old.text), { recursive: true })
+  writeFileSync(old.text, "old\n")
+  const eightDaysAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000)
+  utimesSync(old.text, eightDaysAgo, eightDaysAgo)
+  const noPid = startBoot({ key: "s:nopid", env: {}, stateDir: dir, spawn: fakeSpawn({ pid: null }).spawn })
+  assert.equal(noPid.state, "started")
+  assert.equal(existsSync(old.text), false, "a week-old result is cleared")
+  assert.equal(JSON.parse(readFileSync(noPid.paths.start, "utf8")).pid, null, "no pid to record")
+  const throws = startBoot({ key: "s:throws", env: {}, stateDir: dir, spawn: () => { throw new Error("EAGAIN\nmore") } })
+  assert.equal(throws.state, "failed")
+  assert.match(readFileSync(throws.paths.text, "utf8"), /^Desk boot: it could not start \(EAGAIN\)\./u)
+  const erroring = startBoot({ key: "s:error-event", env: {}, stateDir: dir, spawn: () => ({ pid: 1, unref() {}, on(event, listener) { listener(new Error("ENOENT")) } }) })
+  assert.equal(erroring.state, "started", "an error event from the child is swallowed; the reader finds the boot ended")
+  const unusable = { toString() { throw new Error("no key") } }
+  assert.deepEqual(startBoot({ key: unusable, env: {}, stateDir: dir, spawn: fakeSpawn().spawn }), { state: "failed", paths: null })
+  // With no state folder named, the one the environment points at is used.
+  const viaEnv = startBoot({ key: "s:via-env", env: process.env, spawn: fakeSpawn().spawn })
+  assert.equal(viaEnv.state, "started")
+  assert.ok(viaEnv.paths.start.startsWith(path.join(process.env.XDG_STATE_HOME, "ouroboros-skills", "desk")))
+})
+
+test("a boot whose record has no usable start time or process still reads as running, and its duration is simply left out", async () => {
+  const dir = stateDir()
+  const odd = bootPaths({ stateDir: dir, key: "s:odd" })
+  mkdirSync(path.dirname(odd.start), { recursive: true })
+  writeFileSync(odd.start, JSON.stringify({ at: "soon", pid: "me" }))
+  assert.deepEqual(await awaitBoot({ paths: odd, waitMs: 0 }), { boot: null, reason: "running" })
+  assert.equal(bootAgeSeconds(odd), undefined)
+  writeFileSync(odd.text, "done\n")
+  assert.deepEqual(await awaitBoot({ paths: odd, waitMs: 0 }), { boot: { text: "done\n", seconds: null }, reason: "ready" })
+})
+
+test("a long boot with no line break is cut at the room it has", () => {
+  const cut = bootContext({ boot: { text: "x".repeat(5000), seconds: 1.5 }, maxChars: 900 })
+  assert.equal(cut.whole, false)
+  assert.ok(cut.text.length <= 900)
+  assert.match(cut.text, /\[The rest of the boot arrives with your first Desk tool reply\.\]$/u)
+})
+
+test("the server leaves a reply with no content list as it was, names its own script when no plugin folder is known, and says nothing twice about a boot still running", async () => {
+  const dir = stateDir()
+  const env = { COPILOT_AGENT_SESSION_ID: "srv-7" }
+  const starts = []
+  const callTool = withStartupBoot({
+    callTool: async () => ({ structuredContent: { ok: true } }),
+    env,
+    stateDir: dir,
+    allowInTest: true,
+    start: (options) => {
+      starts.push(options)
+      return startBoot({ ...options, spawn: fakeSpawn().spawn })
+    },
+    waitMs: 0,
+    pause: noWait,
+  })
+  const first = await callTool(call("desk_status"))
+  assert.ok(starts[0].script.endsWith(path.join("mcp", "scripts", "session-boot.js")))
+  assert.equal(first.structuredContent.ok, true)
+  assert.equal(first.content.length, 1, "the boot's note is appended to a reply that had no content list")
+  const second = await callTool(call("desk_status"))
+  assert.equal(second.content, undefined, "a later reply, with the boot still running, is untouched")
+  assert.equal(starts.length, 1)
+})
+
+test("the one-task boot is the plain-text boot for that task, says so when it was not checked in time, and gives nothing when it cannot run", async () => {
+  const { env } = deskFixture("task-boot")
+  const text = await defaultTaskBoot({ env, track: "ops", slug: "ship" })
+  assert.match(text, /^Desk boot, named task only/u)
+  assert.match(await defaultTaskBoot({ env, track: "ops", slug: "ship", waitMs: 20, bootFn: () => new Promise(() => {}) }), /^Push route and repos for ops\/ship were not checked in time; run gh auth status before you push\.$/u)
+  assert.equal(await defaultTaskBoot({ env: null, track: "ops", slug: "ship" }), "")
 })

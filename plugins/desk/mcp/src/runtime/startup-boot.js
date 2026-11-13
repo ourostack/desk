@@ -41,18 +41,18 @@ const BOOT_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
  * The session's key, or null when there is nothing to key on. A Copilot session id wins; Claude has no id the server shares with
  * its hook, so the project folder stands in (a new session in a folder starts a new boot, see `startBoot`'s `fresh`).
  */
-export function bootKey({ sessionId, folder } = {}) {
+export function bootKey({ sessionId, folder }) {
   if (hasText(sessionId)) return `s:${sessionId}`
   return hasText(folder) && path.isAbsolute(folder) ? `f:${path.resolve(folder)}` : null
 }
 
 /** The key the Desk server computes from its own environment; it must equal the one the hook computed. */
-export function serverBootKey(env = process.env) {
+export function serverBootKey(env) {
   return bootKey({ sessionId: env.COPILOT_AGENT_SESSION_ID, folder: env.CLAUDE_PROJECT_DIR })
 }
 
 /** False when the operator turned automatic boots off (`DESK_AUTO_BOOT=0`), for a headless evaluator session, or inside a node:test run that did not ask for one. */
-export function autoBootEnabled(env = process.env, { allowInTest = false } = {}) {
+export function autoBootEnabled(env, { allowInTest = false } = {}) {
   if (String(env[AUTO_BOOT_SWITCH] ?? "").trim() === "0") return false
   const headless = String(env.DESK_FACTORY_HEADLESS ?? "")
   if (headless !== "" && headless !== "0") return false
@@ -107,7 +107,7 @@ function writeText(file, text) {
  * The boot is the plugin's own `session-boot.js`, detached, in the session's folder, with the session id in its environment so it
  * binds the desk the server will. A boot that cannot be spawned leaves a one-sentence result in its place.
  */
-export function startBoot({ key, folder, sessionId, env = process.env, stateDir = resolveDeskStateDir({ env }), script = BOOT_SCRIPT, spawn = nodeSpawn, now = Date.now, fresh = false } = {}) {
+export function startBoot({ key, folder, sessionId, env, stateDir = resolveDeskStateDir({ env }), script = BOOT_SCRIPT, spawn = nodeSpawn, now = Date.now, fresh = false }) {
   if (key === null || key === undefined) return { state: "failed", paths: null }
   try {
     assertNotRealStateUnderTest(stateDir)
@@ -138,7 +138,7 @@ export function startBoot({ key, folder, sessionId, env = process.env, stateDir 
       if (typeof child.pid === "number") writeFileSync(paths.start, JSON.stringify({ at: now(), pid: child.pid }))
       return { state: "started", paths }
     } catch (error) {
-      return failed(String(error?.message ?? error).split("\n")[0].slice(0, 120))
+      return failed(String(error.message).split("\n")[0].slice(0, 120))
     }
   } catch {
     return { state: "failed", paths: null }
@@ -176,7 +176,7 @@ function readText(paths) {
  * The boot's text as `{ text, seconds }`, once it exists; waits up to `waitMs` for it. Null when it is not there yet, or when the
  * boot's process ended without writing one (`reason: "ended"` in `lastReason`), so a crashed boot never costs a whole wait.
  */
-export async function awaitBoot({ paths, waitMs = 0, now = Date.now, pause = sleep } = {}) {
+export async function awaitBoot({ paths, waitMs = 0, now = Date.now, pause = sleep }) {
   if (paths === null || paths === undefined) return { boot: null, reason: "none" }
   const deadline = now() + Math.max(0, waitMs)
   for (;;) {
@@ -247,14 +247,14 @@ const TASK_FOCUS = "task_focus"
  */
 export function withStartupBoot({
   callTool,
-  env = process.env,
-  stateDir = resolveDeskStateDir({ env }),
+  env,
+  stateDir,
   waitMs = SERVER_WAIT_MS,
   allowInTest = false,
   start = startBoot,
   taskBoot = defaultTaskBoot,
   pause = sleep,
-} = {}) {
+}) {
   const key = autoBootEnabled(env, { allowInTest }) ? serverBootKey(env) : null
   if (key === null) return callTool
   let waited = false
@@ -298,13 +298,13 @@ export function withStartupBoot({
 
 // The boot for one named task, as text: what `session-boot.js --task <track/slug> --task-only` printed. Loaded when needed, so the
 // server's start never loads the boot's modules.
-async function defaultTaskBoot({ env, track, slug }) {
+export async function defaultTaskBoot({ env, track, slug, waitMs = 10_000, bootFn }) {
   try {
-    const { bootOnce } = await import("./boot.js")
+    const run = bootFn ?? (await import("./boot.js")).bootOnce
     const { formatBootText } = await import("./boot-text.js")
     const result = await Promise.race([
-      bootOnce({ env, taskQuery: `${track}/${slug}`, taskOnly: true }),
-      new Promise((resolve) => setTimeout(resolve, 10_000, null)),
+      run({ env, taskQuery: `${track}/${slug}`, taskOnly: true }),
+      new Promise((resolve) => setTimeout(resolve, waitMs, null)),
     ])
     return result === null ? `Push route and repos for ${track}/${slug} were not checked in time; run gh auth status before you push.` : formatBootText(result)
   } catch {

@@ -1761,7 +1761,7 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       deliverText(deliverTo, output)
     } catch (error) {
       try {
-        deliverText(deliverTo, `Desk boot: its result could not be written (${String(error?.message ?? error).split("\n")[0].slice(0, 120)}). desk_status reports the desk's state.\n`)
+        deliverText(deliverTo, `Desk boot: its result could not be written (${String(error.message).split("\n")[0].slice(0, 120)}). desk_status reports the desk's state.\n`)
       } catch {
         // The waiting reader sees the boot end without a result and says so.
       }
