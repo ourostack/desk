@@ -326,6 +326,7 @@ test("production runtime dependency pack is committed at the current canonical p
     ["darwin-arm64-node-127", "darwin-arm64-node-137", "linux-x64-node-127", "win32-x64-node-137", "win32-x64-node-147"],
   )
   for (const expectation of expectations) {
+    const expectedPackDir = path.join(
       mcpRoot,
       "artifacts",
       "runtime-deps",
@@ -462,7 +463,9 @@ test("generated artifact freshness script verifies the production runtime depend
   assert.match(result.stdout, /linux-x64-node-127/u)
   assert.match(result.stdout, /win32-x64-node-137/u)
   assert.match(result.stdout, /win32-x64-node-147/u)
-}) handles tar prefixes, blank sizes, and null file types", () => {
+})
+
+test("runtime archive extraction handles tar prefixes, blank sizes, and null file types", () => {
   const tempDir = mkdtempSync(path.join(tmpdir(), "desk-production-pack-tar-"))
   try {
     const longEntry = `node_modules/${"a".repeat(90)}/index.js`
