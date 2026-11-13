@@ -92,7 +92,31 @@ var ARITY = {
   snapshot: [1, 2], find: [2, 2], goto: [2, 2], "go-back": [1, 1], "go-forward": [1, 1], reload: [1, 1],
   click: [2, 2], dblclick: [2, 2], fill: [3, 3], type: [3, 3], press: [2, 3], select: [3, 3], wait: [1, 3],
   check: [2, 2], uncheck: [2, 2], hover: [2, 2], "tab-list": [1, 1], "tab-new": [1, 1],
-  "tab-close": [1, 2], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3], screenshot: [1, 3]
+  "tab-close": [1, 2], "tab-select": [2, 2], resize: [3, 3], mousewheel: [3, 3], screenshot: [1, 3],
+  eval: [2, 3], "run-code": [2, 2], console: [1, 2], keydown: [2, 2], keyup: [2, 2], mousemove: [3, 3], mousedown: [1, 2], mouseup: [1, 2],
+  upload: [3, 64], "dialog-accept": [1, 2], "dialog-dismiss": [1, 1],
+  "localstorage-list": [1, 1], "localstorage-get": [2, 2], "localstorage-set": [3, 3], "localstorage-delete": [2, 2], "localstorage-clear": [1, 1],
+  "sessionstorage-list": [1, 1], "sessionstorage-get": [2, 2], "sessionstorage-set": [3, 3], "sessionstorage-delete": [2, 2], "sessionstorage-clear": [1, 1]
+};
+// The commands that act on the page itself and need no read of it first.
+var RAW = ["eval", "run-code", "console", "keydown", "keyup", "mousemove", "mousedown", "mouseup", "upload", "dialog-accept", "dialog-dismiss",
+  "localstorage-list", "localstorage-get", "localstorage-set", "localstorage-delete", "localstorage-clear",
+  "sessionstorage-list", "sessionstorage-get", "sessionstorage-set", "sessionstorage-delete", "sessionstorage-clear"];
+// Runs in the page: what an eval script's value comes to, [value, element]: a function is called with the element, anything else is the answer.
+var CALL = function (given) { return typeof given[0] === "function" ? given[0](given[1]) : given[0]; };
+// Runs in the page: one localStorage or sessionStorage operation, [kind, operation, key, value].
+var STORE = function (input) {
+  var store = input[0] === "local" ? window.localStorage : window.sessionStorage;
+  if (input[1] === "list") {
+    var all = {};
+    for (var i = 0; i < store.length; i++) all[store.key(i)] = store.getItem(store.key(i));
+    return all;
+  }
+  if (input[1] === "get") return store.getItem(input[2]);
+  if (input[1] === "set") store.setItem(input[2], input[3]);
+  if (input[1] === "delete") store.removeItem(input[2]);
+  if (input[1] === "clear") store.clear();
+  return null;
 };
 // A ref is bound this many times when the page keeps moving it between the read and the browser's confirmation.
 var BIND_ATTEMPTS = 3;
@@ -104,17 +128,20 @@ var OPAQUE_FIELDS = "input, textarea, [contenteditable]";
 
 var COMMANDS = "snapshot [--interactive | --save] / find <text> / goto <url> / go-back / go-forward / reload / wait [<seconds> | <text> | --gone <text>] / " +
   "click, dblclick, hover, check or uncheck <ref> / fill or type <ref> <text> / press [<ref>] <key> / select <ref> <value> / " +
-  "mousewheel <dx> <dy> / resize <width> <height> / screenshot [<ref>] [--full] / tab-list / tab-new / tab-select <index> / tab-close [<index>]";
+  "mousewheel <dx> <dy> / resize <width> <height> / screenshot [<ref>] [--full] / tab-list / tab-new / tab-select <index> / tab-close [<index>] / " +
+  "eval <function or expression> [<ref>] / run-code <async function of page> / console [<level>] / keydown or keyup <key> / mousemove <x> <y> / " +
+  "mousedown or mouseup [<button>] / upload <ref> <file>... / dialog-accept [<text>] / dialog-dismiss / " +
+  "localstorage-list|get|set|delete|clear and sessionstorage-list|get|set|delete|clear [<key> [<value>]]";
 var SNAPSHOT_LOOK = "run [\"snapshot\"] to see the page as it is now";
 var SNAPSHOT_AGAIN = "act on a ref from that snapshot";
 var REPEATS = "if the same refusal repeats, open a new context with browser_context";
 var CHANGING = "the page was changing while it was read";
-// Each failure's parts: what probably happened, how to look further, and how to keep working. Nothing here ever needs eval
-// or a page script: refs from a snapshot cover it.
+// Each failure's parts: what probably happened, how to look further, and how to keep working. An agent may run any command
+// and any page script: these are only things that went wrong.
 var FAILURES = {
-  AUTH_COMMAND_REFUSED: { thing: "browser command", probably: "mine does not run that command", look: "the commands mine runs are " + COMMANDS, keepWorking: "eval and page scripts are never needed: take a snapshot, then act on its refs, and use wait to let a page load" },
-  AUTH_ARGUMENTS_REFUSED: { thing: "browser command", probably: "the arguments are not ones mine accepts for that command", look: "check them against the commands mine runs: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text", keepWorking: "run the command again with corrected arguments" },
-  AUTH_URL_REFUSED: { thing: "browser command", probably: "the address for goto is not an allowed web address", look: "goto takes a full http or https URL with no user name or password in it", keepWorking: "run goto again with such a URL" },
+  AUTH_COMMAND_UNKNOWN: { thing: "browser command", probably: "mine has no command by that name", look: "the commands mine runs are " + COMMANDS, keepWorking: "run one of them, or use eval or run-code for anything they do not cover" },
+  AUTH_SCRIPT_FAILED: { thing: "browser script", probably: "the script you ran threw an error or did not finish", look: "the error the script gave follows, and " + SNAPSHOT_LOOK, keepWorking: "fix the script and run it again; this context is still open" },
+  AUTH_ARGUMENTS_REFUSED: { thing: "browser command", probably: "the arguments do not fit that command", look: "check them against the commands mine runs: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text", keepWorking: "run the command again with corrected arguments" },
   AUTH_TARGET_REFUSED: { thing: "browser element", probably: "that ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone", look: SNAPSHOT_LOOK, keepWorking: SNAPSHOT_AGAIN },
   AUTH_SNAPSHOT_INVALIDATED: { thing: "browser element", probably: "the page replaced that element, or navigated, since it was read", look: SNAPSHOT_LOOK, keepWorking: SNAPSHOT_AGAIN + "; while a page loads, use [\"wait\",\"<text you expect>\"]" },
   AUTH_FRAME_COVERAGE_REFUSED: { thing: "browser page", probably: CHANGING + ", so one of its frames was left out of the read", look: "run [\"wait\",\"2\"] (or wait for text you expect) so the page settles", keepWorking: "then try again; if it repeats, open the frame's own page with goto" },
@@ -157,7 +184,7 @@ function sentence(text) {
 }
 
 // The code leads the line, so callers can match it. `code` may carry retained cleanup codes after CLEANUP_MARK.
-function fail(code, applied) {
+function fail(code, applied, detail) {
   var codes = String(code).split(CLEANUP_MARK);
   var primary = codes[0];
   var entry = FAILURES[primary] || GENERAL_FAILURE;
@@ -166,7 +193,7 @@ function fail(code, applied) {
     (codes.length > 1 ? " (retained cleanup uncertainty: " + codes.slice(1).join(", ") + ")" : "");
   var problem = probably + "; to look further, " + entry.look + "; to file a bug with its evidence, call friction_add with {\"error_code\":\"" +
     primary.toLowerCase() + "\"}; " + entry.keepWorking;
-  var message = (primary + ": desk-web: " + entry.thing + ": " + sentence(problem) + ".").replace(/\s*[\r\n]+\s*/g, " ");
+  var message = (primary + ": desk-web: " + entry.thing + ": " + sentence(problem) + "." + (detail ? " The script said: " + String(detail).slice(0, 1000) : "")).replace(/\s*[\r\n]+\s*/g, " ");
   var error = new Error(message);
   error.plain = true;
   error.authCode = code;
@@ -764,28 +791,22 @@ function shows(node, text) {
 }
 
 function checkArgs(args) {
-  requireTrue(Array.isArray(args) && args.length > 0 && args.every(function (arg) {
-    return typeof arg === "string" && arg.length <= 65536;
-  }), "AUTH_ARGUMENTS_REFUSED");
+  requireTrue(Array.isArray(args) && args.length > 0 && args.every(function (arg) { return typeof arg === "string"; }), "AUTH_ARGUMENTS_REFUSED");
+  requireTrue(Object.prototype.hasOwnProperty.call(ARITY, args[0]), "AUTH_COMMAND_UNKNOWN");
   var bounds = ARITY[args[0]];
-  requireTrue(bounds && args.length >= bounds[0] && args.length <= bounds[1], "AUTH_COMMAND_REFUSED");
+  requireTrue(args.length >= bounds[0] && args.length <= bounds[1], "AUTH_ARGUMENTS_REFUSED");
   if (args[0] === "snapshot") requireTrue(args.length === 1 || args[1] === "--save" || args[1] === "--interactive", "AUTH_ARGUMENTS_REFUSED");
   if (args[0] === "find") requireTrue(args[1].trim().length > 0 && args[1].length <= 200, "AUTH_ARGUMENTS_REFUSED");
-  if (args[0] === "goto") {
-    var url;
-    try { url = new URL(args[1]); } catch (error) { throw fail("AUTH_URL_REFUSED"); }
-    requireTrue(["http:", "https:"].indexOf(url.protocol) !== -1 && !url.username && !url.password, "AUTH_URL_REFUSED");
-  }
   if (args[0] === "wait") waitPlan(args);
-  // A key alone goes to whatever has focus: a key name or one character, with + between modifiers.
-  if (args[0] === "press" && args.length === 2) requireTrue(/^[\x21-\x7e]{1,40}$/.test(args[1]), "AUTH_ARGUMENTS_REFUSED");
+  // A key alone goes to whatever has focus: any key name or character Playwright knows, with + between modifiers.
+  if (args[0] === "press" && args.length === 2) requireTrue(args[1].length > 0, "AUTH_ARGUMENTS_REFUSED");
   if (args[0] === "screenshot") {
     var picks = args.slice(1).filter(function (value) { return value !== "--full"; });
     requireTrue(args.length - 1 - picks.length <= 1 && picks.length <= 1 && picks.every(function (value) { return /^e[1-9]\d*$/.test(value); }) &&
       !(picks.length && args.indexOf("--full") !== -1), "AUTH_ARGUMENTS_REFUSED");
   }
   if (["resize", "mousewheel", "tab-select", "tab-close"].indexOf(args[0]) !== -1) {
-    args.slice(1).forEach(function (value) { requireTrue(/^-?\d+$/.test(value) && Math.abs(Number(value)) <= 10000, "AUTH_ARGUMENTS_REFUSED"); });
+    args.slice(1).forEach(function (value) { requireTrue(/^-?\d+$/.test(value) && true, "AUTH_ARGUMENTS_REFUSED"); });
     if (args[0] !== "mousewheel") requireTrue(args.slice(1).every(function (value) { return Number(value) >= (args[0] === "resize" ? 1 : 0); }), "AUTH_ARGUMENTS_REFUSED");
   }
 }
@@ -886,11 +907,12 @@ function isMainNavigation(page, request) {
 }
 
 // One recorder per page, attached when the page joins the context: its last RECENT requests (host, type and code), the
-// requests still pending, the main document's status and console counts. Nothing here holds text or a query.
+// requests still pending, the main document's status and console counts. Diagnoses use only the counts; the console
+// command shows the last messages to the agent that asks for them.
 function recorderFor(page) {
   var known = recorders.get(page);
   if (known) return known;
-  var rec = { lastActivity: Date.now(), pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined, launches: [], launchCount: 0, moves: 0, reported: 0 };
+  var rec = { lastActivity: Date.now(), pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, messages: [], mainStatus: null, mainFailed: undefined, mainIdentity: false, external: undefined, launches: [], launchCount: 0, moves: 0, reported: 0 };
   recorders.set(page, rec);
   function finish(request, code) {
     var entry = rec.pending.get(request);
@@ -924,6 +946,8 @@ function recorderFor(page) {
   page.on("requestfinished", function (request) { finish(request); });
   page.on("requestfailed", function (request) { finish(request, failureCode((request.failure() || {}).errorText)); });
   page.on("console", function (message) {
+    rec.messages.push({ type: message.type(), text: String(message.text()).slice(0, 1000) });
+    if (rec.messages.length > RECENT) rec.messages.shift();
     if (message.type() === "error") rec.errors++;
     else if (message.type() === "warning") rec.warnings++;
   });
@@ -1643,6 +1667,65 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: moved ? "page" : "none", option: moved ? null : launch.webOptionIn(outcome.snapshot), url: outcome.page.url });
     return outcome;
   }
+  // Commands that act on the page itself: scripts, raw input, storage, the console and dialogs. Nothing here is refused;
+  // what a script returns is returned as it is.
+  async function raw(command, args, page) {
+    requireTrue(page && !page.isClosed(), "AUTH_CONTEXT_REFUSED");
+    var reply = {};
+    var scripted = command === "eval" || command === "run-code";
+    var onRef = async function (ref, run) {
+      requireTrue(/^e[1-9]\d*$/.test(ref), "AUTH_TARGET_REFUSED");
+      var reader = await readerFor(page);
+      var record = refs.get(ref);
+      requireTrue(record && record.reader === reader, "AUTH_TARGET_REFUSED");
+      var bound = await bind(reader, record, command);
+      try { return await run(bound.handle); } finally { await disposeRecords([bound]); }
+    };
+    try {
+      checkRuntime();
+      var value;
+      if (command === "eval") {
+        // Playwright runs a string as an expression and hands back a function uncalled, so a function is called here (with the
+        // element, when a ref is given) through the browser's own protocol, which a page's content-security policy cannot block.
+        var evaluate = async function (element) {
+          var source = await page.evaluateHandle(args[1]);
+          try { return await page.evaluate(CALL, [source, element]); }
+          finally { await source.dispose(); }
+        };
+        value = args.length === 3 ? await onRef(args[2], evaluate) : await evaluate(null);
+      }
+      else if (command === "run-code") value = await (new Function("return (" + args[1] + ")")())(page);
+      else if (command === "console") {
+        var levels = ["error", "warning", "info", "log", "debug"];
+        var floor = args[1] === undefined ? levels.length - 1 : levels.indexOf(args[1]);
+        requireTrue(floor !== -1, "AUTH_ARGUMENTS_REFUSED");
+        value = recorderFor(page).messages.filter(function (message) {
+          var rank = levels.indexOf(message.type);
+          return rank === -1 || rank <= floor;
+        });
+      }
+      else if (command === "keydown") await page.keyboard.down(args[1]);
+      else if (command === "keyup") await page.keyboard.up(args[1]);
+      else if (command === "mousemove") await page.mouse.move(Number(args[1]), Number(args[2]));
+      else if (command === "mousedown") await page.mouse.down(args[1] ? { button: args[1] } : undefined);
+      else if (command === "mouseup") await page.mouse.up(args[1] ? { button: args[1] } : undefined);
+      else if (command === "upload") await onRef(args[1], function (handle) { return handle.setInputFiles(args.slice(2)); });
+      else if (command === "dialog-accept") { page.once("dialog", function (dialog) { dialog.accept(args[1]).catch(function () {}); }); value = "the next dialog will be accepted"; }
+      else if (command === "dialog-dismiss") { page.once("dialog", function (dialog) { dialog.dismiss().catch(function () {}); }); value = "the next dialog will be dismissed"; }
+      else {
+        var parts = command.split("-");
+        value = await page.evaluate(STORE, [parts[0] === "localstorage" ? "local" : "session", parts[1], args[1], args[2]]);
+      }
+      checkRuntime();
+      dataOnly(value);
+      if (value !== undefined) reply.result = value;
+      reply.page = { url: pageAddress(page.url()) };
+      return reply;
+    } catch (error) {
+      if (knownFailure(error)) throw error;
+      throw fail(scripted ? "AUTH_SCRIPT_FAILED" : "AUTH_ACTION_FAILED", !scripted, scripted && error ? error.message : undefined);
+    }
+  }
   async function execute(args, inner) {
     checkRuntime();
     checkArgs(args);
@@ -1677,6 +1760,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }
+    if (RAW.indexOf(command) !== -1) return raw(command, args, page);
     var reader;
     try { reader = await readerFor(page); }
     catch (error) {
@@ -1832,4 +1916,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, STORE: STORE, CALL: CALL, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };

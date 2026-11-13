@@ -34,10 +34,10 @@ var safeErrors = new WeakMap();
 var SESSION = "desk";
 // The page commands browser_command may run; one of them must come first. Everything else stays out: opening, closing,
 // attaching or listing browsers (only browser_context opens and closes, and some of these reach other sessions or kill every
-// Playwright browser on the machine), running Node code (run-code), and saving or reading sign-in state and cookies.
+// Playwright browser on the machine). Scripts (eval, run-code), sign-in state and cookies are the agent's to use.
 var PAGE_COMMANDS = ["goto", "go-back", "go-forward", "reload", "snapshot", "find", "click", "dblclick", "type", "fill", "press",
   "keydown", "keyup", "select", "check", "uncheck", "hover", "drag", "drop", "upload", "mousemove", "mousedown", "mouseup",
-  "mousewheel", "eval", "console", "dialog-accept", "dialog-dismiss", "resize", "screenshot", "pdf", "tab-list", "tab-new",
+  "mousewheel", "eval", "run-code", "state-save", "state-load", "cookie-list", "cookie-get", "cookie-set", "cookie-delete", "cookie-clear", "console", "dialog-accept", "dialog-dismiss", "resize", "screenshot", "pdf", "tab-list", "tab-new",
   "tab-close", "tab-select", "localstorage-list", "localstorage-get", "localstorage-set", "localstorage-delete",
   "localstorage-clear", "sessionstorage-list", "sessionstorage-get", "sessionstorage-set", "sessionstorage-delete",
   "sessionstorage-clear", "requests", "request", "request-headers", "request-body", "response-headers", "response-body",
