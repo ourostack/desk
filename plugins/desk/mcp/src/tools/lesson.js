@@ -170,6 +170,19 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
   return result
 }
 
+// No card is open for a desk lesson: the same lesson_add call is made again once its cause is fixed, and its answer says whether the card is open now.
+function notOpenedRoute(added, target, topic, body) {
+  return {
+    summary: `The improvement card for this lesson did not open (${added.improvement}), so nothing acts on it yet.`,
+    steps: [{
+      step: `Fix the cause Desk reported (${added.improvement}), then call lesson_add again with the same arguments. It opens the card only when it is missing. Stop and report any answer other than the read-back below.`,
+      tool: "lesson_add",
+      arguments: { scope: "desk", owner: target.owner, topic, body },
+    }],
+    landed_when: { tool: "lesson_add", expect: "its answer reports improvement opened, duplicate or reopened" },
+  }
+}
+
 async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFriction, spawnGit, schedulePush, search, scan }) {
   const target = ownerOf(owner, { env, scan })
   const added = await addFriction({
@@ -201,8 +214,9 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
     message: opened
       ? `Not in effect yet. ${added.improvement_path === undefined ? "An improvement card" : `Improvement card ${added.improvement_path}`} is open against ${target.owner}; the lesson takes effect when the change it asks for ships.`
       : `Not in effect, and no improvement card opened (${added.improvement}), so nothing will act on this lesson yet. The note is in ${added.path}.`,
+    ...(opened ? {} : { route_around: notOpenedRoute(added, target, topic, body) }),
   }
-  for (const field of ["improvement_key", "improvement_path", "commit", "improvement_commit"]) if (added[field] !== undefined) result[field] = added[field]
+  for (const field of ["improvement_key", "improvement_path", "commit", "improvement_commit", "improvement_route_around"]) if (added[field] !== undefined) result[field] = added[field]
   return result
 }
 

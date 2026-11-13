@@ -28,6 +28,14 @@ export function readsOnly(step) {
     (String(argv[1] ?? "").endsWith("finish-commit.js") && !argv.includes("--commit")))
 }
 
+// The paths a commit failure's route names, in the order the route gives them: the captured change's `--path` flags, else the
+// `git diff HEAD -- <paths>` read of a route without a capture.
+export function routedPaths(route) {
+  const [first] = argvsOf(route.steps[0])
+  if (first.includes("--path")) return first.flatMap((arg, i) => (first[i - 1] === "--path" ? [arg] : []))
+  return first.slice(first.indexOf("--") + 1)
+}
+
 export function assertRoute(route) {
   assert.ok(route && typeof route === "object", "a result that is not committed carries route_around")
   assert.equal(typeof route.summary, "string")

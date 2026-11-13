@@ -128,6 +128,38 @@ export function commitFailure({ root, paths, message, committed, card = null, de
 }
 
 /**
+ * The route for a pull request Desk opened that has not merged (note_leave, lesson_add's team write, both through
+ * shared-write.js): merge it by hand, then read it back. A queued pull request is read again later; any other state is reported.
+ */
+export function pullRequestRoute(pr) {
+  return {
+    summary: `Pull request ${pr} is open and has not merged, so the change is not on the default branch yet. Merge it by hand, then read it back.`,
+    steps: [
+      { step: `Read the pull request's state. ${READS_ONLY} OPEN and MERGEABLE: go on. QUEUED (a merge queue holds it): change nothing and read again later. Any other answer: stop and report it with the tool's result.`, argv: ["gh", "pr", "view", pr, "--json", "state,mergeable,mergeStateStatus"] },
+      { step: `Only if step 1 showed OPEN and MERGEABLE: merge it once, by hand, as the GitHub account the tool's result names (\`account\`), with the same squash merge Desk runs.`, argv: ["gh", "pr", "merge", pr, "--squash"] },
+    ],
+    landed_when: { argv: ["gh", "pr", "view", pr, "--json", "state", "--jq", ".state"], expect: "prints MERGED" },
+  }
+}
+
+/**
+ * The route for a shared-repository write that stopped before its pull request merged (note_leave, lesson_add's team write):
+ * read whether the change is already on the default branch, and if not, call the same tool again. The tool builds the change
+ * from that branch again with every protection it has, so the route never writes to the repository by hand. `landed` is the
+ * read-back (`argv` and what `expect` says it proves).
+ */
+export function retryRoute({ summary, landed, tool, arguments: args }) {
+  return {
+    summary,
+    steps: [
+      { step: `Read whether the change is already on the default branch. ${READS_ONLY} If it ${landed.expect}, it landed: stop.`, argv: landed.argv },
+      { step: `Only if step 1 did not show it: fix the reason the tool gave, then call ${tool} again with the same arguments.`, tool, arguments: args },
+    ],
+    landed_when: landed,
+  }
+}
+
+/**
  * The route for a change Desk wrote but deliberately left uncommitted because a file already held another session's
  * uncommitted edit (R1, R7). It only reads: committing the file whole would publish that edit as this call's, and no step
  * here resets an index entry or moves a branch, so another session's staged and unstaged work stays exactly as it is.
