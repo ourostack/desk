@@ -1714,11 +1714,11 @@ test("wait keeps waiting through a page that is still changing, and a closed con
 
 test("wait for text to go reports when it stays", async () => {
   const root = await mkTempRoot("auth-native-wait-gone-")
-  const adapter = adapterFor(fakeDriver(), root, 2000)
+  const adapter = adapterFor(fakeDriver(), root, 6000)
   try {
     const stays = await adapter.call(["wait", "--gone", "Password"])
     assert.deepEqual(stays.waited, { text: "Password", found: false })
-    assert.match(stays.hint, /did not go within 1 s/u)
+    assert.match(stays.hint, /did not go within 3 s/u)
   } finally { await adapter.close() }
 })
 
