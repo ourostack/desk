@@ -69,47 +69,71 @@ var BIND_ATTEMPTS = 3;
 // open-shadow content, masked by their host).
 var OPAQUE_FIELDS = "input, textarea, [contenteditable]";
 
-var COMMANDS = "snapshot [--interactive | --save]; find <text>; goto <url>; go-back; go-forward; reload; wait [<seconds> | <text> | --gone <text>]; " +
-  "click, dblclick, hover, check or uncheck <ref>; fill or type <ref> <text>; press [<ref>] <key>; select <ref> <value>; " +
-  "mousewheel <dx> <dy>; resize <width> <height>; screenshot [<ref>] [--full]; tab-list; tab-new; tab-select <index>; tab-close [<index>]";
-var SNAPSHOT_AGAIN = "Run [\"snapshot\"] to see the page as it is now and act on a ref from it.";
-var CHANGING = "The page was changing while it was read. Run [\"wait\",\"2\"] (or wait for text you expect), then try again.";
-// What to do instead, for each refusal. Nothing here ever needs eval or a page script: refs from a snapshot cover it.
-var HINTS = {
-  AUTH_COMMAND_REFUSED: "Commands in mine: " + COMMANDS + ". eval and page scripts are never needed: snapshot, then act on its refs; to let a page load, use wait.",
-  AUTH_ARGUMENTS_REFUSED: "Check the arguments. Commands in mine: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text.",
-  AUTH_URL_REFUSED: "goto takes a full http or https URL with no user name or password in it.",
-  AUTH_TARGET_REFUSED: "That ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone. " + SNAPSHOT_AGAIN,
-  AUTH_SNAPSHOT_INVALIDATED: "The page replaced that element, or navigated, since it was read. " + SNAPSHOT_AGAIN + " While a page loads, use [\"wait\",\"<text you expect>\"].",
-  AUTH_FRAME_COVERAGE_REFUSED: CHANGING + " If it repeats, open the frame's own page with goto.",
-  AUTH_SHADOW_COVERAGE_REFUSED: "Part of this page (or of one of its frames) is in a closed shadow root, which mine can neither read nor picture, so neither snapshot nor screenshot can show it. If the page was still loading, run [\"wait\",\"2\"] and try again; otherwise open the frame's own page with goto, or use another way to reach what you need.",
-  AUTH_FOCUS_MOVED: "Something else on the page took the keyboard focus, so typing stopped before the next key; the field may hold part of the text. " + SNAPSHOT_AGAIN + " Check the field, then type into its ref again.",
-  AUTH_ACTION_FAILED: SNAPSHOT_AGAIN + " Check the ref is the control you mean and is enabled; for a key, use a name such as Enter, Tab or Control+a.",
-  AUTH_ACTION_COVERED: "Something else on the page is probably covering that control, such as a tooltip, menu or hover card. This context is still open. Run [\"find\",\"<text>\"] to see what covers it, press [\"press\",\"Escape\"] or click what covers it, then act on a fresh ref from [\"snapshot\"].",
-  AUTH_ACTION_NOT_READY: "That control was not ready: probably hidden, still moving, or disabled. This context is still open. Run [\"snapshot\"] to see whether it is visible and enabled; if the page is still changing, run [\"wait\",\"2\"] first, then act on a fresh ref.",
-  AUTH_ACTION_TIMEOUT: "That control did not respond in time. This context is still open. Run [\"snapshot\"] to see the page as it is now, then act on a fresh ref; if the page keeps stalling, run [\"wait\",\"2\"] first.",
-  AUTH_SCREENSHOT_FAILED: "Run [\"wait\",\"2\"], then try again; for one part of the page, pass a ref from a snapshot.",
-  AUTH_TAB_ACTION_FAILED: "Run [\"tab-list\"] to see the tabs, then try again.",
-  AUTH_TAB_REFUSED: "There is no such open tab. Run [\"tab-list\"] and use an index from it with tab-select or tab-close.",
-  AUTH_OUTPUT_TOO_LARGE: "The page is too large to read whole. Go to a narrower page (a single item or chat) with goto, or close panels you do not need.",
-  AUTH_TIMEOUT: "The command ran out of time, so this context was closed. Open a new one with browser_context and start again; keep waits under a minute.",
-  AUTH_CONTEXT_REFUSED: "This context, or its selected tab, is closed. If [\"tab-list\"] shows tabs, select one with tab-select; otherwise open a new context with browser_context.",
-  AUTH_TIMEOUT_CLOSE_FAILED: "Open a new context with browser_context.",
-  AUTH_RUNTIME_POLICY_REFUSED: "This Desk process cannot protect authenticated output now. Close the context and open a new one with browser_context; if it repeats, report it with desk_doctor.",
-  AUTH_READER_REFUSED: "The tab was replaced or closed. Run [\"tab-list\"], select a tab, then snapshot.",
-  AUTH_READER_SETUP_FAILED: "The tab could not be read yet. Run [\"wait\",\"2\"], then snapshot; if it repeats, open a new context.",
-  AUTH_DOCUMENT_REFUSED: "This page is not an ordinary HTML document mine can read. Go to the page's HTML address with goto, or use [\"screenshot\"].",
-  AUTH_TARGET_KIND_REFUSED: "That element cannot be acted on in mine. " + SNAPSHOT_AGAIN + " Choose its labelled parent or another control."
+var COMMANDS = "snapshot [--interactive | --save] / find <text> / goto <url> / go-back / go-forward / reload / wait [<seconds> | <text> | --gone <text>] / " +
+  "click, dblclick, hover, check or uncheck <ref> / fill or type <ref> <text> / press [<ref>] <key> / select <ref> <value> / " +
+  "mousewheel <dx> <dy> / resize <width> <height> / screenshot [<ref>] [--full] / tab-list / tab-new / tab-select <index> / tab-close [<index>]";
+var SNAPSHOT_LOOK = "run [\"snapshot\"] to see the page as it is now";
+var SNAPSHOT_AGAIN = "act on a ref from that snapshot";
+var REPEATS = "if the same refusal repeats, open a new context with browser_context";
+var CHANGING = "the page was changing while it was read";
+// Each failure's parts: what probably happened, how to look further, and how to keep working. Nothing here ever needs eval
+// or a page script: refs from a snapshot cover it.
+var FAILURES = {
+  AUTH_COMMAND_REFUSED: { thing: "browser command", probably: "mine does not run that command", look: "the commands mine runs are " + COMMANDS, keepWorking: "eval and page scripts are never needed: take a snapshot, then act on its refs, and use wait to let a page load" },
+  AUTH_ARGUMENTS_REFUSED: { thing: "browser command", probably: "the arguments are not ones mine accepts for that command", look: "check them against the commands mine runs: " + COMMANDS + ". A wait is 1 to 60 seconds (or 100 to 60000 ms), or up to 200 characters of text", keepWorking: "run the command again with corrected arguments" },
+  AUTH_URL_REFUSED: { thing: "browser command", probably: "the address for goto is not an allowed web address", look: "goto takes a full http or https URL with no user name or password in it", keepWorking: "run goto again with such a URL" },
+  AUTH_TARGET_REFUSED: { thing: "browser element", probably: "that ref is not from one of the last " + REF_READS + " reads of this tab, or its element has gone", look: SNAPSHOT_LOOK, keepWorking: SNAPSHOT_AGAIN },
+  AUTH_SNAPSHOT_INVALIDATED: { thing: "browser element", probably: "the page replaced that element, or navigated, since it was read", look: SNAPSHOT_LOOK, keepWorking: SNAPSHOT_AGAIN + "; while a page loads, use [\"wait\",\"<text you expect>\"]" },
+  AUTH_FRAME_COVERAGE_REFUSED: { thing: "browser page", probably: CHANGING + ", so one of its frames was left out of the read", look: "run [\"wait\",\"2\"] (or wait for text you expect) so the page settles", keepWorking: "then try again; if it repeats, open the frame's own page with goto" },
+  AUTH_SHADOW_COVERAGE_REFUSED: { thing: "browser page", probably: "part of this page, or of one of its frames, is in a closed shadow root, which mine can neither read nor picture, so neither snapshot nor screenshot can show it", look: "if the page was still loading, run [\"wait\",\"2\"] and try again", keepWorking: "otherwise open the frame's own page with goto, or use another way to reach what you need" },
+  AUTH_FOCUS_MOVED: { thing: "browser element", probably: "something else on the page took the keyboard focus, so typing stopped before the next key, and the field may hold part of the text", look: SNAPSHOT_LOOK + ", and check the field", keepWorking: "then type into the field's ref again" },
+  AUTH_ACTION_FAILED: { thing: "browser element", probably: "the action on that ref did not complete", look: SNAPSHOT_LOOK + ", and check the ref is the control you mean and is enabled", keepWorking: SNAPSHOT_AGAIN + "; for a key, use a name such as Enter, Tab or Control+a" },
+  AUTH_ACTION_COVERED: { thing: "browser element", probably: "something else on the page is probably covering that control, such as a tooltip, menu or hover card", look: "run [\"find\",\"<text>\"] to see what covers it", keepWorking: "this context is still open; press [\"press\",\"Escape\"] or click what covers it, then act on a fresh ref from [\"snapshot\"]" },
+  AUTH_ACTION_NOT_READY: { thing: "browser element", probably: "that control was not ready: probably hidden, still moving, or disabled", look: SNAPSHOT_LOOK + " to see whether it is visible and enabled", keepWorking: "this context is still open; if the page is still changing, run [\"wait\",\"2\"] first, then act on a fresh ref" },
+  AUTH_ACTION_TIMEOUT: { thing: "browser element", probably: "that control did not respond in time", look: SNAPSHOT_LOOK, keepWorking: "this context is still open; act on a fresh ref from it, and if the page keeps stalling, run [\"wait\",\"2\"] first" },
+  AUTH_TARGET_KIND_REFUSED: { thing: "browser element", probably: "that element cannot be acted on in mine", look: SNAPSHOT_LOOK, keepWorking: SNAPSHOT_AGAIN + ", choosing its labelled parent or another control" },
+  AUTH_OUTPUT_TOO_LARGE: { thing: "browser page", probably: "the page is too large to read whole", look: "a narrower page, such as a single item or chat, is small enough to read", keepWorking: "go to it with goto, or close panels you do not need" },
+  AUTH_DOCUMENT_REFUSED: { thing: "browser page", probably: "this page is not an ordinary HTML document mine can read", look: "the page's HTML address is the form mine can read", keepWorking: "go to that address with goto, or use [\"screenshot\"]" },
+  AUTH_SCREENSHOT_FAILED: { thing: "browser page", probably: "the screenshot did not finish", look: "run [\"wait\",\"2\"]", keepWorking: "then try again; for one part of the page, pass a ref from a snapshot" },
+  AUTH_TAB_ACTION_FAILED: { thing: "browser tab", probably: "the tab action did not finish safely", look: "run [\"tab-list\"] to see the tabs", keepWorking: "then try again" },
+  AUTH_TAB_REFUSED: { thing: "browser tab", probably: "there is no such open tab", look: "run [\"tab-list\"] to see the open tabs", keepWorking: "use an index from it with tab-select or tab-close" },
+  AUTH_TIMEOUT: { thing: "browser command", probably: "the command ran out of time (often a page that kept loading, or a control that never became clickable), so this context was closed", look: "open a new context with browser_context, then [\"snapshot\"]", keepWorking: "start again from the page you were on; keep waits under a minute" },
+  AUTH_TIMEOUT_CLOSE_FAILED: { thing: "browser context", probably: "the command ran out of time and its context did not close cleanly", look: "call desk_doctor to see Desk's runtime state", keepWorking: "open a new context with browser_context" },
+  AUTH_CONTEXT_REFUSED: { thing: "browser context", probably: "this context, or its selected tab, is closed", look: "run [\"tab-list\"] to see whether any tabs are open", keepWorking: "if tabs are open, select one with tab-select; otherwise open a new context with browser_context" },
+  AUTH_READER_REFUSED: { thing: "browser tab", probably: "the tab was replaced or closed", look: "run [\"tab-list\"] to see the open tabs", keepWorking: "select a tab, then run [\"snapshot\"]" },
+  AUTH_READER_SETUP_FAILED: { thing: "browser tab", probably: "the tab was not ready to be read yet", look: "run [\"wait\",\"2\"]", keepWorking: "then run [\"snapshot\"]; if it repeats, open a new context with browser_context" },
+  AUTH_READER_CLEANUP_FAILED: { thing: "browser tab", probably: "the tab's reader was not released cleanly, so its cleanup is not confirmed", look: "call desk_doctor to see Desk's runtime state", keepWorking: "open a new context with browser_context" },
+  AUTH_RUNTIME_POLICY_MISSING: { thing: "browser context", probably: "this Desk process has no output protection to check the browser against, so mine refused to open it", look: "call desk_doctor to see Desk's runtime state", keepWorking: "close the context and open a new one with browser_context; if it repeats, report it with desk_doctor" },
+  AUTH_RUNTIME_POLICY_REFUSED: { thing: "browser command", probably: "this Desk process cannot protect authenticated output now", look: "call desk_doctor to see Desk's runtime state", keepWorking: "close the context and open a new one with browser_context; if it repeats, report it with desk_doctor" },
+  AUTH_NATIVE_DATA_INVALID: { thing: "browser page", probably: "the browser returned page data that fails mine's checks", look: SNAPSHOT_LOOK, keepWorking: REPEATS },
+  AUTH_HANDLE_CLEANUP_FAILED: { thing: "browser element", probably: "an element handle was not released, so its cleanup is not confirmed", look: "call desk_doctor to see Desk's runtime state", keepWorking: "close the context with browser_context, then open a new one" },
+  AUTH_STAGE_IDENTITY_REFUSED: { thing: "browser output", probably: "the staged output file changed before mine read it, so mine refused it", look: "call desk_doctor to see Desk's runtime state", keepWorking: "run the command again" },
+  AUTH_STAGE_CLOSE_FAILED: { thing: "browser output", probably: "the staged output file was not closed cleanly", look: "call desk_doctor to see Desk's runtime state", keepWorking: "run the command again" },
+  AUTH_SNAPSHOT_FAILED: { thing: "browser page", probably: "the snapshot did not finish safely", look: SNAPSHOT_LOOK, keepWorking: REPEATS },
+  AUTH_ARTIFACT_CLEANUP_FAILED: { thing: "browser output", probably: "a temporary output file was kept because it was not removed", look: "call desk_doctor to see Desk's runtime state", keepWorking: "close the context with browser_context and open a new one" },
+  AUTH_OPERATION_FAILED: { thing: "browser command", probably: "the command did not finish safely", look: SNAPSHOT_LOOK, keepWorking: REPEATS },
+  AUTH_CLOSE_FAILED: { thing: "browser context", probably: "the browser's cleanup is not confirmed, so its files were kept", look: "call desk_doctor to see Desk's runtime state", keepWorking: "if it repeats, report it with desk_doctor" }
 };
-var GENERAL_HINT = SNAPSHOT_AGAIN + " If the same refusal repeats, open a new context with browser_context.";
+var GENERAL_FAILURE = { thing: "browser command", probably: "mine did not complete this command safely", look: SNAPSHOT_LOOK, keepWorking: REPEATS };
+var CLEANUP_MARK = "; retained cleanup uncertainty: ";
 
-function hintFor(code) {
-  return HINTS[String(code).split(";")[0]] || GENERAL_HINT;
+// The same rules as Ouro AX's errorLine (desk-failure.js uses it for the other Desk failures). This file loads synchronously
+// and cannot import that ESM kit, so the rules are written here.
+function sentence(text) {
+  return text.trim().replace(/[.\s]+$/, "");
 }
 
+// The code leads the line, so callers can match it. `code` may carry retained cleanup codes after CLEANUP_MARK.
 function fail(code, applied) {
-  var message = code + ": The authenticated browser could not safely complete this operation." +
-    (applied ? " The action may have applied; its output was refused." : "") + " " + hintFor(code);
+  var codes = String(code).split(CLEANUP_MARK);
+  var primary = codes[0];
+  var entry = FAILURES[primary] || GENERAL_FAILURE;
+  var probably = entry.probably +
+    (applied ? ", and the action may have applied and its output was refused" : "") +
+    (codes.length > 1 ? " (retained cleanup uncertainty: " + codes.slice(1).join(", ") + ")" : "");
+  var problem = probably + "; to look further, " + entry.look + "; to file a bug with its evidence, call friction_add with {\"error_code\":\"" +
+    primary.toLowerCase() + "\"}; " + entry.keepWorking;
+  var message = (primary + ": desk-web: " + entry.thing + ": " + sentence(problem) + ".").replace(/\s*[\r\n]+\s*/g, " ");
   var error = new Error(message);
   error.plain = true;
   error.authCode = code;
@@ -1375,4 +1399,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, hintFor: hintFor, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(HINTS) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
