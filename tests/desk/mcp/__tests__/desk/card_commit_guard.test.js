@@ -122,6 +122,7 @@ test("a hand commit that edits a live card is refused, with a message that names
     assert.match(refused.stderr, /task_update/)
     assert.match(refused.stderr, /ToolSearch/)
     assert.match(refused.stderr, /git restore --staged/)
+    assert.match(refused.stderr, /cannot reach/)
     const log = sh(root, ["log", "--oneline"]).stdout.trim().split("\n")
     assert.equal(log.length, 1, "nothing was committed")
   } finally {
