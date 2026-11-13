@@ -1,3 +1,0 @@
-### Eval fingerprints can record a rerun that still fails
-
-An eval suite can now carry an optional `knownFailure` with an issue URL, the failing case and the date someone reran it, so a refreshed fingerprint no longer hides a failing eval as a source review only. `node scripts/skill-evals.cjs validate` accepts the field only with an issue URL and prints each open known failure, and `verify` refuses a passing receipt until the field is deleted. `always-on-collaboration` and `human-experience-defaults` now record their open failures, ourostack/desk#852 and #851. See [the evals README](../../evals/README.md).

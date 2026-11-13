@@ -48,7 +48,7 @@ test("the Desk hooks the unused-code check lists are the ones hooks.json and cop
 
 // A hook's logic is a module with named exports under lib/, which knip checks export by export. A registered file that exported its own members would be loaded as one whole object again, which knip cannot see through.
 test("the hook files hosts register or start by path are thin entries over lib/, with no exports of their own", () => {
-  for (const name of ["boot-checks.cjs", "factory-end.cjs", "session-end.cjs"]) {
+  for (const name of ["boot-checks.cjs", "destructive-command-guard.cjs", "factory-end.cjs", "session-end.cjs"]) {
     const text = read("plugins", "desk", "hooks", name)
     assert.doesNotMatch(text, /module\.exports|exports\./u, `${name} must not export`)
     assert.match(text, new RegExp(`require\\("\\./lib/${name.replace(".", "\\.")}"\\)`, "u"), `${name} must call its module under lib/`)
@@ -85,7 +85,7 @@ test("no command in hooks.json or copilot-hooks.json starts with bash or sh, and
   const copilot = JSON.parse(read("plugins", "desk", "hooks", "copilot-hooks.json"))
   const commands = [
     ...Object.entries(claude.hooks).flatMap(([event, groups]) => groups.flatMap((group) => group.hooks.map((hook) => [event, hook.command, false]))),
-    ...Object.entries(copilot.hooks).flatMap(([event, hooks]) => hooks.flatMap((hook) => [[event, hook.bash, false], [event, hook.powershell, true]])),
+    ...Object.entries(copilot.hooks).flatMap(([event, hooks]) => hooks.flatMap((hook) => [[event, hook.bash, false], ...(hook.powershell === undefined ? [] : [[event, hook.powershell, true]])])),
   ]
   assert.ok(commands.length >= 10)
   for (const [event, command, powershell] of commands) {

@@ -658,6 +658,7 @@ function command(s, id, args) {
     throw plain("This browser context has no current password-store exclusion policy. Close it with browser_context and open a new context; Desk will not scrub or migrate an existing profile.");
   }
   checkArgs(args);
+  if (args[0] === "goto" && args.length > 1) args = [args[0], authBrowser.webFormOf(args[1])].concat(args.slice(2));
   return runCli(s, dir, args, s.commandMs).then(function (result) {
     if (result.timedOut) throw plain("The command took longer than " + s.commandMs / 1000 + " seconds and was stopped.");
     if (result.code !== 0) throw plain(result.text || "The command failed.");

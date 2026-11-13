@@ -1206,6 +1206,16 @@ test("a missing browser, a failed start and bad input each give a plain message"
   assert.deepEqual(json(gone), { contextId: "00000000-0000-4000-8000-000000000000", closed: true })
 })
 
+test("a fresh browser opens a Teams link at its web form and passes other goto commands through", async () => {
+  const { options, calls } = await setup()
+  const controller = web.createController(options)
+  const { contextId } = json(await controller.call("browser_context", { action: "open" }))
+  await controller.call("browser_command", { contextId, args: ["goto", "https://teams.microsoft.com/l/chat/0/0?users=a"] })
+  await controller.call("browser_command", { contextId, args: ["goto", "https://app.example.test/work"] })
+  const gotos = calls().filter((call) => call.args.includes("goto")).map((call) => call.args.slice(call.args.indexOf("goto")))
+  assert.deepEqual(gotos, [["goto", "https://teams.microsoft.com/l/chat/0/0?users=a&webjoin=true"], ["goto", "https://app.example.test/work"]])
+})
+
 test("browser_command runs only page commands, refuses options that switch session or browser, and reports failures plainly", async () => {
   const { options, calls } = await setup()
   const controller = web.createController(options)

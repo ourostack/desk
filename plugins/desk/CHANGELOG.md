@@ -1,5 +1,45 @@
 # desk plugin — changelog
 
+## 3.2.109 — 2026-11-13
+
+desk-web now blocks every "open in the desktop app" launch for every site and scheme, and opens Teams links in their web form. A Teams deep link used to stop on Teams' launcher page, which tried `msteams:`, was refused, and stayed on its prompt even after "Use the web app instead" was chosen. `goto` now adds the `webjoin=true` flag the launcher reads (to a `/l/` link, or inside a launcher address), so the launcher goes straight to the web app. The flag rules are a small data table in `web-auth.cjs`, so another launcher needs one entry, not new code, and the fresh browser uses the same table.
+
+When a page's app launch was refused, the not-ready hint names the scheme (for example `msteams:`, `zoommtg:` or `mailto:`), says desk-web blocks every app launch, and points to the page's own web option or the link's web form. It also says opening an app needs its own explicit route, which desk-web does not offer yet. It no longer suggests a fresh browser or the desktop app for this cause.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.108 — 2026-11-13
+
+A new `preToolUse` hook, [`hooks/destructive-command-guard.cjs`](hooks/destructive-command-guard.cjs), refuses a Bash command that removes or moves away something its author did not create, and says what to do instead. Two incidents drove it: a subagent ran `cd ~/code && rm -rf desk` and deleted a registered main checkout, which broke every linked worktree that pointed at it, and a worker ran `colima delete -f` on a Colima profile that already existed.
+
+It refuses `rm` or `mv` of a git main checkout (a folder with a `.git` directory) or of a folder that holds one, which it looks for up to two folders down, so `rm -rf ~/code` is caught as well as `rm -rf ~/code/desk`. It refuses `rm` of a linked worktree and points to `git worktree remove <path>`, which stays allowed. It refuses `colima delete`, `limactl delete`, `limactl remove` and `limactl rm` for every profile, because the hook keeps no record of what a session created; the message suggests starting a dedicated profile with a new name. Ordinary removal, such as `rm -rf /tmp/x` or a scratch folder that is not a checkout, is unchanged.
+
+The command reader is small on purpose. It follows `cd`, `pushd`, `~`, `$VAR` and simple `NAME=value` assignments, and looks through `sudo`, `env`, `bash -c`, `eval`, subshells and `$(...)`. Anything it cannot resolve, such as a computed path or an unclosed quote, is allowed, and so is any error in the hook itself.
+
+Copilot runs this hook for subagents' Bash calls too, so a `task` subagent is refused the same way as the main agent. It is registered for Claude's `Bash` and Copilot's `bash`; Copilot's `powershell` tool is not read, so on Windows the hook is not registered.
+
+Desk's sync status no longer loses track of pushed commits when two writers overlap. A status write that finds its lock held by a process that has exited now takes the lock over at once instead of waiting it out, and a lock held by a live process is left alone. A status file that is damaged or not a plain record is moved aside, with the newest three kept as evidence, so it can no longer block later writes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.107 — 2026-11-13
+
+Archiving a task now keeps its Markdown links working. `task_archive` rewrites the relative links that point into or out of the moved folder, in the task's own files, in other tasks' files and in the track card, so each one still resolves after the move. In a Git desk the rewritten files join the archive commit, and a non-Git desk gets the same rewrites without a commit. The result lists what it changed in `links.rewritten`. A link it cannot rewrite is listed in `links.not_rewritten` with the reason, and the archive still happens. A file with unstaged or untracked work is never touched, so another session's edits are kept.
+
+### Eval fingerprints can record a rerun that still fails
+
+An eval suite can now carry an optional `knownFailure` with an issue URL, the failing case and the date someone reran it, so a refreshed fingerprint no longer hides a failing eval as a source review only. `node scripts/skill-evals.cjs validate` accepts the field only with an issue URL and prints each open known failure, and `verify` refuses a passing receipt until the field is deleted. `always-on-collaboration` and `human-experience-defaults` now record their open failures, ourostack/desk#852 and #851. See [the evals README](../../evals/README.md).
+
+When a `wait` in an authenticated `mine` browser runs out without finding its text, the result now says why a page never became ready, with evidence, instead of only returning the last snapshot. It carries a `diagnosis`: the page's address with no query or fragment, the main document's HTTP status, the hosts of failed and pending requests with a fixed code (`net_error`, `blocked`, `aborted`, `timeout` or an HTTP status), console error and warning counts, whether the page sat on a sign-in redirect, and a masked screenshot taken before the wait returns. Its hint names the likeliest cause, the screenshot and snapshot to look at, the one call that files it (`friction_add` with `auth_page_not_ready`), and how to keep working. The context stays open.
+
+Page text, console text, request queries and cookies never appear in this evidence. When an authenticated command times out, the same evidence is taken before its context closes, within five seconds, and its summary is added to the `AUTH_TIMEOUT` failure, so the picture outlives the close.
+
+### Five shortened skill descriptions get their lost triggers back
+
+The earlier shortening of skill descriptions dropped triggers that decide when a skill loads. `preflight-actions` loads again when an action comes from your own research rather than a mandate. `evidence-discipline` loads before quoting an estimate, claiming a precedent or durability, and writing tests. `fast-honest-ci` loads when a CI workflow is being changed, a paid or larger runner is proposed, or you are asked to shard, cache or path-filter. `operator-voice-comments` loads when asked to make text sound less AI-written. `delightful-decks` no longer refuses a document-to-slides request: it hands off to a document-to-deck skill when one is installed and otherwise makes the deck itself. The skill bodies are unchanged except for that fallback sentence in `delightful-decks`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.106 — 2026-11-13
 
 ### The skills list every session carries is shorter

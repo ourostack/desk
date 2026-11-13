@@ -225,10 +225,11 @@ function buildFixture(tempRoot, deskVersion = currentDesk) {
   };
   writeManifest(currentSuperpowers);
   git(upstreamDir, "add", "--all");
-  for (const file of superpowersSource.files) {
-    const executable = (fs.statSync(path.join(repoRoot, file.upstreamPath ?? file.generatedPath)).mode & 0o111) !== 0;
-    git(upstreamDir, "update-index", `--chmod=${executable ? "+" : "-"}x`, file.sourcePath);
-  }
+  // One Git call per mode, not one per file: each call is a process, and this fixture is built for every scenario.
+  const executables = superpowersSource.files.filter((file) => (fs.statSync(path.join(repoRoot, file.upstreamPath ?? file.generatedPath)).mode & 0o111) !== 0).map((file) => file.sourcePath);
+  const plain = superpowersSource.files.map((file) => file.sourcePath).filter((sourcePath) => !executables.includes(sourcePath));
+  if (executables.length > 0) git(upstreamDir, "update-index", "--chmod=+x", "--", ...executables);
+  if (plain.length > 0) git(upstreamDir, "update-index", "--chmod=-x", "--", ...plain);
   git(upstreamDir, "commit", "--quiet", "--message", "locked payload");
   const base = git(upstreamDir, "rev-parse", "HEAD");
   const lockPath = path.join(root, "upstream-sources.lock.json");

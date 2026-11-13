@@ -664,6 +664,29 @@ test("boot starts delivery for local commits unless the remote cannot be used, a
   assert.equal(started.length, 3, "nothing is started while the remote cannot be used")
 })
 
+test("a delivery keeps the delivered entries another writer records while it pushes", async () => {
+  const { desk } = await mkShared()
+  await commit(desk, "tasks/a.md", "a\n", "a")
+  await commit(desk, "tasks/b.md", "b\n", "b")
+  let injected = false
+  let delivering = false
+  // Inside the delivery, after the loop's read: the remote-tracking ref has moved, then another writer's entry lands and
+  // the checkout is reported behind, so the delivered list is kept (a followed checkout clears it) and the loop writes its union.
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("update-ref") && !args.includes("HEAD")) delivering = true
+    if (delivering && !injected && args.includes("rev-parse") && args.includes("HEAD")) {
+      injected = true
+      updateSyncStatus(desk, process.env, (current) => ({ delivered: [...(Array.isArray(current.delivered) ? current.delivered : []), "other-writer-entry"] }))
+      return { status: 0, stdout: `${"0".repeat(40)}\n`, stderr: "" }
+    }
+    return spawnSync(cmd, args, opts)
+  }
+  assert.deepEqual(await runPushWorker({ root: desk, env: process.env, clock: instantClock, spawnGit, fileProblem: () => {} }), { result: "ok" })
+  const delivered = readSyncStatus({ root: desk, env: process.env }).delivered
+  assert.ok(delivered.includes("other-writer-entry"), JSON.stringify(delivered))
+  assert.equal(delivered.length, 3, "the two pushed commits and the other writer's entry, each once")
+})
+
 test("boot adds nothing when the pending list cannot be read", async () => {
   const { desk } = await mkShared()
   await commit(desk, "tasks/a.md", "a\n", "a")
