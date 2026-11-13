@@ -201,6 +201,15 @@ test("cached engines follow the engines field, or the manifests a copy holds, an
   assert.deepEqual(cachedEngines(fixture.cacheDir, CIT), ["copilot"])
   assert.equal(cachedEngines(fixture.cacheDir, SUPERPOWERS), null)
   assert.equal(cachedEngines(fixture.cacheDir, "github:example/none:plugins/x@main"), null)
+  const reader = (files) => (file) => {
+    const name = path.relative(fixture.cacheDir, file).split(path.sep).join("/")
+    if (name in files) return files[name]
+    throw new Error("ENOENT")
+  }
+  const index = JSON.stringify({ entries: { [`claude:${CIT}`]: { dir_name: "a" }, [`copilot:${CIT}`]: { dir_name: "b" } } })
+  // A copy whose agency.json holds no manifest is no usable copy, so the next engine's copy answers; a broken agency.json holds.
+  assert.deepEqual(cachedEngines(fixture.cacheDir, CIT, reader({ "cache_index.json": index, "entries/a/agency.json": "{}", "entries/b/plugin.json": "{}" })), ["copilot"])
+  assert.equal(cachedEngines(fixture.cacheDir, CIT, reader({ "cache_index.json": index, "entries/a/agency.json": "{broken", "entries/b/plugin.json": "{}" })), null)
 })
 
 test("an entry waits while a plugin that might bring Desk is not cached, or names engines this cannot read", async () => {
