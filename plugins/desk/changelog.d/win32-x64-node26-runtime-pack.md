@@ -1,0 +1,1 @@
+Desk now ships a native runtime dependency pack for Windows x64 on Node 26 (ABI 147), so Desk starts on a Windows machine whose only Node is 26. The exact-host CI lane builds, verifies and loads the pack on its own Windows runner.
