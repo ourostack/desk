@@ -22,7 +22,8 @@ import { promises as fs, readFileSync, realpathSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
-import { isTransientError, renameWithRetryAsync } from "../util/rename-retry.js"
+import { setTimeout as delay } from "node:timers/promises"
+import { readFileWithRetryAsync, renameWithRetryAsync } from "../util/rename-retry.js"
 
 export const MAIN_SPEC = "github:ourostack/desk:plugins/desk@main"
 export const RELEASE_SPEC = "github:ourostack/desk:plugins/desk@release"
@@ -264,19 +265,19 @@ const CHANGED = Symbol("agency.toml changed before the swap")
  * no reader ever sees half a file. Returns "written", "changed" (someone else changed it; nothing written) or "busy".
  * Without Agency taking this lock, a write that lands between the final read and a single successful rename (two system calls) can't be detected by Desk.
  */
-export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitMs = 500, fsp = fs, rename = (from, to) => fsp.rename(from, to), sleep, platform, holdLock }) {
+export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitMs = 500, fsp = fs, rename = (from, to) => fsp.rename(from, to), sleep = delay, platform = process.platform, holdLock }) {
   const outcome = await holdLock(`${target}${LOCK_SUFFIX}`, { lockWaitMs }, async () => {
     if ((await fsp.readFile(target, "utf8")) !== seen) return "changed"
     const mode = (await fsp.stat(target)).mode & 0o777
     const temp = `${target}.desk-${process.pid}-${randomBytes(4).toString("hex")}.tmp`
     // Windows can refuse the rename while Agency has the file open, and each retry is a new window: before every retry the
-    // target must still hold `seen`. A read that fails only because the file is busy is not a change.
+    // target must still hold `seen`. A busy read is retried like the rename; a read that stays busy, or fails otherwise, counts as
+    // a change, because Desk cannot verify the file.
     const beforeRetry = async () => {
       let now
       try {
-        now = await fsp.readFile(target, "utf8")
-      } catch (error) {
-        if (isTransientError(error)) return
+        now = await readFileWithRetryAsync(target, "utf8", { readFile: (file, encoding) => fsp.readFile(file, encoding), sleep, platform })
+      } catch {
         throw CHANGED
       }
       if (now !== seen) throw CHANGED
