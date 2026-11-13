@@ -1,11 +1,11 @@
 ---
 name: plain-language
-description: Make human-readable replies, documents, reviews, status updates, and handoffs easy for their intended readers to find, understand, and use without weakening facts, uncertainty, safety, technical precision, schemas, quotations, or requested voice.
+description: Use when writing anything a person will read, such as chat replies, status updates, handoffs, documents, pull request titles and bodies, reviews, issue comments or commit messages. Makes it easy for its reader to find, understand and use, without weakening facts, uncertainty, safety, precision, quotations or requested voice.
 ---
 
 # Plain Language
 
-Apply these rules to human-readable prose. Keep internal reasoning, code, commands, logs, diffs, exact quotations, identifiers, and schema-bound payloads unchanged.
+Apply these rules to human-readable prose only. Keep internal reasoning, code, commands, logs, stack traces, diffs, exact quotations, tool arguments, identifiers, and schema-bound payloads unchanged.
 
 ## Serve the reader
 
@@ -85,24 +85,19 @@ Use a reader-facing name before an internal identifier. Every first mention that
 
 - State the concrete action, decision, verification, or terminal evidence when it exists.
 - Use exact commands, paths, dates, quantities, owners, and parameters when the reader needs them.
-- Say what remains open. Do not turn planned, attempted, built, or inferred work into verified or completed work.
 - End substantial instructions with the next required action or success condition, not a generic offer.
 
 ## Report work precisely
 
 - For each material defect, state the defect, the evidence, and the effect before the repair.
-- Separate built from verified. Name every required check that remains open.
+- Separate built from verified. Planned, attempted, built, or inferred work is not verified work, and every required check still open is named.
 - Reserve `done` and `complete` for terminal state.
 - Compare alternatives with the same criteria, evidence, detail, and tone.
 - When correcting an earlier answer, say what changed and supersede the wrong claim without discarding context that remains true.
 
 ## Preserve meaning
 
-Preserve facts, quantities, dates, evidence state, uncertainty, attribution, safety warnings, accessibility requirements, technical precision, required schemas, blockers, owners, and completion state. If a clearer rewrite changes the claim, keep the precise wording and explain around it.
-
-Do not restyle internal reasoning, code, commands, logs, stack traces, diffs, exact quotations, tool arguments, identifiers, or schema-bound payloads. Apply Plain Language only inside human-readable prose fields.
-
-In agent handoffs, preserve owners, evidence, authority, blocked state, and next-action meaning while leaving structured fields to their schema.
+Preserve facts, quantities, dates, evidence state, uncertainty, attribution, safety warnings, accessibility requirements, technical precision, required schemas, blockers, owners, and completion state. If a clearer rewrite changes the claim, keep the precise wording and explain around it. In agent handoffs, preserve owners, evidence, authority, blocked state, and next-action meaning while leaving structured fields to their schema.
 
 ## Keep the right voice and format
 
