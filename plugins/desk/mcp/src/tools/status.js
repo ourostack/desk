@@ -173,6 +173,7 @@ function runtimeStatus(runtime, env) {
     runtime_cache_dir: runtime.runtime_cache_dir ?? runtime.runtimeCacheDir ?? null,
     source_mirror_path: sourceMirrorPath,
     loaded_from_source_mirror: typeof sourceMirrorPath === "string" && sourceMirrorPath.length > 0,
+    ...(runtime.newest_release === undefined ? {} : { newest_release: runtime.newest_release }),
   }
 }
 

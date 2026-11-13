@@ -162,6 +162,7 @@ export async function main({
   watch,
   timers,
   offload = runInWorker,
+  newestRelease,
   crashHandlers = false,
   spawnDetached = spawn,
   onClosed = () => {},
@@ -246,15 +247,17 @@ export async function main({
       input: { args, env: plainEnv, cwd, homeDir, injectedReadinessPolicy },
     }),
     setupDiagnostic: (error) => createSetupDiagnostic({ pathsTried: error.tried, bindingPath: claudeBindingPath(env) }),
-    loadRuntime: (activation, { onPhase }) => loadRuntime({
+    loadRuntime: (activation, { onPhase }) => loadNewestOrCached({
       onPhase,
       activation,
       env: plainEnv,
+      homeDir,
       mcpRoot,
       offload,
       preflight,
       runtimeImporter,
       runtimeInspector,
+      newestRelease,
     }),
   })
   let kicked = false
@@ -352,6 +355,29 @@ function preflightInspection({ mcpRoot, runtimeInspector }) {
 
 function deferPackVerification() {
   return { ok: true, deferred: true, manifest: null, archiveEntries: [] }
+}
+
+// Desk's tools run the newest release when the release channel is ahead of the copy that launched this server (src/runtime/newest-release.js): the server loads a copy of the newer `mcp` folder and falls back to this one, and says so, when that cannot finish in its budget or the copy will not load. Only the shipped importer takes part, and a pinned source or runtime cache (an activation config) is never swapped.
+async function loadNewestOrCached(options) {
+  const { activation, env, homeDir, mcpRoot, runtimeImporter, newestRelease } = options
+  const cached = () => loadRuntime(options)
+  if (runtimeImporter !== importRuntimeServer && newestRelease === undefined) return cached()
+  if (activation.sourceIdentity != null || activation.runtimeCacheDir != null) return cached()
+  let release
+  try {
+    const ensure = newestRelease ?? (await import("./src/runtime/newest-release.js")).ensureNewestRelease
+    const pluginRoot = path.resolve(mcpRoot, "..")
+    release = await ensure({ env, pluginRoot, running: deskVersion({ DESK_PLUGIN_ROOT: pluginRoot }), homeDir })
+  } catch {
+    return cached()
+  }
+  const withRelease = (loaded, summary) => (loaded.runtimeStatus === undefined ? loaded : { ...loaded, runtimeStatus: { ...loaded.runtimeStatus, newest_release: summary } })
+  const summary = ({ state, running, latest, reason }) => ({ state, plugin_copy: running ?? null, newest: latest ?? null, ...(reason === undefined ? {} : { reason }) })
+  if (release.state !== "loaded") return withRelease(await cached(), summary(release))
+  options.onPhase("loading_newest_release")
+  const newer = await loadRuntime({ ...options, mcpRoot: release.mcpRoot })
+  if (newer.runtimeServer !== undefined) return withRelease(newer, summary(release))
+  return withRelease(await cached(), summary({ state: "fell_back", running: release.running, latest: release.latest, reason: `the ${release.latest} copy did not load` }))
 }
 
 // Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.
