@@ -46,7 +46,7 @@ if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser fai
 if (verb === "open" && mode === "open-hang") setTimeout(() => {}, 10000)
 if (verb === "open" && mode === "open-hang-loud") { process.stderr.write("Waiting for the browser\\n"); setTimeout(() => {}, 10000) }
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
-if (verb === "screenshot") { fs.writeFileSync(path.join(process.cwd(), "files", "page-1.png"), "PNG"); process.stdout.write("### Result\\n- [Screenshot](files/page-1.png)\\n") }
+if (verb === "screenshot" && mode !== "no-picture") { fs.writeFileSync(path.join(process.cwd(), "files", "page-1.png"), "PNG"); process.stdout.write("### Result\\n- [Screenshot](files/page-1.png)\\n") }
 if (verb === "fail-quiet") process.exit(1)
 if (verb === "fail-loud") { process.stderr.write("boom\\n"); process.exit(1) }
 if (verb === "sleep") setTimeout(() => {}, 10000)
@@ -967,6 +967,14 @@ test("a fresh browser's screenshot is copied to the evidence folder, which close
   await controller.call("browser_context", { action: "close", contextId: opened.contextId })
   assert.equal(fs.existsSync(opened.files), false)
   assert.equal(fs.readFileSync(kept, "utf8"), "PNG", "the picture outlives the context")
+})
+
+test("a fresh screenshot that wrote no picture claims nothing was kept", async () => {
+  const { options } = await setup({ mode: "no-picture" })
+  const controller = web.createController(options)
+  const opened = json(await controller.call("browser_context", { action: "open" }))
+  assert.doesNotMatch(text(await controller.call("browser_command", { contextId: opened.contextId, args: ["screenshot"] })), /Kept after/u)
+  await controller.call("browser_context", { action: "close", contextId: opened.contextId })
 })
 
 test("mine opens with an evidence folder its screenshots go to, and a later start removes only old evidence folders", async () => {
