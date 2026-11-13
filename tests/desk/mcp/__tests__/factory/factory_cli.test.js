@@ -3,7 +3,11 @@
 // subprocess invocations prove the shebang, argv/env defaults and the actual
 // process exit code, against a throwaway HOME/XDG_STATE_HOME only.
 
-import { test } from "node:test"
+import { test as nodeTest } from "node:test"
+// DIAGNOSTIC ONLY (not for merge): record each test's time and report the slowest through a failing last test, whose message CI keeps.
+const timings = []
+const test = (name, fn) => nodeTest(name, async (t) => { const s = performance.now(); try { return await fn(t) } finally { timings.push([Math.round(performance.now() - s), name.slice(0, 70)]) } })
+
 import assert from "node:assert/strict"
 import { AsyncLocalStorage, createHook } from "node:async_hooks"
 import { execFileSync, spawn } from "node:child_process"
@@ -1445,4 +1449,9 @@ test("the removed triage commands are unknown subcommands", async () => {
     assert.equal(await main({ argv: [command], write: () => assert.fail("prints nothing"), logError: (text) => errors.push(text) }), 1)
     assert.match(errors[0], /unknown subcommand/u)
   }
+})
+
+nodeTest("zz diagnostic timings", () => {
+  const sorted = [...timings].sort((a, b) => b[0] - a[0])
+  assert.fail(`TIMINGS total=${timings.reduce((a, b) => a + b[0], 0)} n=${timings.length} :: ${sorted.slice(0, 22).map((x) => `${x[0]}ms ${x[1]}`).join(" | ")}`)
 })
