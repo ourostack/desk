@@ -933,7 +933,7 @@ async function deliver(env, context) {
   const listed = (name) => newer.add(name)
   // A label withdrawn because its session stopped binding its job comes back when the session binds the job again.
   if ((await releaseReboundLabels(env, store)).length > 0) delivered = await readDelivered(env, store)
-  // A proof-marked session's queued copies leave the outbox before anything is listed, and the listings below never read a proof-marked session's copies.
+  // A proof-marked session's copies leave the outbox (`proof-held/`) before anything is listed; the listings below never read them.
   await removeQueuedProofCopies(env, store)
   const proofs = await proofSessionSet(env)
   let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed, proofs })

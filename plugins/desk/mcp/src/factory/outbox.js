@@ -61,6 +61,9 @@
 //                                      published, the coverage to say and the store's readiness (`triage-outbox.js`)
 //   triage-outbox/<store-slug>/<batch>.json   one staged public triage batch, immutable once written; outside
 //                                      outbox/ so an older Desk never reads it as facts
+//   proof-held/<store-slug>/<name>     the facts and labels of a proof-marked session, moved out of outbox/ (`removeQueuedProofCopies`);
+//                                      no publisher reads this folder, and nothing in it is deleted
+//   proof-audit.json                   content-free entries of proof marks and moves, keyed by a hash of the session id
 //
 // Local labels (`desk.factory.labels/3`, or `/2` or `/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
@@ -710,51 +713,40 @@ export async function appendProofAudit(env, entry, { platform = process.platform
   }), { platform, env, runner }, (value) => isPlainObject(value) && Array.isArray(value.entries))
 }
 
-// One queued copy's removal, read back from the disk: `ok` when it is gone, `failed` when it is still there (the next flush retries it), `uncertain` when the disk cannot say.
-async function removeQueuedFile(file) {
-  try {
-    if ((await lstatIfPresent(file, NAMING)) !== null) await fsp.unlink(file)
-    return "ok"
-  } catch {
-    try {
-      return (await lstatIfPresent(file, NAMING)) === null ? "ok" : "failed"
-    } catch {
-      return "uncertain"
-    }
-  }
+// Moves one proof copy out of the outbox into `proof-held/`, which no publisher reads. The bytes are written there first and the outbox copy is removed second,
+// so a failure in between leaves both, and the next flush repeats the move. The copy is kept, not deleted: a copy the store may already hold is withdrawn
+// by its delivered blob, and that needs the bytes this Desk wrote.
+async function moveProofCopy(root, slug, name, file, { platform, env, runner }) {
+  const bytes = await fsp.readFile(file)
+  await writeAtomic(root, path.join(root, "proof-held", slug, name), bytes, { platform, env, runner })
+  await fsp.rm(file, { force: true })
 }
 
 /**
- * `removeQueuedProofCopies(env, store) -> { removed, failed }`: removes the queued copies of proof-marked sessions from `store`'s outbox and labels
- * folder. A copy is queued when neither the store's delivered, retracting nor retracted records name it: a delivered copy is not removed here, and it
- * never publishes again either. Each removal is audited by the session's hash.
+ * `removeQueuedProofCopies(env, store)`: moves every copy of a proof-marked session out of `store`'s outbox and labels folder into `proof-held/`.
+ * A copy of a session the store may already hold moves too, so nothing new is published for it; the store's copy is withdrawn separately. Each move
+ * is audited by the session's hash, and a move the disk refuses is audited as `failed` and retried by the next flush.
  */
 export async function removeQueuedProofCopies(env, store, { platform = process.platform, runner = undefined, now = defaultNow } = {}) {
   const proofs = await proofSessionSet(env)
-  const counts = { removed: 0, failed: 0 }
-  if (proofs.size === 0) return counts
+  if (proofs.size === 0) return
   const root = await factoryStateRoot(env, { platform, runner })
   const slug = storeSlug(store)
-  const delivered = await readDelivered(env, store, { platform })
-  const recorded = (name) => Object.hasOwn(delivered.blobs, name) || Object.hasOwn(delivered.retracting, name) || Object.hasOwn(delivered.retracted, name)
   const candidates = (await listRegularFiles(path.join(root, "outbox", slug), OUTBOX_NAME_PATTERN)).map((name) => ({ name, file: path.join(root, "outbox", slug, name) }))
-  for (const job of await listDirSafe(path.join(root, "labels", slug))) {
-    if (!PATTERNS.jobId.test(job)) continue
+  for (const job of (await listDirSafe(path.join(root, "labels", slug))).filter((entry) => PATTERNS.jobId.test(entry))) {
     for (const file of await listRegularFiles(path.join(root, "labels", slug, job), LABELS_NAME_PATTERN)) {
       candidates.push({ name: `labels/${job}/${file}`, file: path.join(root, "labels", slug, job, file) })
     }
   }
   for (const { name, file } of candidates) {
     const session = sessionIdOfName(name)
-    if (!proofs.has(session) || recorded(name)) continue
-    const outcome = await removeQueuedFile(file)
+    if (!proofs.has(session)) continue
+    const outcome = await moveProofCopy(root, slug, name, file, { platform, env, runner }).then(() => "ok", () => "failed")
     if (outcome === "ok" && !name.startsWith("labels/")) await setJobsForFile(env, name, [], { platform, runner })
-    await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: "queued", action: "removed_queued", outcome, at: now() }, { platform, runner })
-    if (outcome === "ok") counts.removed += 1
-    else counts.failed += 1
+    await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: "outbox", action: "moved_to_held", outcome, at: now() }, { platform, runner })
   }
-  return counts
 }
+
 
 /** Serialize the source read, facts replacement and receipt for one session. */
 export async function withDerivationLock(env, name, body, { deskRoot = null } = {}) {

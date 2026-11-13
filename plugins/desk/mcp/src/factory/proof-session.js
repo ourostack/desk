@@ -40,7 +40,7 @@ const MARK_OUTCOMES = {
  * derivation ledger knows the session), `ambiguous` (more than one host records it), or `foreign` (no desk recorded it, its desk folder is gone, or
  * it is not `desk`).
  */
-export async function markProofSession(env, { sessionId, desk = null } = {}) {
+export async function markProofSession(env, { sessionId, desk = null, write = markSessionProof, readBack = sessionMarkers }) {
   if (typeof sessionId !== "string" || !PATTERNS.sessionId.test(sessionId)) return { result: "refused", reason: "invalid_id" }
   // No state folder means nothing is recorded here, and nothing is created to audit it in.
   if ((await factoryStateRoot(env, { create: false })) === null) return { result: "refused", reason: "unknown" }
@@ -62,11 +62,11 @@ export async function markProofSession(env, { sessionId, desk = null } = {}) {
   }
   let how
   try {
-    const written = await markSessionProof(env, marker)
+    const written = await write(env, marker)
     how = written === "marked" ? "marked" : "already"
   } catch {
     // The write may have landed before it failed, so the marker is read back rather than guessed.
-    const proven = await sessionMarkers(env, sessionId).then((found) => found[0]?.marker?.proof === true, () => undefined)
+    const proven = await readBack(env, sessionId).then((found) => found[0]?.marker?.proof === true, () => undefined)
     how = proven === undefined ? "uncertain" : proven ? "marked" : "failed"
   }
   const { action, outcome, result } = MARK_OUTCOMES[how]
