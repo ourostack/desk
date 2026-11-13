@@ -26,6 +26,31 @@ export function isAgencySession({ env, pluginRoot }) {
   return /[\\/]plugins[\\/]sessions[\\/]agency-plugin-[^\\/]+[\\/]/u.test(`${path.resolve(pluginRoot)}${path.sep}`)
 }
 
+// This session's engine (`AGENCY_ENGINE`, else the agent host) and Agency's cache folder for it; null for an engine Agency does not run Desk on.
+function agencyCache({ env, agentHost, pluginRoot, homeDir }) {
+  const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
+  if (engine !== "copilot" && engine !== "claude") return null
+  return { engine, cacheDir: path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache") }
+}
+
+/**
+ * The version of Desk's release-channel copy in Agency's cache, or null. Agency refreshes that copy for each session, so
+ * Desk learns the current release from disk and needs no network call for it.
+ */
+export function cachedReleaseVersion({ env, agentHost, pluginRoot, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
+  try {
+    const cache = agencyCache({ env, agentHost, pluginRoot, homeDir })
+    if (cache === null) return null
+    const entries = JSON.parse(readFile(path.join(cache.cacheDir, "cache_index.json"))).entries ?? {}
+    const entry = entries[`${cache.engine}:github:ourostack/desk:plugins/desk@release`]
+    if (!text(entry?.dir_name)) return null
+    const version = JSON.parse(readFile(path.join(cache.cacheDir, "entries", entry.dir_name, "plugin.json"))).version
+    return typeof version === "string" && version.trim() !== "" ? version.trim() : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The Agency cache spec this Desk was loaded from, from Agency's own cache index: the `ourostack/desk` plugin on `@release`
  * (or `@main`, for an install from before the release channel) for this session's engine (`AGENCY_ENGINE`, else the agent
@@ -33,9 +58,9 @@ export function isAgencySession({ env, pluginRoot }) {
  */
 export function deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile = (file) => readFileSync(file, "utf8") }) {
   try {
-    const engine = text(env.AGENCY_ENGINE) ? env.AGENCY_ENGINE.trim() : agentHost
-    if (engine !== "copilot" && engine !== "claude") return null
-    const cacheDir = path.join(agencyPluginsDir({ pluginRoot, homeDir }), "cache")
+    const cache = agencyCache({ env, agentHost, pluginRoot, homeDir })
+    if (cache === null) return null
+    const { engine, cacheDir } = cache
     const entries = JSON.parse(readFile(path.join(cacheDir, "cache_index.json"))).entries ?? {}
     for (const channel of DESK_CHANNELS) {
       const spec = `${engine}:github:ourostack/desk:plugins/desk@${channel}`

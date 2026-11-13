@@ -16,6 +16,7 @@ import {
   compareVersions,
   parseVersion,
   refreshStep,
+  releaseNotice,
   releasesBehind,
   staleDeskFinding,
 } from "../../../../../plugins/desk/mcp/src/runtime/stale-desk.js"
@@ -96,7 +97,8 @@ test("the finding is one line, with a count when reliable and just behind otherw
   assert.equal(vague.line, "Desk 3.2.0-alpha.153 is behind main (3.3.0); run copilot plugin update desk, then start a new session.")
   const release = staleDeskFinding({ running: "3.2.92", latest: "3.2.93", agentHost: "copilot", channel: "release", agency: true, spec: "copilot:github:ourostack/desk:plugins/desk@release" })
   assert.equal(release.channel, "release")
-  assert.equal(release.line, 'Desk 3.2.92 is behind the release channel (3.2.93); run agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release", then start a new session.')
+  assert.equal(release.line, releaseNotice({ running: "3.2.92", latest: "3.2.93" }))
+  assert.equal(release.refresh, 'run agency plugin cache remove "copilot:github:ourostack/desk:plugins/desk@release", then start a new session')
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.172", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
   assert.equal(staleDeskFinding({ running: "3.2.0-alpha.173", latest: "3.2.0-alpha.172", agentHost: "claude" }), null)
 })
@@ -308,6 +310,7 @@ async function agencyInstall({ running, specs }) {
   const home = await mkTempRoot("desk-stale-agency-")
   const plugins = path.join(home, ".local", "agency", "plugins")
   const entries = {}
+  await fs.mkdir(path.join(plugins, "cache"), { recursive: true })
   for (const [index, [spec, version]] of Object.entries(specs).entries()) {
     const dir = path.join(plugins, "cache", "entries", `e${index}`)
     await fs.mkdir(dir, { recursive: true })
@@ -331,43 +334,34 @@ const byBranch = (branches, calls = []) => async (url, init) => {
 const RELEASE = "copilot:github:ourostack/desk:plugins/desk@release"
 const MAIN = "copilot:github:ourostack/desk:plugins/desk@main"
 
-test("a release install is compared with the release branch, so a release candidate on main is not a stale warning", async () => {
-  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.93", specs: { [RELEASE]: "3.2.93" } })
+test("a release install is compared with the release copy Agency already cached, with no request", async () => {
+  const current = await agencyInstall({ running: "3.2.93", specs: { [RELEASE]: "3.2.93" } })
   const calls = []
-  const branches = { release: "3.2.93", main: "3.3.0-rc.1" }
-  assert.equal(await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch(branches, calls) }), null)
-  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("release")])
-  // Behind the release branch, it is told so, with the release spec's own refresh.
-  const behind = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.92" } })
-  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: behind.pluginRoot, stateDir: behind.stateDir, homeDir: behind.home, agentHost: "copilot", fetchFn: byBranch(branches) })
+  const fetchFn = byBranch({ release: "3.2.94", main: "3.3.0-rc.1" }, calls)
+  assert.equal(await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: current.pluginRoot, stateDir: current.stateDir, homeDir: current.home, agentHost: "copilot", fetchFn }), null)
+  assert.equal(calls.length, 0)
+  // Behind the cached release copy, the finding names it and the notice, again with no request.
+  const behind = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.93" } })
+  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: behind.pluginRoot, stateDir: behind.stateDir, homeDir: behind.home, agentHost: "copilot", fetchFn })
+  assert.equal(calls.length, 0)
   assert.equal(found.channel, "release")
   assert.equal(found.latest, "3.2.93")
-  assert.equal(found.refresh, `run agency plugin cache remove "${RELEASE}", then start a new session`)
-})
-
-test("a legacy main install is compared with main and is never given the release command", async () => {
-  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.92", specs: { [MAIN]: "3.2.92" } })
-  const calls = []
-  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls) })
-  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("main")])
-  assert.equal(found.channel, "main")
-  assert.equal(found.latest, "3.3.0-rc.1")
-  assert.equal(found.line, `Desk 3.2.92 is behind main (3.3.0-rc.1); run agency plugin cache remove "${MAIN}", then start a new session.`)
-  assert.doesNotMatch(found.line, /@release/u)
-})
-
-test("an Agency session whose spec is not found compares with release and names no spec", async () => {
-  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.92", specs: { [RELEASE]: "3.2.90" } })
-  const calls = []
-  const found = await checkStaleDesk({ env: {}, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls) })
-  assert.deepEqual(calls.map((call) => call.url), [latestPluginUrl("release")])
-  assert.equal(found.channel, "release")
-  assert.match(found.refresh, /agency plugin cache list/u)
-  assert.doesNotMatch(found.refresh, /@(release|main)/u)
+  assert.equal(found.refresh, refreshStep("copilot", { agency: true }))
+  assert.equal(found.line, releaseNotice({ running: "3.2.92", latest: "3.2.93" }))
+  // A legacy main install is still compared with main and is never given the release command.
+  const legacy = await agencyInstall({ running: "3.2.92", specs: { [MAIN]: "3.2.92" } })
+  const calls2 = []
+  const main = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: legacy.pluginRoot, stateDir: legacy.stateDir, homeDir: legacy.home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93", main: "3.3.0-rc.1" }, calls2) })
+  assert.deepEqual(calls2.map((call) => call.url), [latestPluginUrl("main")])
+  assert.equal(main.channel, "main")
+  assert.equal(main.latest, "3.3.0-rc.1")
+  assert.equal(main.line, `Desk 3.2.92 is behind main (3.3.0-rc.1); run agency plugin cache remove "${MAIN}", then start a new session.`)
+  assert.doesNotMatch(main.line, /@release/u)
 })
 
 test("a cached answer counts only for the channel it was fetched for", async () => {
-  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.93", specs: { [RELEASE]: "3.2.93" } })
+  // No cached release copy, so the answer comes from the network and the state cache.
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.93", specs: {} })
   // An answer from main, and one from before channels, are both fetched again for a release install.
   for (const cached of [{ channel: "main", latest: "3.3.0-rc.1" }, { latest: "3.3.0-rc.1" }]) {
     writeFileSync(path.join(stateDir, VERSION_CACHE_FILE), JSON.stringify({ schema_version: 1, checked_at: new Date().toISOString(), ...cached }))
@@ -379,4 +373,47 @@ test("a cached answer counts only for the channel it was fetched for", async () 
   const calls = []
   await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: byBranch({ release: "3.2.93" }, calls) })
   assert.equal(calls.length, 0, "the release answer is reused for the release channel")
+})
+
+// Boot in an Agency folder whose session runs `running`, with the release copy Agency cached (or none), and no network.
+async function agencyBoot({ running, release }) {
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running, specs: release === null ? {} : { [RELEASE]: release } })
+  const root = await deskRoot()
+  const neverAnswers = () => new Promise(() => {})
+  return boot(root, { staleDeskFn: (args) => checkStaleDesk({ ...args, env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, budgetMs: 60, fetchFn: neverAnswers }) })
+}
+
+test("stale prints the notice once", async () => {
+  const result = await agencyBoot({ running: "3.2.98", release: "3.2.101" })
+  assert.equal(result.stale_desk.line, releaseNotice({ running: "3.2.98", latest: "3.2.101" }))
+  const text = formatBootText(result)
+  assert.equal(text.split(result.stale_desk.line).length, 2, "the notice appears exactly once")
+  assert.equal(formatBootText(result).split("\n")[1], result.stale_desk.line)
+  for (const phrase of ["loaded", "3.2.98", "3.2.101", "worktree session", "agency copilot", "restart the Copilot app at a quiet moment"]) {
+    assert.match(text, new RegExp(phrase, "u"))
+  }
+})
+
+test("current prints nothing", async () => {
+  const result = await agencyBoot({ running: "3.2.101", release: "3.2.101" })
+  assert.equal(result.stale_desk, null)
+  assert.doesNotMatch(formatBootText(result), /Heads up|behind/u)
+})
+
+test("an offline check prints nothing and doesn't delay startup", async () => {
+  // With no cached release copy and no network, the check gives up inside its budget and boot prints nothing.
+  const offline = await agencyBoot({ running: "3.2.98", release: null })
+  assert.equal(offline.stale_desk, null)
+  assert.doesNotMatch(formatBootText(offline), /Heads up|behind/u)
+  const { home, pluginRoot, stateDir } = await agencyInstall({ running: "3.2.98", specs: {} })
+  const started = Date.now()
+  const rejected = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot, stateDir, homeDir: home, agentHost: "copilot", fetchFn: async () => { throw new Error("getaddrinfo ENOTFOUND api.github.com") } })
+  assert.equal(rejected, null)
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`)
+  // A cached release copy answers at once, so a hung network cannot hold it.
+  const known = await agencyInstall({ running: "3.2.98", specs: { [RELEASE]: "3.2.101" } })
+  const fast = Date.now()
+  const found = await checkStaleDesk({ env: { AGENCY_ENGINE: "copilot" }, pluginRoot: known.pluginRoot, stateDir: known.stateDir, homeDir: known.home, agentHost: "copilot", budgetMs: 60, fetchFn: () => new Promise(() => {}) })
+  assert.equal(found.latest, "3.2.101")
+  assert.ok(Date.now() - fast < 50, `took ${Date.now() - fast} ms`)
 })
