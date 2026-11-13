@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { resolveBash } from "../../../../../plugins/desk/mcp/src/util/bash.js"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -221,36 +221,80 @@ test("runBlock runs the block from a file, never as a command-line argument Wind
   assert.equal(existsSync(path.dirname(runs[1].args[0])), false, "and when bash cannot start")
 })
 
-test("a timed-out Windows block whose tree cleanup is confirmed resolves as timed out, with no cleanup note", async () => {
-  // Stands in for taskkill: it ends the launcher (`exec sleep` makes the sleep the launcher) and reports success.
-  const seen = []
-  const taskkill = (file, args, options, callback) => {
-    seen.push(args)
-    try {
-      process.kill(Number(args[1]), "SIGKILL")
-      process.nextTick(callback, null, "", "")
-    } catch (error) {
-      process.nextTick(callback, error, "", "")
-    }
-    return {}
+const WINDOWS_TIMEOUT = { env: process.env, cwd: process.cwd(), platform: "win32", bash: "bash" }
+// Stands in for taskkill: it ends the process named by `/PID`, then reports to `callback` after `delayMs` (`null` reports before any output close).
+const fakeTaskkill = (delayMs) => (file, args, options, callback) => {
+  let error = null
+  try {
+    process.kill(Number(args[1]), "SIGKILL")
+  } catch (killed) {
+    error = killed
   }
-  const run = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32", bash: "bash", execFile: taskkill })
-  assert.deepEqual(run, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
+  if (delayMs === null) process.nextTick(callback, error, "", "")
+  else setTimeout(callback, delayMs, error, "", "")
+  return {}
+}
+
+test("a timed-out Windows block whose tree cleanup is confirmed resolves as timed out, with no cleanup note", async () => {
+  // `exec sleep` makes the sleep the launcher, so ending it ends the block.
+  const seen = []
+  const recording = (file, args, options, callback) => { seen.push(args); return fakeTaskkill(null)(file, args, options, callback) }
+  const before = await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 200, execFile: recording })
+  assert.deepEqual(before, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
   assert.equal(seen.length, 1)
   assert.deepEqual(seen[0].slice(0, 1), ["/PID"])
   assert.deepEqual(seen[0].slice(2), ["/T", "/F"])
+  // Here the launcher's output closes before taskkill reports, so the result waits for the report.
+  const late = await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 200, execFile: fakeTaskkill(100) })
+  assert.deepEqual(late, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false })
 })
 
-test("a Windows tree cleanup that is slow or refused resolves as timed out with an unqualified note, and never rejects", async () => {
-  const neverCalledBack = () => ({})
-  const slow = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "bash", treeBudgetMs: 200, execFile: neverCalledBack })
-  assert.deepEqual(slow, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" })
+test("a Windows tree cleanup that is slow, refused or cannot start resolves as timed out with an unqualified note, and never rejects", async () => {
+  const unqualified = { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" }
+  // The budget runs out first; the late result must change nothing.
+  const slow = await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 50, treeBudgetMs: 100, execFile: fakeTaskkill(300) })
+  assert.deepEqual(slow, unqualified)
   const refused = (file, args, options, callback) => {
     process.nextTick(callback, new Error("Access is denied."), "", "")
     return {}
   }
-  const denied = await runBlock("exec sleep 30", { env: process.env, cwd: process.cwd(), timeoutMs: 100, platform: "win32", bash: "bash", treeBudgetMs: 5_000, execFile: refused })
-  assert.deepEqual(denied, { status: null, stdout: "", stderr: "", timedOut: true, unavailable: false, cleanup: "unqualified" })
+  assert.deepEqual(await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 100, execFile: refused }), unqualified)
+  const cannotStart = () => { throw new Error("spawn EINVAL") }
+  assert.deepEqual(await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 100, execFile: cannotStart }), unqualified)
+})
+
+test("taskkill runs from the Windows folder named by SystemRoot, or from C:\\Windows when that is missing or not absolute", async () => {
+  const saved = { SystemRoot: process.env.SystemRoot, windir: process.env.windir }
+  const files = []
+  const recording = (file, args, options, callback) => { files.push(file); process.nextTick(callback, new Error("recorded"), "", ""); return {} }
+  try {
+    delete process.env.windir
+    process.env.SystemRoot = "D:\\Windows"
+    await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 100, execFile: recording })
+    process.env.SystemRoot = "relative"
+    await runBlock("exec sleep 30", { ...WINDOWS_TIMEOUT, timeoutMs: 100, execFile: recording })
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+  assert.deepEqual(files, ["D:\\Windows\\System32\\taskkill.exe", "C:\\Windows\\System32\\taskkill.exe"])
+})
+
+test("a block file that cannot be removed after the run does not fail the run", { skip: process.platform === "win32" }, async () => {
+  // The block makes its own folder read-only, so removing the file after the run is refused.
+  const folders = []
+  const spy = (command, args, options) => { folders.push(path.dirname(args[0])); return spawn("bash", args, options) }
+  try {
+    const run = await runBlock('chmod 500 "$(dirname "$0")"; echo done', { env: process.env, cwd: process.cwd(), timeoutMs: 10_000, spawn: spy })
+    assert.deepEqual(run, { status: 0, stdout: "done\n", stderr: "", timedOut: false, unavailable: false })
+  } finally {
+    for (const folder of folders) {
+      chmodSync(folder, 0o700)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }
 })
 
 test("on Windows a block longer than the command-line limit runs intact from its file", { skip: process.platform !== "win32" }, async () => {

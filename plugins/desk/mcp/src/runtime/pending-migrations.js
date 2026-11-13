@@ -184,10 +184,9 @@ export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_
     child.stdout.on("data", (chunk) => { stdout = keep(stdout, chunk) })
     child.stderr.on("data", (chunk) => { stderr = keep(stderr, chunk) })
     const finish = (result) => {
-      if (settled) return
-      settled = true
       clearTimeout(timer)
       clearTimeout(budget)
+      settled = true
       child.removeListener("error", onError)
       child.removeListener("close", onClose)
       cleanUp()
