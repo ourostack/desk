@@ -64,7 +64,7 @@ export {
 }
 
 // Used only when package.json's engines.node cannot be read as a plain ">=" floor.
-const DEFAULT_NODE_FLOOR = [20, 0, 0]
+const DEFAULT_NODE_FLOOR = [22, 18, 0]
 const SHUTDOWN_TIMEOUT_MS = 3000
 
 // The lowest Node that Desk supports, from engines.node in package.json (">=X[.Y[.Z]]").

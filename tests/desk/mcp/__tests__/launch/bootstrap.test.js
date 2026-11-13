@@ -177,9 +177,9 @@ test("engines ranges follow npm semver for plain majors, minors and patches", ()
 test("the bootstrap reads engines.node and the runtime pack ABIs from the same files index.js uses", async () => {
   assert.deepEqual(bootstrap.readPackage(mcpRoot), { range: packageJson.engines.node, version: packageJson.version })
   const root = await mkTempRoot("desk-bootstrap-package-")
-  assert.deepEqual(bootstrap.readPackage(root), { range: ">=20.0.0", version: null })
+  assert.deepEqual(bootstrap.readPackage(root), { range: ">=22.18.0", version: null })
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "9.9.9", engines: {} }))
-  assert.deepEqual(bootstrap.readPackage(root), { range: ">=20.0.0", version: "9.9.9" })
+  assert.deepEqual(bootstrap.readPackage(root), { range: ">=22.18.0", version: "9.9.9" })
 
   for (const [platform, arch, abis] of [
     ["darwin", "arm64", ["127", "137"]],
@@ -307,7 +307,7 @@ test("on a fake Windows layout the bootstrap picks the packed Node, not the newe
   const appData = path.join(root, "AppData", "Roaming")
   fakeNode(path.join(appData, "nvm", "v25.1.0", "node.exe"), "25.1.0", "141")
   const packed = fakeNode(path.join(appData, "nvm", "v24.9.0", "node.exe"), "24.9.0", "137")
-  fakeNode(path.join(appData, "nvm", "v22.9.0", "node.exe"), "22.9.0", "127")
+  fakeNode(path.join(appData, "nvm", "v22.18.0", "node.exe"), "22.18.0", "127")
   const selection = bootstrap.selectNode(machine(root, {
     platform: "win32",
     arch: "x64",
@@ -327,8 +327,8 @@ test("selection prefers the newest Node whose ABI has a runtime pack, then the n
   fakeNode(nvm("25.1.0"), "25.1.0", "141")
   const packed = fakeNode(nvm("24.1.0"), "24.1.0", "137")
   fakeNode(nvm("24.2.0"), "24.2.0", "137", { broken: true })
-  const olderPacked = fakeNode(nvm("22.9.0"), "22.9.0", "127")
-  fakeNode(nvm("22.10.0"), "22.10.0", "127", { broken: true })
+  const olderPacked = fakeNode(nvm("22.18.0"), "22.18.0", "127")
+  fakeNode(nvm("22.19.0"), "22.19.0", "127", { broken: true })
   fakeNode(nvm("20.11.1"), "20.11.1", "115")
   let selection = bootstrap.selectNode(machine(root))
   assert.equal(selection.range, packageJson.engines.node)
@@ -353,10 +353,10 @@ test("selection prefers the newest Node whose ABI has a runtime pack, then the n
 
 test("selection keeps the running Node on a tie and never probes it", async () => {
   const root = await mkTempRoot("desk-bootstrap-current-")
-  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   const probed = []
   const selection = bootstrap.selectNode(machine(root, {
-    current: { path: "/running/node", version: "v22.9.0", abi: "127" },
+    current: { path: "/running/node", version: "v22.18.0", abi: "127" },
     probe: (file) => { probed.push(file); return null },
   }))
   assert.equal(selection.node.current, true)
@@ -366,7 +366,7 @@ test("selection keeps the running Node on a tie and never probes it", async () =
 
 test("the same binary reached through two paths is considered once, and a probe that fails drops it", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-dedupe-")
-  const real = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  const real = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   mkdirSync(path.join(root, "link-bin"))
   symlinkSync(real, path.join(root, "link-bin", "node"))
   fakeNode(path.join(root, "odd-bin", "node"), "x", "y")
@@ -530,7 +530,7 @@ test("when the running Node is the best choice, index.js runs in this process", 
   const root = await mkTempRoot("desk-bootstrap-inprocess-")
   const calls = []
   await bootstrap.run({
-    ...machine(root, { current: { path: "/running/node", version: "v22.9.0", abi: "127" } }),
+    ...machine(root, { current: { path: "/running/node", version: "v22.18.0", abi: "127" } }),
     args: ["--root", "/desk"],
     importIndex: (file, args) => { calls.push([file, args]) },
   })
@@ -560,7 +560,7 @@ test("an index.js that cannot load is served as a degraded state, never a crash"
   const read = collect(output)
   const errors = []
   const running = bootstrap.run({
-    ...machine(root, { current: { path: "/running/node", version: "v22.9.0", abi: "127" } }),
+    ...machine(root, { current: { path: "/running/node", version: "v22.18.0", abi: "127" } }),
     args: [],
     stdin: input,
     stdout: output,
@@ -576,7 +576,7 @@ test("an index.js that cannot load is served as a degraded state, never a crash"
 
   const stdin = new PassThrough()
   const again = bootstrap.run({
-    ...machine(root, { current: { path: "/running/node", version: "v22.9.0", abi: "127" } }),
+    ...machine(root, { current: { path: "/running/node", version: "v22.18.0", abi: "127" } }),
     args: [],
     stdin,
     stdout: new PassThrough(),
@@ -597,7 +597,7 @@ function fakeChild() {
 
 test("another Node runs index.js as a child with inherited stdio, forwarded signals and its exit code", async () => {
   const root = await mkTempRoot("desk-bootstrap-reexec-")
-  const chosen = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  const chosen = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   const signals = new EventEmitter()
   const exits = []
   const kills = []
@@ -634,7 +634,7 @@ test("another Node runs index.js as a child with inherited stdio, forwarded sign
 
 test("a Node that cannot be spawned falls back to the degraded responder", async () => {
   const root = await mkTempRoot("desk-bootstrap-spawn-fail-")
-  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   const child = fakeChild()
   const input = new PassThrough()
   const output = new PassThrough()
@@ -828,7 +828,7 @@ test("the bootstrap's tool list matches the server's", () => {
 
 test("a spawn that throws synchronously is served as node_spawn_failed", async () => {
   const root = await mkTempRoot("desk-bootstrap-spawn-throw-")
-  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   const input = new PassThrough()
   const output = new PassThrough()
   const read = collect(output)
@@ -848,7 +848,7 @@ test("a spawn that throws synchronously is served as node_spawn_failed", async (
 
 test("anything that throws while picking a Node is served as bootstrap_failed", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-throw-")
-  fakeNode(path.join(root, "path-bin", "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "path-bin", "node"), "22.18.0", "127")
   const input = new PassThrough()
   const output = new PassThrough()
   const read = collect(output)
@@ -871,7 +871,7 @@ test("anything that throws while picking a Node is served as bootstrap_failed", 
 
 test("an error event from a child that did start never starts a second responder", async () => {
   const root = await mkTempRoot("desk-bootstrap-late-error-")
-  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   const child = fakeChild()
   child.pid = 4242
   const errors = []
@@ -895,7 +895,7 @@ test("an error event from a child that did start never starts a second responder
 test("probes share a 3 s budget and version-manager shims on PATH are never run", { skip: posixBranchOnly }, async () => {
   const root = await mkTempRoot("desk-bootstrap-budget-")
   // Unversioned PATH binaries have to be probed; the clock jumps 2 s per probe.
-  for (const name of ["a", "b", "c"]) fakeNode(path.join(root, name, "node"), "22.9.0", "127")
+  for (const name of ["a", "b", "c"]) fakeNode(path.join(root, name, "node"), "22.18.0", "127")
   fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v20.11.1", "bin", "node"), "20.11.1", "115")
   let clock = 0
   const probed = []
@@ -913,8 +913,8 @@ test("probes share a 3 s budget and version-manager shims on PATH are never run"
   const home = path.join(shims, "home")
   const voltaShim = fakeNode(path.join(home, ".volta", "bin", "volta-shim"), "0.0.0", "0")
   symlinkSync(voltaShim, path.join(home, ".volta", "bin", "node"))
-  fakeNode(path.join(home, ".asdf", "shims", "node"), "22.9.0", "127")
-  fakeNode(path.join(home, ".local", "share", "mise", "shims", "node"), "22.9.0", "127")
+  fakeNode(path.join(home, ".asdf", "shims", "node"), "22.18.0", "127")
+  fakeNode(path.join(home, ".local", "share", "mise", "shims", "node"), "22.18.0", "127")
   mkdirSync(path.join(shims, "linked"))
   symlinkSync(voltaShim, path.join(shims, "linked", "node"))
   const onPath = [path.join(home, ".volta", "bin"), path.join(home, ".asdf", "shims"), path.join(home, ".local", "share", "mise", "shims"), path.join(shims, "linked")]

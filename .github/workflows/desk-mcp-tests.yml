@@ -457,7 +457,7 @@ jobs:
         with:
           # Node 22 (matches validate-skills.yml; current LTS). The test script
           # uses a `**` glob in `node --test`, which only resolves on Node >= 21,
-          # so do NOT drop below 22 here even though engines floor is >= 20.
+          # so do NOT drop below 22 here (the engines floor is 22.18).
           node-version: "22"
           cache: "npm"
           cache-dependency-path: plugins/desk/mcp/package-lock.json

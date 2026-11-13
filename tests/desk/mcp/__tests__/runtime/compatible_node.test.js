@@ -49,12 +49,12 @@ test("a plain >= floor is checked without loading the bootstrap; any other range
   assert.deepEqual(compatibleNode({ mcpRoot: await range(">=20.1.0"), current: at("v20.0.9"), select: () => tooOld }), { node: null, range: ">=20.1.0" })
   assert.deepEqual(compatibleNode({ mcpRoot: await range("^22.0.0 || >=24.0.0"), current: at("v22.5.0"), select: noSearch }), { node: "/node/v22.5.0", range: "^22.0.0 || >=24.0.0" })
   assert.equal(compatibleNode({ mcpRoot: await range("^22.0.0 || >=24.0.0"), current: at("v23.1.0"), select: () => tooOld }).node, null)
-  assert.deepEqual(compatibleNode({ mcpRoot: await range(undefined), current: at("v22.0.0"), select: noSearch }), { node: "/node/v22.0.0", range: ">=20.0.0" }, "no package.json: the bootstrap's default range")
+  assert.deepEqual(compatibleNode({ mcpRoot: await range(undefined), current: at("v22.18.0"), select: noSearch }), { node: "/node/v22.18.0", range: ">=22.18.0" }, "no package.json: the bootstrap's default range")
 })
 
 test("an old running Node searches with the bootstrap's selection and a hook-sized probe budget", () => {
   const calls = []
-  const select = (options) => { calls.push(options); return { node: { path: "/nvm/v22/bin/node" }, range: ">=20.0.0" } }
+  const select = (options) => { calls.push(options); return { node: { path: "/nvm/v22/bin/node" }, range: ">=22.18.0" } }
   assert.equal(compatibleNode({ env: { HOME: "/home/a", DESK_NODE_SYSTEM_PREFIX: "/fixture" }, current: OLD, select }).node, "/nvm/v22/bin/node")
   assert.equal(calls[0].probeBudgetMs, PROBE_BUDGET_MS)
   assert.equal(typeof calls[0].probe, "function", "the hook's own probe, which trusts version-named install folders")
@@ -70,14 +70,14 @@ test("an old running Node searches with the bootstrap's selection and a hook-siz
   assert.equal(typeof calls[2].homeDir, "string")
   assert.equal(calls[2].probeBudgetMs, 3000, "a caller nothing waits on may probe for longer")
 
-  assert.deepEqual(compatibleNode({ env: {}, current: OLD, select: () => ({ node: null, range: ">=20.0.0" }) }).node, null)
+  assert.deepEqual(compatibleNode({ env: {}, current: OLD, select: () => ({ node: null, range: ">=22.18.0" }) }).node, null)
 })
 
 test("the real selection finds an installed compatible Node and finds none on a bare machine", { skip: process.platform === "win32" && "the fake Node is a POSIX script" }, async () => {
   const root = await mkTempRoot("desk-compatible-node-")
   const env = { PATH: "", HOME: path.join(root, "home"), DESK_NODE_SYSTEM_PREFIX: path.join(root, "sysroot") }
   assert.equal(compatibleNode({ env, current: OLD }).node, null)
-  const installed = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  const installed = fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.18.0", "bin", "node"), "22.18.0", "127")
   assert.equal(compatibleNode({ env, current: OLD }).node, installed)
 
   // A Node on PATH whose folder does not name its version is probed; one that does is trusted without running it.
@@ -85,7 +85,7 @@ test("the real selection finds an installed compatible Node and finds none on a 
   // Generous timeouts: a loaded machine can take seconds to start even a shell script.
   const probe = hookProbe({})
   assert.deepEqual(probe(unversioned, 30_000), { version: "24.1.0", abi: "137" })
-  assert.deepEqual(probe(installed, 30_000), { version: "22.9.0", abi: null })
+  assert.deepEqual(probe(installed, 30_000), { version: "22.18.0", abi: null })
   assert.equal(probe(path.join(root, "missing", "node"), 30_000), null, "a missing Node is neither trusted nor run")
   await fs.rm(unversioned)
   assert.deepEqual(probe(unversioned, 30_000), { version: "24.1.0", abi: "137" }, "one selection probes a Node once")
@@ -116,14 +116,14 @@ test("the factory hook starts its worker only in a compatible Node, and starts n
   const script = path.join(root, "worker.cjs")
   await fs.writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(proof)}, process.execPath + " " + process.argv.slice(2).join(" "))\n`)
   const resolved = []
-  assert.equal(await launchWorker(script, ["derive"], process.env, (options) => { resolved.push(options.env); return { node: null, range: ">=20.0.0" } }), undefined)
+  assert.equal(await launchWorker(script, ["derive"], process.env, (options) => { resolved.push(options.env); return { node: null, range: ">=22.18.0" } }), undefined)
   assert.deepEqual(resolved, [process.env])
-  await launchWorker(script, ["derive"], process.env, () => ({ node: process.execPath, range: ">=20.0.0" }))
+  await launchWorker(script, ["derive"], process.env, () => ({ node: process.execPath, range: ">=22.18.0" }))
   const deadline = Date.now() + 10_000
   let ran = null
   while (ran === null && Date.now() < deadline) {
     try { ran = await fs.readFile(proof, "utf8") } catch { await new Promise((resolve) => setTimeout(resolve, 25)) }
   }
   assert.equal(ran, `${process.execPath} derive`)
-  await assert.rejects(launchWorker(script, [], process.env, () => ({ node: path.join(root, "missing-node"), range: ">=20.0.0" })), { code: "ENOENT" })
+  await assert.rejects(launchWorker(script, [], process.env, () => ({ node: path.join(root, "missing-node"), range: ">=22.18.0" })), { code: "ENOENT" })
 })

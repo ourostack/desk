@@ -313,14 +313,14 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
   const bare = { ...f.env, PATH: empty, HOME: empty, DESK_NODE_SYSTEM_PREFIX: empty, NVM_DIR: "", FNM_DIR: "", VOLTA_HOME: "", ASDF_DATA_DIR: "", MISE_DATA_DIR: "", XDG_DATA_HOME: "", USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty, NVM_HOME: "", NVM_SYMLINK: "", ProgramFiles: empty, "ProgramFiles(x86)": empty }
   const probeBudgets = []
   const noNode = (options) => { probeBudgets.push(options.probeBudgetMs); return compatibleNode({ ...options, env: bare, current: { path: path.join(empty, "node"), version: "v16.20.2", abi: "93" } }) }
-  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: noNode, repair }), { started: false, reason: "no Node >=20.0.0 found" })
+  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: noNode, repair }), { started: false, reason: "no Node >=22.18.0 found" })
   assert.deepEqual(probeBudgets, [3000], "nothing waits on the launcher, so it may probe for longer than the hook could")
   assert.deepEqual(repaired, [])
-  assert.equal(JSON.parse(await fs.readFile(`${file}.node.json`, "utf8")).range, ">=20.0.0")
-  assert.equal(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), "Desk boot pre-checks: workspace-tidy last repair not started: it needs Node >=20.0.0 and none was found; deferred (0 listed)")
+  assert.equal(JSON.parse(await fs.readFile(`${file}.node.json`, "utf8")).range, ">=22.18.0")
+  assert.equal(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), "Desk boot pre-checks: workspace-tidy last repair not started: it needs Node >=22.18.0 and none was found; deferred (0 listed)")
 
   // This Node fits: the repair runs here, and the stale no-Node status goes.
-  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair }), { repaired: f.desk })
+  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=22.18.0" }), repair }), { repaired: f.desk })
   await assert.rejects(fs.lstat(`${file}.node.json`), { code: "ENOENT" })
 
   // Another Node fits: the launcher re-executes itself there and waits.
@@ -329,7 +329,7 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
     spawned.push({ command, args, marked: options.env[REPAIR_NODE_ENV] })
     return { once: (event, handler) => { if (event === "close") setImmediate(() => handler(code)) } }
   }
-  const other = { node: "/other/node", range: ">=20.0.0" }
+  const other = { node: "/other/node", range: ">=22.18.0" }
   assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => other, spawnChild: child(0), repair }), { started: true, node: "/other/node" })
   assert.deepEqual(spawned[0], { command: "/other/node", args: [fileURLToPath(hookPath), "--repair", f.desk], marked: "1" })
   await assert.rejects(startRepair(f.desk, { env: f.env, resolveNode: () => other, spawnChild: child(3), repair }), /exited with 3/)
@@ -344,12 +344,12 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
     const victim = path.join(f.root, "victim.txt")
     await fs.writeFile(victim, "untouched\n")
     await fs.symlink(victim, `${file}.node.json`)
-    await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=20.0.0" }), repair })
+    await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=22.18.0" }), repair })
     assert.equal(await fs.readFile(victim, "utf8"), "untouched\n")
     assert.equal((await fs.lstat(`${file}.node.json`)).isFile(), true)
     await fs.rm(`${file}.node.json`)
     await fs.symlink(victim, `${file}.node.json`)
-    await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair })
+    await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=22.18.0" }), repair })
     await assert.rejects(fs.lstat(`${file}.node.json`), { code: "ENOENT" }, "clearing removes the link, not its target")
     assert.equal(await fs.readFile(victim, "utf8"), "untouched\n")
     await fs.link(victim, `${file}.node.json`)
@@ -357,10 +357,10 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
     await fs.rm(`${file}.node.json`)
   }
   await fs.mkdir(`${file}.node.json`)
-  await assert.rejects(startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=20.0.0" }), repair }), /could not record the workspace-tidy Node status/)
+  await assert.rejects(startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=22.18.0" }), repair }), /could not record the workspace-tidy Node status/)
   assert.equal((await fs.readdir(path.dirname(file))).some((name) => name.endsWith(".tmp")), false, "no temporary file is left behind")
   repaired.length = 0
-  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair }), { repaired: f.desk }, "a directory there never stops the repair")
+  assert.deepEqual(await startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=22.18.0" }), repair }), { repaired: f.desk }, "a directory there never stops the repair")
   await fs.rm(`${file}.node.json`, { recursive: true })
 
   // An unreadable status is named, never fatal.
@@ -380,13 +380,13 @@ test("the --compatible launcher runs a script in the Node the resolver picks, an
   await fs.writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(proof)}, process.argv.slice(2).join(" "))\n`)
   assert.deepEqual(compatibleCommand(script, "a", "b"), [process.execPath, fileURLToPath(hookPath), "--compatible", script, "a", "b"])
   const budgets = []
-  assert.deepEqual(await runCompatible(script, ["a"], { env: f.env, resolveNode: (options) => { budgets.push(options.probeBudgetMs); return { node: null, range: ">=20.0.0" } } }), { started: false, reason: "no Node >=20.0.0 found" })
+  assert.deepEqual(await runCompatible(script, ["a"], { env: f.env, resolveNode: (options) => { budgets.push(options.probeBudgetMs); return { node: null, range: ">=22.18.0" } } }), { started: false, reason: "no Node >=22.18.0 found" })
   assert.deepEqual(budgets, [3000])
   await assert.rejects(fs.lstat(proof), { code: "ENOENT" }, "nothing started")
-  assert.deepEqual(await runCompatible(script, ["a", "b"], { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }) }), { started: true, node: process.execPath, code: 0 })
+  assert.deepEqual(await runCompatible(script, ["a", "b"], { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=22.18.0" }) }), { started: true, node: process.execPath, code: 0 })
   assert.equal(await fs.readFile(proof, "utf8"), "a b")
   const failing = () => ({ once: (event, handler) => { if (event === "error") setImmediate(() => handler(new Error("spawn ENOENT"))) } })
-  await assert.rejects(runCompatible(script, [], { env: f.env, resolveNode: () => ({ node: "/missing/node", range: ">=20.0.0" }), spawnChild: failing }), /ENOENT/)
+  await assert.rejects(runCompatible(script, [], { env: f.env, resolveNode: () => ({ node: "/missing/node", range: ">=22.18.0" }), spawnChild: failing }), /ENOENT/)
 
   // The real CLI, from this process's Node, which fits.
   await fs.rm(proof)
