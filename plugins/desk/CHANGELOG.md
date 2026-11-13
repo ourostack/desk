@@ -1,5 +1,25 @@
 # desk plugin — changelog
 
+## 3.2.117 — 2026-11-13
+
+### desk-web no longer refuses what an agent asks it to run
+
+`mine` now runs `eval` and `run-code` as given and returns what the script returns, unredacted, and it runs the other commands it used to refuse: raw `keydown`, `keyup`, `mousemove`, `mousedown` and `mouseup`, `upload`, `dialog-accept` and `dialog-dismiss`, `console`, and `localstorage-*` and `sessionstorage-*`. A script's own error comes back in `AUTH_SCRIPT_FAILED`. `goto` takes any address, and `press` takes any key Playwright knows, a space included. Snapshots and screenshots still redact typed values.
+
+Gone: `AUTH_COMMAND_REFUSED` (an unknown command now says `AUTH_COMMAND_UNKNOWN` and lists the commands), `AUTH_URL_REFUSED`, the 64 KiB argument limit, the 10,000-pixel limit on `resize` and `mousewheel`, and the key-name pattern on `press`. In `fresh`, `run-code`, sign-in state and cookie commands are allowed too; commands that open, close, attach or list other browsers stay out, because they can kill sessions that are not this agent's. The hints and docs no longer say eval is never needed.
+
+This lets the Teams send macros in MS Desk run in `mine` as they are.
+
+Desk now owns the issue-drain poller. `node plugins/desk/mcp/scripts/drains.js poll` lists each configured repository's open issues with no model turn, records which are new or changed (ignoring the drain's own status comment, `drain:` and configured labels, and configured body trailer lines), and prints the wakes to deliver as JSON. Events and seen markers are saved before anything is printed, and a wake the runner never acknowledges comes back with the next poll. `ack` reports a wake's delivery and `status` shows each drain's health. Config and state live in Desk's state folder.
+
+Delivery is the runner's job: Ouroboros, a launchd job or any always-on process runs the command on a cadence and delivers each wake to its session. See [issue drains](docs/issue-drains.md). The `draining-issues` skill points at the command, and its eval was rerun against the new text.
+
+A card write from a worktree on a feature branch no longer leaves the card staged and the worktree behind. Desk publishes the card to the remote's default branch without committing on the worktree's branch, so the card stayed staged against an older HEAD, and in a repository with a `.desk/content-home.json` policy the next `task_update` then refused with `content_home_unpublished_base` (HEAD was no longer the published commit) or `content_home_dirty_target`. Desk now fast-forwards the worktree to the commit it published when the branch is behind it and nothing local would be overwritten. A branch with commits of its own keeps them, and only the staged copy of the published card is unstaged; the file on disk is untouched.
+
+A write that the remote took before the call was cut off is now reported as published. Desk reads the remote back after a timed-out push or a publication pull request that errored, and when the commit is there the write succeeds instead of reporting an unknown result and asking for a retry. `task_update` from such a worktree also says the card is already on the remote (`desk_pushed: true`, with `desk_commit` the default branch's tip) instead of saying it is still being pushed in the background.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.116 — 2026-11-13
 
 `node scripts/skill-evals.cjs validate` now refuses a skill eval whose fingerprint moved without evidence of a real run, so refreshing `reviewedSourceFingerprint` alone no longer passes CI. A suite must either carry a current, passing run receipt at `evals/receipts/<suite id>.json` or record a `knownFailure` with an issue. The new `record` command writes that receipt from an external harness result (`record evals/<suite>.json --result <harness-result.json>`, or `-` to read it from a pipe), stamps the suite id and both fingerprints, and applies `verify`'s checks before writing. The error names the exact command to run. Existing suites are grandfathered at their committed state in `evals/receipts/_baseline.json`, and no receipts were invented for them. See the [evals README](../../../evals/README.md).
