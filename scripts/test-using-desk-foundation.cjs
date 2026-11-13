@@ -323,12 +323,11 @@ function main() {
     "Source and channels",
     "Durable context and attribution",
     "Requirements that arrive during execution",
-    "Visual proof",
     "Instruction coherence",
     "Child agents",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fifteen foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fourteen foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
@@ -549,13 +548,10 @@ function main() {
     "must not return control merely because the plan changed",
   ]);
 
-  assertSectionPhrases(section(skill, "Visual proof"), "using-desk Visual proof", [
-    "bounded visual proof as you go",
-    "anything a person sees",
-    "rendered, installed, merged or rollout",
-    "terminal success line",
-    "(`evidence-discipline`)",
-  ]);
+  // The foundation no longer carries a Visual proof section: evidence-discipline holds the whole rule, and a pressure run
+  // (2026-11-12, Haiku 4.5 and Sonnet 5, a merged and deployed change reported with only a log line) behaved the same with
+  // and without the foundation's sentence.
+  assert.doesNotMatch(skill, /^## Visual proof$/mu, "the visual-proof rule lives in evidence-discipline");
   assertSectionPhrases(section(owned("evidence-discipline"), "Visual proof"), "evidence-discipline Visual proof", [
     "by default whenever work touches something a person sees",
     "not what it is called",
