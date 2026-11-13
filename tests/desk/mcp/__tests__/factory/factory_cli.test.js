@@ -44,6 +44,7 @@ import { consentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/co
 import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { osEnv } from "../_os_env.js"
 import { removeTree } from "../_remove_tree.js"
+import { closeWindowsAclSessions } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
@@ -103,6 +104,7 @@ async function scratch(run) {
     try {
       // Child close can precede native handle destruction; the copied gh.exe
       // belongs to this fixture until those owned handles have been released.
+      closeWindowsAclSessions()
       while (processes.size) await nextTurn()
     } finally {
       hook.disable()
