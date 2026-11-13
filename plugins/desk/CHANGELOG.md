@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.118 — 2026-11-13
+
+Desk's tools now run the newest release at session start. Agency serves its cached copy of the release channel and refreshes it in the background, so the first session after a release used to run the release before it. When the `release` branch is ahead of the copy that launched Desk's server, the server downloads the newer `plugins/desk/mcp` (one tarball, about 1.5 s on a good link, kept under `~/.cache/ouroboros-skills/desk/release-copies` and reused by later starts) and loads its runtime from there. The step has an 8-second budget. When it cannot finish (offline, a slow download, a copy that will not load) Desk's tools keep running the cached copy, and boot's stale-Desk line and `desk_status` (`runtime.newest_release`) say which version that is and why. Hooks and skills still come from Agency's copy and move with the Copilot app's next restart. `DESK_NEWEST_RELEASE=0` turns the step off; a pinned activation config, a Claude or Copilot marketplace install and a development checkout are left alone.
+
+Desk now runs the session boot itself and hands the agent the result, so no hook, skill or reply tells an agent to run `session-boot.js` any more. The Copilot first-prompt hook (and, for a resumed session, the session-start hook) starts the boot in the background, waits for it within its time limit (up to 8 s; the prompt hook's own limit is now 11 s) and puts the result in the agent's context under `Desk boot`. Claude's session-start hook does the same and carries the head of the result (1,500 characters, which fits the preview Claude Code shows for a long context). A result that is not ready in time, or that a hook cut short, comes with the first Desk tool reply, which waits for the boot and also starts it when no hook did. Exactly one place delivers it. The boot's own text no longer says to run it again for a picked task: the `task_focus` reply now carries that task's push route and repos.
+
+The stand-down rule stays, reworded for what it means now: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores the boot's instructions. `DESK_AUTO_BOOT=0` turns the automatic boot off. The startup line names the plugin folder, which Crew's start command uses. The `session-start` skill and the skills that opened with "Boot first" now say where the result is.
+
+The Crew `start-crew` skill names the Desk plugin folder from the `Desk startup:` line, which no longer runs the boot script (Crew 0.2.21).
+
+`fresh` now opens `file:` addresses with `goto`, such as a local HTML page, and `snapshot` reads them. The Playwright CLI behind `fresh` refused `file:` addresses, which blocked local fixture pages; desk-web no longer refuses them. The same CLI setting also lifts its check on file paths outside the context's own folders, so a `fresh` screenshot or upload can use a path anywhere on the computer. `mine` already opened `file:` addresses and is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.117 — 2026-11-13
 
 ### desk-web no longer refuses what an agent asks it to run
