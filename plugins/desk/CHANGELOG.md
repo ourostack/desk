@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.109 — 2026-11-13
+
+desk-web now blocks every "open in the desktop app" launch for every site and scheme, and opens Teams links in their web form. A Teams deep link used to stop on Teams' launcher page, which tried `msteams:`, was refused, and stayed on its prompt even after "Use the web app instead" was chosen. `goto` now adds the `webjoin=true` flag the launcher reads (to a `/l/` link, or inside a launcher address), so the launcher goes straight to the web app. The flag rules are a small data table in `web-auth.cjs`, so another launcher needs one entry, not new code, and the fresh browser uses the same table.
+
+When a page's app launch was refused, the not-ready hint names the scheme (for example `msteams:`, `zoommtg:` or `mailto:`), says desk-web blocks every app launch, and points to the page's own web option or the link's web form. It also says opening an app needs its own explicit route, which desk-web does not offer yet. It no longer suggests a fresh browser or the desktop app for this cause.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.108 — 2026-11-13
 
 A new `preToolUse` hook, [`hooks/destructive-command-guard.cjs`](hooks/destructive-command-guard.cjs), refuses a Bash command that removes or moves away something its author did not create, and says what to do instead. Two incidents drove it: a subagent ran `cd ~/code && rm -rf desk` and deleted a registered main checkout, which broke every linked worktree that pointed at it, and a worker ran `colima delete -f` on a Colima profile that already existed.
