@@ -98,7 +98,7 @@ const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`
 
 /** The lines for the agent: what is where, then the rules. `trees` carry `dir`, `branch`, `activity` (ms or null) and `sessions` (how many other sessions run there). */
 export function describe({ trees, current, home, now }) {
-  const rules = "Rules while others work here: never stash, reset, clean or switch branches in a shared checkout; never touch, move or remove another session's worktree; branch from origin/main in your own worktree (`git worktree add <dir> -b <branch> origin/main`), and remove only what you created."
+  const rules = "Rules while others work here: in a shared checkout (the main one, or any folder another session uses) never stash, reset, clean, switch branches or delete files you did not create, even when asked to tidy it; never touch, move or remove another session's worktree. Do that work in your own worktree instead (`git worktree add <dir> -b <branch> origin/main`), and remove only what you created."
   const line = (tree, index) => {
     const mine = tree.dir === current
     const where = `- ${tilde(tree.dir, home)} (${index === 0 ? "the shared main checkout, " : ""}${tree.branch})`

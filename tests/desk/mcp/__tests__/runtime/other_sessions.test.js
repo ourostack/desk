@@ -61,7 +61,7 @@ test("boot lists the other worktrees and sessions here, this one first, and the 
   assert.equal(mine, "- /r/wt/me (mine): you are here")
   assert.ok(rest.includes("- /r/wt/other (theirs): 1 session running (up 4 min)"), rest.join("\n"))
   assert.ok(rest.includes("- /r/main (the shared main checkout, main): 1 session running (up 4 min)"), rest.join("\n"))
-  assert.match(result.lines.at(-1), /^Rules while others work here: never stash, reset, clean or switch branches in a shared checkout; never touch, move or remove another session's worktree; branch from origin\/main in your own worktree \(`git worktree add <dir> -b <branch> origin\/main`\), and remove only what you created\.$/u)
+  assert.match(result.lines.at(-1), /^Rules while others work here: in a shared checkout \(the main one, or any folder another session uses\) never stash, reset, clean, switch branches or delete files you did not create, even when asked to tidy it; never touch, move or remove another session's worktree\. Do that work in your own worktree instead \(`git worktree add <dir> -b <branch> origin\/main`\), and remove only what you created\.$/u)
 })
 
 test("a lone session says nothing, and a machine without ps still names the other worktrees", async () => {
