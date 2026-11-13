@@ -52,7 +52,7 @@ export function isolatedEnv({ home, desk, cache, runtimeCache }, overrides = {})
         USERPROFILE: home,
         APPDATA: path.join(home, "AppData", "Roaming"),
         LOCALAPPDATA: path.join(home, "AppData", "Local"),
-        // Windows PowerShell 5.1 rebuilds its module analysis cache when it cannot find one, which takes 8 to 15 s on a CI runner and made every protected write in a fixture (a fresh LOCALAPPDATA) hit Desk's 20 s ACL timeout. The runner image keeps a warm cache and names it here; a machine without one gets a single shared folder, so only the first call of a run pays.
+        // Windows PowerShell 5.1 rebuilds its module analysis cache when it cannot find one, which takes 8 to 15 s on a CI runner and made every protected write in a fixture (a fresh LOCALAPPDATA) hit Desk's ACL timeout. The runner image keeps a warm cache and names it here; a machine without one gets a single shared folder, so only the first call of a run pays.
         PSModuleAnalysisCachePath: analysisCache,
         PATH: [path.dirname(process.execPath), process.env.SystemRoot && path.join(process.env.SystemRoot, "System32"), ...windowsGitDirectories()].filter(Boolean).join(";"),
       }
