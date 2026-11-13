@@ -2492,6 +2492,7 @@ function branchGit(state) {
     const key = args.join(" ")
     if (key.startsWith("rev-parse --show-toplevel")) return { ok: true, stdout: "/repo\n/repo/.git" }
     if (key.includes("refs/remotes/origin/HEAD")) return state.remoteDefault ? { ok: true, stdout: `origin/${state.remoteDefault}` } : { ok: false, stdout: "" }
+    if (key.startsWith("rev-parse --verify --quiet refs/remotes/origin/")) return state.remoteRef === false ? { ok: false, stdout: "" } : { ok: true, stdout: "abcdef1234567890" }
     if (key.startsWith("symbolic-ref")) return state.branch ? { ok: true, stdout: state.branch } : { ok: false, stdout: "" }
     return { ok: false, stdout: "" }
   }
@@ -2505,15 +2506,18 @@ test("with no state branch configured, a write is refused before any tool runs o
   assert.equal(runtime.calls.length, 1)
 
   state.branch = "feature"
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create", "a feature branch publishes to the remote's default branch, so its writes reach the tool")
+  state.remoteRef = false
   const off = await session.callTool({ name: "task_create" })
   assert.equal(off.isError, true)
-  assert.equal(payload(off).code, "write_branch_mismatch")
-  assert.match(payload(off).fix, /on branch feature.*default branch is main.*wrote nothing/u)
+  assert.equal(payload(off).code, "write_publication_unreachable")
+  assert.match(payload(off).fix, /on branch feature.*publish to main.*Look further.*nothing was written/u)
 
+  state.remoteRef = true
   state.branch = null
   const detached = await session.callTool({ name: "task_create" })
   assert.equal(payload(detached).code, "write_branch_detached")
-  assert.equal(runtime.calls.length, 1, "no refused write reached a tool")
+  assert.equal(runtime.calls.length, 2, "only the publishable branch write reached a tool; the refused ones did not")
 
   state.branch = "master"
   state.remoteDefault = null

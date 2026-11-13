@@ -15,6 +15,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { budgeted, commitCaptured, operationAnswer } from "./cas-commit.js"
+import { defaultBranchForPublication, publishCardCommit } from "./main-publish.js"
 
 // Bounds every git call so a hung hook or a held lock can never block a tool
 // call indefinitely. Git hooks stay enabled — disabling them is not this
@@ -27,8 +28,7 @@ const TOOL_COMMIT_ENV = "DESK_TOOL_COMMIT" // the same name `desk/card-commit-gu
 /**
  * Why Desk must not stage or commit in `root` right now, or null when it may. A detached HEAD is always refused. Beyond that, `stateBranch` says what the caller knows:
  * - a branch name: the checkout must be on it (the host configured a state branch);
- * - `null`: no state branch is configured, so the checkout must be on the branch `origin/HEAD` names when the remote has one, and any named branch will do otherwise;
- * - `undefined`: the caller was not told, so only the detached-HEAD rule applies. The session's write gate has already applied the full rule before a tool runs; this is the backstop for any path that skips it.
+ * - `null` or `undefined`: no state branch is configured. A checkout on another branch publishes through `util/main-publish.js`, so only the detached-HEAD rule applies here.
  * A Git read that cannot run (a status other than 0, or 1 for a detached HEAD) is not a refusal here: the stage or commit itself then fails and says why.
  */
 export function commitBranchRefusal(root, spawnGit, stateBranch) {
@@ -37,14 +37,9 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
   if (status !== 0 && status !== 1) return null
   const found = status === 0 ? String(head.stdout ?? "").trim() : ""
   if (found === "") return "Desk did not write: the desk checkout is on a detached HEAD. Switch it to a branch and try again."
-  let expected = stateBranch
-  if (expected === null) {
-    const remote = run(spawnGit, root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])
-    const name = remote.status === 0 ? String(remote.stdout).trim() : ""
-    expected = name.startsWith("origin/") ? name.slice("origin/".length) : undefined
-  }
-  if (expected === undefined || found === expected) return null
-  return `Desk did not write: the desk checkout is on branch \`${found}\`, and Desk writes only on \`${expected}\`. Switch the checkout to \`${expected}\` and try again.`
+  // Without a configured state branch, a checkout on another branch publishes its commits to the remote's default branch (util/main-publish.js).
+  if (typeof stateBranch !== "string" || found === stateBranch) return null
+  return `Desk did not write: the desk checkout is on branch \`${found}\`, and Desk writes only on \`${stateBranch}\`. Switch the checkout to \`${stateBranch}\` and try again.`
 }
 
 // Another Git process (often Desk's own background loop committing an improvement card) can hold the desk's index or a ref lock
@@ -379,6 +374,11 @@ function capturedPaths(root, relPaths, spawnGit) {
  * and reported as `{ ok: false, stderr: "timeout" }`.
  */
 export function commitPaths(root, relPaths, message, spawnGit, stateBranch) {
+  // A checkout on another branch (a worktree) publishes the commit to the remote's default branch instead of committing on its own branch.
+  if (typeof stateBranch !== "string") {
+    const target = defaultBranchForPublication(root, spawnGit)
+    if (target !== null) return publishCardCommit({ root, relPaths, message, defaultBranch: target, spawnGit })
+  }
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal, readback: "absent" }
   const before = headOf(root, spawnGit)

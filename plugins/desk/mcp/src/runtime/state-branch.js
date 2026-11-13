@@ -90,7 +90,7 @@ export async function inspectStateBranch({ root, branch, git = runGit, exists = 
 }
 
 /**
- * The rule for a desk with no state branch configured (a configured one is judged by `inspectStateBranch`): HEAD must not be detached, and when the remote names a default branch (`origin/HEAD`) HEAD must be on it.
+ * The rule for a desk with no state branch configured (a configured one is judged by `inspectStateBranch`): HEAD must not be detached. When the remote names a default branch (`origin/HEAD`) and HEAD is on another branch, the write still publishes to that default branch (util/main-publish.js), so it is allowed while this checkout can reach it: a worktree on a feature branch writes to main.
  * With no such remote, any named branch is allowed, so a `master` desk, a fetched-but-not-cloned remote and a local-only desk all pass. `ok` is also true outside a Git checkout.
  */
 export async function inspectWriteBranch({ root, branch, git }) {
@@ -103,7 +103,9 @@ export async function inspectWriteBranch({ root, branch, git }) {
   const remote = await git({ cwd: toplevel, args: ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"] })
   const expected = remote.ok && remote.stdout.startsWith("origin/") ? remote.stdout.slice("origin/".length) : null
   if (expected === null || head.stdout === expected) return { ok: true }
-  return { ok: false, kind: "other_branch", found: head.stdout, expected }
+  const reachable = await git({ cwd: toplevel, args: ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${expected}`] })
+  if (reachable.ok) return { ok: true }
+  return { ok: false, kind: "unpublishable", root: toplevel, found: head.stdout, expected }
 }
 
 /** The degraded answer for a refused write from `inspectWriteBranch`, with a fix the agent can act on. */
@@ -111,11 +113,13 @@ export function writeBranchProblem(inspection) {
   if (inspection.kind === "detached") {
     return { code: "write_branch_detached", fix: "The desk checkout is on a detached HEAD, so Desk wrote nothing. Switch it to a branch (git switch <branch>), then retry." }
   }
+  const { root, found, expected } = inspection
   return {
-    code: "write_branch_mismatch",
-    fix: `The desk checkout is on branch ${inspection.found}, but the remote's default branch is ${inspection.expected}, so Desk wrote nothing. Switch back with git switch ${inspection.expected}, then retry.`,
+    code: "write_publication_unreachable",
+    fix: `Desk did not write: this checkout is on branch ${found}, and its card writes publish to ${expected}, but Git has no origin/${expected} to publish to. Probable cause: this checkout was never fetched from origin, or its origin remote was removed. Look further: git -C "${root}" remote -v, then git -C "${root}" fetch origin ${expected}. Keep working: nothing was written; retry the write once origin/${expected} exists.`,
   }
 }
+
 
 async function readHead(git, toplevel) {
   const symbolic = await git({ cwd: toplevel, args: ["symbolic-ref", "--quiet", "--short", "HEAD"] })
