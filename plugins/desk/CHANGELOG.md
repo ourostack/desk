@@ -1,5 +1,43 @@
 # desk plugin — changelog
 
+## 3.2.104 — 2026-11-13
+
+### A busy agency.toml that cannot be re-read no longer lets the release-channel move through
+
+When Desk moves the explicit Agency entry for Desk to the release channel and Windows refuses the rename, Desk re-reads agency.toml before each retry. A read that Windows refuses while Agency has the file open is now retried in the same short waits as the rename. If the file still cannot be read, or its content changed, Desk leaves agency.toml as it is and the move is tried again at a later session start. Before, a busy read was skipped, so the retried rename could replace a write Agency made in that window.
+
+### An Agency write that lands while the release-channel move waits to rename is kept
+
+When Desk moves the explicit Agency entry for Desk to the release channel, it now re-reads agency.toml before every retry of the final rename. Windows can refuse that rename while Agency has the file open, and the retry used to replace the file even if Agency had written it in the meantime. If the file changed, Desk now leaves it as it is, removes its temporary file and reports the move as not made, so the next session start checks again. A write that lands between Desk's last read and its one successful rename is still not detected, because Agency does not take Desk's lock.
+
+Three skills now carry rules the operator gave agents in sessions that never reached a written home. `interaction-style` says to give an update in one place instead of one version in chat and another in a canvas, to answer "research and let's chat" with findings and questions rather than decisions, and to collect a whole round of feedback before editing without rewriting prose the operator already wrote, and to name files for the person who opens them. `runtime-symptom-investigation` says to trace the code path instead of searching blind and to change lanes when an approach is not working. `fast-honest-ci` says a merged change should reach its live surface in seconds.
+
+Failures from Desk's authenticated browser, such as `AUTH_TIMEOUT` and `AUTH_ACTION_COVERED`, now follow the same Ouro AX problem shape as Desk's other failures. Each line still starts with the code, then says what probably happened, how to look further, the one call that files a bug with its evidence (`friction_add` with `{"error_code":"auth_timeout"}`), and how to keep working. Before, these lines gave the next step but never named that call or the `error_code` to file it with.
+
+When the card guard refuses a commit that changes a task card this session's Desk tools cannot reach (a card in another desk in a shared workspace), the refusal now says so and names the route: make the edit from a session bound to that desk, or ask the person who owns it. The refusal still points at `task_update` for any card the session can reach. The hook is rewritten in each desk on its next boot, so installed desks get the new text without a manual step.
+
+**The platform's generations are named Epoch 1, Epoch 2 and Epoch 3, not V1, V2 and V3.** "V" now stays only on package versions. The Agentic Engineering RFC, the evaluation packet, the setup guide, the Crew and first-run skills, and the observer agent use the new names, and the RFC heading reads "Agentic Engineering Epoch 2". File names, paths, links, command and profile names, and quotations keep their original text. Evals that review these sources record a refreshed source fingerprint; the wording changed, the behavior did not.
+
+### A blocked question form is asked in chat, never rewritten as a statement
+
+When a host blocks the structured question form, the agent now asks the same question in ordinary chat and waits for that answer. Before, it could stop the interview or rewrite the question as a statement that left the decision implicit. If the host requires the form and forbids chat questions, the agent names the policy owner and the supported adjustment, and says the question is undelivered because of that conflict, not because the person refused.
+
+### A sync conflict no longer reads as a block on Desk's own writes
+
+When the session-start pull hits a conflict, Desk's sync failure now says that its own writes still publish from a clean copy of the remote, so the agent keeps working and does not stash, rebase or reset the shared checkout. The failure before said that Desk delivers its local commits "once it can", which read as a block on every write. Nothing else about the sync or the delivery changed.
+
+`track_create`, `track_update`, `track_rename`, `desk_search`, `desk_recall`, `desk_timeline`, `desk_skill`, `desk_status` and `desk_doctor` now advertise shorter descriptions, which cuts the fixed context a host loads for them in every session. With the two earlier trims, all 24 Desk tools went from 61,790 to 42,798 bytes in total (about 17,650 to 12,230 tokens at 3.5 bytes per token), and this change itself took 44,749 to 42,798. Every parameter, enum and validation rule is unchanged. The track tools keep the sentences the content contracts pin (the `allow_dirty` refusal and the `commit` field); the other descriptions drop restated defaults and internals. `desk_doctor`'s description no longer mentions that its repair counts the retired measurement partitions, which the result still reports.
+
+The six task tools (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `task_focus`) now advertise shorter descriptions, which cuts the fixed context a host loads for them in every session. Their schemas went from 31,365 to 20,092 bytes (about 8,960 to 5,740 tokens at 3.5 bytes per token), and all 24 Desk tools from 61,790 to 49,446 bytes (about 17,650 to 14,130 tokens). Every parameter, enum and validation rule is unchanged. The long explanations of the done-evidence rules, the content-home declaration, step and resource rows and the intake proposal were already in `task-card-format`, `start-task` and `task-lifecycle` or in the refusal each rule raises, so the descriptions now say what the field is and when it is required, and defer the rest to those.
+
+`desk_save`, `friction_add`, `lesson_add`, `note_leave`, `note_ack` and the three `improvement_*` tools now advertise shorter descriptions, which cuts the fixed context a host loads for them in every session. Together with the task tools trimmed earlier, all 24 Desk tools went from 49,446 to 44,749 bytes in this change (about 14,130 to 12,790 tokens at 3.5 bytes per token). Every parameter, enum and validation rule is unchanged. The descriptions say what each tool does and what the caller must supply; the file-path rules of `desk_save`, the lesson placement and size rules, and the friction and kaizen bookkeeping were already in the refusals those rules raise and in `friction-management`, `lesson-capture` and the MCP README.
+
+`using-desk`, the text every session carries, is 230 bytes lighter (6,615 to 6,385): its "Visual proof" section is gone, because [`evidence-discipline`](skills/evidence-discipline/SKILL.md) holds the whole rule and every child brief still carries it. In a pressure run (Haiku 4.5 and Sonnet 5, three runs per arm), an agent that had merged and deployed a change reported with only a log line the same way with and without the foundation's sentence. Four other sections were tested the same way and kept, because each failed without its foundation text: "Cite every factual claim", "Requirements that arrive during execution", "Instruction coherence" and "Coaching the collaboration".
+
+On Windows, a migration block that times out now ends its whole process tree with `taskkill` before it is reported, so a `node` process the block started no longer outlives it. Tree cleanup has 30 seconds to confirm, which is what hosted Windows runners need. If it does not confirm in time, or `taskkill` fails, the block still resolves as timed out, with `cleanup: "unqualified"` on its result, rather than throwing, so a slow cleanup cannot turn a migration timeout into a session-start error.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.103 — 2026-11-13
 
 A browser action on one element, such as a click or a fill, now gets at most 30 seconds, and never more than half the command's time. Before, it could wait the whole command time for a control that stayed covered, hidden, moving or disabled, and the whole browser context closed. Now that action fails inside its own time with `AUTH_ACTION_COVERED`, `AUTH_ACTION_NOT_READY` or `AUTH_ACTION_TIMEOUT`, which says what probably happened and that the context is still open, so the agent can look at the page and act again. A command that runs out of time as a whole still closes the context, as before.

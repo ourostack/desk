@@ -1,3 +1,0 @@
-### An Agency write that lands while the release-channel move waits to rename is kept
-
-When Desk moves the explicit Agency entry for Desk to the release channel, it now re-reads agency.toml before every retry of the final rename. Windows can refuse that rename while Agency has the file open, and the retry used to replace the file even if Agency had written it in the meantime. If the file changed, Desk now leaves it as it is, removes its temporary file and reports the move as not made, so the next session start checks again. A write that lands between Desk's last read and its one successful rename is still not detected, because Agency does not take Desk's lock.
