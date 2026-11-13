@@ -32,3 +32,7 @@ When a heavy-tier check fails on `main`, its workflow opens a `main is red: <che
 - **Who fixes it:** the author of the pull request whose merge turned `main` red. Fix it or revert it within 30 minutes of the issue opening.
 - **If that author is gone** (the session ended, or nothing happens within 30 minutes): whoever reads the issue first reverts the merge commit through a pull request. Agents draining this repository's issues take `red-main` issues before anything else.
 - A random failure gets its own issue before anyone reruns it.
+
+## Interfaces follow Ouro UI
+
+Every interface an agent or person uses, in our tools and our products alike, follows [Ouro UI](https://github.com/ourostack/ouro-ui)'s agent-experience guidance: [Ouro AX](https://github.com/ourostack/ouro-ui#ouro-ax) and, for Apple apps, [Reins](https://github.com/ourostack/ouro-ui/blob/main/docs/platforms/apple.md). When an interface teaches you something general, contribute it back to Ouro UI as a principle, a component or a check with a test, kept generic, so every product and tool gets it: a fix in our tooling improves our products. A tool that needs an instruction booklet is a design bug, so put the guidance in the surface (tool descriptions, replies, errors, automatic hooks) instead of writing more prose.
