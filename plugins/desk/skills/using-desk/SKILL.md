@@ -67,10 +67,6 @@ Durable state lives on `main` in the desk, never in a host's memory or folders (
 
 On material change, first reply names invalidated checks or says no affected checks passed; keep same durable task and rerun affected implementation and review gates (`work-orchestration`).
 
-## Visual proof
-
-Capture bounded visual proof as you go of anything a person sees, and any claimed rendered, installed, merged or rollout state, not a terminal success line; never secrets or private data (`evidence-discipline`).
-
 ## Instruction coherence
 
 When instructions are confusing, redundant or in conflict, say so and record the friction; an agent must not be silently confused. Each rule has one owner.
