@@ -53,12 +53,14 @@ supply `display_label`. Clearing does not issue a rename. A task card's status
 never changes the proposal's `unknown` phase into working, delivered or
 accepted.
 
-## Parent-loaded Copilot consumer
+## Parent-loaded Copilot consumer (not shipped)
 
-`extensions/session-label/extension.mjs` is a native Copilot extension entry.
-The Copilot root manifest declares `"extensions": "./extensions/"`, the
-host-supported legacy plugin component path. Normal plugin acquisition
-therefore supplies the entry to native plugin discovery, with source-qualified
+**Not loaded by default.** The Copilot root manifest no longer declares `extensions`, and the code lives in `optional/session-label/`. The Copilot app asks a person to allow any extension that registers hooks, in every new session folder, and a session that is waiting on that prompt does not start; unattended sessions froze. A test keeps Desk from shipping an extension again. Without the extension, automatic naming is not applied in the Copilot app. The rest of this section describes the optional code if a host lets it load without a prompt.
+
+`optional/session-label/extension.mjs` is a native Copilot extension entry.
+A manifest that declared `"extensions": "./extensions/"`, the
+host-supported legacy plugin component path, would have normal plugin acquisition
+supply the entry to native plugin discovery, with source-qualified
 identity `plugin:desk:session-label`. Merely exposing a task-tool schema is not
 enrollment.
 

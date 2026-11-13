@@ -19,7 +19,6 @@
   "agents": "./agents/",
   "skills": "./skills/",
   "hooks": "./hooks/copilot-hooks.json",
-  "extensions": "./extensions/",
   "mcpServers": "./.mcp.copilot.json",
   "activation": {
     "copilot": {
