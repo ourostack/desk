@@ -16,7 +16,7 @@ test.after(() => rmSync(ROOT, { recursive: true, force: true }))
 function start(input, name, extraEnv = {}) {
   const home = path.join(ROOT, name)
   mkdirSync(home, { recursive: true })
-  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH, ...extraEnv }
+  const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), PATH: process.env.PATH, DESK_AUTO_BOOT: "0", ...extraEnv }
   const result = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { input: JSON.stringify(input), env, encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
   return { env, context: JSON.parse(result.stdout).additionalContext }
@@ -66,7 +66,7 @@ test("a session start that sets only the question form says so in its own line a
 
 test("every Copilot session is told to act as Desk's worker unless it was started as another agent", () => {
   const { context } = start({ sessionId: "sess-worker", cwd: ROOT, source: "new" }, "worker")
-  assert.match(context, /\n\nUnless started with `--agent` or the skip rule above applies \(then skip this read too\), act as Desk's worker: read \S+worker\.agent\.md first\.\n\n# Using Desk/u, "the pointer comes just before the foundation, whose frontmatter is dropped")
+  assert.match(context, /\n\nUnless started with `--agent` or the stand-down rule above applies \(then skip this read too\), act as Desk's worker: read \S+worker\.agent\.md first\.\n\n# Using Desk/u, "the pointer comes just before the foundation, whose frontmatter is dropped")
   assert.doesNotMatch(context, /^name: using-desk$/mu)
 })
 
@@ -91,29 +91,6 @@ test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   assert.equal(hooks.postToolUse[0].matcher, "skill")
   assert.deepEqual(commands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot'])
   assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
-})
-
-test("the first prompt of a session gets the boot direction as context, in either order with sessionStart, and later prompts get none", () => {
-  const desk = path.join(ROOT, "boot-desk")
-  mkdirSync(path.join(desk, "_meta"), { recursive: true })
-  mkdirSync(path.join(desk, "_archive"), { recursive: true })
-  const { env } = start({ sessionId: "sess-boot", cwd: desk, source: "new" }, "boot")
-  const prompt = (sessionId, input = "hi") => {
-    const result = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-boot-prompt.cjs")], { input: typeof input === "string" ? JSON.stringify({ sessionId, cwd: desk, prompt: input }) : "not json", env, encoding: "utf8" })
-    assert.equal(result.status, 0, result.stderr)
-    return JSON.parse(result.stdout)
-  }
-  const first = prompt("sess-boot")
-  assert.match(first.additionalContext, /^Desk boot is pending for this session: unless the skip rule below applies, run `node \S*session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. The boot is for desk-backed work \(tasks, cards, saves, sync, memory\)\. Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: .*desk_status and desk-web's browser_command and browser_context\.$/u)
-  assert.deepEqual(prompt("sess-boot"), {})
-  assert.deepEqual(prompt("sess-boot", null), {}, "a broken payload fails open")
-
-  // Copilot's real order on a new session: the prompt hook runs first, before sessionStart has recorded anything, and still directs the boot, once.
-  const fresh = prompt("sess-prompt-first")
-  assert.match(fresh.additionalContext, /^Desk boot is pending for this session/u)
-  const session = spawnSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { input: JSON.stringify({ sessionId: "sess-prompt-first", cwd: desk, source: "new" }), env, encoding: "utf8" })
-  assert.equal(session.status, 0, session.stderr)
-  assert.deepEqual(prompt("sess-prompt-first"), {}, "sessionStart after the claim does not re-arm the pointer")
 })
 
 function grantingDesk(name) {

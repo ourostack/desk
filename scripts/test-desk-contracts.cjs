@@ -1078,7 +1078,7 @@ contract("session-start still owns the factory consent question", () => {
 contract("boot prints the bound desk's AGENTS.md, and no step orders a read of it or a desk_status check", () => {
   const body = text(sessionStart);
   assert.match(body, /It already includes the desk's `AGENTS\.md`/u);
-  assert.match(body, /prints plain text and always exits 0; add `--json` only when a tool needs to parse the result/u);
+  assert.doesNotMatch(body, /add `--json` only when a tool needs to parse the result/u, "the skill no longer teaches a script's flags");
   assert.doesNotMatch(body, /Confirm this session can call the Desk MCP/u);
   const source = text(bootSource);
   assert.doesNotMatch(source, /Read \$\{path\.join\(root\.path, "AGENTS\.md"\)\} now/u, "boot no longer orders a read of AGENTS.md");
@@ -1341,7 +1341,8 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
 // machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
 contract("session start syncs the desk quietly and says why", () => {
   const skill = text(sessionStart);
-  assert.match(skill, /node <absolute plugin folder>\/mcp\/scripts\/session-boot\.js/u);
+  assert.match(skill, /Desk runs the boot itself at session start/u);
+  assert.doesNotMatch(skill, /session-boot\.js/u, "the skill never tells an agent to run the boot script");
   assert.match(skill, /syncs without streaming git's diffstat, so a folder another machine created with a secret in its name cannot land here before the listing hides it/u);
   assert.match(skill, /To see what changed, use the listing, never `git log --stat` or `git diff --stat` on the desk/u);
   for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {

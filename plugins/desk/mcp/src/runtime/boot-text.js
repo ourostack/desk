@@ -283,7 +283,7 @@ function namedTaskLines(task) {
 // to a section (boot acceptance rounds F, H and J: "where were we?" reported one task). So the text boot says the section.
 // A boot that names no task checks no repo state and no push route (they cost a network call per repo and matter only
 // once a task is picked), so the instruction says how to get them for the task the operator picks.
-const PICKED_TASK_SENTENCE = " When the operator picks one, run this boot again with `--task \"<its handle>\" --task-only` before working on it: that run prints only the task's push route, repos and instructions."
+const PICKED_TASK_SENTENCE = " When the operator picks one, call task_focus for it before working on it: its reply carries the task's push route, repos and instructions."
 export const NO_TASK_INSTRUCTION = "No task was named: build the status block from active_tasks and open_prs, then ask which task to resume or whether to start new." + PICKED_TASK_SENTENCE
 export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it." + PICKED_TASK_SENTENCE
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
@@ -471,7 +471,7 @@ export function formatBootText(result) {
     let used = 0
     let kept = 0
     while (kept < middle.length && used + middle[kept].length + 1 <= room) used += middle[kept++].length + 1
-    shown = [...middle.slice(0, kept), `[Shortened here: ${middle.length - kept} more lines of tasks, deliveries, pull requests and repos not shown. Call desk_status, or run the boot with --json, for all of them.]`]
+    shown = [...middle.slice(0, kept), `[Shortened here: ${middle.length - kept} more lines of tasks, deliveries, pull requests and repos not shown. Call desk_status for all of them.]`]
     notes.push(`shortened the task list (${middle.length - kept} lines not shown)`)
   }
   lines.push(...shown, ...tail)

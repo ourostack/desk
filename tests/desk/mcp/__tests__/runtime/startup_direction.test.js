@@ -7,22 +7,21 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
+  BOOT_STAND_DOWN,
   DESK_SETUP_DIRECTION,
-  bootCommand,
-  copilotPromptPointer,
+  START,
+  claudeBootRoot,
+  copilotBootRoot,
   copilotStartupDirection,
   deskStartupDirection,
-  promptBootDirection,
   resolveStartupRoot,
-  startDirection,
 } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
 
-// The explicit-skip rule every boot instruction carries: an operator's or coordinating parent's "don't boot", or a bounded read-only
-// assignment, skips the boot, and the tools that need no boot are named.
-const EXPLICIT_SKIP = /The boot is for desk-backed work \(tasks, cards, saves, sync, memory\)\. Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: .*desk_status and desk-web's browser_command and browser_context\./u
+// The stand-down rule every startup line carries: a child with a bounded brief, or a session told not to boot, follows its brief and ignores the boot's instructions.
+const STAND_DOWN = /The boot's instructions are for the operator's session: a child agent with a bounded brief, or a session the operator told not to boot, follows its brief and ignores them\./u
 
 // A temporary HOME with a ~/desk fallback that has the desk layout, a solo desk, a crew-shaped workspace and a plain repository.
 function withSandbox(body) {
@@ -56,7 +55,7 @@ test("the startup line names the bound root and where it came from", () => {
   ]) {
     const line = deskStartupDirection({ root: "/desks/one", source })
     assert.ok(line.startsWith(`Desk startup: $DESK is /desks/one (${label}). `), `${source}: ${line}`)
-    assert.match(line, /The boot has not run yet: .* not a workspace scan\. Unless the skip rule below applies, run `node \S*session-boot\.js` now, before other work/u)
+    assert.match(line, /Desk runs the session boot itself, so there is nothing for you to run/u)
     assert.match(line, /An overlay that launches Desk with its own root binds that root instead; desk_status reports the root Desk actually bound/u)
   }
 })
@@ -64,7 +63,7 @@ test("the startup line names the bound root and where it came from", () => {
 test("the startup line routes to setup only when no desk is found", () => {
   for (const bound of [null, undefined, { root: null }]) {
     const line = deskStartupDirection(bound)
-    assert.match(line, /^Desk startup: no desk is bound yet, so Desk is in setup mode and the boot has not run\./u)
+    assert.match(line, /^Desk startup: no desk is bound yet, so Desk is in setup mode and no boot ran\./u)
     assert.match(line, /desk:first-run-bootstrap by default/u)
     assert.match(line, /crew:join-crew/u)
     assert.match(line, /Do not offer to continue without Desk/u)
@@ -132,25 +131,27 @@ test("Copilot resolves the root with the session folder as the project folder, e
   })
 })
 
-test("the Copilot first-prompt pointer is given only where the root resolves to a usable desk, the way the startup line resolves it", () => {
+test("the Copilot first-prompt boot is allowed only where the root resolves to a usable desk, the way the startup line resolves it", () => {
   withSandbox(({ env, fallback, crew, codeRepo, malformed, home }) => {
-    const pointer = (extra, sessionFolder) => copilotPromptPointer({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
+    const bootRoot = (extra, sessionFolder) => copilotBootRoot({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
     // A desk folder, and an ordinary folder that falls back to the home desk, resolve.
-    assert.equal(pointer({}, crew), promptBootDirection())
-    assert.equal(pointer({}, codeRepo), promptBootDirection())
-    // No desk anywhere (the fallback is gone and nothing is bound) is setup mode: nothing to point at.
+    assert.equal(bootRoot({}, crew), crew)
+    assert.equal(bootRoot({}, codeRepo), fallback)
+    // No desk anywhere (the fallback is gone and nothing is bound) is setup mode: nothing to boot.
     rmSync(fallback, { recursive: true })
-    assert.equal(pointer({}, codeRepo), null)
-    assert.equal(pointer({}, undefined), null)
-    assert.equal(pointer({}, crew), promptBootDirection())
-    // A saved binding to a desk makes any folder resolve; one to a desk that has gone, or one that cannot be read, gives no pointer.
+    assert.equal(bootRoot({}, codeRepo), null)
+    assert.equal(bootRoot({}, undefined), null)
+    assert.equal(bootRoot({}, crew), crew)
+    // A saved binding to a desk makes any folder resolve; one to a desk that has gone, or one that cannot be read, gives no boot.
     const binding = path.join(home, "binding.json")
     writeFileSync(binding, JSON.stringify({ schema_version: 1, desk: { root: crew } }))
-    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: binding }, codeRepo), promptBootDirection())
+    assert.equal(bootRoot({ DESK_ACTIVATION_CONFIG: binding }, codeRepo), crew)
     const moved = path.join(home, "moved.json")
     writeFileSync(moved, JSON.stringify({ schema_version: 1, desk: { root: path.join(home, "moved") } }))
-    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: moved }, codeRepo), null)
-    assert.equal(pointer({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), null)
+    assert.equal(bootRoot({ DESK_ACTIVATION_CONFIG: moved }, codeRepo), null)
+    assert.equal(bootRoot({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), null)
+    // Claude resolves through the project folder the host names.
+    assert.equal(claudeBootRoot({ env: { ...env, CLAUDE_PROJECT_DIR: crew }, homeDir: env.HOME }), crew)
   })
 })
 
@@ -213,7 +214,7 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
       withOverlay.copilotStartupDirection({ env, homeDir: home }),
       withOverlay.deskStartupDirection({ root: path.join(home, "ms-desk"), source: "overlay_home_fallback" }),
     )
-    assert.ok(withOverlay.bootCommand().includes(path.join("agency-plugin-Zx9.p101", "desk", "mcp", "scripts", "session-boot.js")), "each copy names its own boot script")
+    assert.ok(withOverlay.START.includes(`Desk's plugin folder is ${path.join(scratch, "agency-plugin-Zx9.p101", "desk")}.`), "each copy names its own plugin folder")
     const plain = await load("agency-plugin-Yw8.p102", [])
     assert.equal(
       plain.copilotStartupDirection({ env, homeDir: home }),
@@ -224,37 +225,20 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
   }
 })
 
-test("the startup line gives the boot command by absolute path, says the boot has not run, and quotes a path with a space", () => {
+test("the startup line says Desk runs the boot, names the plugin folder, and never gives a command to run", () => {
   const line = deskStartupDirection({ root: "/desks/one", source: "env:DESK" })
-  const command = bootCommand()
-  assert.ok(path.isAbsolute(command.replace(/^node /u, "")), command)
-  assert.ok(command.endsWith(path.join("mcp", "scripts", "session-boot.js")) || command.endsWith(`${path.join("mcp", "scripts", "session-boot.js")}"`))
-  assert.ok(line.includes(`run \`${command}\` now`))
-  assert.match(line, /--task "<what the operator named>"/u)
-  assert.match(line, EXPLICIT_SKIP)
-  assert.equal(bootCommand("/a b/session-boot.js"), 'node "/a b/session-boot.js"')
-  assert.equal(bootCommand("/a/session-boot.js"), "node /a/session-boot.js")
-  assert.match(startDirection("node x"), /Unless the skip rule below applies, run `node x` now/u)
-  assert.match(DESK_SETUP_DIRECTION, /the boot has not run/u)
-  assert.match(DESK_SETUP_DIRECTION, EXPLICIT_SKIP)
-  assert.ok(DESK_SETUP_DIRECTION.includes(command))
+  assert.match(line, /Desk runs the session boot itself, so there is nothing for you to run: its result \(headed `Desk boot`\) is in your context or comes with your next message or your first Desk tool reply\. Until it arrives, say nothing about the desk's state\./u)
+  assert.ok(line.includes(`Desk's plugin folder is ${START.match(/plugin folder is (.+?)\. The boot's/u)[1]}.`))
+  assert.ok(path.isAbsolute(START.match(/plugin folder is (.+?)\. The boot's/u)[1]))
+  assert.match(line, STAND_DOWN)
+  assert.doesNotMatch(line, /session-boot|run `node|--task/u, "no script for the agent to run")
+  assert.match(DESK_SETUP_DIRECTION, /no boot ran/u)
+  assert.match(DESK_SETUP_DIRECTION, STAND_DOWN)
+  assert.doesNotMatch(DESK_SETUP_DIRECTION, /session-boot|run the boot/u)
   assert.doesNotMatch(line, /Desk boot pre-checks:/u, "a hook with no pre-check line never mentions one")
 })
 
-test("the per-prompt boot direction is a short pointer that gives the exact command", () => {
-  const line = promptBootDirection("node /x/session-boot.js")
-  assert.match(line, /^Desk boot is pending for this session: unless the skip rule below applies, run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. Do this before anything else, including any search of files or folders; nothing else counts as the boot\. /u)
-  assert.match(line, EXPLICIT_SKIP)
-  assert.doesNotMatch(line, /has not run/u, "a pointer, not an unconditional claim")
-  assert.ok(promptBootDirection().includes(bootCommand()))
-})
-
-test("both hosts' boot direction is an imperative first action: the exact command, before the first reply or any search, and nothing else counts", () => {
-  const claude = startDirection("node /x/session-boot.js")
-  assert.match(claude, /run `node \/x\/session-boot\.js` now, before other work and before anything else, including your first reply and any search of files or folders/u)
-  assert.match(claude, /Nothing else counts as the boot: searching for the desk, a task or a repo yourself is not a substitute, and a reply before the boot has run is wrong\./u)
-  const copilot = promptBootDirection("node /x/session-boot.js")
-  assert.match(copilot, /run `node \/x\/session-boot\.js` first/u)
-  assert.match(copilot, /Do this before anything else, including any search of files or folders; nothing else counts as the boot\./u)
-  for (const line of [claude, copilot]) assert.match(line, /\bnothing else counts as the boot\b/iu, "both say it")
+test("the stand-down rule keeps a child with a bounded brief out of the boot's instructions", () => {
+  assert.match(BOOT_STAND_DOWN, STAND_DOWN)
+  assert.equal(START.endsWith(BOOT_STAND_DOWN) || START.includes(BOOT_STAND_DOWN), true)
 })

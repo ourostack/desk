@@ -436,7 +436,7 @@ test("formatBootText shortens a long task list, not the AGENTS.md files, to keep
   const text = formatBootText(sampleResult({ open_prs: prs, agents_md: { path: "/work/desk/AGENTS.md", text: rules, truncated: false, bytes: rules.length, shownBytes: rules.length } }))
   assert.ok(text.length <= BOOT_TEXT_MAX_CHARS, `${text.length} characters`)
   assert.match(text.split("\n")[1], /^Session start shortened the task list \(\d+ lines not shown\), to stay within 16 KB of AGENTS\.md and 28000 characters of output\.$/u)
-  assert.match(text, /\n\[Shortened here: \d+ more lines of tasks, deliveries, pull requests and repos not shown\. Call desk_status, or run the boot with --json, for all of them\.\]\n/u)
+  assert.match(text, /\n\[Shortened here: \d+ more lines of tasks, deliveries, pull requests and repos not shown\. Call desk_status for all of them\.\]\n/u)
   assert.match(text, /- ops\/flash-valves /u, "the tasks come first and are shown")
   assert.match(text, /- acme\/w#0 Change number 0/u)
   assert.match(text, /Instructions, in order:\n1\. First thing\.\n2\. Second thing\./u, "the instructions are never shortened")
@@ -525,10 +525,10 @@ test("the shipped script prints text by default and JSON with --json", async () 
 // ── Review fixes ────────────────────────────────────────────────────────
 
 test("parseBootArgs: a flag after --task is never the task name", () => {
-  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
+  assert.deepEqual(parseBootArgs(["--task", "--json"]), { taskQuery: null, json: true, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "flash"]), { taskQuery: "flash", json: true, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
 })
 
 test("boot hands every card to the local-only recorder, and a recorder that throws never degrades the boot", async () => {

@@ -1399,12 +1399,15 @@ test("detectAgentHost: names the covered host from its own variables, unknown ot
 })
 
 test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
-  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true, taskOnly: false })
-  assert.deepEqual(parseBootArgs(["--task", "x", "--task-only"]), { taskQuery: "x", json: false, taskOnly: true })
+  assert.deepEqual(parseBootArgs([]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk", json: false, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null, json: false, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--json", "--task", "x"]), { taskQuery: "x", json: true, taskOnly: false, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--task", "x", "--task-only"]), { taskQuery: "x", json: false, taskOnly: true, deliverTo: null })
+  assert.deepEqual(parseBootArgs(["--deliver", "/a/b.txt"]), { taskQuery: null, json: false, taskOnly: false, deliverTo: "/a/b.txt" })
+  assert.equal(parseBootArgs(["--deliver"]).deliverTo, null, "a missing file is no file")
+  assert.equal(parseBootArgs(["--deliver", "--json"]).deliverTo, null, "a flag is never the file")
 })
 
 test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
@@ -1668,10 +1671,10 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   assert.ok(!result.instructions.some((line) => /Confirm this session can call/u.test(line)))
   assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
   // Plain text names the printed section; the structured instructions keep the field names.
-  assert.ok(result.instructions.some((line) => /from active_tasks and open_prs/u.test(line) && /--task "<its handle>"/u.test(line)))
+  assert.ok(result.instructions.some((line) => /from active_tasks and open_prs/u.test(line) && /call task_focus for it/u.test(line)))
   const printed = formatBootText(result)
   assert.match(printed, /No task was named: report every task under "Active tasks" above/u)
-  assert.match(printed, /run this boot again with `--task "<its handle>" --task-only` before working on it/u)
+  assert.match(printed, /call task_focus for it before working on it/u)
   assert.doesNotMatch(printed, /active_tasks, open_prs|repo_states/u)
   await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
   const withAgents = await healthyBoot(root)

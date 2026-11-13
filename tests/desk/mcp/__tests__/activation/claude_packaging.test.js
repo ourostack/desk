@@ -68,6 +68,7 @@ function runSessionStartHook() {
           ...process.env,
           CLAUDE_PLUGIN_ROOT: path.join(repoRoot, "plugins", "desk"),
           DESK: deskRoot,
+          DESK_AUTO_BOOT: "0",
         },
       },
     )
@@ -454,7 +455,8 @@ test("Claude SessionStart injects the full Desk foundation once without scanning
   ]) {
     assert.equal(countOccurrences(startup, phrase), 1)
   }
-  assert.match(startup, /The boot has not run yet:.*session-boot\.js/isu)
+  assert.match(startup, /Desk runs the session boot itself, so there is nothing for you to run/u)
+  assert.doesNotMatch(startup, /session-boot\.js/u)
   assert.deepEqual(
     startup.split("\n").filter((line) => line.startsWith("Desk RFC:")),
     [`Desk RFC: ${path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md")}`],

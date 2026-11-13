@@ -20,7 +20,7 @@
 // See README.md for the isolation verification this relies on.
 
 import { spawn } from "node:child_process"
-import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs"
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import * as process from "node:process"
@@ -178,6 +178,18 @@ export function buildContext(events) {
 }
 
 /**
+ * Whether Desk's own boot ran for this run: its result file is in the run's private Desk state (the hook that starts it keeps it there, keyed by session; see `runtime/startup-boot.js`). The harness reads the state, never the transcript, because a hook's context is not in a transcript.
+ */
+export function autoBootRan(homeDir) {
+  try {
+    const dir = path.join(homeDir, ".local", "state", "ouroboros-skills", "desk", "boot-results")
+    return readdirSync(dir).some((name) => name.endsWith(".txt"))
+  } catch {
+    return false
+  }
+}
+
+/**
  * Both turns of one run. Turn 1 is the scenario prompt; turn 2 is the critique, sent into the same session with `--resume <session id>` and the same isolated environment, so turn 1's final reply is the agent's real answer to the operator and the critique is a separate field. `claude` is the foreground runner (`runClaude`; a test passes a fake). Token-shaped strings are redacted from every output before anything is parsed or saved; the markers left behind are counted in `ctx.tokenLeaks`.
  * `host` picks how a turn's output is read and how the critique resumes the session; `secrets` are exact values (the Copilot credential) redacted from every output whatever shape they take, on top of the token-shape redaction.
  * Returns { ctx, critique, critiqueSkipped, turns: [{ stdout, stderr, timedOut, status, signal }] }.
@@ -220,7 +232,9 @@ export function loadRunContext(runDir, host = "claude") {
   ctx.host = host
   // A saved run whose summary says it opened in a plain folder started there, not in the desk (rescoring reads it back).
   try {
-    if (JSON.parse(read("summary.json") ?? "{}").outside_desk === true) ctx.outsideDesk = true
+    const summary = JSON.parse(read("summary.json") ?? "{}")
+    if (summary.outside_desk === true) ctx.outsideDesk = true
+    if (typeof summary.auto_boot === "boolean") ctx.autoBoot = summary.auto_boot
   } catch {
     // No usable summary: the desk is the working folder.
   }
@@ -365,6 +379,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   ctx.deskRoot = deskRoot
   ctx.homeDir = homeDir
   ctx.runTmp = runTmp
+  ctx.autoBoot = autoBootRan(homeDir)
   ctx.sessionFolder = sessionFolder
   // With the harness's own plugin copy, the source checkout's path must never appear in a tool call. A `--plugin-dir` run names its own folder, which is then the plugin under test, so there is no source to hide.
   ctx.sourcePaths = args.pluginDir ? [] : sourcePaths(worktreeRoot)
@@ -408,6 +423,7 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     prompt: scenario.prompt,
     injected: scenario.inject,
     outside_desk: args.outsideDesk,
+    auto_boot: ctx.autoBoot,
     spawn_exit_code: first.status,
     spawn_signal: first.signal,
     timed_out: turns.some((t) => t.timedOut),

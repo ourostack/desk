@@ -12,7 +12,7 @@ node <Desk plugin folder>/mcp/scripts/crew.js status --repo <clone>
 node <Desk plugin folder>/mcp/scripts/crew.js start --repo <clone> [options]
 ```
 
-`<Desk plugin folder>` is the folder whose `mcp/scripts/session-boot.js` your `Desk startup:` line runs (the `desk` plugin, two folders above `desk:session-start`'s skill folder). Each command prints one JSON result; tell the person its `message`. The script signs in to GitHub itself, as the signed-in gh account that can push to the repository, so there is no account to switch first.
+`<Desk plugin folder>` is the plugin folder your `Desk startup:` line names (the `desk` plugin, two folders above `desk:session-start`'s skill folder). Each command prints one JSON result; tell the person its `message`. The script signs in to GitHub itself, as the signed-in gh account that can push to the repository, so there is no account to switch first.
 
 ## One shape, two setups
 

@@ -48,7 +48,7 @@
 // it found is healthy.
 
 import { execFile, spawn as nodeSpawn, spawnSync } from "node:child_process"
-import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -97,6 +97,7 @@ import { noteSignoffListed } from "./signoff-listed.js"
 import { consentMentioned } from "./consent-mentioned.js"
 import { resolveDeskStateDir } from "./last-start.js"
 import { applyPublicationMode } from "./publication-mode.js"
+import { renameWithRetry } from "../util/rename-retry.js"
 
 const parseFrontmatter = loadFrontmatterParser()
 // Without gray-matter (a plugin run straight from its install folder) the
@@ -1426,8 +1427,8 @@ export async function bootOnce({
   //   - the prerequisite probe (gh, jq, sign-in);
   //   - one GitHub search for the operator's open pull requests, only when an open task names a GitHub repo;
   //   - the push route of the named task's repos, only when the operator named a task. A boot that names no task
-  //     checks no push routes: the route matters only before a push, and the agent runs the boot again with `--task
-  //     <handle> --task-only` once the operator picks one.
+  //     checks no push routes: the route matters only before a push, and the task_focus reply carries it (runtime/startup-boot.js
+  //     runs `--task <track/slug> --task-only` for it) once the operator picks one.
   // The card list read here, before the sync, only decides what to start; everything shown is read after the sync.
   const prereqsStarted = checkPrereqs({ gh, jq, ghAuth, authOptions })
   let earlyCards = []
@@ -1706,7 +1707,21 @@ export function parseBootArgs(argv) {
     taskQuery: typeof value === "string" && value.trim() !== "" && !value.startsWith("--") ? value : null,
     json: argv.includes("--json"),
     taskOnly: argv.includes("--task-only"),
+    deliverTo: deliverTarget(argv),
   }
+}
+
+// `--deliver <file>`: the startup boot's mode (runtime/startup-boot.js). The text goes to that file, renamed into place, and nothing is printed.
+function deliverTarget(argv) {
+  const value = argv[argv.indexOf("--deliver") + 1]
+  return argv.includes("--deliver") && typeof value === "string" && value !== "" && !value.startsWith("--") ? value : null
+}
+
+function deliverText(file, text) {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temp = `${file}.${process.pid}.tmp`
+  writeFileSync(temp, text, { mode: 0o600 })
+  renameWithRetry(temp, file)
 }
 
 /**
@@ -1715,7 +1730,7 @@ export function parseBootArgs(argv) {
  */
 export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce, refreshOptions = {} }) {
   applyPublicationMode({}, env)
-  const { taskQuery, json, taskOnly } = parseBootArgs(argv)
+  const { taskQuery, json, taskOnly, deliverTo } = parseBootArgs(argv)
   let result
   try {
     result = await bootFn({ env, taskQuery, taskOnly })
@@ -1739,7 +1754,19 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
     result = { ...result, stale_desk: { ...finding, auto_refresh: started ? "started" : prepared.state, line: started && finding.channel !== "release" ? startedLine(finding, prepared.plan) : finding.line } }
   }
   const { text_instructions: _textOnly, ...structured } = result
-  io.stdout.write(json ? `${JSON.stringify(structured)}\n` : formatBootText(result))
+  const output = json ? `${JSON.stringify(structured)}\n` : formatBootText(result)
+  if (deliverTo === null) io.stdout.write(output)
+  else {
+    try {
+      deliverText(deliverTo, output)
+    } catch (error) {
+      try {
+        deliverText(deliverTo, `Desk boot: its result could not be written (${String(error?.message ?? error).split("\n")[0].slice(0, 120)}). desk_status reports the desk's state.\n`)
+      } catch {
+        // The waiting reader sees the boot end without a result and says so.
+      }
+    }
+  }
   if (prepared.state === "ready") startStaleRefresh({ ...options, prepared })
   return 0
 }

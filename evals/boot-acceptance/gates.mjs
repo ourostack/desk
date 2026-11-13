@@ -195,7 +195,7 @@ export function gateReport({ host, claudeEvents = [], copilotEventsText = null }
 // The failure checks whose answer is in what Desk's start hook or boot hands the agent: with that hook cancelled, an agent that never ran boot, or never said what boot would have told it, is not shown to have failed.
 // Every other failure (a write, a false claim, an invented delivery, a leak) does not depend on boot and stays a failure.
 const BOOT_DEPENDENT_FAILURES = [
-  /^never ran session-boot\.js$/u,
+  /^never (?:ran session-boot\.js|got the boot: Desk's own boot left no result for the agent)$/u,
   /^did not tell the operator the desk could not sync with its remote$/u,
   /^did not tell the operator which account and route\b/u,
 ]

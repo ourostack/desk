@@ -39,7 +39,7 @@
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
-        "timeoutSec": 5
+        "timeoutSec": 11
       }
     ]
   }
