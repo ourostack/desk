@@ -10,7 +10,8 @@
 //
 // Dependency-free, so the session can run it before and without the runtime pack.
 
-import { execFile } from "node:child_process"
+import { execFile, spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { win32 as winPath } from "node:path"
 
@@ -27,6 +28,21 @@ export function runForText(file, args, { timeout, env }) {
   })
 }
 
+/** The synchronous twin of `runForText`, for callers that cannot await (the status lock). */
+export function runForTextSync(file, args, { timeout, env }) {
+  const result = spawnSync(file, args, { encoding: "utf8", timeout, env, maxBuffer: 16_384, windowsHide: true })
+  return result.status === 0 ? result.stdout : null
+}
+
+const UNKNOWN_BOOT = "unknown-boot"
+
+// The command name (field 2) is in parentheses and may hold spaces or parentheses itself, so fields are counted after the last ")": field 3 is the first.
+function linuxStartFrom(stat, boot) {
+  const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]
+  if (!/^\d+$/u.test(ticks ?? "")) return null
+  return `linux:${boot}:${ticks}`
+}
+
 async function linuxStart(pid, { read = readFile } = {}) {
   let stat
   try {
@@ -34,25 +50,44 @@ async function linuxStart(pid, { read = readFile } = {}) {
   } catch {
     return null
   }
-  // The command name (field 2) is in parentheses and may hold spaces or parentheses itself, so fields are counted after the last ")": field 3 is the first.
-  const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]
-  if (!/^\d+$/u.test(ticks ?? "")) return null
-  let boot = "unknown-boot"
+  let boot = UNKNOWN_BOOT
   try {
     boot = (await read("/proc/sys/kernel/random/boot_id", "utf8")).trim() || boot
   } catch {
     // A kernel without a boot id: the ticks alone still tell processes of this boot apart.
   }
-  return `linux:${boot}:${ticks}`
+  return linuxStartFrom(stat, boot)
 }
 
-async function darwinStart(pid, { run = runForText } = {}) {
-  const text = await run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-    timeout: EXEC_TIMEOUT_MS.darwin,
-    env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" },
-  })
+function linuxStartSync(pid, { read = readFileSync } = {}) {
+  let stat
+  try {
+    stat = read(`/proc/${pid}/stat`, "utf8")
+  } catch {
+    return null
+  }
+  let boot = UNKNOWN_BOOT
+  try {
+    boot = read("/proc/sys/kernel/random/boot_id", "utf8").trim() || boot
+  } catch {
+    // A kernel without a boot id: the ticks alone still tell processes of this boot apart.
+  }
+  return linuxStartFrom(stat, boot)
+}
+
+function darwinStartFrom(text) {
   const when = Date.parse(`${(text ?? "").trim()} UTC`)
   return Number.isFinite(when) ? `darwin:${new Date(when).toISOString()}` : null
+}
+
+const DARWIN_PS = { args: ["-o", "lstart=", "-p"], env: { PATH: "/usr/bin:/bin", TZ: "UTC", LC_ALL: "C" } }
+
+async function darwinStart(pid, { run = runForText } = {}) {
+  return darwinStartFrom(await run("/bin/ps", [...DARWIN_PS.args, String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: DARWIN_PS.env }))
+}
+
+function darwinStartSync(pid, { run = runForTextSync } = {}) {
+  return darwinStartFrom(run("/bin/ps", [...DARWIN_PS.args, String(pid)], { timeout: EXEC_TIMEOUT_MS.darwin, env: DARWIN_PS.env }))
 }
 
 /** The operating system's own Windows PowerShell, from SystemRoot (any letter case, then windir, then C:\Windows), never from PATH: a child with a trimmed environment has no System32 on its PATH. */
@@ -65,14 +100,21 @@ export function windowsPowerShellPath(env = process.env) {
   return winPath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 }
 
-async function win32Start(pid, { run = runForText, env = process.env } = {}) {
-  const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString("o") }`
-  const text = await run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", script], {
-    timeout: EXEC_TIMEOUT_MS.win32,
-    env,
-  })
+function win32StartFrom(text) {
   const when = Date.parse((text ?? "").trim())
   return Number.isFinite(when) ? `win32:${new Date(when).toISOString()}` : null
+}
+
+function win32Script(pid) {
+  return `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString("o") }`
+}
+
+async function win32Start(pid, { run = runForText, env = process.env } = {}) {
+  return win32StartFrom(await run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", win32Script(pid)], { timeout: EXEC_TIMEOUT_MS.win32, env }))
+}
+
+function win32StartSync(pid, { run = runForTextSync, env = process.env } = {}) {
+  return win32StartFrom(run(windowsPowerShellPath(env), ["-NoProfile", "-NonInteractive", "-Command", win32Script(pid)], { timeout: EXEC_TIMEOUT_MS.win32, env }))
 }
 
 async function unsupportedStart() {
@@ -80,12 +122,19 @@ async function unsupportedStart() {
 }
 
 export const processStartReaders = { linux: linuxStart, darwin: darwinStart, win32: win32Start }
+const processStartReadersSync = { linux: linuxStartSync, darwin: darwinStartSync, win32: win32StartSync }
 
 /** The start time of process `pid`, or null when it cannot be read (no such process, an unsupported platform or a failed read). */
 export async function readProcessStart(pid, { platform = process.platform, ...deps } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null
   const reader = Object.hasOwn(processStartReaders, platform) ? processStartReaders[platform] : unsupportedStart
   return reader(pid, deps)
+}
+
+/** `readProcessStart` for synchronous callers: the same value, read with blocking calls. */
+export function readProcessStartSync(pid, { platform = process.platform, ...deps } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null
+  return Object.hasOwn(processStartReadersSync, platform) ? processStartReadersSync[platform](pid, deps) : null
 }
 
 let selfStart = null

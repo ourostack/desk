@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
-  processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText, windowsPowerShellPath,
+  processStartReaders, readOwnProcessStart, readProcessStart, readProcessStartSync, resetOwnProcessStart, runForText, windowsPowerShellPath,
 } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { killAndWait } from "../_kill_and_wait.js"
 
@@ -26,6 +26,10 @@ test("this machine: a running process has one start time, read the same way ever
   sleeper.kill("SIGKILL")
   await new Promise((resolve) => sleeper.once("exit", resolve))
   assert.equal(await readProcessStart(sleeper.pid), null, "a process that has ended has no start time")
+})
+
+test("this machine: the synchronous reader gives the same start time as the async one", { skip: nativeRead }, async () => {
+  assert.equal(readProcessStartSync(process.pid), await readProcessStart(process.pid))
 })
 
 test("a PID that is not a positive integer, or a platform with no reader, has no start time", async () => {
