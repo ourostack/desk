@@ -63,12 +63,12 @@ test("with no table every file weighs the same, so the split is even by count", 
   assert.deepEqual(plan.map((s) => s.files.length).sort(), [2, 2, 3, 3])
 })
 
-test("the checked-in table plans the workflow's shards inside the budget: none over 10 minutes and none far above the mean", () => {
+test("the checked-in table plans the workflow's shards inside the budget: none over 8 minutes and none far above the mean", () => {
   const real = loadDurations()
   const plan = assignShards(suiteFiles(testsRoot), WINDOWS_SHARDS, real)
   const mean = plan.reduce((n, s) => n + s.seconds, 0) / plan.length
   const worst = Math.max(...plan.map((s) => s.seconds))
-  assert.ok(worst <= 10 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
+  assert.ok(worst <= 8 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
   assert.ok(worst <= mean * 1.1, `the longest shard (${Math.round(worst)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
   // The per-file limit is 30 minutes; a file near it cannot be balanced away and needs its own fix.
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
