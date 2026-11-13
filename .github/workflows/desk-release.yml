@@ -8,7 +8,7 @@ name: Desk release
 #
 # Separate jobs, because steps in one job share a runner and anything a step leaves behind (a git hook, a background
 # process, git configuration) runs in the later steps:
-# - main-ci waits for main's CI on the commit to release and stops the release unless it passed. Pull requests run only
+# - main-ci waits for main's CI on the commit to release, unless no fragment or requested stage makes a release, and stops the release unless it passed. Pull requests run only
 #   the fast tier; the Windows suite and the rest of the heavy tier run on main after the merge (AGENTS.md, "CI tiers"),
 #   so a release never ships a commit main's full CI has not passed. It holds a read-only token and runs one script.
 # - build holds only a read token. It installs dependencies, builds the release commit and checks that exact commit,
@@ -90,10 +90,16 @@ jobs:
         if: env.SELF_PUSH != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
         run: |
           set -euo pipefail
           head="$(git rev-parse HEAD)"
-          node .github/scripts/main-ci-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$head" --workflows desk-mcp-tests.yml,desk-windows-suite.yml,factory-macos-protection.yml --timeout-min 50
+          # Without a pending fragment or a requested stage, scripts/release-desk.cjs releases nothing, so there is nothing to wait for.
+          if [ "$RELEASE_STAGE" = auto ] && [ -z "$(find plugins/desk/changelog.d -maxdepth 1 -name '*.md' ! -name README.md 2>/dev/null)" ]; then
+            echo "No changelog fragment is pending on $head, so there is nothing to release and no CI to wait for." >> "$GITHUB_STEP_SUMMARY"
+          else
+            node .github/scripts/main-ci-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$head" --workflows desk-mcp-tests.yml,desk-windows-suite.yml,factory-macos-protection.yml --timeout-min 50
+          fi
           echo "head=$head" >> "$GITHUB_OUTPUT"
 
   build:
