@@ -625,6 +625,8 @@ test("the card write goes through the injected commit seam, in the person's fold
   assert.equal(result.improvement, "opened")
   assert.equal(result.improvement_commit, "commit_failed")
   assert.equal(result.improvement_route_around, ROUTE, "the card's route comes back with its code")
+  assert.deepEqual(Object.keys(result).slice(0, 1), ["next"], "the answer opens with the next step")
+  assert.match(result.next, /run improvement_route_around\.steps now, in order/u)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].deskRoot, root)
   assert.equal(calls[0].personPrefix, "")

@@ -28,7 +28,7 @@ import {
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths, includeInCheckout, releaseFromCheckout } from "../util/git-stage.js"
-import { commitFailure, commitRoute } from "../util/route-around.js"
+import { commitFailure, commitRoute, unfinishedNext } from "../util/route-around.js"
 import { deskPushNote, schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -1275,7 +1275,9 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   }
   Object.assign(result, archiveDueAnswer({ track, slug, status: merged.status }))
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
-  return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
+  const answer = deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
+  // A commit that did not finish says what to do first, as the answer's first key: the route is easy to read past in a long answer (#623).
+  return commit?.route_around ? { next: unfinishedNext(commit.route_around, "commit.route_around"), ...answer } : answer
 }
 
 // The refresh's part of the answer, with the steps it made ready joined to any the call's own step made ready.

@@ -129,7 +129,8 @@ test("a commit failure reports a code and never loses the card or the library's 
   assert.equal(answer.commit, "commit_failed")
   assert.equal(JSON.stringify(answer).includes("secret"), false)
   assertRoute(answer.route_around)
-  assert.equal((await fs.readdir(w.folder)).length, 1)
+  assert.equal(Object.keys(answer)[0], "next", "the answer opens with the next step")
+  assert.match(answer.next, /run route_around\.steps now, in order/u)
   assert.deepEqual(w.pushes, [])
 })
 
