@@ -278,12 +278,12 @@ function main() {
   ]) {
     assert.ok(watching.includes(phrase), `issue watching must specify ${phrase}`);
   }
-  // Byte-for-byte bundle of https://github.com/ourostack/ouroboros-skills/blob/main/skills/draining-issues/SKILL.md.
-  // Refresh from the canonical library and review its behavior before updating this digest.
+  // The skill now lives only in Desk (ouroboros-skills dropped its copy). Review the behavior of any change before
+  // updating this digest.
   assert.equal(
     crypto.createHash("sha256").update(drain).digest("hex"),
-    "e3e353ad7ed46bf950289f5225a228881246e0c3685538c174dfd2b12db8e8cb",
-    "draining-issues must match the reviewed canonical library copy",
+    "16f5e4264542955ce279a692a06e9fbaf11c3720c7615aa2cd346a82efaedb60",
+    "draining-issues must match the reviewed copy",
   );
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
 
