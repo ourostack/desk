@@ -405,7 +405,7 @@ test("a command timeout closes the owned context and cannot publish late artifac
   await assert.rejects(adapter.call(["snapshot", "--save"]), /AUTH_TIMEOUT/u)
   assert.ok(native.calls.some((call) => call[0] === "context.close"))
   await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.deepEqual(fs.readdirSync(root), [])
+  assert.deepEqual(fs.readdirSync(root).filter((name) => !/^screenshot-[0-9a-f-]{36}\.png$/u.test(name)), [], "only the evidence picture is kept")
   await adapter.close()
 })
 
@@ -1007,7 +1007,7 @@ test("timeout cleanup failure refuses without losing context-close retry ownersh
   native.context.close = async () => {}
   await new Promise(resolve => setTimeout(resolve, 50))
   await adapter.close()
-  assert.deepEqual(fs.readdirSync(root), [])
+  assert.deepEqual(fs.readdirSync(root).filter(name => !/^screenshot-/u.test(name)), [], "only the evidence picture is kept")
 })
 
 test("missing staged files retain refusal without false artifact cleanup uncertainty", async () => {
@@ -1788,6 +1788,145 @@ test("wait for text to go reports when it stays", async () => {
     assert.deepEqual(stays.waited, { text: "Password", found: false })
     assert.match(stays.hint, /did not go within 3 s/u)
   } finally { await adapter.close() }
+})
+
+// A request as a page reports it: its frame is the main frame when `main` is set, and it fails with `errorText` when given.
+function requestOn(native, url, { type = "xhr", main = false, errorText } = {}) {
+  return { url: () => url, resourceType: () => type, isNavigationRequest: () => main, frame: () => native.page.mainFrame(), failure: () => (errorText ? { errorText } : null) }
+}
+
+test("a wait that never finds its text says why, with evidence: hosts and codes, console counts and a picture, and no page text or query", async () => {
+  const root = await mkTempRoot("auth-not-ready-")
+  const native = fakeDriver()
+  native.page.url = () => "https://app.example.test/work/item?token=QUERY_SECRET_688"
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const broken = requestOn(native, "https://cdn.example.test/app.js?key=REQUEST_QUERY_688", { type: "script", errorText: "net::ERR_CONNECTION_RESET" })
+    native.page.emit("request", broken)
+    native.page.emit("requestfailed", broken)
+    native.page.emit("request", requestOn(native, "https://files.example.test/doc/PATH_SECRET_688", { type: "fetch" }))
+    native.page.emit("console", { type: () => "error", text: () => "CONSOLE_TEXT_688" })
+    native.page.emit("console", { type: () => "warning", text: () => "CONSOLE_TEXT_688" })
+    native.page.emit("pageerror", new Error("PAGE_ERROR_TEXT_688"))
+    const missing = await adapter.call(["wait", "never shows"])
+    const { diagnosis } = missing
+    assert.equal(missing.waited.found, false)
+    assert.equal(diagnosis.url, "https://app.example.test/work/item")
+    assert.equal(diagnosis.status, null)
+    assert.deepEqual(diagnosis.network.failed, [{ host: "cdn.example.test", type: "script", code: "net_error" }])
+    assert.deepEqual(diagnosis.network.pending.map(({ host, type }) => ({ host, type })), [{ host: "files.example.test", type: "fetch" }])
+    assert.deepEqual(diagnosis.console, { errors: 1, warnings: 1, pageErrors: 1 })
+    assert.equal(diagnosis.signIn, false)
+    assert.equal(path.dirname(diagnosis.screenshot), root)
+    assert.ok(fs.existsSync(diagnosis.screenshot), "the picture is kept")
+    assert.match(missing.hint, /Probably network requests are still pending or failing for cdn\.example\.test, files\.example\.test; /u)
+    assert.match(missing.hint, /friction_add with \{"error_code":"auth_page_not_ready"\}/u)
+    const shown = JSON.stringify([diagnosis, missing.hint])
+    for (const secret of ["QUERY_SECRET_688", "REQUEST_QUERY_688", "PATH_SECRET_688", "CONSOLE_TEXT_688", "PAGE_ERROR_TEXT_688", "token=", "?"]) {
+      assert.equal(shown.includes(secret), false, secret)
+    }
+  } finally { await adapter.close() }
+})
+
+test("a page on a sign-in host is waiting on a sign-in redirect, and the hint says so", async () => {
+  const root = await mkTempRoot("auth-not-ready-signin-")
+  const native = fakeDriver()
+  native.page.url = () => "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=SIGNIN_QUERY_688"
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    native.page.emit("request", requestOn(native, native.page.url(), { type: "document", main: true }))
+    const missing = await adapter.call(["wait", "never shows"])
+    assert.equal(missing.diagnosis.signIn, true)
+    assert.equal(missing.diagnosis.url, "https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
+    assert.match(missing.hint, /Probably the page was waiting on a sign-in redirect; /u)
+    assert.match(missing.hint, /complete sign-in in the person's own browser, then open a new context/u)
+    assert.equal(JSON.stringify(missing.diagnosis).includes("SIGNIN_QUERY_688"), false)
+    native.page.url = () => "https://app.example.test/work"
+    native.page.emit("request", requestOn(native, "https://github.com/login?return_to=SIGNIN_QUERY_688", { type: "document", main: true }))
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.signIn, true, "the last main navigation was to a sign-in page")
+    native.page.emit("request", requestOn(native, "https://app.example.test/work", { type: "document", main: true }))
+    assert.equal((await adapter.call(["wait", "never shows"])).diagnosis.signIn, false)
+  } finally { await adapter.close() }
+})
+
+test("a diagnosis shows a host or path that looks like an address or token as redacted, and a main document's failure or status", async () => {
+  const root = await mkTempRoot("auth-not-ready-redact-")
+  const native = fakeDriver()
+  native.page.url = () => "https://app.example.test/mail/user@example.test/"
+  const adapter = adapterFor(native, root, 2000)
+  try {
+    const blocked = requestOn(native, "https://0123456789abcdef0123456789abcdef.example.test/x", { type: "xhr", errorText: "net::ERR_BLOCKED_BY_CLIENT" })
+    native.page.emit("request", blocked)
+    native.page.emit("requestfailed", blocked)
+    const missing = await adapter.call(["wait", "never shows"])
+    assert.equal(missing.diagnosis.url, "https://app.example.test/[redacted]")
+    assert.deepEqual(missing.diagnosis.network.failed, [{ host: "[redacted]", type: "xhr", code: "blocked" }])
+    const main = requestOn(native, "https://app.example.test/work", { type: "document", main: true })
+    native.page.emit("request", main)
+    native.page.emit("response", { request: () => main, status: () => 503 })
+    native.page.emit("requestfinished", main)
+    const failing = await adapter.call(["wait", "never shows"])
+    assert.equal(failing.diagnosis.status, 503)
+    assert.match(failing.hint, /Probably the page's main document returned HTTP 503; /u)
+  } finally { await adapter.close() }
+})
+
+test("a timed-out command keeps a picture and its diagnosis before its context closes, and names them in the failure", async () => {
+  const root = await mkTempRoot("auth-timeout-evidence-")
+  const native = fakeDriver()
+  native.page.url = () => "https://app.example.test/work"
+  const send = native.cdp.send
+  native.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
+    return send(...args)
+  }
+  const adapter = adapterFor(native, root, 20)
+  native.page.emit("request", requestOn(native, "https://cdn.example.test/app.js", { type: "script" }))
+  await assert.rejects(adapter.call(["snapshot", "--save"]), error => {
+    const shot = native.calls.find(call => call[0] === "page.screenshot")[1].path
+    return error.message.startsWith("AUTH_TIMEOUT: desk-web: browser command: ") &&
+      error.message.includes(`; evidence kept before the close: screenshot ${shot}; `) &&
+      error.message.includes("pending requests cdn.example.test; ") && error.message.endsWith(".")
+  })
+  const order = native.calls.map(call => call[0])
+  assert.ok(order.indexOf("page.screenshot") !== -1 && order.indexOf("page.screenshot") < order.indexOf("context.close"), "the picture is taken before the close")
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.ok(fs.readdirSync(root).every(name => /^screenshot-[0-9a-f-]{36}\.png$/u.test(name)), "only the picture is kept, no staged snapshot")
+  await adapter.close()
+})
+
+test("a picture that hangs cannot hold a timed-out context open past its bound, and one that arrives late is removed", async () => {
+  const root = await mkTempRoot("auth-timeout-hung-")
+  const native = fakeDriver()
+  native.page.screenshot = () => new Promise(() => {})
+  const send = native.cdp.send
+  native.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
+    return send(...args)
+  }
+  const adapter = auth.create(native.context, root, 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  const started = Date.now()
+  await assert.rejects(adapter.call(["snapshot", "--save"]), error => /^AUTH_TIMEOUT: .*; evidence kept before the close: no screenshot was kept; /u.test(error.message))
+  assert.ok(native.calls.some(call => call[0] === "context.close"), "the context closed")
+  assert.ok(Date.now() - started < 1000, "the close followed the 50 ms bound, not the hung picture")
+  await adapter.close()
+
+  const late = fakeDriver()
+  late.page.screenshot = async (options) => {
+    await new Promise(resolve => setTimeout(resolve, 150))
+    fs.writeFileSync(options.path, "FAKE_PNG")
+  }
+  const lateSend = late.cdp.send
+  late.cdp.send = async (...args) => {
+    if (args[0] === "DOMSnapshot.captureSnapshot") await new Promise(resolve => setTimeout(resolve, 80))
+    return lateSend(...args)
+  }
+  const lateRoot = await mkTempRoot("auth-timeout-late-")
+  const slow = auth.create(late.context, lateRoot, 20, () => {}, { snapshotAttempts: 1, evidenceMs: 50 })
+  await assert.rejects(slow.call(["snapshot", "--save"]), error => /no screenshot was kept/u.test(error.message))
+  await new Promise(resolve => setTimeout(resolve, 800))
+  assert.deepEqual(fs.readdirSync(lateRoot), [], "a picture that arrives after its bound is removed")
+  await slow.close()
 })
 
 test("press with only a key presses it on whatever has focus", async () => {

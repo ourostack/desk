@@ -59,9 +59,10 @@ With a PowerShell window open, the person can set up a coding agent there by fol
 
 ## When it stops
 
-- `AUTH_TIMEOUT`: the command ran too long and the context is closed. Open a new one, start again from step 1 and keep waits under a minute.
+- `AUTH_TIMEOUT`: the command ran too long and the context is closed. Before the close, Desk keeps a masked screenshot and names it in the failure, with the failed and pending hosts. Look at that picture, open a new context and start again from step 1, and keep waits under a minute.
+- `wait` for text that never shows: the context stays open, and the result has a `diagnosis` (the page's address without its query, the main document's status, failed and pending request hosts with codes, console counts, whether it sat on a sign-in redirect, and a screenshot path) and a hint that names the likeliest cause and how to keep working. For a sign-in redirect, complete sign-in in your own browser and open a new context.
 - `AUTH_ACTION_COVERED`, `AUTH_ACTION_NOT_READY` or `AUTH_ACTION_TIMEOUT`: that one control could not be used in time, and the context is still open. Look at the page with a snapshot or a find, clear what covers the control or wait for the page to settle, then act on a fresh ref.
 - `AUTH_CONTEXT_REFUSED`: the tab or context is gone. Open a new one.
 - `AUTH_COMMAND_REFUSED`: the command isn't one `mine` runs. The line lists the ones it does.
-- Each of these failures also names the one call that files a bug with its evidence: `friction_add` with `{"error_code":"auth_timeout"}` (the code, lowercased).
+- Each of these failures also names the one call that files a bug with its evidence: `friction_add` with `{"error_code":"auth_timeout"}` (the code, lowercased). A page that never became ready is filed with `{"error_code":"auth_page_not_ready"}`.
 - A certificate, unsafe-site or operating-system authentication prompt: stop and tell the person. Desk never clicks through these.

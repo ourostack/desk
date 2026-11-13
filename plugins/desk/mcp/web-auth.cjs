@@ -17,6 +17,15 @@ var NAVIGATIONS = ["goto", "go-back", "go-forward", "reload"];
 var WAIT_DEFAULT_MS = 2000;
 var WAIT_MAX_MS = 60000;
 var WAIT_POLL_MS = 1000;
+// Evidence for a page that never became ready (a screenshot, and the diagnosis of its requests) is given this long at most.
+var EVIDENCE_MS = 5000;
+// The latest requests a page's recorder keeps.
+var RECENT = 200;
+var RESOURCE_TYPES = ["document", "script", "stylesheet", "image", "font", "xhr", "fetch", "websocket", "media"];
+// Identity providers a page is sent to in order to sign in: a page on one of them is waiting on a sign-in redirect.
+var SIGN_IN_HOSTS = ["login.microsoftonline.com", "login.live.com", "login.windows.net", "accounts.google.com"];
+var SIGN_IN_SUFFIXES = [".okta.com"];
+var FRESH_OR_APP = "try a fresh context (browser_context with browser \"fresh\"); if it repeats, use the desktop app or another route";
 // A ref's action shares one deadline of this long, or half the command time if less. Playwright then fails a stalled
 // action before the command's own bound closes the context.
 var ACTION_MAX_MS = 30000;
@@ -754,10 +763,170 @@ function narrow(result, view) {
 
 function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
+// ---- Why a page never became ready: its requests and console, kept as counts, host names and codes only ----
+var recorders = new WeakMap();
+
+function addressOf(raw) {
+  try { return new URL(String(raw)); } catch (error) { return null; }
+}
+
+// A host or path part that could be an address or a credential is never shown.
+function looksSecret(part) {
+  return /@|%40/iu.test(part) || (part.length >= 32 && /\d/u.test(part) && /[A-Za-z]/u.test(part) && /^[\w.+=~%-]+$/u.test(part));
+}
+
+function hostOf(url) {
+  if (!url) return "unknown";
+  if (!url.hostname) return url.protocol.replace(/:$/u, "");
+  return url.hostname.split(".").some(looksSecret) ? "[redacted]" : url.hostname;
+}
+
+// The page's address with no query or fragment; its path is cut to 80 characters, or hidden when it looks like an address or token.
+function pageAddress(raw) {
+  var url = addressOf(raw);
+  if (!url) return "unknown";
+  if (!/^https?:$/u.test(url.protocol)) return url.protocol;
+  var path = url.pathname.split("/").some(looksSecret) ? "/[redacted]" : url.pathname.slice(0, 80);
+  return url.protocol + "//" + hostOf(url) + (url.port ? ":" + url.port : "") + path;
+}
+
+function identityProvider(url) {
+  if (!url) return false;
+  var host = url.hostname;
+  return SIGN_IN_HOSTS.indexOf(host) !== -1 || SIGN_IN_SUFFIXES.some(function (suffix) { return host.endsWith(suffix); }) ||
+    (host === "github.com" && /^\/login(\/|$)/u.test(url.pathname));
+}
+
+// Playwright's error text is matched by these fixed parts only; the text itself is never kept.
+function failureCode(text) {
+  var name = String(text || "");
+  if (name.indexOf("ABORTED") !== -1) return "aborted";
+  if (/TIMED_OUT|TIMEOUT/u.test(name)) return "timeout";
+  if (/BLOCKED|ACCESS_DENIED/u.test(name)) return "blocked";
+  return "net_error";
+}
+
+function resourceType(request) {
+  var type = request.resourceType();
+  return RESOURCE_TYPES.indexOf(type) !== -1 ? type : "other";
+}
+
+function isMainNavigation(page, request) {
+  try { return request.isNavigationRequest() && request.frame() === page.mainFrame(); } catch (error) { return false; }
+}
+
+// One recorder per page, attached when the page joins the context: its last RECENT requests (host, type and code), the
+// requests still pending, the main document's status and console counts. Nothing here holds text or a query.
+function recorderFor(page) {
+  var known = recorders.get(page);
+  if (known) return known;
+  var rec = { pending: new Map(), done: [], errors: 0, warnings: 0, pageErrors: 0, mainStatus: null, mainFailed: undefined, mainIdentity: false };
+  recorders.set(page, rec);
+  function finish(request, code) {
+    var entry = rec.pending.get(request);
+    if (!entry) return;
+    rec.pending.delete(request);
+    rec.done.push({ host: entry.host, type: entry.type, code: code || (entry.status >= 400 ? "http_" + entry.status : undefined) });
+    if (rec.done.length > RECENT) rec.done.shift();
+    if (entry.main && code) rec.mainFailed = code;
+  }
+  page.on("request", function (request) {
+    if (rec.pending.size >= RECENT) rec.pending.delete(rec.pending.keys().next().value);
+    var url = addressOf(request.url());
+    var main = isMainNavigation(page, request);
+    if (main) { rec.mainFailed = undefined; rec.mainIdentity = identityProvider(url); }
+    rec.pending.set(request, { host: hostOf(url), type: resourceType(request), start: Date.now(), main: main });
+  });
+  page.on("response", function (response) {
+    var entry = rec.pending.get(response.request());
+    if (!entry) return;
+    entry.status = response.status();
+    if (entry.main) rec.mainStatus = entry.status;
+  });
+  page.on("requestfinished", function (request) { finish(request); });
+  page.on("requestfailed", function (request) { finish(request, failureCode((request.failure() || {}).errorText)); });
+  page.on("console", function (message) {
+    if (message.type() === "error") rec.errors++;
+    else if (message.type() === "warning") rec.warnings++;
+  });
+  page.on("pageerror", function () { rec.pageErrors++; });
+  return rec;
+}
+
+// The last `limit` distinct entries of a list, oldest first.
+function distinctRecent(list, keyOf, limit) {
+  var seen = new Set();
+  var out = [];
+  for (var i = list.length - 1; i >= 0 && out.length < limit; i--) {
+    var key = keyOf(list[i]);
+    if (!seen.has(key)) { seen.add(key); out.unshift(list[i]); }
+  }
+  return out;
+}
+
+// The value of `work`, or undefined once `ms` has passed or it fails. A value that arrives after that is given to `discard`.
+function within(work, ms, discard) {
+  var timer;
+  var late = false;
+  return Promise.race([
+    work.then(function (value) { if (late) discard(value); return value; }, function () { return undefined; }),
+    new Promise(function (resolve) { timer = setTimeout(function () { late = true; resolve(undefined); }, ms); })
+  ]).finally(function () { clearTimeout(timer); });
+}
+
+function discardPicture(file) {
+  if (file) fs.promises.unlink(file).catch(function () {});
+}
+
+// The likeliest cause, first match wins, with what probably happened and how to keep working from it.
+function likelyCause(d) {
+  if (d.signIn) return { probably: "the page was waiting on a sign-in redirect", keepWorking: "complete sign-in in the person's own browser, then open a new context with browser_context so the profile copy has it" };
+  if (d.mainFailed || d.status >= 400) {
+    return { probably: d.status >= 400 ? "the page's main document returned HTTP " + d.status : "the page's main document did not arrive (" + d.mainFailed + ")", keepWorking: FRESH_OR_APP };
+  }
+  var hosts = Array.from(new Set(d.network.failed.concat(d.network.pending).map(function (entry) { return entry.host; }))).slice(0, 3);
+  if (hosts.length) return { probably: "network requests are still pending or failing for " + hosts.join(", "), keepWorking: "try a fresh context (browser_context with browser \"fresh\"); if the same hosts stay blocked, use the desktop app or another route" };
+  if (d.console.pageErrors || d.console.errors) return { probably: "the page's scripts reported errors", keepWorking: "use the desktop app or another route; if the page is still changing, wait again" };
+  return { probably: "the page is still loading with no failing request", keepWorking: "wait again with [\"wait\",\"<text you expect>\"]; if it still does not show, use the desktop app or another route" };
+}
+
+function notReadyHint(d, text, gone, seconds) {
+  var cause = likelyCause(d);
+  var look = "[\"snapshot\"] to see the page as it is now" + (d.screenshot ? ", and the screenshot at " + d.screenshot : "; no screenshot was kept");
+  return "The text did not " + (gone ? "go" : "show") + " within " + seconds + " s. Probably " + cause.probably + "; to look further, " + look +
+    "; to file a bug with this evidence, call friction_add with {\"error_code\":\"auth_page_not_ready\"}; " + cause.keepWorking + ".";
+}
+
+// The evidence in one line for a failure the agent reads after its context closed: hosts and codes, never page text.
+function evidenceLine(d) {
+  var listed = function (items) { return items.length ? items.join(", ") : "none"; };
+  return [
+    d.screenshot ? "screenshot " + d.screenshot : "no screenshot was kept",
+    "main document status " + (d.status === null ? "none" : d.status),
+    "failed requests " + listed(d.network.failed.map(function (entry) { return entry.host + " " + entry.code; })),
+    "pending requests " + listed(d.network.pending.map(function (entry) { return entry.host; })),
+    "console errors " + d.console.errors + ", page errors " + d.console.pageErrors,
+    "sign-in redirect " + (d.signIn ? "yes" : "no")
+  ].join("; ");
+}
+
+// The same failure, with the evidence kept before its context closed added to its line.
+function withEvidence(error, evidence) {
+  if (!evidence) return error;
+  var safe = safeFailure(error);
+  var message = safe.message.replace(/\.$/u, "") + "; evidence kept before the close: " + evidence + ".";
+  var next = Object.assign(new Error(message), { plain: true, authCode: safe.code });
+  failures.set(next, Object.freeze({ code: safe.code, message: message }));
+  return next;
+}
+
 function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   requireTrue(typeof runtimePolicy === "function", "AUTH_RUNTIME_POLICY_MISSING");
   var attempts = options && integer(options.snapshotAttempts, 1, SNAPSHOT_ATTEMPTS) ? options.snapshotAttempts : SNAPSHOT_ATTEMPTS;
   var closed = false;
+  // Set once a command timed out: its context is closed, but its evidence is still read before the close.
+  var evidencing = false;
+  var evidenceMs = options && integer(options.evidenceMs, 1, EVIDENCE_MS) ? options.evidenceMs : EVIDENCE_MS;
   var readers = new Map();
   var refs = new Map();
   var cleanupRecords = new Set();
@@ -765,6 +934,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   // A wait's polls are reads the agent never sees: their refs are kept apart until one is returned.
   var polled = new WeakMap();
   var selected = context.pages()[0];
+  context.pages().forEach(recorderFor);
+  context.on("page", recorderFor);
   var queue = Promise.resolve();
   var pending = new Set();
   var stageHandles = new Set();
@@ -810,6 +981,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   async function readerFor(page) {
     checkRuntime();
     requireTrue(page && page.context() === context && context.pages().indexOf(page) !== -1 && !page.isClosed(), "AUTH_CONTEXT_REFUSED");
+    recorderFor(page);
     if (readers.has(page)) {
       requireTrue(readers.get(page).ready && readers.get(page).alive, "AUTH_READER_REFUSED");
       return readers.get(page);
@@ -858,7 +1030,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   }
   function live(reader) {
     checkRuntime();
-    requireTrue(!closed && reader.alive && !reader.page.isClosed() && reader.page.context() === context &&
+    requireTrue((evidencing || !closed) && reader.alive && !reader.page.isClosed() && reader.page.context() === context &&
       context.pages().indexOf(reader.page) !== -1, "AUTH_CONTEXT_REFUSED");
   }
   // One target's frame and DOM: the tab's own session, or an out-of-process frame's.
@@ -1127,7 +1299,8 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   // A picture of the tab, or of one element, in the context's private files folder. Every input, textarea and editable
   // region is painted over in every frame, as a snapshot redacts them. The tab is read before and after the picture; an
   // opaque region the first read did not mask (one markup alone does not mark) means the picture is taken again.
-  async function screenshot(reader, args) {
+  // `limitMs` bounds the browser's wait for the picture (the command's time when none is given).
+  async function screenshot(reader, args, limitMs) {
     var picked = args.slice(1).filter(function (value) { return value !== "--full"; })[0];
     var record;
     if (picked) {
@@ -1144,7 +1317,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         checkRuntime();
         var mask = reader.page.frames().map(function (frame) { return frame.locator(OPAQUE_FIELDS); })
           .concat(regions.map(function (found) { return maskOf(reader, found); }));
-        var options = { path: file, mask: mask, timeout: timeoutMs };
+        var options = { path: file, mask: mask, timeout: limitMs || timeoutMs };
         written = true;
         if (bound) await bound.handle.screenshot(options);
         else await reader.page.screenshot(Object.assign(options, { fullPage: args.indexOf("--full") !== -1 }));
@@ -1159,7 +1332,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         written = false;
         requireTrue(attempt < BIND_ATTEMPTS, "AUTH_SNAPSHOT_INVALIDATED");
       }
-      requireTrue(!closed, "AUTH_CONTEXT_REFUSED");
+      requireTrue(evidencing || !closed, "AUTH_CONTEXT_REFUSED");
       return { screenshot: file };
     } catch (error) {
       if (written) { try { await fs.promises.unlink(file); } catch (unlinkError) { /* never written */ } }
@@ -1168,6 +1341,40 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (bound) await disposeRecords([bound]);
     }
   }
+  // Why the tab is not ready: its address, main document status, requests (hosts and codes only), console counts, whether it
+  // sits on a sign-in redirect, and a masked picture taken within `ms` (none is kept when it does not finish in time).
+  async function diagnose(page, reader, ms) {
+    var rec = recorderFor(page);
+    var now = Date.now();
+    var pending = Array.from(rec.pending.values());
+    var failed = distinctRecent(rec.done.filter(function (entry) { return entry.code; }),
+      function (entry) { return [entry.host, entry.type, entry.code].join(" "); }, 10);
+    var waiting = distinctRecent(pending, function (entry) { return [entry.host, entry.type].join(" "); }, 10);
+    var picture = reader && reader.ready && reader.alive ? await within(screenshot(reader, ["screenshot"], ms).then(function (result) {
+      return result.screenshot;
+    }), ms, discardPicture) : undefined;
+    return {
+      url: pageAddress(page.url()),
+      status: rec.mainStatus,
+      mainFailed: rec.mainFailed,
+      network: {
+        failed: failed.map(function (entry) { return { host: entry.host, type: entry.type, code: entry.code }; }),
+        pending: waiting.map(function (entry) { return { host: entry.host, type: entry.type, ageS: Math.round((now - entry.start) / 1000) }; }),
+        hosts: Array.from(new Set(rec.done.concat(pending).map(function (entry) { return entry.host; }))).slice(-20)
+      },
+      console: { errors: rec.errors, warnings: rec.warnings, pageErrors: rec.pageErrors },
+      signIn: identityProvider(addressOf(page.url())) || rec.mainIdentity,
+      screenshot: picture || null,
+      screenshotSkipped: !picture
+    };
+  }
+  // A timed-out command's tab, read before its context closes: the evidence outlives the close.
+  async function timeoutEvidence() {
+    evidencing = true;
+    if (!selected) return null;
+    return evidenceLine(await diagnose(selected, readers.get(selected), evidenceMs));
+  }
+
   // One more read of this tab: its refs join the last REF_READS reads, and older ones go.
   function counted(reader, records) {
     reader.reads = (reader.reads || 0) + 1;
@@ -1219,7 +1426,9 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (last && Date.now() >= deadline) {
         counted(reader, pending);
         last.waited = { text: plan.text, found: false };
-        last.hint = "The text did not " + (plan.gone ? "go" : "show") + " within " + limit / 1000 + " s. Read this snapshot; if the page is still loading, wait again.";
+        // The picture must fit in what is left of the command's time after the wait.
+        last.diagnosis = await diagnose(reader.page, reader, Math.max(1, Math.min(evidenceMs, timeoutMs - limit)));
+        last.hint = notReadyHint(last.diagnosis, plan.text, plan.gone, limit / 1000);
         return last;
       }
       // The next poll rechecks the runtime policy first thing, after this poll's refs are dropped.
@@ -1367,10 +1576,12 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         work.then(function () { pending.delete(work); }, function () { pending.delete(work); });
         return bounded(work);
       }).catch(async function (error) {
+        var evidence = null;
         if (knownFailure(error) && safeFailure(error).code === "AUTH_TIMEOUT") {
-          try { await bounded(closeContext()); } catch (closeError) { throw fail("AUTH_TIMEOUT_CLOSE_FAILED", true); }
+          evidence = await timeoutEvidence().catch(function () { return null; });
+          try { await bounded(closeContext()); } catch (closeError) { throw withEvidence(fail("AUTH_TIMEOUT_CLOSE_FAILED", true), evidence); }
         }
-        throw knownFailure(error) ? error : fail("AUTH_OPERATION_FAILED");
+        throw knownFailure(error) ? withEvidence(error, evidence) : fail("AUTH_OPERATION_FAILED");
       });
       queue = result.catch(function () {});
       return result;

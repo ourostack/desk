@@ -598,7 +598,7 @@ test("managed native package loading uses only an owned synthetic versioned modu
   fs.writeFileSync(path.join(moduleDir, "package.json"), JSON.stringify({ version: web.PLAYWRIGHT_VERSION, main: "index.cjs" }))
   fs.writeFileSync(path.join(moduleDir, "index.cjs"), `
     module.exports = { chromium: { launchPersistentContext: async () => ({
-      pages: () => [], close: async () => {}
+      pages: () => [], on: () => {}, close: async () => {}
     }) } }
   `)
   const controller = web.createController({ ...options, authDriver: undefined })
