@@ -117,11 +117,11 @@ function migrateResources(body, mapping, refuse) {
   for (const key of MIGRATION_FIELDS) {
     if (mapping[key] !== null && (typeof mapping[key] !== "string" || mapping[key].trim() === "" || /[\r\n\0]/u.test(mapping[key]))) refuse(`Name an existing column in \`resource.migrate.${key}\`, or null for an absent column`)
   }
-  if (mapping.identity === null) refuse("Name an existing column in `resource.migrate.identity`; it cannot be null")
+  if (mapping.identity === null) refuse("Set `resource.migrate.identity` to an existing column; it cannot be null")
   const { lines, eol, fenced } = scan(body)
   const headings = lines.flatMap((line, index) => !fenced[index] && line.trim() === HEADING ? [index] : [])
   if (headings.length === 0) refuse("Leave out `resource.migrate`, or add a `## Resources` section: resource.migrate found no `## Resources` section")
-  if (headings.length > 1) refuse("Keep one `## Resources` section: resource.migrate found more than one")
+  if (headings.length > 1) refuse("Keep one `## Resources` section: resource.migrate found more than one `## Resources` section")
   const heading = headings[0]
   let end = heading + 1
   while (end < lines.length && (fenced[end] || !/^## /u.test(lines[end]))) end += 1
@@ -138,9 +138,9 @@ function migrateResources(body, mapping, refuse) {
   for (; stop < end && !fenced[stop] && lines[stop].trim().startsWith("|"); stop += 1) {
     const cells = splitCells(lines[stop])
     if (cells.length !== names.length) refuse(`Give the row at body line ${stop + 1} as many cells as the header: it has a different number`)
-    if (cells.every((cell) => /^:?-+:?$/u.test(cell))) refuse("Keep one table under `## Resources`: resource.migrate found more than one")
+    if (cells.every((cell) => /^:?-+:?$/u.test(cell))) refuse("Keep one table under `## Resources`: resource.migrate found more than one table under `## Resources`")
   }
-  if (lines.some((line, index) => index >= stop && index < end && !fenced[index] && line.trim().startsWith("|"))) refuse("Keep one table under `## Resources`: resource.migrate found more than one")
+  if (lines.some((line, index) => index >= stop && index < end && !fenced[index] && line.trim().startsWith("|"))) refuse("Keep one table under `## Resources`: resource.migrate found more than one table under `## Resources`")
   const canonical = COLUMNS.map((name) => lower.indexOf(name.toLowerCase()))
   const complete = canonical.every((index) => index !== -1)
   const sources = complete ? canonical : MIGRATION_FIELDS.map((key, index) => {
@@ -159,7 +159,7 @@ function migrateResources(body, mapping, refuse) {
   const identities = new Set()
   for (let at = head + 2; at < stop; at += 1) {
     const value = splitCells(lines[at])[sources[IDENTITY]]
-    if (EMPTY.test(value)) refuse(`Give the row at body line ${at + 1} a resource identity: resource.migrate found none`)
+    if (EMPTY.test(value)) refuse(`Give the row at body line ${at + 1} a resource identity: it has no resource identity`)
     const identity = canonicalIdentity(value)
     if (identity !== null && identities.has(identity)) refuse(`Remove or rename the repeated identity ${JSON.stringify(identity)}: resource.migrate found it more than once`)
     if (identity !== null) identities.add(identity)
