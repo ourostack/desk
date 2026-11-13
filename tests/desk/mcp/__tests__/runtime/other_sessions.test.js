@@ -9,7 +9,11 @@ import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot
 import { describe, otherSessions, parseProcesses, parseWorktrees, sessionProcesses } from "../../../../../plugins/desk/mcp/src/runtime/other-sessions.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const porcelain = (...trees) => trees.map(([dir, branch]) => `worktree ${dir}\nHEAD 0123456789abcdef\n${branch === "detached" ? "detached" : `branch refs/heads/${branch}`}\n`).join("\n")
+// Paths are written POSIX-style and resolved for the platform; output is compared with the drive and backslashes removed.
+const P = (value) => path.resolve(value)
+const norm = (text) => text.replaceAll("\\", "/").replace(/\b[A-Za-z]:/gu, "")
+const view = (result) => result.lines.map(norm)
+const porcelain = (...trees) => trees.map(([dir, branch]) => `worktree ${P(dir)}\nHEAD 0123456789abcdef\n${branch === "detached" ? "detached" : `branch refs/heads/${branch}`}\n`).join("\n")
 
 test("git's worktree list reads as directories and branches, leaving out one git would prune", () => {
   const text = `${porcelain(["/r/main", "main"], ["/r/wt/a", "feature-a"], ["/r/wt/b", "detached"])}\nworktree /r/bare\nbare\n\nworktree /r/odd\nHEAD 0123\n\nworktree /r/gone\nHEAD 0123\nbranch refs/heads/gone\nprunable gitdir file points to non-existent location\n`
@@ -36,10 +40,10 @@ test("only one process per session counts, and never this session's own", () => 
 function machine({ trees, processes = "", cwds = {}, throwPs = false }) {
   return async (file, args) => {
     if (file === "git" && args[0] === "worktree") return porcelain(...trees)
-    if (file === "git") return `${trees.find(([dir]) => dir === "/r/wt/me")?.[0] ?? trees[0][0]}\n`
+    if (file === "git") return `${P(trees.find(([dir]) => dir === "/r/wt/me")?.[0] ?? trees[0][0])}\n`
     if (throwPs) throw new Error("spawn ps ENOENT")
     if (file === "ps") return processes
-    if (file === "lsof") return Object.entries(cwds).map(([pid, cwd]) => `p${pid}\nfcwd\nn${cwd}`).join("\n")
+    if (file === "lsof") return Object.entries(cwds).map(([pid, cwd]) => `p${pid}\nfcwd\nn${P(cwd)}`).join("\n")
     throw new Error(`unexpected ${file}`)
   }
 }
@@ -56,12 +60,12 @@ test("boot lists the other worktrees and sessions here, this one first, and the 
   })
   assert.equal(result.worktrees, 3)
   assert.equal(result.sessions, 2)
-  const [head, mine, ...rest] = result.lines
+  const [head, mine, ...rest] = view(result)
   assert.equal(head, "Other work on this machine in this repo: 3 worktrees, 2 other running sessions.")
   assert.equal(mine, "- /r/wt/me (mine): you are here")
   assert.ok(rest.includes("- /r/wt/other (theirs): 1 session running (up 4 min)"), rest.join("\n"))
   assert.ok(rest.includes("- /r/main (the shared main checkout, main): 1 session running (up 4 min)"), rest.join("\n"))
-  assert.match(result.lines.at(-1), /^Rules while others work here: in a shared checkout \(the main one, or any folder another session uses\) never stash, reset, clean, switch branches or delete files you did not create, even when asked to tidy it; never touch, move or remove another session's worktree\. Do that work in your own worktree instead \(`git worktree add <dir> -b <branch> origin\/main`\), and remove only what you created\.$/u)
+  assert.match(view(result).at(-1), /^Rules while others work here: in a shared checkout \(the main one, or any folder another session uses\) never stash, reset, clean, switch branches or delete files you did not create, even when asked to tidy it; never touch, move or remove another session's worktree\. Do that work in your own worktree instead \(`git worktree add <dir> -b <branch> origin\/main`\), and remove only what you created\.$/u)
 })
 
 test("a lone session says nothing, and a machine without ps still names the other worktrees", async () => {
@@ -69,7 +73,7 @@ test("a lone session says nothing, and a machine without ps still names the othe
   assert.equal(alone, null, "the only session in the only worktree: nobody else")
   const crowded = await otherSessions({ cwd: "/r/main", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: machine({ trees: [["/r/main", "main"]], processes: "  500     1 02:00 /bin/agency copilot --server\n  501     1 03:00 /bin/agency copilot --server\n", cwds: { 500: "/r/main", 501: "/r/main" } }) })
   assert.equal(crowded.sessions, 1, "two sessions in one shared checkout: one of them is this one")
-  assert.match(crowded.lines[1], /^- \/r\/main \(the shared main checkout, main\): you are here; 1 session besides yours$/u)
+  assert.match(view(crowded)[1], /^- \/r\/main \(the shared main checkout, main\): you are here; 1 session besides yours$/u)
   const noPs = await otherSessions({ cwd: "/r/wt/me", env: {}, now: Date.now, home: "/h", platform: "linux", inspect: machine({ trees: [["/r/main", "main"], ["/r/wt/me", "mine"]], throwPs: true }) })
   assert.equal(noPs.worktrees, 2)
   assert.equal(noPs.sessions, 0)
@@ -88,7 +92,7 @@ test("a long list shows this worktree first and counts the rest", () => {
   const now = Date.parse("2026-11-13T12:00:00Z")
   const trees = Array.from({ length: 10 }, (_, index) => ({ dir: `/r/wt/${index}`, branch: `b${index}`, activity: now - index * 60000, sessions: 0, upMs: null }))
   trees.push({ dir: "/r/wt/old", branch: "old", activity: now - 9 * 24 * 3600 * 1000, sessions: 0, upMs: null })
-  const lines = describe({ trees, current: "/r/wt/9", home: "/h", now })
+  const lines = describe({ trees, current: "/r/wt/9", home: P("/h"), now })
   assert.match(lines[1], /^- \/r\/wt\/9 \(b9\): you are here$/u)
   assert.equal(lines.filter((line) => line.startsWith("- /r")).length, 6)
   assert.match(lines.find((line) => line.startsWith("- and ")), /^- and 5 more worktrees, quiet for a day or more or past this list; `git worktree list` shows them$/u)
@@ -110,8 +114,8 @@ test("with a real repo and a linked worktree, boot names both", async () => {
   git(main, "worktree", "add", "-q", linked, "-b", "feature")
   const result = await otherSessions({ cwd: linked, env: {}, now: Date.now, platform: "win32", home: base })
   assert.equal(result.worktrees, 2)
-  assert.match(result.lines[1], /^- ~\/linked \(feature\): you are here$/u)
-  assert.match(result.lines[2], /^- ~\/main \(the shared main checkout, main\): last git activity \d+ min ago$/u)
+  assert.match(view(result)[1], /^- ~\/linked \(feature\): you are here$/u)
+  assert.match(view(result)[2], /^- ~\/main \(the shared main checkout, main\): last git activity \d+ min ago$/u)
 })
 
 test("the boot text carries the lines, right after the status", () => {
@@ -125,15 +129,15 @@ test("time spans read in minutes, hours and days, and a worktree with a session 
   const tree = (dir, activity, sessions = 0, upMs = null) => ({ dir, branch: "b", activity, sessions, upMs })
   const lines = describe({
     trees: [tree("/r/main", now - 3 * minute), tree("/r/wt/h", now - 5 * 60 * minute, 2, 100 * minute), tree("/r/wt/d", null, 1, 3 * 24 * 60 * minute), tree("/r/wt/me", null)],
-    current: "/r/wt/me", home: "/h", now,
+    current: "/r/wt/me", home: P("/h"), now,
   })
   assert.ok(lines.includes("- /r/main (the shared main checkout, b): last git activity 3 min ago"), lines.join("\n"))
   assert.ok(lines.includes("- /r/wt/h (b): 2 sessions running (up 2 h); last git activity 5 h ago"), lines.join("\n"))
   assert.ok(lines.includes("- /r/wt/d (b): 1 session running (up 3 days)"), lines.join("\n"))
   assert.ok(lines.includes("- /r/wt/me (b): you are here"), lines.join("\n"))
-  assert.equal(describe({ trees: [tree("/r/wt/old", now - 5 * 24 * 60 * minute, 0), tree("/r/wt/me", null)], current: "/r/wt/me", home: "/h", now }).filter((line) => line.startsWith("- and ")).length, 1)
-  assert.match(describe({ trees: [tree("/r/wt/old", now - 5 * 24 * 60 * minute), tree("/r/wt/me", null)], current: "/r/wt/me", home: "/h", now })[2], /^- and 1 more worktree, quiet/u)
-  assert.equal(describe({ trees: [tree("/h/code/x", now - 1000, 0), tree("/r/wt/me", null)], current: "/r/wt/me", home: "/h", now }).some((line) => line.startsWith("- ~/code/x ")), true)
+  assert.equal(describe({ trees: [tree("/r/wt/old", now - 5 * 24 * 60 * minute, 0), tree("/r/wt/me", null)], current: "/r/wt/me", home: P("/h"), now }).filter((line) => line.startsWith("- and ")).length, 1)
+  assert.match(describe({ trees: [tree("/r/wt/old", now - 5 * 24 * 60 * minute), tree("/r/wt/me", null)], current: "/r/wt/me", home: P("/h"), now })[2], /^- and 1 more worktree, quiet/u)
+  assert.equal(describe({ trees: [tree(path.join(P("/h"), "code", "x"), now - 1000, 0), tree("/r/wt/me", null)], current: "/r/wt/me", home: P("/h"), now }).some((line) => norm(line).startsWith("- ~/code/x ")), true)
 })
 
 test("a session whose folder is unknown, or outside every worktree, is not counted, and a machine with no sessions skips the folder lookup", async () => {
@@ -153,6 +157,6 @@ test("a worktree whose .git file names no folder has no git activity to report",
   mkdirSync(wt)
   writeFileSync(path.join(wt, ".git"), "not a pointer\n")
   const result = await otherSessions({ cwd: wt, env: {}, now: Date.now, home: base, platform: "win32", inspect: async (file, args) => (args[0] === "worktree" ? porcelain([path.join(base, "main"), "main"], [wt, "mine"]) : `${wt}\n`) })
-  assert.equal(result.lines[1], "- ~/wt (mine): you are here", "no activity fact for a worktree git cannot read")
-  assert.match(result.lines[2], /^- and 1 more worktree, quiet/u)
+  assert.equal(view(result)[1], "- ~/wt (mine): you are here", "no activity fact for a worktree git cannot read")
+  assert.match(view(result)[2], /^- and 1 more worktree, quiet/u)
 })
