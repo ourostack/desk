@@ -89,8 +89,10 @@ export function serializeMarkdown(data, content) {
 }
 
 /** Write a markdown file with frontmatter, creating parent dirs as needed. */
-// Errors a rename over a card gives when something holds it open (an editor, antivirus, OneDrive on Windows): the card is then written in place.
+// Errors a rename over a card gives when something holds it open or another writer is renaming over it (an editor, antivirus, OneDrive, a concurrent write on Windows).
 const HELD_OPEN = new Set(["EPERM", "EBUSY", "EACCES"])
+const RENAME_ATTEMPTS = 40
+const RENAME_DELAY_CAP_MS = 50
 
 export async function writeMarkdown(filePath, data, content, { atomic = false } = {}) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -100,7 +102,9 @@ export async function writeMarkdown(filePath, data, content, { atomic = false } 
 
 /**
  * Write `text` to an existing file through a temporary file beside it and a rename (over what a symlinked file points at), so a reader sees the old file or
- * the new one. The temporary name is unique to this write and the file keeps its mode; where something holds the file open the text is written in place.
+ * the new one. The temporary name is unique to this write and the file keeps its mode. Where something holds the file open the rename is retried with a short
+ * backoff; the card is never written in place, because two in-place writers interleave and leave the tail of the longer text behind. If every retry is
+ * refused the write fails and the card keeps its old text.
  */
 export async function writeFileAtomic(filePath, text) {
   const target = await fs.realpath(filePath)
@@ -108,12 +112,18 @@ export async function writeFileAtomic(filePath, text) {
   try {
     await fs.writeFile(temporary, text, "utf8")
     await fs.chmod(temporary, (await fs.stat(target)).mode & 0o7777)
-    await fs.rename(temporary, target)
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await fs.rename(temporary, target)
+      } catch (error) {
+        if (!HELD_OPEN.has(error.code) || attempt >= RENAME_ATTEMPTS) throw error
+        await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 2, RENAME_DELAY_CAP_MS) + Math.random() * 10))
+      }
+    }
   } catch (error) {
     // A failed cleanup never hides the error that led to it.
     await fs.rm(temporary, { force: true }).catch(() => {})
-    if (!HELD_OPEN.has(error.code)) throw error
-    await fs.writeFile(target, text, "utf8")
+    throw error
   }
 }
 
