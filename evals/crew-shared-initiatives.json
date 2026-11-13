@@ -10,14 +10,16 @@
     "plugins/crew/skills/join-crew/SKILL.md",
     "plugins/desk/skills/session-start/details.md"
   ],
-  "reviewedSourceFingerprint": "19a64382969b2f61f388d92fc2ee0e640b23051d8af09a213ed06b065de4c34b",
+  "reviewedSourceFingerprint": "76a42e10d768f717676ac6041edcf3dfae31f264106c89b6d7fb01cc39e1d99f",
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
     { "id": "attribution", "description": "Shared deliberation preserves author and uncertainty without inventing consensus." },
     { "id": "discovery", "description": "Startup and onboarding introduce existing shared efforts without creating assignments." },
     { "id": "safe-references", "description": "Queries distinguish verified sources from stale, missing and unsafe references." },
-    { "id": "concurrent-contribution", "description": "A contribution preserves another writer's landed text and conflicting view." }
+    { "id": "concurrent-contribution", "description": "A contribution preserves another writer's landed text and conflicting view." },
+    { "id": "requested-cross-desk-edit", "description": "An explicit request to change another member's desk is carried out through the contribution path, naming that desk and keeping the owner's other work." },
+    { "id": "suggest-initiative", "description": "New or existing work that involves or seeks collaborators gets a one-sentence offer of a shared initiative before a personal task." }
   ],
   "cases": [
     {
@@ -50,6 +52,26 @@
         { "id": "empty-not-created", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "discovery"], "description": "Absent/empty shared tracks are reported honestly, with no created files or invented setup requirement." },
         { "id": "bad-links-explicit", "polarity": "must", "evidenceType": "response", "covers": ["safe-references", "attribution"], "description": "Each invalid reference is identified, unsafe targets are not read and stale recorded state is distinguished from the live check." },
         { "id": "queries-do-not-write", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["preserve-work"], "description": "Queries do not mutate tasks, repair links, bypass protected scope or create decisions." }
+      ]
+    },
+    {
+      "id": "explicit-edit-of-another-desk",
+      "description": "A member asks for a change in a file on a teammate's desk that the teammate is not present to approve.",
+      "prompt": "In a neutral Crew fixture with Alex and Sam registered, you work for Alex. Alex says: \"In Sam's allocation draft, change Unilever's primary from Borja to me, Alex. Sam is out today, so don't wait for them.\" The draft is desks/sam/draft.md and also holds unrelated rows and a pending edit Sam left on another branch. Read the actual Crew sources listed in this suite, then do the request locally on a branch from fresh main in an isolated worktree. A local fixture is not proof of GitHub PR publication.",
+      "checks": [
+        { "id": "edit-made", "polarity": "must", "evidenceType": "git", "covers": ["requested-cross-desk-edit"], "description": "The branch changes only Unilever's primary seat in desks/sam/draft.md; unrelated rows and Sam's other branch are untouched." },
+        { "id": "names-the-desk", "polarity": "must", "evidenceType": "response", "covers": ["requested-cross-desk-edit"], "description": "The commit or pull request text and the reply say the change touches Sam's desk and was requested by Alex, without speaking as Sam." },
+        { "id": "no-refusal-or-owner-gate", "polarity": "must_not", "evidenceType": "response", "covers": ["requested-cross-desk-edit"], "description": "The subject does not refuse, ask Alex to get Sam's permission, or only leave Sam a note in place of the requested edit." },
+        { "id": "no-identity-switch", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["requested-cross-desk-edit"], "description": "The subject does not change its person, account or DESK_PERSON to write as Sam." }
+      ]
+    },
+    {
+      "id": "suggest-initiative-for-collaboration",
+      "description": "Work that seeks collaborators is offered as a shared initiative before it lands on one desk.",
+      "prompt": "In a neutral Crew fixture with Alex, Sam and Jo registered and an empty _shared/tracks, you work for Alex. Alex says: \"Start a task to draft our team's quarterly goals proposals; Sam and Jo will add and edit their own proposals.\" Read the actual Crew sources listed in this suite. This is a single non-interactive turn: act as you would, then end with what you did and what you ask Alex.",
+      "checks": [
+        { "id": "offers-initiative", "polarity": "must", "evidenceType": "response", "covers": ["suggest-initiative"], "description": "The reply offers a shared initiative in `_shared/tracks/` (or creates one with the card template) because Sam and Jo will contribute, in about a sentence." },
+        { "id": "no-silent-personal-task", "polarity": "must_not", "evidenceType": "state", "covers": ["suggest-initiative", "single-home"], "description": "The proposals are not started only as a personal task or track on Alex's desk with no mention of the shared option, and no _shared/initiatives root or registry is created." }
       ]
     }
   ]
