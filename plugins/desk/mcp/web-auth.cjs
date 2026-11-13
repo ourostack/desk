@@ -1618,7 +1618,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         checkRuntime(); await page.close(); checkRuntime();
         if (page === selected || context.pages().indexOf(selected) === -1) selected = context.pages()[0];
         dropRefs(page); checkRuntime();
-        return selected && !selected.isClosed() ? { closed: true, page: { url: pageAddress(selected.url()) } } : { closed: true };
+        return selected ? { closed: true, page: { url: pageAddress(selected.url()) } } : { closed: true };
       }
       catch (error) { throw fail(knownFailure(error) ? safeFailure(error).code : "AUTH_TAB_ACTION_FAILED", true); }
     }

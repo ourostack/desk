@@ -100,11 +100,7 @@ function pruneEvidence(s) {
 
 // The picture files directly in a folder, by name.
 function pictures(folder) {
-  try {
-    return fs.readdirSync(folder).filter(function (name) { return PICTURE.test(name); });
-  } catch (error) {
-    return [];
-  }
+  return fs.readdirSync(folder).filter(function (name) { return PICTURE.test(name); });
 }
 
 // The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.

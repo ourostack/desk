@@ -2598,6 +2598,7 @@ test("tab-select brings the tab to the front, and refs from its snapshot act the
     await adapter.call(["click", kept])
     assert.equal(natives[1].calls.filter((call) => call[0] === "click").length, 2, "closing another tab keeps this tab's refs")
     for (const args of [["tab-close", "5"], ["tab-close", "-1"], ["tab-close", "x"]]) await assert.rejects(adapter.call(args), /AUTH_(TAB|ARGUMENTS)_REFUSED/u)
+    assert.deepEqual(await adapter.call(["tab-close", "0"]), { closed: true }, "closing the last tab leaves no tab to name")
   } finally { await adapter.close() }
 })
 
