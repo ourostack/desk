@@ -1583,7 +1583,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   async function until(test, ms) {
     var end = Date.now() + Math.min(ms, Math.floor(timeoutMs / 4));
     while (!test()) {
-      if (closed || Date.now() >= end) return test();
+      if (Date.now() >= end) return false;
       await sleep(50);
     }
     return true;
@@ -1616,25 +1616,20 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
           outcome = await execute(["click", option.ref], true);
           how = "followed";
         } catch (error) {
-          if (closed) throw error;
           problem = "its click did not complete";
         }
         break;
       }
-      if (closed || Date.now() >= end) break;
+      if (Date.now() >= end) break;
       // The page may show its web option a moment after the launch (Zoom does, about two seconds later), or move on by itself.
       await sleep(WEB_PATH_POLL_MS);
       checkRuntime();
-      try {
-        outcome = await settled(reader, false, true);
-        option = launch.webOptionIn(outcome.snapshot);
-      } catch (error) {
-        if (closed || !knownFailure(error) || RETRIED.indexOf(safeFailure(error).code) === -1) throw error;
-      }
+      outcome = await settled(reader, false, true);
+      option = launch.webOptionIn(outcome.snapshot);
     }
     if (how === "page") outcome = await settled(reader, false, true);
     rec.reported = rec.launchCount;
-    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: how, option: option, url: outcome.page && outcome.page.url, problem: problem });
+    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: how, option: option, url: outcome.page.url, problem: problem });
     return outcome;
   }
   // A read never acts: a launch it finds that no reply has told yet is reported with the page's web option and its click.
@@ -1645,7 +1640,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
     var last = fresh[fresh.length - 1];
     var moved = rec.moves > last.moves;
     rec.reported = rec.launchCount;
-    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: moved ? "page" : "none", option: moved || !outcome.snapshot ? null : launch.webOptionIn(outcome.snapshot), url: outcome.page && outcome.page.url });
+    outcome.appLaunch = launch.report({ schemes: schemesOf(fresh), host: last.host, how: moved ? "page" : "none", option: moved ? null : launch.webOptionIn(outcome.snapshot), url: outcome.page.url });
     return outcome;
   }
   async function execute(args, inner) {

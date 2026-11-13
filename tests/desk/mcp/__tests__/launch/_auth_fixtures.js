@@ -261,6 +261,17 @@ export function fakeDriver({ packet = nativeSnapshot(), hook, launchError, close
   return { driver, calls, context, page, cdp, oop, handles, packet, focus }
 }
 
+// A page with one button that reads `label`.
+export function buttonSnapshot(label) {
+  const packet = editingSnapshot("read-only")
+  const table = packet.documents[0].nodes
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  table.nodeName[3] = s("BUTTON")
+  table.nodeValue[4] = s(label)
+  packet.documents[0].layout.text[3] = s(label)
+  return packet
+}
+
 export function editingSnapshot(mode = "read-write") {
   const packet = nativeSnapshot()
   const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }

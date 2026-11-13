@@ -7,7 +7,7 @@ import { deskFailure } from "../../../../../plugins/desk/mcp/src/runtime/desk-fa
 import { vagueFailuresIn } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/precise-copy.ts"
 import { mkTempRoot } from "../_temp_roots.js"
 import { NO_POSIX_MODES } from "../_platform.js"
-import { nativeSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
+import { nativeSnapshot, buttonSnapshot, editingSnapshot, inspectedDOM, fakeDriver, framedSnapshot, pageNode, PASSWORD, FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED } from "./_auth_fixtures.js"
 
 const require = createRequire(import.meta.url)
 const auth = require("../../../../../plugins/desk/mcp/web-auth.cjs")
@@ -3161,6 +3161,109 @@ test("no hint for a signed-in profile suggests a fresh browser, another profile 
   }
 })
 
+// A page that points itself at an app address, refused as the browser refuses it.
+function tryLaunch(native, address = "zoomus://zoom.us/join?confno=SECRET_QUERY") {
+  const attempt = requestOn(native, address, { type: "document", main: true, errorText: "net::ERR_ABORTED" })
+  native.page.emit("request", attempt)
+  native.page.emit("requestfailed", attempt)
+}
+
+const movesOn = (native) => native.page.emit("request", requestOn(native, "https://app.example.test/web", { type: "document", main: true }))
+const clicks = (native) => native.calls.filter((call) => call[0] === "click").length
+
+test("a navigation whose page tries to open an app follows the page's web option once, even when the launch holds the load back", async () => {
+  const native = fakeDriver({ packet: buttonSnapshot("Join from browser") })
+  native.page.goto = async () => { native.calls.push(["goto"]); tryLaunch(native) }
+  native.page.waitForLoadState = () => new Promise(() => {})
+  const adapter = adapterFor(native, await mkTempRoot("auth-launch-follow-"), 8000)
+  try {
+    const reply = await adapter.call(["goto", "https://zoom.example.test/j/1"])
+    assert.deepEqual([reply.appLaunch.how, reply.appLaunch.refused, reply.appLaunch.by, reply.appLaunch.followed], ["followed", ["zoomus"], "app.example.test", { role: "button", name: "Join from browser" }])
+    assert.equal(clicks(native), 1)
+    assert.equal(reply.change, "navigated")
+    assert.equal(JSON.stringify(reply.appLaunch).includes("SECRET_QUERY"), false)
+    assert.equal((await adapter.call(["snapshot"])).appLaunch, undefined, "a launch is reported once")
+  } finally { await adapter.close() }
+})
+
+test("a launch the page makes just after its load is found when the page shows a web option, and not waited for when it does not", async () => {
+  const late = fakeDriver({ packet: buttonSnapshot("Continue in browser") })
+  late.page.goto = async () => { setTimeout(() => tryLaunch(late, "slack://open"), 150) }
+  const adapter = adapterFor(late, await mkTempRoot("auth-launch-late-"), 8000)
+  try {
+    const reply = await adapter.call(["goto", "https://slack.example.test/x"])
+    assert.deepEqual([reply.appLaunch.how, reply.appLaunch.refused, clicks(late)], ["followed", ["slack"], 1])
+  } finally { await adapter.close() }
+
+  const quiet = fakeDriver({ packet: buttonSnapshot("Continue in browser") })
+  const still = adapterFor(quiet, await mkTempRoot("auth-launch-none-"), 8000)
+  try {
+    const reply = await still.call(["goto", "https://app.example.test/x"])
+    assert.deepEqual([reply.appLaunch, clicks(quiet)], [undefined, 0], "a page that opens no app is left alone, whatever it offers")
+  } finally { await still.close() }
+})
+
+test("a page that moves on by itself after the launch is not clicked; one that shows its web option late is followed; one with none says what to do", async () => {
+  const own = fakeDriver()
+  own.page.goto = async () => { tryLaunch(own); movesOn(own) }
+  own.page.waitForLoadState = async () => { throw new Error("timeout") }
+  const first = adapterFor(own, await mkTempRoot("auth-launch-page-"), 8000)
+  try {
+    const reply = await first.call(["goto", "https://app.example.test/start"])
+    assert.deepEqual([reply.appLaunch.how, clicks(own)], ["page", 0])
+    assert.match(reply.appLaunch.note, /took its own web path, and it is now https:\/\/synthetic\.invalid\/\./u)
+  } finally { await first.close() }
+
+  const slow = fakeDriver({ packet: buttonSnapshot("Please wait") })
+  slow.page.goto = async () => {
+    tryLaunch(slow)
+    setTimeout(() => {
+      const [table, layout] = [slow.packet.documents[0].nodes, slow.packet.documents[0].layout]
+      slow.packet.strings[table.nodeValue[4]] = slow.packet.strings[layout.text[3]] = "Join from browser"
+    }, 300)
+  }
+  const second = adapterFor(slow, await mkTempRoot("auth-launch-slow-"), 8000)
+  try {
+    const reply = await second.call(["goto", "https://zoom.example.test/j/1"])
+    assert.deepEqual([reply.appLaunch.how, clicks(slow)], ["followed", 1])
+  } finally { await second.close() }
+
+  const none = fakeDriver()
+  none.page.goto = async () => { tryLaunch(none, "figma://file/x") }
+  const third = adapterFor(none, await mkTempRoot("auth-launch-nothing-"), 1600)
+  try {
+    const reply = await third.call(["goto", "https://figma.example.test/file/x"])
+    assert.deepEqual([reply.appLaunch.how, reply.appLaunch.refused, reply.appLaunch.webOption], ["none", ["figma"], undefined])
+    assert.deepEqual(reply.appLaunch.next, [["wait", "<text you expect>"], ["snapshot", "--interactive"]])
+  } finally { await third.close() }
+})
+
+test("a web option whose click does not complete is named with the click to try, and a read reports a launch without acting", async () => {
+  const stuck = fakeDriver({ packet: buttonSnapshot("Use the web app instead") })
+  stuck.handles.get(104).click = async () => { throw new Error("timeout waiting for enabled " + PASSWORD) }
+  stuck.page.goto = async () => { tryLaunch(stuck, "msteams:/l/chat/0/0") }
+  const adapter = adapterFor(stuck, await mkTempRoot("auth-launch-click-"), 8000)
+  try {
+    const reply = await adapter.call(["goto", "https://teams.example.test/l/chat/0/0"])
+    assert.equal(reply.appLaunch.how, "none")
+    assert.match(reply.appLaunch.note, /following it did not work: its click did not complete\. Click it with \["click","e\d+"\]/u)
+    assert.deepEqual(reply.appLaunch.next, [["click", reply.appLaunch.webOption.ref]])
+  } finally { await adapter.close() }
+
+  const reads = fakeDriver({ packet: buttonSnapshot("Continue on this browser") })
+  const reader = adapterFor(reads, await mkTempRoot("auth-launch-read-"), 8000)
+  try {
+    await reader.call(["snapshot"])
+    tryLaunch(reads, "spotify:track:1")
+    const found = await reader.call(["find", "browser"])
+    assert.deepEqual([found.appLaunch.how, found.appLaunch.refused, found.appLaunch.webOption.name, clicks(reads)], ["none", ["spotify"], "Continue on this browser", 0])
+    for (let launches = 0; launches < 205; launches++) tryLaunch(reads)
+    movesOn(reads)
+    const moved = await reader.call(["snapshot", "--interactive"])
+    assert.deepEqual([moved.appLaunch.how, moved.appLaunch.webOption], ["page", undefined])
+  } finally { await reader.close() }
+})
+
 const launchOption = require("../../../../../plugins/desk/mcp/web-launch.cjs")
 
 test("a web option is found by what it says, whichever site it is on, and downloads and app buttons are not one", () => {
@@ -3173,6 +3276,13 @@ test("a web option is found by what it says, whichever site it is on, and downlo
     "Your browser is not supported", "Open in the desktop app", "Why do I need a browser extension?", "x".repeat(200) + " in browser"]) {
     assert.equal(launchOption.webOptionIn(tree(["button", name])), null, name)
   }
+  assert.deepEqual(launchOption.webOptionIn({ role: "document", children: [{ role: "generic", ref: "e1", visible: true, children: [{ role: "text", text: "[redacted]" }, { role: "text", text: "Open in the web app" }] }] }),
+    { ref: "e1", role: "control", name: "Open in the web app" }, "a styled element that reads like a web option is found when it is shown")
+  assert.equal(launchOption.webOptionIn({ role: "document", children: [{ role: "textbox", ref: "e1", name: "Join from browser", children: [] }] }), null, "only a link, button or styled element is one")
+  assert.deepEqual(launchOption.webOptionIn({ role: "document", children: [{ role: "link", ref: "e4", name: "Open in browser", children: [] }, { role: "link", ref: "e5", name: "Join in browser", children: [] }] }),
+    { ref: "e4", role: "link", name: "Open in browser" }, "among the same length, the first on the page")
+  assert.deepEqual(launchOption.webOptionIn({ role: "document", children: [{ role: "button", ref: "e1", children: [{ role: "generic", children: [{ role: "text", text: "Join   from" }, { role: "text", text: "browser" }] }] }] }),
+    { ref: "e1", role: "button", name: "Join from browser" }, "a name split across its text is joined")
   assert.deepEqual(launchOption.webOptionIn(tree(["button", "Open the app", "e1"], ["link", "Continue in browser", "e2"])), { ref: "e2", role: "link", name: "Continue in browser" })
   assert.equal(launchOption.webOptionIn({ role: "document", children: [{ role: "button", ref: "e1", visible: false, name: "Continue in browser", children: [] }] }), null, "a hidden control is not offered")
   assert.deepEqual(launchOption.webOptionInText('- heading "Join"\n  - button "Open app" [ref=e3]\n  - link "Join from browser" [ref=e4] [cursor=pointer]:'), { ref: "e4", role: "link", name: "Join from browser" })

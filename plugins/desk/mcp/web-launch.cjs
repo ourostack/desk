@@ -17,7 +17,7 @@ function nameOf(node) {
   var words = [];
   (function collect(n) {
     if (n.role === "text") { if (typeof n.text === "string" && n.text !== "[redacted]") words.push(n.text); return; }
-    (n.children || []).forEach(collect);
+    n.children.forEach(collect);
   })(node);
   return words.join(" ");
 }
