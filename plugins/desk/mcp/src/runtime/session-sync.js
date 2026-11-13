@@ -72,7 +72,7 @@ function run(spawnGit, root, args, timeoutMs) {
   return spawnGit("git", ["-C", root, ...args], { windowsHide: true,
     encoding: "utf8",
     timeout: timeoutMs,
-    env: remoteIdentityEnv({ root, args, env: gitEnv() }),
+    env: remoteIdentityEnv({ root, args, env: gitEnv(), spawn: spawnGit }),
   })
 }
 
@@ -404,10 +404,10 @@ const TELL = {
 // The Ouro AX error shape: `<tool>: <thing>: <problem>. Fix: <command>.` It names the probable cause, the command that
 // shows more, the one call that files the failure with its evidence, and that work continues meanwhile.
 function credentialRefusal({ root, env, remote, error }) {
-  // The remote's path is left out of the evidence: the argv narrowing would read a repository path as a desk path.
-  const evidence = argvSafeReason(`git refused the credentials for ${remote?.match(/^https?:\/\/([^/]+)/u)?.[1] ?? "origin"}: ${error || "no message"}`)
+  // The remote's path stays out of the evidence: the argv narrowing would read a repository path as a desk path.
+  const evidence = argvSafeReason(`git refused the credentials: ${error}`)
   const file = `node ${commandArgument(FILE_DESK_PROBLEM_SCRIPT)} --mechanism session-sync --reason ${commandArgument(evidence)} --host ${commandArgument(hostFromEnv(env))}`
-  return `desk: sync: the remote refused this host's credentials, probably because the GitHub account Git is signed in as here does not own ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${commandArgument(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth status.`
+  return `desk: sync: the remote refused this host's credentials, probably because no GitHub account signed in to gh can reach ${remote ?? "the desk's remote"}; \`git status\` will read clean, local work continues and Desk retries with every write; to see git's own answer run \`git -C ${commandArgument(root)} ls-remote origin\`; to file this with its evidence run \`${file}\`. Fix: gh auth login --hostname github.com.`
 }
 
 function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {

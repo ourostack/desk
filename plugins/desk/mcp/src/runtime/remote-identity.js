@@ -3,30 +3,36 @@
 // The Copilot app starts every process with command-line Git config that resets the host's credential helpers and
 // installs its own, which answers with the session's account. That outranks the repository's own pinned helper and
 // any route in the user's global Git config, so a session signed in as one account got "Repository not found" from
-// a desk whose remote another account owns. The remote's own URL names that account: the user in
-// `https://<login>@github.com/...`, or else the owner of a user-owned repository. When the environment carries such an
-// override and `gh` holds a token for that login, the credential config appended here comes last and wins. Anything
-// less certain (no override, a remote that is not HTTPS, no token for the login) leaves the environment untouched.
+// a desk whose remote another account owns. The account is the signed-in `gh` account that can reach the remote: the
+// user named in `https://<login>@github.com/...`, the repository's owner, or any other account `gh` holds. Organizations
+// own many desks, so the owner is not always a login; Desk asks `gh` whether each account can read (or push to) the
+// repository. When the environment carries such an override and an account can reach the remote, the credential config
+// appended here comes last and wins. Anything less certain (no override, a remote that is not HTTPS, no account that can
+// reach it) leaves the environment untouched.
 
 import { spawnSync } from "node:child_process"
 
 const NETWORK_COMMANDS = new Set(["fetch", "pull", "push"])
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u
+const REPO = /^[A-Za-z0-9._-]+$/u
 const HOST = /^[a-z0-9][a-z0-9.-]*$/iu
 const TOKEN_VARIABLES = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST"]
 const LOOKUP_TIMEOUT_MS = 3000
-const TOKEN_CACHE_MS = 5 * 60_000
+const ACCESS_TIMEOUT_MS = 5000
+const CACHE_MS = 5 * 60_000
 
-const tokenCache = new Map()
+const lookupCache = new Map()
 
-/** `{ origin, host, user, owner }` for an HTTPS remote URL with no embedded password, else `null`. */
+/** `{ origin, host, user, owner, repo }` for an HTTPS repository URL with no embedded password, else `null`. */
 export function parseHttpsRemote(url) {
   let parsed
   try { parsed = new URL(String(url).trim()) } catch { return null }
   if (parsed.protocol !== "https:" || parsed.password !== "" || parsed.port !== "" || !HOST.test(parsed.hostname)) return null
-  const user = parsed.username === "" ? null : decodeURIComponent(parsed.username)
-  const owner = parsed.pathname.split("/").filter((part) => part !== "")[0] ?? null
-  return { origin: `https://${parsed.hostname}`, host: parsed.hostname, user, owner }
+  const [owner, name] = parsed.pathname.split("/").filter((part) => part !== "")
+  const repo = name?.replace(/\.git$/u, "")
+  if (!LOGIN.test(owner ?? "") || !REPO.test(repo ?? "")) return null
+  const user = parsed.username === "" ? null : parsed.username
+  return { origin: `https://${parsed.hostname}`, host: parsed.hostname, user, owner, repo }
 }
 
 /** Whether the environment's command-line Git config sets a credential helper, as the Copilot app's does. */
@@ -53,21 +59,48 @@ function appendConfig(env, pairs) {
   return { ...env, GIT_CONFIG_PARAMETERS: [existing, ...added].filter((part) => part !== "").join(" ") }
 }
 
-function hasToken({ host, login, env, spawn, cache, now }) {
-  const key = `${host}\0${login}`
-  const cached = cache.get(key)
-  if (cached !== undefined && now() - cached.at < TOKEN_CACHE_MS) return cached.ok
+function cleanEnv(env) {
   const clean = { ...env }
   for (const name of TOKEN_VARIABLES) delete clean[name]
-  const result = spawn("gh", ["auth", "token", "--hostname", host, "--user", login], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env: clean })
-  const ok = result?.status === 0 && typeof result.stdout === "string" && result.stdout.trim() !== ""
-  cache.set(key, { ok, at: now() })
-  return ok
+  return clean
+}
+
+// Answers from `cache` for CACHE_MS, so a Desk process asks gh once per account rather than once per Git command.
+function remembered(cache, now, key, compute) {
+  const cached = cache.get(key)
+  if (cached !== undefined && now() - cached.at < CACHE_MS) return cached.value
+  const value = compute()
+  cache.set(key, { value, at: now() })
+  return value
+}
+
+function signedInLogins({ host, env, spawn, cache, now }) {
+  return remembered(cache, now, `logins\0${host}`, () => {
+    const result = spawn("gh", ["auth", "status", "--hostname", host], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env: cleanEnv(env) })
+    const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+    return [...new Set([...text.matchAll(/Logged in to \S+ account (\S+)/gu)].map((match) => match[1]))].filter((login) => LOGIN.test(login))
+  })
+}
+
+function tokenFor({ host, login, env, spawn }) {
+  const result = spawn("gh", ["auth", "token", "--hostname", host, "--user", login], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env: cleanEnv(env) })
+  return result.status === 0 ? result.stdout.trim() : ""
+}
+
+// Whether gh's account for `login` can read the repository, or push to it when `push` is set.
+function canUse({ host, login, owner, repo, push, env, spawn, cache, now }) {
+  return remembered(cache, now, [host, login, owner, repo, push].join("\0"), () => {
+    const token = tokenFor({ host, login, env, spawn })
+    if (token === "") return false
+    const field = push ? "push" : "pull"
+    const result = spawn("gh", ["api", `repos/${owner}/${repo}`, "--hostname", host, "--jq", `.permissions.${field}`], { windowsHide: true, encoding: "utf8", timeout: ACCESS_TIMEOUT_MS, env: { ...cleanEnv(env), GH_TOKEN: token } })
+    return result.status === 0 && result.stdout.trim() === "true"
+  })
 }
 
 function gitText(spawn, root, args, env) {
   const result = spawn("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: LOOKUP_TIMEOUT_MS, env })
-  return result?.status === 0 && typeof result.stdout === "string" ? result.stdout.trim() : ""
+  return result.status === 0 ? result.stdout.trim() : ""
 }
 
 // The URL this command talks to: a URL or remote named in its arguments, else the current branch's upstream remote.
@@ -86,16 +119,19 @@ function remoteUrl({ spawn, root, args, env }) {
 }
 
 /**
- * `env` for one Git command. For a fetch, pull or push whose remote is an HTTPS URL naming a login that `gh` holds a
- * token for, and only when `env` already overrides credential helpers, the result ends with a helper for that login.
- * Any other command or situation returns `env` itself. `spawn` runs both `git` and `gh` (tests only).
+ * `env` for one Git command. For a fetch, pull or push whose remote is an HTTPS repository, and only when `env` already
+ * overrides credential helpers, the result ends with a helper for the first signed-in `gh` account that can reach the
+ * repository (the account named in the URL first, then its owner, then the rest). Any other command or situation returns
+ * `env` itself. `spawn` runs both `git` and `gh` (tests only).
  */
-export function remoteIdentityEnv({ root, args, env, spawn = spawnSync, cache = tokenCache, now = Date.now }) {
+export function remoteIdentityEnv({ root, args, env, spawn = spawnSync, cache = lookupCache, now = Date.now }) {
   if (!NETWORK_COMMANDS.has(args[0]) || !hasCredentialOverride(env)) return env
   const remote = parseHttpsRemote(remoteUrl({ spawn, root, args, env }))
   if (remote === null) return env
-  const logins = [...new Set([remote.user, remote.owner])].filter((login) => login !== null && LOGIN.test(login))
-  const login = logins.find((candidate) => hasToken({ host: remote.host, login: candidate, env, spawn, cache, now }))
+  const push = args[0] === "push"
+  const named = [remote.user, remote.owner, ...signedInLogins({ host: remote.host, env, spawn, cache, now })]
+  const candidates = [...new Set(named)].filter((login) => login !== null && LOGIN.test(login))
+  const login = candidates.find((candidate) => canUse({ ...remote, login: candidate, push, env, spawn, cache, now }))
   if (login === undefined) return env
   const key = `credential.${remote.origin}.helper`
   return appendConfig(env, [[key, ""], [key, credentialHelperFor({ host: remote.host, login })]])
