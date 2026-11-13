@@ -35,7 +35,9 @@ function normalizeSource(content) {
 }
 
 function contractFingerprint(suite) {
-  return crypto.createHash("sha256").update(JSON.stringify(suite)).digest("hex");
+  // knownFailure annotates a rerun's outcome; it is not part of the behavior contract a receipt covers.
+  const { knownFailure, ...contract } = suite;
+  return crypto.createHash("sha256").update(JSON.stringify(contract)).digest("hex");
 }
 
 function utcTimestamp(value, field) {
@@ -433,6 +435,17 @@ function validateSuite(suite, repoRoot, label) {
     if (!covered.has(requirement)) fail(`${label}: uncovered requirement: ${requirement}`);
   }
 
+  if (suite.knownFailure !== undefined) {
+    const known = suite.knownFailure;
+    if (!exactly(known, ["issue", "case", "observed"]) || !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+$/u.test(known.issue)) {
+      fail(`${label}: knownFailure needs an issue URL, a case id and an observed date`);
+    }
+    if (!caseIds.has(known.case)) fail(`${label}: knownFailure names unknown case: ${known.case}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(known.observed) || new Date(`${known.observed}T00:00:00Z`).toISOString().slice(0, 10) !== known.observed) {
+      fail(`${label}: knownFailure observed must be a valid YYYY-MM-DD date`);
+    }
+  }
+
   const fingerprint = sourceFingerprint(suite.sources, repoRoot);
   if (fingerprint !== suite.reviewedSourceFingerprint) fail(`${label}: reviewedSourceFingerprint does not match current sources`);
   return {
@@ -488,6 +501,7 @@ function verifyReceipt(resultFile, repoRoot = process.cwd()) {
   if (!entry) fail(`result receipt names unknown suite: ${receipt.suiteId}`);
   if (receipt.sourceFingerprint !== entry.fingerprint) fail("result receipt sourceFingerprint does not match current sources");
   if (receipt.contractFingerprint !== contractFingerprint(entry.suite)) fail("result receipt contractFingerprint does not match the current contract");
+  if (entry.suite.knownFailure) fail(`suite ${entry.suite.id} still records a knownFailure; clear it when the eval passes`);
   if (!isObject(receipt.run)) fail("result receipt needs a run object");
   for (const field of ["actor", "model", "runtimeRevision"]) {
     if (!hasText(receipt.run[field])) fail(`result receipt run.${field} must be a non-empty string`);
@@ -539,6 +553,9 @@ function main(args) {
   if (command === "validate" && !second) {
     const totals = validateRepo(first);
     console.log(`Validated ${totals.suites} suite(s), ${totals.requirements} requirement(s), ${totals.cases} case(s), ${totals.checks} check(s). behavior: UNVERIFIED - validation does not run or judge an agent.`);
+    for (const { suite } of totals.entries) {
+      if (suite.knownFailure) console.log(`KNOWN FAILURE ${suite.id}/${suite.knownFailure.case} (observed ${suite.knownFailure.observed}): ${suite.knownFailure.issue}`);
+    }
     return;
   }
   if (command === "fingerprint" && first && !extra) {

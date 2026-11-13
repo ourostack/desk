@@ -159,6 +159,24 @@ try {
   }
 
   {
+    const known = { issue: "https://github.com/owner/repo/issues/1", case: "case-1", observed: "2026-11-13" };
+    const write = (dir, suite, knownFailure) => fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify({ ...suite, knownFailure }, null, 2)}\n`);
+    const { dir, suite } = makeFixture();
+    write(dir, suite, known);
+    assert.equal(validateRepo(dir).suites, 1);
+    assert.equal(contractFingerprint({ ...suite, knownFailure: known }), contractFingerprint(suite));
+    const run = spawnSync(process.execPath, [cli, "validate", dir], { encoding: "utf8" });
+    assert.match(run.stdout, /KNOWN FAILURE fixture\/case-1 \(observed 2026-11-13\): https:\/\/github\.com\/owner\/repo\/issues\/1/u);
+    const passing = path.join(dir, "result.json");
+    fs.writeFileSync(passing, JSON.stringify(receipt(suite)));
+    assert.throws(() => verifyReceipt("result.json", dir), /clear it when the eval passes/u);
+    for (const bad of [{ ...known, issue: undefined }, { ...known, issue: "see the tracker" }, { ...known, case: "missing" }, { ...known, observed: "2026-02-31" }]) {
+      write(dir, suite, bad);
+      assert.throws(() => validateRepo(dir), /knownFailure/u);
+    }
+  }
+
+  {
     const { dir, suite } = makeFixture();
     suite.requirements.push({ id: "uncovered", description: "Uncovered requirement." });
     fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
