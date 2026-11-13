@@ -150,13 +150,13 @@ test("success is reported only once the default branch holds the result, not bec
   const start = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: hollow(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
   assert.equal(start.state, "failed")
   assert.equal(start.stage, "verify")
-  assert.match(start.message, /^Not confirmed: GitHub says the pull request https:\/\/github\.com\/acme\/team\/pull\/12 merged, but the team's main branch does not have what this start wrote\. Someone may have changed it since\. Next: check what the workspace holds now before starting it again\.$/u)
+  assert.match(start.message, /^Check what the team's main branch holds, then run the same command again\. Not confirmed: GitHub says the pull request https:\/\/github\.com\/acme\/team\/pull\/12 merged, but that branch does not have what this start wrote\. Someone may have changed it since\.$/u)
   assert.match(start.reason, /^main does not hold AGENTS\.md as this run wrote it, _meta\/crew\.json, _meta\/desks\.md, /u)
   const team = await started()
   const join = await joinWorkspace({ repo: memberClone(team, "dan").clone, spawnGit: team.spawnGit, gh: hollow(team.bare).gh, identity: "dan_example", alias: "dan", wait: noWait, now: NOW, apply: true })
   assert.equal(join.state, "failed")
   assert.equal(join.stage, "verify")
-  assert.equal(join.message, "Not confirmed: GitHub says the pull request https://github.com/acme/team/pull/12 merged, but the team's main branch does not have dan_example's roster row. Next: run the same join again; it adds only what is missing.")
+  assert.equal(join.message, "Check what the team's main branch holds, then run the same command again. Not confirmed: GitHub says the pull request https://github.com/acme/team/pull/12 merged, but that branch does not have dan_example's roster row. The join adds only what is missing.")
   assert.equal(join.reason, "main does not hold the roster row for dan_example as dan")
   // A merge that, by GitHub's account, took the desk away is not a join either.
   const emptied = fakeGh(team.bare, {
@@ -174,7 +174,7 @@ test("success is reported only once the default branch holds the result, not bec
   const gone = await joinWorkspace({ repo: memberClone(team, "eve").clone, spawnGit: team.spawnGit, gh: emptied.gh, identity: "eve_example", alias: "eve", wait: noWait, now: NOW, apply: true })
   assert.equal(gone.stage, "verify")
   assert.equal(gone.reason, "main does not hold the roster row for eve_example as eve, desks/eve/")
-  assert.match(gone.message, /does not have eve_example's roster row and desk\. Next: run the same join again/u)
+  assert.match(gone.message, /does not have eve_example's roster row and desk\. The join adds only what is missing/u)
   // The start's own read-back checks the settings it wrote, not merely that the file exists.
   const swapped = await teamRepo(CIT_SHAPED)
   const swap = fakeGh(swapped.bare, {

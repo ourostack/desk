@@ -199,7 +199,7 @@ async function readEach(items, read, signal) {
 
 const timeOf = (now) => {
   const at = now instanceof Date ? now.getTime() : now
-  if (typeof at !== "number" || !Number.isFinite(at)) throw new TypeError("now must be a time in milliseconds")
+  if (typeof at !== "number" || !Number.isFinite(at)) throw new TypeError("Pass `now` as a time in milliseconds")
   return at
 }
 

@@ -173,7 +173,7 @@ test("start refuses what it cannot honor before writing anything, and never over
   const cases = [
     [{ tooling: { repo: "not a repo" } }, /tooling\.repo: "not a repo" is not owner\/name/u],
     [{ founder: { alias: "Bad Alias", identity: "x" } }, /"Bad Alias" is not a valid alias/u],
-    [{ founder: { alias: "ok", identity: "a|b" } }, /is not a valid identity/u],
+    [{ founder: { alias: "ok", identity: "a|b" } }, /Pass a valid identity/u],
   ]
   for (const [extra, reason] of cases) {
     const result = await startWorkspace(startCit(repo, { apply: true, ...extra }))
@@ -186,9 +186,9 @@ test("start refuses what it cannot honor before writing anything, and never over
   const taken = await teamRepo({ ...CIT_SHAPED, "_meta/crew.json": "{\"note\":\"someone else's\"}\n" })
   const refused = await startWorkspace(startCit(taken, { apply: true }))
   assert.equal(refused.state, "refused")
-  assert.match(refused.message, /_meta\/crew\.json already exists, and starting a crew never overwrites a file/u)
+  assert.match(refused.message, /Move _meta\/crew\.json out of the way and run start again: it already exists, and starting a crew never overwrites a file/u)
   const registry = await teamRepo({ ...CIT_SHAPED, "_meta/desks.md": "# Routing\n\n| desk | path |\n|---|---|\n| a | b |\n" })
-  assert.match((await startWorkspace(startCit(registry, { apply: true }))).message, /_meta\/desks\.md already exists/u)
+  assert.match((await startWorkspace(startCit(registry, { apply: true }))).message, /Move _meta\/desks\.md out of the way.*already exists/u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })
 
@@ -216,7 +216,7 @@ test("a pull request that cannot merge stays open with its branch, and the clone
   assert.equal(result.state, "pr_open")
   assert.equal(result.branch, "crew/start-mjuohs00")
   assert.equal(result.reason, "BLOCKED")
-  assert.equal(result.message, "Not in effect yet: the pull request https://github.com/acme/team/pull/12 is open on branch crew/start-mjuohs00 and has not merged: GitHub's rules for main block merging it (a required review, a required check or a merge restriction). Someone allowed to merge into main merges it; for Crew's writes to land at once, the team lets its members merge Crew's crew/ pull requests. GitHub said: Protected branch: review required. Running the same command again reuses this pull request and tries to merge it again; it never opens a second one.")
+  assert.equal(result.message, "Run the same command again to retry the merge, or merge the pull request https://github.com/acme/team/pull/12 yourself. Not in effect yet: the pull request https://github.com/acme/team/pull/12 is open on branch crew/start-mjuohs00 and has not merged: GitHub's rules for main block merging it (a required review, a required check or a merge restriction). Someone allowed to merge into main merges it; for Crew's writes to land at once, the team lets its members merge Crew's crew/ pull requests. GitHub said: Protected branch: review required. Running the same command again reuses this pull request and tries to merge it again; it never opens a second one.")
   assert.ok(branches(repo.bare).includes("crew/start-mjuohs00"))
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -263,7 +263,7 @@ test("a pull request that cannot be opened is a failure, and its pushed branch i
   const result = await startWorkspace(startCit(repo, { apply: true, gh }))
   assert.equal(result.state, "failed")
   assert.equal(result.stage, "pull_request")
-  assert.match(result.message, /^Not in effect: the shared write stopped at pull_request \(could not open the pull request: GraphQL: no permission\)\./u)
+  assert.match(result.message, /^Fix what the parentheses name, then run the same command again\. Not in effect: the shared write stopped at pull_request \(could not open the pull request: GraphQL: no permission\)\./u)
   assert.deepEqual(branches(repo.bare), ["main"])
   assert.equal(git(repo.clone, ["rev-parse", "--abbrev-ref", "HEAD"]), "main")
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
@@ -301,7 +301,7 @@ test("a dual-repo start checks the tooling repository and says plainly what to c
   const plan = (gh, tooling = TOOLING) => startWorkspace(startCit(repo, { gh, tooling }))
   const missing = await plan(fakeGh(repo.bare, { hidden: ["acme/team-tooling"] }).gh)
   assert.equal(missing.state, "refused")
-  assert.match(missing.message, /^Nothing was written: the tooling repository acme\/team-tooling does not exist, or no signed-in gh account can see it\. Create it on GitHub first \(private is fine, with read access for the whole team\)/u)
+  assert.match(missing.message, /^the tooling repository acme\/team-tooling does not exist, or no signed-in gh account can see it\. Create it on GitHub first \(private is fine, with read access for the whole team\)/u)
   const empty = await plan(fakeGh(repo.bare, { repos: {} }).gh)
   assert.match(empty.message, /acme\/team-tooling has no plugin at plugins\/team\/ on main: add plugins\/team\/plugin\.json \(for Copilot through Agency\) and plugins\/team\/\.claude-plugin\/plugin\.json \(for Claude Code\) there/u)
   // A stub, with no plugin declared yet, needs only the repository.
@@ -368,7 +368,7 @@ test("a monorepo with several plugins: start names none of them unless told whic
   const repo = await teamRepo(files)
   const refused = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, now: NOW })
   assert.equal(refused.state, "refused")
-  assert.match(refused.message, /several plugins in plugins\/ \(alpha-helpers, team\); name the team's with --tooling-path plugins\/<name> --tooling-plugin <name>/u)
+  assert.match(refused.message, /Name the team's plugin with --tooling-path plugins\/<name> --tooling-plugin <name>: this repository has several plugins in plugins\/ \(alpha-helpers, team\)/u)
   const result = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply: true, tooling: { path: "plugins/team", plugin: "team" } })
   assert.equal(result.state, "published", result.message)
   assert.deepEqual(JSON.parse(onMain(repo.bare, "_meta/crew.json")), { schema_version: 1, tooling: { path: "plugins/team", plugin: "team" } })
@@ -376,5 +376,5 @@ test("a monorepo with several plugins: start names none of them unless told whic
   // A named monorepo plugin must be there.
   const absent = await teamRepo({ "README.md": "# Mono\n" })
   const named = await startWorkspace({ repo: absent.clone, spawnGit: absent.spawnGit, now: NOW, tooling: { path: "plugins/team", plugin: "team" } })
-  assert.match(named.message, /plugins\/team\/ in this repository has no plugin\.json or \.claude-plugin\/plugin\.json; add the plugin there first/u)
+  assert.match(named.message, /Add the plugin there first, or correct --tooling-path: plugins\/team\/ in this repository has no plugin\.json or \.claude-plugin\/plugin\.json/u)
 })

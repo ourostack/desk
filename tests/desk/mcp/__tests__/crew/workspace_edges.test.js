@@ -209,7 +209,7 @@ test("join: a roster row that cannot merge leaves the desk pushed and the pull r
   const { gh } = fakeGh(repo.bare, { merge: () => ({ code: 1, stderr: "blocked" }), view: BLOCKED })
   const result = await joinWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh, identity: "a_example", alias: "a", apply: true, wait: noWait, now: NOW })
   assert.equal(result.state, "pr_open")
-  assert.match(result.message, /^Not joined yet: desks\/a\/ is pushed, and the pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open on branch crew\/join-a-mjuohs00 and has not merged: GitHub's rules for main block merging it/u)
+  assert.match(result.message, /^Run the same command again to retry the merge, or merge the pull request \S+ yourself\. Not joined yet: desks\/a\/ is pushed, and the pull request https:\/\/github\.com\/acme\/team\/pull\/12 is open on branch crew\/join-a-mjuohs00 and has not merged: GitHub's rules for main block merging it/u)
   assert.ok(onMain(repo.bare, "desks/a/AGENTS.md") !== null)
   // The plan for a desk that is already in place says only the roster row is left.
   const plan = await joinWorkspace({ repo: repo.clone, identity: "a_example", alias: "a" })

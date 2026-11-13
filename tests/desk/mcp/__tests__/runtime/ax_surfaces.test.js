@@ -14,6 +14,33 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "../../../../..")
 const baselinePath = path.join(here, "ax-surfaces-baseline.json")
 
+// Strings the extractor reads as errors that are not: they stay in the manifest as texts, which are still checked for
+// scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
+const NOT_ERRORS = {
+  // Crew's replies that report an outcome other than a failure: a plan, a success, a status, or a note.
+  "plugins/desk/mcp/src/crew/workspace.js#the-team-s-tooling-repository": "status note",
+  "plugins/desk/mcp/src/crew/workspace.js#the-team-s-tooling-is": "status note",
+  "plugins/desk/mcp/src/crew/workspace.js#this-is-a-crew-workspace": "status",
+  "plugins/desk/mcp/src/crew/workspace.js#this-repository-is-already-a": "already done",
+  "plugins/desk/mcp/src/crew/workspace.js#plan-only-nothing-was-written": "plan",
+  "plugins/desk/mcp/src/crew/workspace.js#plan-only-nothing-was-written~2": "plan",
+  "plugins/desk/mcp/src/crew/workspace.js#plan-only-nothing-was-written~3": "plan",
+  "plugins/desk/mcp/src/crew/workspace.js#started-this-clone-s-crew": "success",
+  "plugins/desk/mcp/src/crew/workspace.js#started-committed-on-this-clone": "success",
+  "plugins/desk/mcp/src/crew/workspace.js#started-this-repository-is-now": "success",
+  "plugins/desk/mcp/src/crew/workspace.js#started-this-repository-is-now~2": "success",
+  "plugins/desk/mcp/src/crew/workspace.js#is-already-on-the-roster": "already done",
+  "plugins/desk/mcp/src/crew/workspace.js#joined-is-on-the-roster": "success",
+  "plugins/desk/mcp/src/crew/workspace.js#crew-s-desk-adopting": "commit message",
+  "plugins/desk/mcp/src/crew/workspace.js#nothing-was-written": "carrier",
+  "plugins/desk/mcp/src/crew/workspace.js#nothing-was-written~2": "carrier",
+  "plugins/desk/mcp/src/desk/content-home.js#nothing-was-written-or-committed": "carrier",
+  "plugins/desk/mcp/src/desk/resources.js#no-resource-was-changed": "carrier",
+  "plugins/desk/mcp/src/desk/steps.js#no-step-was-changed": "carrier",
+  "plugins/desk/mcp/src/desk/improvement-person.js#no-lookup-at-session-start": "internal sentinel, caught by its caller",
+  "plugins/desk/mcp/src/desk/runtime-resolver.js#cannot-find-module-in-the": "mirrors Node's own failed require",
+}
+
 function deskSurfaces() {
   const extracted = extractSurfaces({
     root: repoRoot,
@@ -21,9 +48,11 @@ function deskSurfaces() {
     tool: "desk",
   })
   const browser = JSON.parse(readFileSync(path.join(repoRoot, "plugins/desk/mcp/web-catalog.json"), "utf8")).tools
+  const found = extracted.errors.filter((error) => !error.id.includes("/lib/ouro-ui/"))
   return {
     ...extracted,
-    errors: extracted.errors.filter((error) => !error.id.includes("/lib/ouro-ui/")),
+    errors: found.filter((error) => !(error.id in NOT_ERRORS)),
+    texts: found.filter((error) => error.id in NOT_ERRORS).map(({ id, text, where }) => ({ id, text, where })),
     tools: [
       ...Object.entries(TOOL_DESCRIPTIONS).map(([name, description]) => ({ name, description, where: "plugins/desk/mcp/src/tool-names.js" })),
       ...browser.map((tool) => ({ name: tool.name, description: tool.description, where: "plugins/desk/mcp/web-catalog.json" })),
@@ -32,7 +61,9 @@ function deskSurfaces() {
 }
 
 test("every error and tool description in Desk is within Ouro AX, or recorded in the baseline that only shrinks", (t) => {
-  const report = checkSurfaces(deskSurfaces())
+  const surfaces = deskSurfaces()
+  assert.deepEqual(Object.keys(NOT_ERRORS).filter((id) => !surfaces.texts.some((text) => text.id === id)), [], "NOT_ERRORS names a text that is gone: remove it")
+  const report = checkSurfaces(surfaces)
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8"))
   assert.equal(baseline.ax, "surfaces-baseline/2")
   const result = ratchet(report, baseline.findings)

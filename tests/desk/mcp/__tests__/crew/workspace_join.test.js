@@ -176,7 +176,7 @@ test("join refuses before writing: not a Crew workspace, a taken alias, a bad al
     assert.equal(bad.state, "refused")
     assert.match(bad.message, reason)
   }
-  assert.match((await joinWorkspace(join(repo, { identity: "", apply: true }))).message, /an identity is required/u)
+  assert.match((await joinWorkspace(join(repo, { identity: "", apply: true }))).message, /Pass an identity/u)
 
   const stray = await teamRepo({ ...CIT_SHAPED, "_meta/desks.md": "| alias | identity |\n|---|---|\n| pat | pat_example |\n", "desks/_template/AGENTS.md": "# {{alias}}\n", "desks/newbie/notes.md": "someone's notes\n" })
   const strayResult = await joinWorkspace(join(stray, { apply: true }))
@@ -186,7 +186,7 @@ test("join refuses before writing: not a Crew workspace, a taken alias, a bad al
   const noTemplate = await teamRepo({ "_meta/desks.md": "| alias | identity |\n|---|---|\n| pat | pat_example |\n", "desks/pat/AGENTS.md": "x" })
   const missing = await joinWorkspace(join(noTemplate, { apply: true }))
   assert.equal(missing.state, "refused")
-  assert.match(missing.message, /desks\/_template\/ is missing or empty/u)
+  assert.match(missing.message, /Add the missing files to desks\/_template\/ first: it is missing or empty/u)
   assert.equal(git(repo.clone, ["status", "--porcelain"]), "")
 })
 

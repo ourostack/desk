@@ -110,58 +110,58 @@ function withNewSection(read, rowText) {
 
 // Migration uses explicit source columns, keeps their raw cells, and leaves unassigned columns after the standard six.
 function migrateResources(body, mapping, refuse) {
-  if (mapping === null || typeof mapping !== "object" || Array.isArray(mapping)) refuse("resource.migrate must be an object mapping all six fields to existing column names or null")
+  if (mapping === null || typeof mapping !== "object" || Array.isArray(mapping)) refuse("Pass `resource.migrate` as an object mapping all six fields to existing column names or null")
   const unknown = Object.keys(mapping).filter((key) => !MIGRATION_FIELDS.includes(key))
-  if (unknown.length > 0) refuse(`resource.migrate has unknown fields: ${unknown.join(", ")}`)
-  if (MIGRATION_FIELDS.some((key) => !Object.hasOwn(mapping, key))) refuse(`resource.migrate needs all six fields: ${MIGRATION_FIELDS.join(", ")}`)
+  if (unknown.length > 0) refuse(`Remove the unknown fields from \`resource.migrate\`: ${unknown.join(", ")}`)
+  if (MIGRATION_FIELDS.some((key) => !Object.hasOwn(mapping, key))) refuse(`Add all six fields to \`resource.migrate\`: ${MIGRATION_FIELDS.join(", ")}`)
   for (const key of MIGRATION_FIELDS) {
-    if (mapping[key] !== null && (typeof mapping[key] !== "string" || mapping[key].trim() === "" || /[\r\n\0]/u.test(mapping[key]))) refuse(`resource.migrate.${key} must name an existing column or be null for an absent column`)
+    if (mapping[key] !== null && (typeof mapping[key] !== "string" || mapping[key].trim() === "" || /[\r\n\0]/u.test(mapping[key]))) refuse(`Name an existing column in \`resource.migrate.${key}\`, or null for an absent column`)
   }
-  if (mapping.identity === null) refuse("resource.migrate.identity must name an existing column")
+  if (mapping.identity === null) refuse("Name an existing column in `resource.migrate.identity`; it cannot be null")
   const { lines, eol, fenced } = scan(body)
   const headings = lines.flatMap((line, index) => !fenced[index] && line.trim() === HEADING ? [index] : [])
-  if (headings.length === 0) refuse("resource.migrate found no `## Resources` section")
-  if (headings.length > 1) refuse("resource.migrate found more than one `## Resources` section")
+  if (headings.length === 0) refuse("Leave out `resource.migrate`, or add a `## Resources` section: resource.migrate found no `## Resources` section")
+  if (headings.length > 1) refuse("Keep one `## Resources` section: resource.migrate found more than one")
   const heading = headings[0]
   let end = heading + 1
   while (end < lines.length && (fenced[end] || !/^## /u.test(lines[end]))) end += 1
   const head = lines.findIndex((line, index) => index > heading && index < end && !fenced[index] && line.trim().startsWith("|"))
-  if (head === -1) refuse("resource.migrate found no table under `## Resources`")
+  if (head === -1) refuse("Add a table under `## Resources`, or leave out `resource.migrate`: it found no table there")
   const names = splitCells(lines[head])
   const lower = names.map((name) => name.toLowerCase())
   for (const [index, name] of names.entries()) {
-    if (name === "" || lower.indexOf(lower[index]) !== index) refuse(`resource.migrate found an empty or duplicate column ${JSON.stringify(name)}`)
+    if (name === "" || lower.indexOf(lower[index]) !== index) refuse(`Give every column of the \`## Resources\` table its own non-empty name: resource.migrate found an empty or duplicate column ${JSON.stringify(name)}`)
   }
   const separator = splitCells(lines[head + 1] ?? "")
-  if (separator.length !== names.length || separator.some((cell) => !/^:?-+:?$/u.test(cell))) refuse("resource.migrate needs a separator cell for every header column")
+  if (separator.length !== names.length || separator.some((cell) => !/^:?-+:?$/u.test(cell))) refuse("Add a separator cell for every header column of the table: resource.migrate needs one for each")
   let stop = head + 2
   for (; stop < end && !fenced[stop] && lines[stop].trim().startsWith("|"); stop += 1) {
     const cells = splitCells(lines[stop])
-    if (cells.length !== names.length) refuse(`resource.migrate row at body line ${stop + 1} has a different number of cells than the header`)
-    if (cells.every((cell) => /^:?-+:?$/u.test(cell))) refuse("resource.migrate found more than one table under `## Resources`")
+    if (cells.length !== names.length) refuse(`Give the row at body line ${stop + 1} as many cells as the header: it has a different number`)
+    if (cells.every((cell) => /^:?-+:?$/u.test(cell))) refuse("Keep one table under `## Resources`: resource.migrate found more than one")
   }
-  if (lines.some((line, index) => index >= stop && index < end && !fenced[index] && line.trim().startsWith("|"))) refuse("resource.migrate found more than one table under `## Resources`")
+  if (lines.some((line, index) => index >= stop && index < end && !fenced[index] && line.trim().startsWith("|"))) refuse("Keep one table under `## Resources`: resource.migrate found more than one")
   const canonical = COLUMNS.map((name) => lower.indexOf(name.toLowerCase()))
   const complete = canonical.every((index) => index !== -1)
   const sources = complete ? canonical : MIGRATION_FIELDS.map((key, index) => {
     const source = mapping[key]
     if (canonical[index] !== -1) {
-      if (source === null || source.trim().toLowerCase() !== COLUMNS[index].toLowerCase()) refuse(`resource.migrate.${key} must keep the existing ${JSON.stringify(COLUMNS[index])} column`)
+      if (source === null || source.trim().toLowerCase() !== COLUMNS[index].toLowerCase()) refuse(`Name the existing ${JSON.stringify(COLUMNS[index])} column in \`resource.migrate.${key}\`: it must keep the existing ${JSON.stringify(COLUMNS[index])} column`)
       return canonical[index]
     }
     if (source === null) return -1
     const at = lower.indexOf(source.trim().toLowerCase())
-    if (at === -1) refuse(`resource.migrate: ${JSON.stringify(source)} is not a column of this table`)
+    if (at === -1) refuse(`Name a column of this table in resource.migrate: ${JSON.stringify(source)} is not a column of this table`)
     return at
   })
   const used = sources.filter((index) => index !== -1)
-  if (new Set(used).size !== used.length) refuse("resource.migrate maps one column to more than one field")
+  if (new Set(used).size !== used.length) refuse("Name one field per column in resource.migrate: it maps one column to more than one field")
   const identities = new Set()
   for (let at = head + 2; at < stop; at += 1) {
     const value = splitCells(lines[at])[sources[IDENTITY]]
-    if (EMPTY.test(value)) refuse(`resource.migrate row at body line ${at + 1} has no resource identity`)
+    if (EMPTY.test(value)) refuse(`Give the row at body line ${at + 1} a resource identity: resource.migrate found none`)
     const identity = canonicalIdentity(value)
-    if (identity !== null && identities.has(identity)) refuse(`resource.migrate identity ${JSON.stringify(identity)} appears more than once`)
+    if (identity !== null && identities.has(identity)) refuse(`Remove or rename the repeated identity ${JSON.stringify(identity)}: resource.migrate found it more than once`)
     if (identity !== null) identities.add(identity)
   }
   if (complete) return body
@@ -184,18 +184,18 @@ function migrateResources(body, mapping, refuse) {
 export function applyResource(body, input, tool, taskRef) {
   const refuse = (message) => { throw new Error(`${tool}: ${message}; no resource was changed.`) }
   const unknown = Object.keys(input).filter((key) => !RESOURCE_FIELDS.includes(key))
-  if (unknown.length > 0) refuse(`resource has unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; it takes ${RESOURCE_FIELDS.map((key) => `\`${key}\``).join(", ")}`)
+  if (unknown.length > 0) refuse(`Remove the unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; it takes ${RESOURCE_FIELDS.map((key) => `\`${key}\``).join(", ")}`)
   const identity = canonicalIdentity(input.identity)
-  if (identity === null) refuse("resource `identity` must be `worktree:<absolute path>` or `branch:<owner/repo>#<name>` (Desk records worktrees and branches only)")
-  const text = (field) => (input[field] === undefined ? undefined : typeof input[field] === "string" ? oneLine(input[field]) : refuse(`resource \`${field}\` must be text`))
+  if (identity === null) refuse("Pass `identity` as `worktree:<absolute path>` or `branch:<owner/repo>#<name>` (Desk records worktrees and branches only)")
+  const text = (field) => (input[field] === undefined ? undefined : typeof input[field] === "string" ? oneLine(input[field]) : refuse(`Pass \`${field}\` as text`))
   const [step, intended, disposition, details] = ["step", "intended", "disposition", "details"].map(text)
-  if (disposition !== undefined && !DISPOSITIONS.includes(disposition)) refuse(`resource \`disposition\` must be one of ${DISPOSITIONS.join(", ")}`)
-  if ((disposition === undefined) !== (details === undefined)) refuse("resource `disposition` and `details` go together: the details are the absence readback, the named transferee and their acknowledgement, or the reason, owner and cleanup trigger")
-  if (disposition !== undefined && details === "") refuse("resource `details` cannot be empty")
-  if (step !== undefined && !(readSteps(body).rows ?? []).some((row) => row.id === step)) refuse(`resource \`step\` ${JSON.stringify(step)} is not a step of this card's \`## Steps\` table`)
+  if (disposition !== undefined && !DISPOSITIONS.includes(disposition)) refuse(`Pass \`disposition\` as one of ${DISPOSITIONS.join(", ")}`)
+  if ((disposition === undefined) !== (details === undefined)) refuse("Pass `disposition` and `details` together, or neither: the details are the absence readback, the named transferee and their acknowledgement, or the reason, owner and cleanup trigger")
+  if (disposition !== undefined && details === "") refuse("Add text to `details`: it cannot be empty")
+  if (step !== undefined && !(readSteps(body).rows ?? []).some((row) => row.id === step)) refuse(`Name a step of this card's \`## Steps\` table in \`step\`: ${JSON.stringify(step)} is not a step of this card's \`## Steps\` table`)
   if (input.migrate !== undefined) body = migrateResources(body, input.migrate, refuse)
   const read = readResources(body)
-  if (read.found && read.rows === undefined) refuse(`the \`## Resources\` table on this card is left as prose because ${read.reason}, so ${identity} cannot be written there. For a legacy table, repeat this resource write with \`resource.migrate: {identity, owner, writers, intended, evidence, terminal}\`: name each existing source column, or use null only for an absent column (identity must name a column). Desk preserves other columns and prose and refuses ambiguous or malformed tables`)
+  if (read.found && read.rows === undefined) refuse(`Repeat this resource write with \`resource.migrate: {identity, owner, writers, intended, evidence, terminal}\` for a legacy table, naming each existing source column, or null only for an absent column (identity must name a column): the \`## Resources\` table on this card is left as prose because ${read.reason}, so ${identity} cannot be written there. Desk preserves other columns and prose and refuses ambiguous or malformed tables`)
   const existing = (read.rows ?? []).find((row) => canonicalIdentity(row.identity) === identity)
   const set = [[IDENTITY, identity]]
   if (step !== undefined) set.push([OWNER, `step ${step}`])
