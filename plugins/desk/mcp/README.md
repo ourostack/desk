@@ -73,6 +73,8 @@ Eligible whole-session Copilot sources whose raw logs are gone can supply a boun
 - `friction_add`, `lesson_add`
 - `desk_save` — commit files written directly with Write/Edit rather than through a structured Desk tool; each path must resolve inside this session's write prefix (`desks/<alias>/` in a shared workspace), or the call is refused
 
+`task_archive` rewrites the Markdown links that point into or out of the moved task, in the same commit as the move. It lists the files it changed in `links.rewritten`, and any link it could not rewrite (a link that leaves the desk, or a file with unstaged or untracked work) in `links.not_rewritten`; the archive still happens. A non-Git desk gets the same rewrites without a commit.
+
 After `task_archive` returns `archive_pending`, keep the archived folder and index intact and follow its named repair action before retrying the same track and slug. Retry can publish an exact staged relocation when source HEAD still holds the task, the source index is empty, the archive index and working bytes match that source, and any track-link update matches the update derived from track HEAD. Changed card/report bytes, partial staging, outside track edits and destinations already occupied in HEAD remain pending; do not unstage them to force recovery. A timeout can also occur after the commit takes effect, so retry checks publication before attempting another commit. This recovery does not diagnose or remove the original timeout ([implementation](src/tools/archive-state.js), [qualification](../../../tests/desk/mcp/__tests__/tools/archive_staged_retry.test.js)).
 
 **Teammate notes (Crew):**
