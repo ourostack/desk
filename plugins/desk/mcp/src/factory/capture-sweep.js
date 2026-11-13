@@ -30,7 +30,7 @@ import { readdirSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { claudeFolderOf, listRootSessions } from "./capture-count.js"
 import { assertPartition, classifySessions } from "./capture-classify.js"
-import { allOutboxNames, factoryStateRoot, listMarkers, readConsent, readDelivered, readStatus, writeStatus } from "./outbox.js"
+import { allOutboxNames, factoryStateRoot, listMarkers, listProofMarkers, readConsent, readDelivered, readStatus, writeStatus } from "./outbox.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
 import { derivedStoreOf, deskRootOf, markerRoute, proofIndex, provenBy, sessionPlace, sessionRoute } from "./session-route.js"
 
@@ -105,6 +105,7 @@ async function gather(env, { markers, orphans }) {
   const status = await readStatus(env)
   const receipts = normalReceipts(isPlainObject(status.derivations) ? status.derivations : {})
   const valid = markers ?? await listMarkers(env)
+  const proofs = new Set((await listProofMarkers(env)).map(markerName))
   const consentStores = (await readConsent(env)).stores
   const { copies, quarantined } = await allOutboxNames(env)
   const delivered = []
@@ -119,6 +120,7 @@ async function gather(env, { markers, orphans }) {
     cache: isPlainObject(status.coverage_cache) ? status.coverage_cache : {},
     orphans: orphans === undefined ? (status.orphans ?? null) : orphans,
     markers: valid,
+    proofs,
     receipts,
     // Delivered names first, kept copies next, the live outbox last, so the store that holds the live copy names the copy.
     copies: [...delivered, ...copies].map(({ store, name }) => ({ name, store: lower(store) })),
@@ -128,6 +130,11 @@ async function gather(env, { markers, orphans }) {
   }
 }
 
+// The listed sessions without a proof mark. A proof session is left out before anything is counted: it is no capture candidate and not part of any denominator.
+function withoutProofs(hosts, proofs) {
+  return Object.fromEntries(Object.entries(hosts).map(([host, entry]) => [host, { ...entry, sessions: entry.sessions.filter(({ name }) => !proofs.has(name)) }]))
+}
+
 /** See the header. */
 export async function coverageNow(env, { now = Date.now, bindingVersion, orphans, markers, caps } = {}) {
   let stage = "state_unreadable"
@@ -135,9 +142,10 @@ export async function coverageNow(env, { now = Date.now, bindingVersion, orphans
     const state = await gather(env, { markers, orphans })
     stage = "count_failed"
     const counted = await listRootSessions(env, { now, caps, cache: state.cache })
+    const hostsCounted = withoutProofs(counted.hosts, state.proofs)
     stage = "classify_failed"
     const hosts = classifySessions({
-      hosts: counted.hosts,
+      hosts: hostsCounted,
       markers: markerInputs(state.markers, state.receipts),
       receipts: state.receipts,
       copies: state.copies,
@@ -151,7 +159,7 @@ export async function coverageNow(env, { now = Date.now, bindingVersion, orphans
     for (const host of Object.values(hosts)) assertPartition(host)
     // Per host, the sessions whose facts copy is in quarantine: the only kind of `held` that is a transient state.
     const inQuarantine = new Set(state.copies.map(({ name }) => name).filter((name) => state.quarantined.includes(name)))
-    const quarantined = Object.fromEntries(Object.entries(counted.hosts).map(([host, entry]) => [host, entry.sessions.filter(({ name }) => inQuarantine.has(name)).length]))
+    const quarantined = Object.fromEntries(Object.entries(hostsCounted).map(([host, entry]) => [host, entry.sessions.filter(({ name }) => inQuarantine.has(name)).length]))
     return { ok: true, coverage: { method: 1, ran_at: new Date(now()).toISOString(), hosts }, cache: counted.cache, quarantined }
   } catch {
     return { ok: false, code: stage }

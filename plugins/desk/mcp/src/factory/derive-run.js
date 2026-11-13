@@ -205,6 +205,8 @@ async function noteDerive(env, name, failure, diag = { failed: false }) {
 
 export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = deskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)), admit = null } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
+  // A controlled proof session (`DESK_FACTORY_PROOF`, issue #578) is never derived, whichever run asks.
+  if (marker.proof === true) return { result: "skipped", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   const name = `${marker.host}-${marker.session_id}.json`
   const diag = { failed: false }
@@ -245,6 +247,8 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
   let step = "route"
   try {
     let marker = await newestMarker(env, root, input, requireStored)
+    // The stored mark is read under the lock: a proof mark written after the sweep listed this session still stops the derivation.
+    if (marker.proof === true) return { result: "skipped", store }
     logs.add(marker.log_path)
     if (marker.desk_root === null) return { result: "held", store }
     if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }

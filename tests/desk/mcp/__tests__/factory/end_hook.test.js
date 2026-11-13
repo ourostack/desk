@@ -5,7 +5,7 @@ import { existsSync, readFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
-import { factoryStateRoot, listMarkers, requestEvaluation, requestFinalize, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, listProofMarkers, readStatus, requestEvaluation, requestFinalize, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
 
 import { readInput, runHook } from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
@@ -177,6 +177,76 @@ test("invalid identifiers, events and paths never write or launch", () => scratc
     assert.equal(await runHook({ host: "claude", payload, env: ctx.env, launch: async () => assert.fail("must not launch") }), "invalid")
   }
   assert.equal((await listMarkers(ctx.env)).length, 0)
+}))
+
+// DESK_FACTORY_PROOF marks a controlled proof run (issue #578). The session's own end writes only its mark, and every later reader keeps it out.
+const proofPayload = (marker, event = "SessionEnd") => ({ session_id: ID, transcript_path: marker.log_path, cwd: marker.cwd, hook_event_name: event, reason: "prompt_input_exit" })
+
+test("a proof-marked session writes only its mark, and a later run without the flag still skips it", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const spawned = []
+  const launch = async (...args) => spawned.push(args)
+  assert.equal(await runHook({ host: "claude", payload: proofPayload(marker), env: { ...ctx.env, DESK_FACTORY_PROOF: "1" }, launch }), "proof")
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await listMarkers(ctx.env), [])
+  const [mark] = await listProofMarkers(ctx.env)
+  assert.equal(mark.session_id, ID)
+  assert.equal(mark.proof, true)
+  assert.equal(JSON.stringify(mark).includes(SENTINEL), false)
+  assert.equal(await runHook({ host: "claude", payload: proofPayload(marker), env: ctx.env, launch }), "proof")
+  assert.equal(await runHook({ host: "claude", payload: proofPayload(marker, "Stop"), env: ctx.env, launch }), "proof")
+  assert.deepEqual(spawned, [])
+  const { deriveMarker } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")
+  assert.equal((await deriveMarker(ctx.env, mark, { quietMs: 0, requireStored: true })).result, "skipped")
+  // A copy of the record taken before the mark was written still stops at the stored mark, read under the derivation lock.
+  const ordinary = { ...mark }
+  delete ordinary.proof
+  assert.equal((await deriveMarker(ctx.env, ordinary, { quietMs: 0, requireStored: true })).result, "skipped")
+  // The mark is not pruned with the 30-day marker window: the transcript stays on disk and would otherwise be counted again.
+  await writeMarker(ctx.env, { ...mark, updated_at: "2020-01-01T00:00:00.000Z" })
+  assert.equal((await listProofMarkers(ctx.env)).length, 1)
+}))
+
+test("an empty or 0 proof flag is an ordinary session and still derives", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const spawned = []
+  for (const value of ["", "0"]) {
+    assert.equal(await runHook({ host: "claude", payload: proofPayload(marker), env: { ...ctx.env, DESK_FACTORY_PROOF: value }, launch: async (...args) => spawned.push(args) }), "written")
+  }
+  assert.deepEqual(spawned.map(([, args]) => args[0]), ["derive", "derive"])
+  assert.deepEqual(await listProofMarkers(ctx.env), [])
+  assert.equal((await listMarkers(ctx.env))[0].proof, undefined)
+}))
+
+test("a proof mark that names another session, or sits under another file name, is ignored", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const other = "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f61"
+  const root = await factoryStateRoot(ctx.env)
+  // A proof mark for another session, filed under this session's name: the file and the id disagree, so it is not this session's mark.
+  await fs.mkdir(path.join(root, "markers"), { recursive: true })
+  await fs.writeFile(path.join(root, "markers", `claude-code-${ID}.json`), JSON.stringify({ ...marker, session_id: other, proof: true }))
+  assert.deepEqual(await listProofMarkers(ctx.env), [])
+  const spawned = []
+  assert.equal(await runHook({ host: "claude", payload: proofPayload(marker), env: ctx.env, launch: async (...args) => spawned.push(args) }), "written")
+  assert.deepEqual(spawned.map(([, args]) => args[0]), ["derive"])
+}))
+
+test("an unreadable or invalid proof mark counts the session as ordinary and records a count, not its content", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  const root = await factoryStateRoot(ctx.env)
+  const file = path.join(root, "markers", `claude-code-${ID}.json`)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  for (const text of ["{ not json", JSON.stringify({ ...marker, proof: "yes" })]) {
+    await fs.writeFile(file, text)
+    assert.deepEqual(await listProofMarkers(ctx.env), [])
+  }
+  const { markers_unreadable: dropped } = await readStatus(ctx.env)
+  assert.deepEqual(Object.keys(dropped).sort(), ["count", "last_at"])
+  assert.equal(dropped.count, 2)
+  assert.equal(JSON.stringify(dropped).includes(SENTINEL), false)
+  const spawned = []
+  assert.equal(await runHook({ host: "claude", payload: proofPayload(marker), env: ctx.env, launch: async (...args) => spawned.push(args) }), "written")
+  assert.deepEqual(spawned.map(([, args]) => args[0]), ["derive"])
 }))
 
 // The hosts kill a hook that outlives its declared timeout, so the smallest timeout any host manifest declares for this hook is the bound a real exit must meet.
