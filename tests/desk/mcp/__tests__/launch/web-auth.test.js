@@ -301,6 +301,11 @@ test("only frame owners may own child documents, and the main document must come
   }
 })
 
+test("an eval's value is the function's result when it is a function, and the value itself otherwise", () => {
+  assert.equal(auth.CALL([(element) => `on ${element}`, "the button"]), "on the button")
+  assert.equal(auth.CALL(["just text", null]), "just text")
+})
+
 test("the page storage function lists, reads, writes, deletes and clears local or session storage", () => {
   const store = () => { const items = new Map(); return { get length() { return items.size }, key: (index) => [...items.keys()][index], getItem: (key) => items.get(key) ?? null, setItem: (key, value) => items.set(key, value), removeItem: (key) => items.delete(key), clear: () => items.clear() } }
   globalThis.window = { localStorage: store(), sessionStorage: store() }
@@ -336,7 +341,7 @@ test("actions pass literal data, scripts and the formerly refused commands run a
     assert.equal(native.calls.find((call) => call[0] === "fill")[1], literal)
     native.page.evaluateHandle = async (script) => ({ script, dispose: async () => {} })
     native.page.evaluate = async (script, argument) => {
-      native.calls.push(["page.evaluate", script, argument])
+      native.calls.push(["page.evaluate", script === auth.CALL ? "call" : script, argument])
       return argument?.[0]?.script !== undefined ? { script: argument[0].script, argument: null } : { script: "storage", argument }
     }
     const dialogs = []

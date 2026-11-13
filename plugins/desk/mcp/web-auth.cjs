@@ -102,6 +102,8 @@ var ARITY = {
 var RAW = ["eval", "run-code", "console", "keydown", "keyup", "mousemove", "mousedown", "mouseup", "upload", "dialog-accept", "dialog-dismiss",
   "localstorage-list", "localstorage-get", "localstorage-set", "localstorage-delete", "localstorage-clear",
   "sessionstorage-list", "sessionstorage-get", "sessionstorage-set", "sessionstorage-delete", "sessionstorage-clear"];
+// Runs in the page: what an eval script's value comes to, [value, element]: a function is called with the element, anything else is the answer.
+var CALL = function (given) { return typeof given[0] === "function" ? given[0](given[1]) : given[0]; };
 // Runs in the page: one localStorage or sessionStorage operation, [kind, operation, key, value].
 var STORE = function (input) {
   var store = input[0] === "local" ? window.localStorage : window.sessionStorage;
@@ -1687,7 +1689,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
         // element, when a ref is given) through the browser's own protocol, which a page's content-security policy cannot block.
         var evaluate = async function (element) {
           var source = await page.evaluateHandle(args[1]);
-          try { return await page.evaluate(function (given) { return typeof given[0] === "function" ? given[0](given[1]) : given[0]; }, [source, element]); }
+          try { return await page.evaluate(CALL, [source, element]); }
           finally { await source.dispose(); }
         };
         value = args.length === 3 ? await onRef(args[2], evaluate) : await evaluate(null);
@@ -1914,4 +1916,4 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
   };
 }
 
-module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, STORE: STORE, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
+module.exports = { create: create, prepare: prepare, inspect: inspect, fingerprint: fingerprint, HOLDS: HOLDS, FOCUSED: FOCUSED, STORE: STORE, CALL: CALL, checkArgs: checkArgs, fail: fail, safeFailure: safeFailure, FAILURES: FAILURES, renderText: renderText, TEXT_BUDGET: TEXT_BUDGET, FAILURE_CODES: Object.keys(FAILURES) };
