@@ -2041,6 +2041,8 @@ test("desk_status names who is serving even when the runtime status misses its b
   assert.deepEqual(compact.runtime, identity)
   assert.equal(compact.plugin_version, "9.8.7")
   assert.deepEqual(compact.pending, ["activation", "write_scope", "sync"])
+  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", runtime: { node: "kept" } }) }] })
+  assert.deepEqual(payload(await session.callTool({ name: "desk_doctor", input: {} })).runtime, { node: "kept", ...identity })
 })
 
 test("desk_status serves a fresh detail once no older computation is running, and a cached one after it", async (t) => {

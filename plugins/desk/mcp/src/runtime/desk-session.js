@@ -1048,8 +1048,10 @@ export function createDeskSession(deps) {
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       payload = JSON.parse((await runtimeCall("desk_doctor", { format }, signal)).content[0].text)
     }
+    const admitted = withAdmission(payload, snapshot)
     return jsonResult({
-      ...withAdmission(payload, snapshot),
+      ...admitted,
+      runtime: { ...admitted.runtime, ...runtimeIdentity({ env, runtime: context.runtime }) },
       repairs_available: DOCTOR_REPAIRS,
     })
   }
