@@ -8,7 +8,8 @@
 // and any failure answer `{}`; it always exits 0.
 
 // The hook's limit is 11 s (copilot-hooks.json); the boot takes 3 to 10 s on a busy machine and has a 15 s budget of its own, so a slow one finishes later and is delivered then.
-const WAIT_MS = 8000;
+// The wait ends this long after the hook's process started, so a slow Node start (Windows can spend several seconds on it) shortens the wait instead of overrunning the limit.
+const WAIT_UNTIL_MS = process.platform === "win32" ? 5500 : 8000;
 
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -37,7 +38,7 @@ process.stdin.on("end", async () => {
       process.stdout.write("{}\n");
       return;
     }
-    const result = await boot.awaitBoot({ paths, waitMs: WAIT_MS });
+    const result = await boot.awaitBoot({ paths, waitMs: Math.max(0, WAIT_UNTIL_MS - performance.now()) });
     let context = "";
     if (result.boot !== null) {
       if (boot.claimDelivery(paths)) context = boot.bootContext({ boot: result.boot }).text;
