@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.115 — 2026-11-13
+
+desk-web now handles every site that tries to open a desktop app the same way, instead of Teams only. When a page points itself at an app address (`zoomus:`, `msteams:`, `slack:`, `figma:` and the rest), desk-web still refuses the launch, which fails the way an app that is not installed fails, so a page with a timer fallback takes its web path by itself. A page that only offers a button now gets it followed: after a `goto`, `click`, `reload`, `go-back` or `go-forward`, desk-web finds the page's own web option by role and name ("Join from browser", "Continue on this browser", "Use the web app instead") and clicks it once. Downloads, "Open in the app" and "switch browsers" are never taken.
+
+The reply says what happened in `appLaunch`: `refused` names the app schemes, `by` the site, and `how` says whether the page took its own web path (`page`), desk-web followed its web option (`followed`) or neither happened (`none`, with `next` giving the command to run, such as `["click","e5"]`). A `snapshot`, `find` or `wait` never acts, but reports a launch the page made since the last reply, with the web option's ref. Opening the app itself still needs its own explicit route, which desk-web does not offer yet, and every note says so.
+
+A navigation now returns once the page's response commits and gives the load event up to 8 seconds, or half a second after a refused launch. Before, a launcher that kept the load from ever finishing, such as a Zoom join link, ran the command out of time and closed the context.
+
+The Teams-only table that added `webjoin=true` to Teams links is removed: the Teams launcher's "Join meeting from this browser" is found like any other. A fresh browser keeps no tree, so its replies point out a web option in the driver's snapshot text without clicking it.
+
+When a Desk write's commit did not finish, its result now opens with a `next` sentence: run the route's steps now, in order, then read back the remote. A held route says to report its read-back instead. The `status` stays as it was. The card guard still refuses any hand commit of a card.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.114 — 2026-11-13
 
 Desk no longer has a destructive-command guard. It stopped Bash commands that removed or moved away a git checkout, removed a linked worktree with `rm`, or deleted a Colima or Lima VM, including commands from subagents. Agents are trusted to clean up after themselves, so Desk no longer checks their shell commands.
