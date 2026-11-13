@@ -16,6 +16,7 @@ import {
   LOCK_SUFFIX,
   apply,
   cachedDependencies,
+  cachedEngines,
   plan,
   reachesDesk,
   readBlocks,
@@ -186,6 +187,20 @@ test("Desk alone moves to release; an entry another plugin covers on every engin
   const both = await agencyHome([entry(MAIN_SPEC), entry(RELEASE_SPEC)].join("\n"))
   await run(["--migrate"], both)
   assert.equal(readFileSync(both.file, "utf8"), entry(RELEASE_SPEC))
+})
+
+test("cached engines follow the engines field, or the manifests a copy holds, and are null when unreadable", async () => {
+  const fixture = await agencyHome("", {
+    [MS_DESK]: { dependencies: [], engines: ["copilot", "codex"] },
+    [CREW]: { dependencies: [], claude: true },
+    [CIT]: { dependencies: null },
+    [SUPERPOWERS]: { dependencies: [], engines: "copilot" },
+  })
+  assert.deepEqual(cachedEngines(fixture.cacheDir, MS_DESK), ["copilot"])
+  assert.deepEqual(cachedEngines(fixture.cacheDir, CREW), ["claude", "copilot"])
+  assert.deepEqual(cachedEngines(fixture.cacheDir, CIT), ["copilot"])
+  assert.equal(cachedEngines(fixture.cacheDir, SUPERPOWERS), null)
+  assert.equal(cachedEngines(fixture.cacheDir, "github:example/none:plugins/x@main"), null)
 })
 
 test("an entry waits while a plugin that might bring Desk is not cached, or names engines this cannot read", async () => {
