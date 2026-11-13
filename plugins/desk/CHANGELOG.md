@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.112 — 2026-11-13
+
+A controlled proof run that sets `DESK_FACTORY_PROOF` to `1` no longer enters Factory. Its session's end writes only a private mark, so nothing is captured, derived or flushed for it, and the capture coverage counts leave it out. The mark is kept with the session, so a later run without the variable, or a sweep past the 30-day marker window, still leaves it out. An unattended run without the variable counts as before, and a mark that names another session or cannot be read counts the session as ordinary, with a count of unreadable markers in `status.json` and no name or content. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the variable. Proof sessions that were already published are not withdrawn by this change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.111 — 2026-11-13
 
 When a Desk tool's write does not finish, its result now always says how to finish it by hand. A note that did not reach its recipient, a team lesson that is not yet on the shared branch, and a pull request left open all carry `route_around`. A pull request is merged by hand and read back; a note or lesson that never landed is read for and then sent again through the same tool. A desk lesson whose improvement card did not open says how to retry it. A contract test fails when any failing result under `src/tools` has no route.
