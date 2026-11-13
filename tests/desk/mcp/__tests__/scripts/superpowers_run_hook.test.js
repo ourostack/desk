@@ -10,7 +10,8 @@ import { removeTree } from "../_remove_tree.js"
 const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 const wrapper = path.join(repoRoot, "plugins/superpowers/hooks/run-hook.cmd")
 const bash = process.env.SUPERPOWERS_TEST_BASH || (process.platform === "win32" ? "bash" : "/bin/bash")
-const deadlineMs = 2000
+// Matches the hook's declared 10 s timeout (asserted below), so a slow cold Bash start on a loaded Windows runner is not mistaken for the preamble hang (#615).
+const deadlineMs = 10_000
 
 function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), "superpowers hook "))
