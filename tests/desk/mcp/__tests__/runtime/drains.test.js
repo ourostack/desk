@@ -518,6 +518,7 @@ test("state and config live in Desk's state folder, from XDG_STATE_HOME or the h
   assert.equal(drainsHome({ env: { XDG_STATE_HOME: "relative" }, homeDir: "/h" }), path.join("/h", ".local", "state", "ouroboros-skills", "desk", "drains"))
   assert.equal(drainsHome({ env: {}, homeDir: "/h" }), path.join("/h", ".local", "state", "ouroboros-skills", "desk", "drains"))
   assert.ok(drainsHome().endsWith(path.join("ouroboros-skills", "desk", "drains")))
+  assert.equal(drainPaths().config, path.join(drainsHome(), "config.json"))
   assert.deepEqual(drainPaths({ env: { XDG_STATE_HOME: "/x" } }), { config: path.join("/x", "ouroboros-skills", "desk", "drains", "config.json"), state: path.join("/x", "ouroboros-skills", "desk", "drains", "state.json"), lock: path.join("/x", "ouroboros-skills", "desk", "drains", "poll.lock") })
 })
 
@@ -606,6 +607,7 @@ test("a CLI with no token for the account is a failure that says what to run, wi
   const isolated = { HOME: dir, USERPROFILE: dir, XDG_STATE_HOME: dir, XDG_CONFIG_HOME: dir, GH_CONFIG_DIR: dir, PATH: "/nonexistent" }
   await assert.rejects(connectGithub("no-such-account-for-drains-test", { env: isolated }), /no token for no-such-account-for-drains-test/u)
   await assert.rejects(connectGithub("no-such-account-for-drains-test", { spawn: () => ({ status: 1 }) }), /no token/u)
+  await assert.rejects(connectGithub("no-such-account-for-drains-test"), /no token/u)
 })
 
 test("a state file that is not an object reads as no state", async () => {
@@ -657,6 +659,8 @@ test("poll, ack and status run end to end through the command line, with the sta
   assert.equal(second.wakes[0].message, "New or changed issues in acme/widgets: #1 T. Drain them.")
   assert.deepEqual(second.wakes[0].done.slice(0, 2), [process.execPath, SCRIPT])
   assert.deepEqual(second.wakes[0].done.slice(-2), ["--state", state])
+  const unflagged = JSON.parse((await cli(["poll", "--config", config], { connect, now: () => NOW })).out)
+  assert.equal(unflagged.wakes.length, 0)
   const failed = await cli([...second.wakes[0].done.slice(2), "--error", "no answer"], { now: () => NOW })
   assert.equal(JSON.parse(failed.out).changed, true)
   assert.equal(readDrainStates(state)[DRAIN.repo].lastError, "the wake was not delivered: no answer")
