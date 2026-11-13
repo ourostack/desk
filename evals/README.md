@@ -16,6 +16,8 @@ Run `node scripts/skill-evals.cjs validate`, `node scripts/skill-evals.cjs finge
 
 A suite whose eval was rerun and still fails may carry `"knownFailure": {"issue": "<issue URL>", "case": "<case id>", "observed": "YYYY-MM-DD"}` beside `reviewedSourceFingerprint`. Add it only after you reran the eval and the case failed, and refresh the fingerprint as usual. `validate` accepts it only with an issue URL and prints a `KNOWN FAILURE` line, `verify` refuses a receipt while it remains, and it does not change `contractFingerprint`. Delete it when the eval passes again.
 
+A suite's fingerprint may move only with evidence of a real run. `validate` fails a suite whose `contractFingerprint` differs from the one in `evals/receipts/_baseline.json` (today's frozen state; never add to it) unless `evals/receipts/<suite id>.json` is a current, passing receipt or the suite carries a `knownFailure`. After running the eval externally, record the receipt with `node scripts/skill-evals.cjs record evals/<suite>.json --result <harness-result.json>` (`-` reads stdin, so `<harness> | node scripts/skill-evals.cjs record evals/<suite>.json --result -` runs and records in one step). The harness result carries `run` (`actor`, `model`, `runtimeRevision`, `startedAt`, `completedAt`) and per-check `cases`; `record` adds the suite id and both fingerprints, applies `verify`'s checks and writes the receipt only if they pass. Commit the receipt with the fingerprint change.
+
 Add scenarios from observed regressions, not to inflate counts.
 
 ## Core meeting capture

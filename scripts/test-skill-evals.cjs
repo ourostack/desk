@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, revisionStatus } = require("./skill-evals.cjs");
+const { contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, requireEvidence, recordReceipt, revisionStatus } = require("./skill-evals.cjs");
 
 const root = path.resolve(__dirname, "..");
 const cli = path.join(root, "scripts", "skill-evals.cjs");
@@ -251,6 +251,51 @@ try {
     const resultFile = path.join(dir, "result.json");
     fs.writeFileSync(resultFile, `${JSON.stringify(result, null, 2)}\n`);
     assert.throws(() => verifyReceipt(resultFile, dir), /failed check/u);
+  }
+
+  {
+    const { dir, suite } = makeFixture();
+    const baseline = path.join(dir, "evals", "receipts");
+    fs.mkdirSync(baseline, { recursive: true });
+    fs.writeFileSync(path.join(baseline, "_baseline.json"), JSON.stringify({ schemaVersion: 1, grandfathered: { fixture: contractFingerprint(suite) } }));
+    assert.equal(requireEvidence(dir).suites, 1, "the grandfathered contract needs no receipt");
+
+    fs.writeFileSync(path.join(dir, "source.txt"), "changed\n");
+    const moved = { ...suite, reviewedSourceFingerprint: sourceFingerprint(["source.txt"], dir) };
+    fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
+    assert.throws(() => requireEvidence(dir), /^Error: evals\/fixture\.json: run `node scripts\/skill-evals\.cjs record evals\/fixture\.json --result <harness-result\.json>`.*knownFailure.*without a matching run receipt/u);
+    const refused = spawnSync(process.execPath, [cli, "validate", dir], { encoding: "utf8" });
+    assert.equal(refused.status, 1);
+
+    const harness = path.join(dir, "harness.json");
+    const { run, cases } = receipt(moved);
+    fs.writeFileSync(harness, JSON.stringify({ run, cases }));
+    const stale = receipt(suite);
+    fs.writeFileSync(path.join(dir, "stale.json"), JSON.stringify(stale));
+    assert.throws(() => recordReceipt("evals/fixture.json", "stale.json", dir), /sourceFingerprint does not match/u);
+    assert.equal(fs.existsSync(path.join(baseline, "fixture.json")), false);
+
+    const recorded = spawnSync(process.execPath, [cli, "record", "evals/fixture.json", "--result", "harness.json"], { cwd: dir, encoding: "utf8" });
+    assert.equal(recorded.status, 0, recorded.stderr);
+    assert.doesNotThrow(() => requireEvidence(dir));
+    assert.doesNotThrow(() => verifyReceipt("evals/receipts/fixture.json", dir));
+
+    // A later change makes the stored receipt stale again.
+    moved.cases[0].description = "Changed case.";
+    fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
+    assert.throws(() => requireEvidence(dir), /contractFingerprint does not match/u);
+  }
+
+  {
+    const { dir, suite } = makeFixture();
+    fs.writeFileSync(path.join(dir, "source.txt"), "changed\n");
+    const moved = {
+      ...suite,
+      reviewedSourceFingerprint: sourceFingerprint(["source.txt"], dir),
+      knownFailure: { issue: "https://github.com/owner/repo/issues/1", case: "case-1", observed: "2026-11-13" },
+    };
+    fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
+    assert.equal(requireEvidence(dir).suites, 1, "a knownFailure with an issue stands in for a receipt");
   }
 
   assert.equal(typeof revisionStatus, "function", "the shipped CLI must expose relevant-revision status routing");
