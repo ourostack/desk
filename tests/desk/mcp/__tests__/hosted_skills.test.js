@@ -144,7 +144,7 @@ test("desk_skill called with no arguments lists the plugin's skills from the run
   assert.equal(parse(deskSkill()).status, "listed")
 })
 
-test("Prove the hosted startup sleep schedules a real timer, not a wall-clock bound", async () => {
+test("withHostedStartup's own sleep really waits between polls", async () => {
   const replies = [answer({ detail_pending: true }), answer({ state: "ready" })]
   const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", waitMs: 50, pollMs: 5 })
   const originalSetTimeout = globalThis.setTimeout
