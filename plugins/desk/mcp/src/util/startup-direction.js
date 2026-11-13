@@ -36,7 +36,7 @@ export function bootCommand(script = BOOT_SCRIPT) {
 // assignment, skips it, and Desk's tools still work: desk_status needs no boot (the server admits the desk itself) and desk-web
 // (browser_command, browser_context) never reads the desk. One sentence, because a child that had to guess between "boot first"
 // and "don't boot" stopped and blocked its parent.
-export const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
+const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context."
 
 // A child agent with a bounded brief (dispatched with a scoped outcome, authority and return contract) is not the
 // root operator's session, even when it receives this same startup text; it stands down from this imperative and

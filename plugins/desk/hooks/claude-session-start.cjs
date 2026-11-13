@@ -17,6 +17,8 @@ const { pathToFileURL } = require("node:url");
 const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = process.argv[2] || `${pluginRoot}/skills/using-desk/SKILL.md`;
 const bootScript = `${pluginRoot}/mcp/scripts/session-boot.js`;
+// The same rule as BOOT_SKIP in mcp/src/util/startup-direction.js; the fallbacks below cannot load that module.
+const BOOT_SKIP = "The boot is for desk-backed work (tasks, cards, saves, sync, memory). Skip it when the operator or a coordinating parent says not to boot, or your assignment is bounded and read-only: follow that brief and use Desk's tools, which need no boot, such as desk_status and desk-web's browser_command and browser_context.";
 
 // A shell command substitution strips trailing newlines; the output this hook replaces was built from such substitutions.
 function stripTrailingNewlines(text) {
@@ -63,12 +65,12 @@ function emit(additionalContext) {
     try {
       foundation = stripTrailingNewlines(fs.readFileSync(foundationPath, "utf8"));
     } catch {
-      emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node "${bootScript}" before other work, then desk:session-start explains its result. A child agent with a bounded brief follows the brief instead and skips this.`);
+      emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. The boot has not run: run node "${bootScript}" before other work, then desk:session-start explains its result. ${BOOT_SKIP}`);
       return;
     }
     let direction = await startupDirection();
     if (!direction) {
-      direction = `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node "${bootScript}" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
+      direction = `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node "${bootScript}" now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. ${BOOT_SKIP}`;
     }
     // The foundation points at the RFC through this line: the installed copy, which the agent can open from any repository.
     // A Windows plugin root keeps its backslash separators, so the separator follows the root's own spelling.
