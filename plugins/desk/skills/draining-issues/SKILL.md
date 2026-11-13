@@ -51,9 +51,11 @@ If a helper fails, use an available permitted API/CLI path for the same authoriz
 
 For continuing discovery, use deterministic API polling, webhooks or another non-model detector. No new eligible issue/change means no model invocation, AI credits or tokens. A scheduled AI prompt that “checks first and exits quickly” still spends tokens; never use it for idle detection. Normal authorized issue work is not watcher overhead.
 
+Desk ships this watcher: `node <desk>/plugins/desk/mcp/scripts/drains.js poll` records changes and prints the wakes for any always-on runner to deliver (see [issue drains](../../docs/issue-drains.md)).
+
 Deduplicate by stable repository/issue identity and relevant revision; durably record eligible events before waking the drain. Recheck ownership/dependencies on intake; recover pending events idempotently. Authentication/network failures must remain observable through deterministic health/status reporting, without model wakeups or advancing seen markers.
 
-Filter the drain's own status-only comment creations/edits deterministically so acknowledgements do not wake the drain again. Match the specific comment/revision, not all activity on that issue or by that account; meaningful external changes remain eligible. Put `<!-- ouro-drain-status -->` in the drain's own acknowledgement and status comments: Ouroboros' issue-drain watcher skips a change only when the newest activity is a marked comment by the polling account, so a comment without the marker still wakes the drain.
+Filter the drain's own status-only comment creations/edits deterministically so acknowledgements do not wake the drain again. Match the specific comment/revision, not all activity on that issue or by that account; meaningful external changes remain eligible. Put `<!-- ouro-drain-status -->` in the drain's own acknowledgement and status comments: the watcher skips a change only when the newest activity is a marked comment by the polling account, so a comment without the marker still wakes the drain.
 
 Record owner, exact lifetime, restart/recovery steps and pending-event location. For example, an attached poller can sleep until it persists an event and exits to wake its agent; it does not survive owning-session termination or reboot.
 
