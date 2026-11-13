@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { renameWithRetry } from "./rename-retry.js"
-import { resolveDeskStateDir } from "../runtime/last-start.js"
 import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 
 export const CAPTURE_DIR = "pending-captures"
@@ -31,7 +30,7 @@ function pruneOld(dir, now) {
 }
 
 /** Writes the record of a captured change and returns its id. Throws when the state folder cannot be written. */
-export function writeCaptureRecord({ stateDir = resolveDeskStateDir(), root, paths, message, capture, now = Date.now() }) {
+export function writeCaptureRecord({ stateDir, root, paths, message, capture, now = Date.now() }) {
   assertNotRealStateUnderTest(stateDir)
   mkdirSync(dirOf(stateDir), { recursive: true, mode: 0o700 })
   pruneOld(dirOf(stateDir), now)
@@ -51,7 +50,7 @@ const isRecord = (record) => record !== null && typeof record === "object" && re
   Array.isArray(record.expected) && record.expected.every(isText)
 
 /** The record for `id`: `{ record }`, or `{ error }` saying why Desk cannot use it. */
-export function readCaptureRecord({ stateDir = resolveDeskStateDir(), id }) {
+export function readCaptureRecord({ stateDir, id }) {
   if (typeof id !== "string" || !ID.test(id)) return { error: "the capture id is not one Desk issues" }
   let text
   try {
@@ -68,7 +67,7 @@ export function readCaptureRecord({ stateDir = resolveDeskStateDir(), id }) {
   return isRecord(record) && record.id === id ? { record } : { error: "Desk's record of this change is malformed" }
 }
 
-/** Removes the record for `id`; a missing record is already removed. */
-export function removeCaptureRecord({ stateDir = resolveDeskStateDir(), id }) {
-  if (typeof id === "string" && ID.test(id)) rmSync(fileOf(stateDir, id), { force: true })
+/** Removes the record for `id`, a valid id Desk issued; a missing record is already removed. */
+export function removeCaptureRecord({ stateDir, id }) {
+  rmSync(fileOf(stateDir, id), { force: true })
 }

@@ -3,7 +3,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
@@ -945,13 +946,49 @@ test("a recorded finish is held when Desk's record of the change cannot be read 
   assert.notEqual(git(root, ["status", "--porcelain"]), "", "nothing was committed")
 })
 
-test("a record older than a week is pruned when the next record is written", () => {
+test("a record older than a week is pruned when the next record is written, and the rest of the folder is left alone", () => {
   const stateDir = mkdtempSync(path.join(tmpdir(), "desk-captures-"))
+  const dir = path.join(stateDir, CAPTURE_DIR)
   const capture = { before: "a".repeat(40), branch: "main", expected: [] }
-  const old = writeCaptureRecord({ stateDir, root: "/desk", paths: ["t/x.md"], message: "m", capture })
+  const write = () => writeCaptureRecord({ stateDir, root: "/desk", paths: ["t/x.md"], message: "m", capture })
+  const old = write()
+  const recent = write()
   const past = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
-  utimesSync(path.join(stateDir, CAPTURE_DIR, `${old}.json`), past, past)
-  const fresh = writeCaptureRecord({ stateDir, root: "/desk", paths: ["t/x.md"], message: "m", capture })
+  utimesSync(path.join(dir, `${old}.json`), past, past)
+  mkdirSync(path.join(dir, "stuck.json"))
+  utimesSync(path.join(dir, "stuck.json"), past, past)
+  writeFileSync(path.join(dir, "notes.txt"), "kept\n")
+  const fresh = write()
   assert.ok(readCaptureRecord({ stateDir, id: old }).error, "the old record is gone")
-  assert.deepEqual(readCaptureRecord({ stateDir, id: fresh }).record.id, fresh)
+  assert.equal(readCaptureRecord({ stateDir, id: recent }).record.id, recent, "a recent record stays")
+  assert.equal(readCaptureRecord({ stateDir, id: fresh }).record.id, fresh)
+  assert.equal(readFileSync(path.join(dir, "notes.txt"), "utf8"), "kept\n", "a file that is not a record is not touched")
+  assert.ok(existsSync(path.join(dir, "stuck.json")), "an entry Desk cannot remove is left in place, and pruning goes on")
+})
+
+test("Desk reads its record only when every field is well formed, and refuses anything else", () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), "desk-captures-"))
+  const dir = path.join(stateDir, CAPTURE_DIR)
+  mkdirSync(dir, { recursive: true })
+  const id = randomUUID()
+  const good = { schema_version: 1, id, root: "/desk", paths: ["t/x.md"], message: "m", before: "a".repeat(40), branch: "main", expected: ["100644 abc\tt/x.md"], created: "2026-11-13T00:00:00.000Z" }
+  const withoutId = { ...good }
+  delete withoutId.id
+  const file = path.join(dir, `${id}.json`)
+  writeFileSync(file, JSON.stringify(good))
+  assert.equal(readCaptureRecord({ stateDir, id }).record.id, id)
+  const malformed = [null, "5", { ...good, schema_version: 2 }, { ...good, id: randomUUID() }, withoutId, { ...good, root: "" }, { ...good, paths: "t/x.md" }, { ...good, paths: [] }, { ...good, paths: [7] }, { ...good, message: 3 }, { ...good, before: "" }, { ...good, branch: "" }, { ...good, expected: "x" }, { ...good, expected: [""] }]
+  for (const value of malformed) {
+    writeFileSync(file, JSON.stringify(value))
+    assert.ok(readCaptureRecord({ stateDir, id }).error, JSON.stringify(value))
+  }
+  writeFileSync(file, "not json")
+  assert.match(readCaptureRecord({ stateDir, id }).error, /unreadable/u)
+})
+
+test("a card whose record cannot be written, and whose commit cannot be read back, says it cannot tell and only reads", () => {
+  const capture = { before: "a".repeat(40), branch: "main", expected: [] }
+  const route = commitRoute({ root: "/desk", paths: ["t/x.md"], message: "m", readback: "unknown", card: "t/x", capture })
+  assert.equal(route.held, true)
+  assert.match(route.summary, /^Desk cannot tell whether its commit of the card t\/x landed/u)
 })
