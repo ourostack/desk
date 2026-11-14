@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.153 — 2026-11-14
+
+The drains runner now runs relays, two small GitHub automations for a repository whose own settings cannot do the job. A `dispatch` relay fires a workflow or a `repository_dispatch` event once when a watched workflow has a new successful run. A `merge-when-green` relay merges a labelled pull request only when every check it names is green on the head and, if asked, the default branch's latest completed run of a workflow is green; it never bypasses the branch rules and keeps one status comment it edits. Both poll with conditional requests and back off on a low quota. `drains.js status` lists each relay with its last fire or merge and what it waits on, and `drains.js why --relay <name>` and `drains.js why owner/name#number` show what a relay decided. See [Relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.152 — 2026-11-14
 
 Seven replies that agents kept getting right in the reasoning and wrong in the message now have one short list at the top of [`interaction-style`](skills/interaction-style/SKILL.md): stepping away, a requirement change, a grant that overrides a skill's stop, a native consent prompt that authority already covers, a step that waits on something only the human can do, why a question form is avoided, and an edit or purchase the findings point at. Each says what the last message must carry, because text between tool calls can fold out of sight.
