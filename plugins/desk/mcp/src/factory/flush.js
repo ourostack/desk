@@ -665,7 +665,7 @@ const withdrawnPlace = (place) => place === "away" || place === "suppressed"
 
 // The withdrawal of a proof-marked session's record, audited by the session's hash in `proof-audit.json` with reason `proof`: `pushed` once its delete
 // is in a pull request, `withdrawn` once the store no longer holds it (its tombstone).
-async function auditWithdrawal(env, session, stateBefore, outcome, reason = "proof") {
+async function auditWithdrawal(env, session, stateBefore, outcome, reason) {
   await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: stateBefore, action: "withdraw", outcome, reason, at: new Date().toISOString() })
 }
 
