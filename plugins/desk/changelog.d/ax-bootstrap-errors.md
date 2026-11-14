@@ -1,1 +1,0 @@
-The errors in Desk's runtime bootstrap (a missing `mcpRoot`, an incomplete atomic publication, a source mirror with links or other files, a source identity that does not match, and an unsafe path in the dependency pack) now open with what to do, then say what went wrong, and keep their meaning.

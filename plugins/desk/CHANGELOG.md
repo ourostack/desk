@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.132 — 2026-11-14
+
+The errors in Desk's runtime bootstrap (a missing `mcpRoot`, an incomplete atomic publication, a source mirror with links or other files, a source identity that does not match, and an unsafe path in the dependency pack) now open with what to do, then say what went wrong, and keep their meaning.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.131 — 2026-11-14
 
 The errors in Desk's runtime (runtime dependencies, pull-request publication, delivery, status inspection, drains, session retention and sync, pending migrations, workspace claims and workspace tidy) now open with what to do, then say what went wrong, and keep their meaning. Labels, log lines and messages that mirror another program's wording keep theirs.
