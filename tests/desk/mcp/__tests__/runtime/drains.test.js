@@ -221,6 +221,44 @@ async function quiet(extra = {}) {
   return w
 }
 
+test("the drain's marked status comment followed two seconds later by its own drain: label wakes nobody, however the polls fall around them, and the marker advances", async () => {
+  const created = "2026-11-13T20:51:13Z"
+  const commentAt = "2026-11-14T01:11:27Z"
+  const labelAt = "2026-11-14T01:11:29Z"
+  const marked = statusComment(6869126791, commentAt, "maintainer")
+  const label = labelEvent(labelAt, "drain: triaged")
+  const cases = [
+    ["one poll after both", [], created, [marked], [label]],
+    ["a poll between the comment and the label", [commentAt], commentAt, [marked], [label]],
+    ["a poll that saw the comment but not yet the label event", [], labelAt, [marked], []],
+    ["a poll that saw the new updated_at before either record could be listed", [], labelAt, [], []],
+  ]
+  for (const [name, between, updatedAt, comments, events] of cases) {
+    const w = await world([issue(890, created)])
+    await w.poll()
+    for (const at of between) {
+      w.issues[0] = issue(890, at)
+      w.comments = async () => [marked]
+      w.events = async () => []
+      await w.poll()
+      matches(w.state().seen["890"], seenAt(at))
+    }
+    w.issues[0] = issue(890, updatedAt)
+    w.comments = async (_repo, _n, since) => comments.filter((comment) => comment.updated_at > since)
+    w.events = async () => events
+    const out = await w.poll()
+    assert.deepEqual(out.wakes, [], name)
+    assert.deepEqual(w.state().pending, [], name)
+    matches(w.state().seen["890"], seenAt(updatedAt))
+    // The next poll, with the label listed too and nothing newer, is quiet as well.
+    w.issues[0] = issue(890, labelAt)
+    w.comments = async () => [marked]
+    w.events = async () => [label]
+    assert.deepEqual((await w.poll()).wakes, [], name)
+    matches(w.state().seen["890"], seenAt(labelAt))
+  }
+})
+
 test("a cross-reference from the drain's own marked comment, marked body or drain branch wakes nobody, and the marker still advances", async () => {
   const marked = (id, created_at, body = `Filed #1 as a follow-up.\n${DRAIN_STATUS_MARKER}`) => ({ id, body, created_at, updated_at: created_at, user: { login: "maintainer" } })
   const cases = [
