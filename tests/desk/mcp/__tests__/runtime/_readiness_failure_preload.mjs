@@ -151,19 +151,20 @@ export function transformSource(url, source, scope) {
   } else if (owned(url, "runtime/bootstrap.js", scope)) {
     name = "mirror"
     replacements = [
-      ["  const lockIo = { platform, remove: removeDirectory, sleep, writeLockOwner }",
-        `  const lockIo = { platform, remove: removeDirectory, sleep, writeLockOwner }
-  if (__rm(destinationDir)) {
+      // The anchor is a statement the coverage gate's instrumentation leaves as written: a changed file is instrumented,
+      // and an anchor on a line it reformats, such as the `lockIo` object, would no longer match there.
+      ["if (build === null)",
+        `if (__rm(destinationDir)) {
     if (build !== null) build = __rw("build", build)
     const __validate = validateDestination
     validateDestination = function(candidate) { return __rw(candidate === stagingDir ? "stage" : "dest", __validate).call(this, candidate) }
     rename = __rw("rename", rename)
-  }`],
+  }
+  if (build === null)`],
       ["cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {", '__rw("copy", cpSync)(path.join(mcpRoot, entry), path.join(stagingPath, entry), {'],
     ]
   } else return { source, coverage: "outside" }
   if (replacements.some(([anchor]) => source.split(anchor).length !== 2)) {
-    process.stderr.write("[anchor-debug] " + JSON.stringify({ url, counts: replacements.map(([anchor]) => source.split(anchor).length - 1), length: source.length, crlf: source.includes("\r\n") }) + "\n")
     return { source, coverage: "unknown", name }
   }
   let changed = source
