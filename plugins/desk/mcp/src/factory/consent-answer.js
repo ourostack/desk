@@ -12,7 +12,7 @@ import { factoryStatus } from "../tools/factory-context.js"
 import { noteConsentMentioned } from "../runtime/consent-mentioned.js"
 import { resolveDeskStateDir } from "../runtime/last-start.js"
 
-export const FACTORY_CONSENT_ANSWERS = Object.freeze(["yes", "no"])
+const FACTORY_CONSENT_ANSWERS = Object.freeze(["yes", "no"])
 
 const NO_ACCOUNT_FIX = (store) => `Do not record it. Tell the operator in one line that no signed-in GitHub account can open pull requests on ${store}, giving each account's reason from \`accounts\`, and that signing in a personal account with \`gh auth login\` lets a later session ask.`
 
