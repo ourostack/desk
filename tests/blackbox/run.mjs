@@ -938,6 +938,9 @@ function percentile(values, p) {
   return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)]
 }
 
+// A speed gap fails only when each host has at least this many samples; fewer are reported as informational.
+const MIN_SPEED_SAMPLES = 5
+
 function parityChecks(shared, hosts) {
   if (!(hosts.includes("copilot") && hosts.includes("claude"))) return
   const add = (id, ok, detail) => parity.push({ id, ok, detail })
@@ -992,11 +995,17 @@ function parityChecks(shared, hosts) {
     if (c.length && l.length && c.some((r) => !r.ok) && l.every((r) => r.ok)) add(`reliability.${id}`, false, "fails on Copilot, passes on Claude")
   }
   for (const name of ["desk_server_cold_start_ms", "desk_ready_ms", "desk_session_start_hook_ms", "web_server_cold_start_ms", "boot_ms", "first_meaning_recall_ms"]) {
-    const c = median(metrics.filter((m) => m.host === "copilot" && m.name === name).map((m) => m.value))
-    const l = median(metrics.filter((m) => m.host === "claude" && m.name === name).map((m) => m.value))
-    if (c === null || l === null) continue
+    const cValues = metrics.filter((m) => m.host === "copilot" && m.name === name).map((m) => m.value)
+    const lValues = metrics.filter((m) => m.host === "claude" && m.name === name).map((m) => m.value)
+    if (cValues.length === 0 || lValues.length === 0) continue
+    const [c, l] = [median(cValues), median(lValues)]
+    const samples = Math.min(cValues.length, lValues.length)
+    // Two samples cannot tell a gap from noise: a local run had claude at 5761 and 18908 ms on one host, and #864 had 6087 against 3278 on a passing previous commit.
     // Slower only past noise: 50% and 300 ms both.
-    add(`speed.${name}`, !(c > l * 1.5 && c - l > 300), `copilot p50 ${Math.round(c)} ms, claude p50 ${Math.round(l)} ms`)
+    const slower = c > l * 1.5 && c - l > 300
+    const detail = `copilot p50 ${Math.round(c)} ms, claude p50 ${Math.round(l)} ms`
+    if (samples < MIN_SPEED_SAMPLES) parity.push({ id: `speed.${name}`, ok: true, informational: true, samples, detail })
+    else add(`speed.${name}`, !slower, detail)
   }
 }
 
@@ -1080,7 +1089,10 @@ function markdown(summary) {
     lines.push(`| ${name} | ${fmt(c?.p50, unit)} | ${fmt(c?.p95, unit)} | ${fmt(l?.p50, unit)} | ${fmt(l?.p95, unit)} | ${unit} |`)
   }
   lines.push("", "## Parity", "", "| Check | Result | Detail |", "| --- | --- | --- |")
-  for (const p of summary.parity) lines.push(`| ${p.id} | ${p.ok ? (p.known ? "same (was known)" : "same") : p.known ? "GAP (known)" : "GAP"} | ${p.detail.replace(/\|/gu, "/")} |`)
+  for (const p of summary.parity) {
+    const result = p.informational ? `speed (informational, n=${p.samples})` : p.ok ? (p.known ? "same (was known)" : "same") : p.known ? "GAP (known)" : "GAP"
+    lines.push(`| ${p.id} | ${result} | ${p.detail.replace(/\|/gu, "/")} |`)
+  }
   lines.push("", "## Checks", "", "| Check | Area | Copilot | Claude | Copilot p50 ms | Claude p50 ms |", "| --- | --- | --- | --- | --- | --- |")
   const ids = [...new Set(summary.checks.map((c) => c.id))]
   for (const id of ids) {

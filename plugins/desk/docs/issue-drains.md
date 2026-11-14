@@ -34,6 +34,7 @@ Only `repo` and `session` are required. `session` is opaque to Desk: the runner 
 
 An issue is news when something other than the drain changed it since the revision last recorded: a new issue, a title or body edit, a comment, a reopen, or a label change. These are not news:
 
+- a new issue the drain filed or already triaged: a label in its `drain:` namespace, or the `<!-- ouro-drain-status -->` marker in its body, is there before the poll first sees it, so the issue is recorded as seen and only later changes by others count;
 - the drain's own status comment, matched by the `<!-- ouro-drain-status -->` marker and the polling account, including its edits;
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;

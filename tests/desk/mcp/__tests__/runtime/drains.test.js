@@ -259,6 +259,37 @@ test("the drain's marked status comment followed two seconds later by its own dr
   }
 })
 
+test("an issue the drain filed or already triaged is seen on arrival: a drain: label or the status marker in its body, then only the drain's own marked activity, wakes nobody", async () => {
+  const filed = [
+    ["a drain: label already applied", { labels: [{ name: "Drain: triaged" }, { name: "bug" }] }],
+    ["the status marker in the body", { body: `Filed by the drain.\n${DRAIN_STATUS_MARKER}` }],
+  ]
+  for (const [name, extra] of filed) {
+    const w = await world([issue(1, T(0))])
+    await w.poll()
+    w.issues.push({ ...issue(2, T(5)), ...extra })
+    w.comments = async (_repo, n) => (n === 2 ? [statusComment(7, T(5))] : [])
+    w.events = async (_repo, n) => (n === 2 ? [labelEvent(T(5), "drain: triaged")] : [])
+    assert.deepEqual((await w.poll()).wakes, [], name)
+    matches(w.state().seen["2"], seenAt(T(5)))
+    // The drain's own status comment afterwards is quiet too; someone else's comment is news.
+    w.issues[1] = { ...w.issues[1], updated_at: T(7) }
+    w.comments = async (_repo, n) => (n === 2 ? [statusComment(7, T(5)), statusComment(8, T(7))] : [])
+    assert.deepEqual((await w.poll()).wakes, [], name)
+    w.issues[1] = { ...w.issues[1], updated_at: T(9) }
+    w.comments = async (_repo, n) => (n === 2 ? [{ id: 9, body: "me too", updated_at: T(9), user: { login: "someone" } }] : [])
+    const out = await w.poll()
+    assert.equal(out.wakes[0].events[0].why, "comment 9 by someone", name)
+  }
+  // Any other new issue still wakes: no labels, a label outside the namespace, a label with no name.
+  for (const extra of [{}, { labels: [{ name: "bug" }] }, { labels: [{}] }, { labels: [null] }, { body: undefined }]) {
+    const w = await world([issue(1, T(0))])
+    await w.poll()
+    w.issues.push({ ...issue(2, T(5)), ...extra })
+    assert.equal((await w.poll()).wakes[0].events[0].why, "new issue", JSON.stringify(extra))
+  }
+})
+
 test("a cross-reference from the drain's own marked comment, marked body or drain branch wakes nobody, and the marker still advances", async () => {
   const marked = (id, created_at, body = `Filed #1 as a follow-up.\n${DRAIN_STATUS_MARKER}`) => ({ id, body, created_at, updated_at: created_at, user: { login: "maintainer" } })
   const cases = [
