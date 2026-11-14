@@ -12,7 +12,7 @@ There is one tier, and a pull request runs all of it. From opening a pull reques
 
 - **Quick checks** (`desk-mcp-tests.yml`) runs first. It parses every changed JavaScript, JSON and YAML file and runs the changed Desk test files that fit its budget. Everything else in that workflow waits for it, so a syntax error fails fast.
 - After it, in parallel: the coverage shards and the coverage gate, unused code, the offline eval tests when the change touches them, the browser, Crew member-binding and black-box checks on Linux, macOS and Windows, the runtime packs, native Windows, native macOS protection and the auto, RC and stable release dry runs.
-- `Windows suite` (`desk-windows-suite.yml`, 16 shards) runs beside them, and `Validate skills` and `Claude Code plugin load` run alongside.
+- `Windows suite` (`desk-windows-suite.yml`, 20 shards) runs beside them, and `Validate skills` and `Claude Code plugin load` run alongside.
 - A change to nothing but `docs/`, `SETUP.md` or `LICENSE` skips all but Quick checks and the skill checks (which read `SETUP.md`). The root `README.md` is not on the list, because a test reads it. That list is the only one that may skip anything, and `windows_suite_shards.test.js` keeps it the same in Quick checks, the Windows suite and both main workflows.
 
 Main requires `CI gate`, `Windows suite`, `Validate skills` and `Claude Code plugin load`, and merges on green with auto-merge (there is no merge queue). `CI gate` knows which jobs a pull request may skip, so a skipped job never passes it by accident.

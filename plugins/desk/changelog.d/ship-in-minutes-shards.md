@@ -1,0 +1,1 @@
+The Windows suite now runs on 20 shards and the Linux coverage tests on 12, both balanced by freshly measured per-file times, so a pull request's slowest check finishes in about 6 minutes instead of 8.
