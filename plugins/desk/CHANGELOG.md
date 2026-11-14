@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.139 — 2026-11-14
+
+Desk's agent-facing words now have no known Ouro AX findings, and the check refuses any new one. The last seven tool descriptions that ran over the 600-character budget (`task_move`, `friction_add`, `lesson_add`, `note_leave`, `desk_save`, `browser_context` and `browser_command`) are shorter and say when to use the tool; the detail they dropped now sits in the input schema. Seven messages that told an agent to run `git` commands now say what to do without the command. The recorded baseline is gone: a finding fails the test, and a text exempted as not an error can only be added by raising a cap in the same change.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.138 — 2026-11-14
 
 The issue-drain poller no longer wakes a drain for a bot comment that repeats the same bot's previous comment on the issue (a daily failure report, a CI-budget note) once run links and IDs, dates, times and durations are ignored. A changed text, a bot's first comment and any person's comment still wake it. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
