@@ -76,6 +76,6 @@ test("readiness policy diagnostics lead with the fix, for default and supplied c
 
   const named = diagnostics(() => normalizeReadinessPolicy({ authority_provider: 5, root: "x" }, { path: "cfg.runtime" }))
   assert.equal(named.diagnostics[0].path, "cfg.runtime.root")
-  assert.match(named.diagnostics[0].message, /^Set root to one of: workspace\./u)
+  assert.match(named.diagnostics[0].message, /^Set the readiness policy root to one of: workspace\./u)
   assert.equal(named.diagnostics[1].path, "cfg.runtime.authority_provider")
 })

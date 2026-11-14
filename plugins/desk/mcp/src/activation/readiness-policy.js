@@ -88,7 +88,7 @@ function validateEnum(value, allowed, path, field, diagnostics) {
     diagnostics.push({
       path,
       code: "activation_policy_invalid",
-      message: `Set ${field} to one of: ${[...allowed].join(", ")}.`,
+      message: `Set the readiness policy ${field} to one of: ${[...allowed].join(", ")}.`,
     })
   }
 }
