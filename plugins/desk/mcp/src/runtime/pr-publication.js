@@ -134,7 +134,7 @@ export function publishPullRequest({ git, spawnGit, root, upstream, head, onto, 
     return [...new Set(names)]
   }
   const pushed = git(["push", "--quiet", upstream.remote, `${head}:refs/heads/${branch}`], 60_000)
-  if (pushed.status !== 0) throw Object.assign(new Error(`Push the branch with the command below: The contribution branch push was refused by its hook or remote; the upstream branch was not pushed. Fix: push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic`), { code: "pr_publication_push_the_branch_with_the" })
+  if (pushed.status !== 0) throw Object.assign(new Error(`Push ${commandArgument(`${head}:refs/heads/${branch}`)} to ${commandArgument(upstream.remote)} yourself to read its admission diagnostic: the contribution branch push was refused by its hook or remote, and the upstream branch was not pushed.`), { code: "pr_publication_push_the_branch_with_the" })
   let pr = list()
   if (pr === undefined) {
     gh(["pr", "create", "--repo", repo.full, "--head", branch, "--base", base, "--title", "Publish workspace changes",
