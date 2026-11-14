@@ -1045,6 +1045,15 @@ try {
       assert.equal(fs.existsSync(receiptFile), false, "a dry run writes no receipt");
       assert.match(calls().at(-1).args[1], /## The agent's tool requests, in order\n\(none\)/u);
 
+      const keepDir = path.join(path.dirname(receiptFile), "kept");
+      const kept = run(["fixture", ...fake, "--case", "case-1", "--keep", keepDir]);
+      assert.equal(kept.status, 0, kept.stderr);
+      assert.match(kept.stdout, /Dry run/u, "--case never writes a receipt");
+      assert.equal(JSON.parse(fs.readFileSync(path.join(keepDir, fs.readdirSync(keepDir)[0]), "utf8")).case, "case-1");
+      const noCase = run(["fixture", ...fake, "--case", "no-such-case"]);
+      assert.equal(noCase.status, 1);
+      assert.match(noCase.stderr, /fixture has no case no-such-case/u);
+
       const unversioned = run(["fixture", ...fake], { FAKE_MODE: "no-version" });
       assert.equal(unversioned.status, 0, unversioned.stderr);
       assert.equal(written().run.runtimeRevision, "unknown (fake-harness.cjs did not report a version)");
