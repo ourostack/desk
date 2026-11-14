@@ -1,6 +1,7 @@
 // The `drains` command line: `poll`, `ack` and `status`. Output is one JSON value on stdout; a usage error is one line on stderr
 // (exit 2) and a failure is a Desk failure line on stderr (exit 1).
 import * as path from "node:path"
+import { deskFailure } from "./desk-failure.js"
 import { ackWake, connectGithub, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, whyOf, withDrainLock } from "./drains.js"
 
 const USAGE = [
@@ -13,25 +14,27 @@ const USAGE = [
   "A runner delivers each wake's message to its session, then runs the wake's `done` command, adding --error <text> when delivery failed.",
 ].join("\n")
 
+const usageFailure = (code, thing, fix) => deskFailure({ code, thing, probably: "the command line does not match the drains usage", look: "run drains.js --help", keepWorking: "nothing was polled or changed", fix })
+
 const VALUED = { poll: ["--config", "--state"], ack: ["--repo", "--wake", "--error", "--state"], status: ["--config", "--state"], why: ["--state"] }
 
 export function parseDrainsArgs(argv) {
   const [command, ...args] = argv
   if (command === undefined || command === "--help" || command === "-h") return { help: true }
-  if (!(command in VALUED)) return { error: `unknown command ${JSON.stringify(command)}` }
+  if (!(command in VALUED)) return { error: usageFailure("drains_unknown_command", `unknown command ${JSON.stringify(command)}`, "run drains.js poll, ack, status or why") }
   const target = command === "why" ? /^([^#\s/]+\/[^#\s/]+)#(\d+)$/u.exec(args[0] ?? "") : null
-  if (command === "why" && !target) return { error: "why needs an issue such as owner/name#123" }
+  if (command === "why" && !target) return { error: usageFailure("drains_why_target", "why needs an issue such as owner/name#123", "run drains.js why owner/name#123") }
   const rest = command === "why" ? args.slice(1) : args
   const flags = {}
   for (let i = 0; i < rest.length; i++) {
     const name = rest[i]
     const value = rest[i + 1]
-    if (!VALUED[command].includes(name)) return { error: `${command} does not take ${JSON.stringify(name)}` }
-    if (value === undefined || value.startsWith("--")) return { error: `${name} needs a value` }
+    if (!VALUED[command].includes(name)) return { error: usageFailure("drains_unknown_flag", `${command} does not take ${JSON.stringify(name)}`, `drop ${name} or use ${VALUED[command].join(" or ")}`) }
+    if (value === undefined || value.startsWith("--")) return { error: usageFailure("drains_flag_value", `${name} needs a value`, `pass ${name} <value>`) }
     flags[name.slice(2)] = value
     i++
   }
-  if (command === "ack" && (!flags.repo || !flags.wake)) return { error: "ack needs --repo and --wake" }
+  if (command === "ack" && (!flags.repo || !flags.wake)) return { error: usageFailure("drains_ack_args", "ack needs --repo and --wake", "run drains.js ack --repo <owner/name> --wake <id>") }
   if (command === "why") return { command, flags, repo: target[1], number: Number(target[2]) }
   return { command, flags }
 }
@@ -53,7 +56,7 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
     return 0
   }
   if (parsed.error) {
-    io.stderr.write(`drains: ${parsed.error}\n${USAGE}\n`)
+    io.stderr.write(`${parsed.error}\n${USAGE}\n`)
     return 2
   }
   const { command, flags } = parsed

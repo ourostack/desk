@@ -1024,7 +1024,7 @@ test("the command line says what is wrong: usage, a busy lock and a bad config",
   assert.match((await cli(["--help"])).out, /^Usage: drains\.js poll/u)
   const usage = await cli(["poll", "--bogus", "x"])
   assert.equal(usage.code, 2)
-  assert.match(usage.err, /^drains: poll does not take "--bogus"/u)
+  assert.match(usage.err, /^desk: poll does not take "--bogus": .*Fix: drop --bogus or use --config or --state\./u)
   writeFileSync(config, "{")
   const bad = await cli(["poll", "--config", config, "--state", state])
   assert.equal(bad.code, 1)
