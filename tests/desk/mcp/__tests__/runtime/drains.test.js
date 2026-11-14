@@ -487,6 +487,7 @@ test("a cross-reference from the drain's own marked comment, marked body or drai
     ["a pull request on a drain- branch", crossReference(T(5), sourceIssue(39, { pull_request: {} })), { pull: async () => ({ head: { ref: "drain-1-default-command" } }) }],
     ["a pull request on a drain/ branch", crossReference(T(5), sourceIssue(39, { pull_request: {} })), { pull: async () => ({ head: { ref: "drain/876-ask-for-go" } }) }],
     ["an issue or pull request whose body carries the marker", crossReference(T(5), sourceIssue(9, { body: `Tracking.\n${DRAIN_STATUS_MARKER}` })), {}],
+    ["an issue the drain filed with a drain: label, whose body mentions this one", crossReference(T(5), sourceIssue(958, { labels: [{ name: "Drain: In Progress" }], body: "Follow-up to #1" })), {}],
   ]
   for (const [name, event, extra] of cases) {
     const w = await quiet({ ...extra, timeline: async () => [event] })
@@ -512,6 +513,7 @@ test("a real cross-reference still wakes the drain, from another issue, a pull r
     ["an unmarked comment by the drain's account", crossReference(T(5), sourceIssue(9)), { comments: async () => [comment("See #1.")] }, "acme/widgets#9"],
     ["a marked comment by someone else", crossReference(T(5), sourceIssue(9)), { comments: async () => [comment(`See #1.\n${DRAIN_STATUS_MARKER}`, T(5), "someone")] }, "acme/widgets#9"],
     ["a cross-reference with no source", { id: 1, event: "cross-referenced", created_at: T(5) }, {}, "acme/widgets#unknown"],
+    ["an issue with other labels and no marker", crossReference(T(5), sourceIssue(9, { labels: [{ name: "bug" }, {}], body: "Follow-up to #1" })), {}, "acme/widgets#9"],
     ["a source comment list that cannot be read", crossReference(T(5), sourceIssue(9)), { comments: async () => { throw new Error("HTTP 404") } }, "acme/widgets#9"],
     ["a comment with no body", crossReference(T(5), sourceIssue(9)), { comments: async () => [{ id: 50, created_at: T(5), updated_at: T(5), user: { login: "maintainer" } }] }, "acme/widgets#9"],
   ]

@@ -356,10 +356,10 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, rules)
 const DRAIN_BRANCH_PREFIXES = ["drain-", "drain/"]
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
-/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` or `drain/` branch, the drain's marked comment on this issue that names the source, or its marked comment on the source that names this issue around then. */
+/** Whether a cross-reference's source is the drain's own work: an issue or pull request the drain filed (a `drain:` label or the marker in its body), a pull request on a `drain-` or `drain/` branch, the drain's marked comment on this issue that names the source, or its marked comment on the source that names this issue around then. */
 async function selfCaused(api, repo, issue, event) {
   const source = event.source?.issue ?? {}
-  if ((source.body ?? "").includes(DRAIN_STATUS_MARKER)) return true
+  if (filedByDrain(source)) return true
   const where = source.repository_url?.replace(/^.*\/repos\//u, "") ?? repo
   if (source.pull_request) {
     const pull = await api.pull(where, source.number).catch(() => null)
