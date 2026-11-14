@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.155 — 2026-11-14
+
+### Merge relays can count a skipped check as passing
+
+A `merge-when-green` relay takes an optional `skippedPasses: true`. With it, a required check that completed `skipped` or `neutral` counts as green, so a repository whose own path filters skip a check on changes outside that check's area can still merge. `failure`, `cancelled`, `timed_out`, `action_required` and any other conclusion, a check still running, and a missing check keep the pull request waiting, as before. The option defaults to off, so existing relays behave as they did. See [relays](docs/relays.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.154 — 2026-11-14
 
 `using-desk`, which loads at every session start, is 875 bytes smaller (7,317 to 6,442). Rules that apply in one situation now live where that situation happens: the reply to a requirement change and the reply to "I'm stepping away" are in the list at the top of [`interaction-style`](skills/interaction-style/SKILL.md) (which now also loads when the collaboration slips and carries the reset line), and the contents of a child agent's brief, what a child gains and who answers for an early return are in [`work-orchestration`](skills/work-orchestration/SKILL.md), where a coordinator dispatches. What a child itself must do stays in `using-desk`.
