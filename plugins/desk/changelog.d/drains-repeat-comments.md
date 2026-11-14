@@ -1,1 +1,0 @@
-The issue-drain poller no longer wakes a drain for a bot comment that repeats the same bot's previous comment on the issue (a daily failure report, a CI-budget note) once run links and IDs, dates, times and durations are ignored. A changed text, a bot's first comment and any person's comment still wake it. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).

@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.138 — 2026-11-14
+
+The issue-drain poller no longer wakes a drain for a bot comment that repeats the same bot's previous comment on the issue (a daily failure report, a CI-budget note) once run links and IDs, dates, times and durations are ignored. A changed text, a bot's first comment and any person's comment still wake it. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
+
+A proof session's refused check of an unrecorded published record is now timed in `proof-audit.json` as an ISO 8601 string, like every other entry in that file. It was written as epoch milliseconds.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.137 — 2026-11-14
 
 The remaining errors in Desk's utilities, activation, hooks, search, indexer, artifacts and browser tool now open with what to do, then say what went wrong, and keep their meaning. Every error in `util/`, `desk/`, `activation/`, `hooks/`, `search/`, `indexer/` and `artifacts/` also carries a stable `code` such as `capture_record_missing` or `resources_pass_identity_as_worktree`. The four capture-record results and the four session-retention results gain a `code` beside their `error`. Errors whose code is an exported constant callers compare with keep it, and log lines and status notes keep their wording.
