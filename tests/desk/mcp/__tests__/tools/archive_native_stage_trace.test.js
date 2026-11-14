@@ -143,7 +143,7 @@ test("zero or ambiguous summaries emit no success frame and the default result i
 
 test("an archive error keeps its message and emits its own receipt; no success frame joins it", async () => {
   probeFrames.length = 0
-  const failure = Object.assign(new Error("task_archive: native handle capture readiness timeout"), { handleReceipt: summaryWith(7) })
+  const failure = Object.assign(new Error("task_archive: Check the native session handle: native handle capture readiness timeout"), { handleReceipt: summaryWith(7) })
   const result = await withProbe(async () => { recordNativeStageSummary(summaryWith(9)); throw failure }, () => probeRequest(9))
   assert.equal(result.isError, true)
   assert.equal(JSON.parse(result.content[0].text).message, failure.message)
@@ -274,7 +274,7 @@ test("an unavailable stage program fails typed before any spawn, and only when t
   off.dependencies.spawn = (...a) => { spawns++; return offSpawn(...a) }
   const offError = await openArchiveHandleSession(pair, { ...off.dependencies, buildStageProgram: throwing }).then(() => null, e => e)
   assert.equal(offError.code, "ARCHIVE_NATIVE_MOVE")
-  assert.equal(offError.message, "task_archive: native handle capture readiness timeout")
+  assert.equal(offError.message, "task_archive: Check the native session handle: native handle capture readiness timeout")
   assert.equal(builds, 1)
   assert.equal(spawns, 1)
   assert.equal(createHash("sha256").update(off.argv()[4]).digest("hex"), DEFAULT_SHA)

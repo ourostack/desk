@@ -513,7 +513,7 @@ test("task_move moves nothing when a track card it would edit cannot be parsed, 
 
     await assert.rejects(
       task_move({ deskRoot: root, input: { track: "main-track", slug: "task-one", to_track: "other-track" }, schedulePush: () => assert.fail("nothing to push") }),
-      (error) => error.message.startsWith("task_move: nothing was moved") && error.message.includes(trackMd) && /duplicated mapping key/u.test(error.message),
+      (error) => error.message.startsWith("task_move: Fix the card, then try again: nothing was moved") && error.message.includes(trackMd) && /duplicated mapping key/u.test(error.message),
     )
     assert.equal(await fs.readFile(card, "utf8"), before)
     assert.equal(await exists(path.join(root, "other-track", "task-one")), false)

@@ -353,7 +353,7 @@ test("team lesson leaves the pull request open, not in effect, when it cannot me
   assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
   assert.equal(Object.keys(result)[0], "next", "the answer opens with the next step")
   assert.match(result.next, /^The change is on a pull request that has not merged: run route_around\.steps now, in order, then read back that it merged\.$/u)
-  assert.equal(result.message, `Not in effect: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). It takes effect when it merges.`)
+  assert.equal(result.message, `Wait for the pull request to merge, or merge it yourself: Not in effect: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). It takes effect when it merges.`)
   assert.equal(blocked.state.merges, 1)
   // The open pull request keeps its branch.
   assert.equal(lessonBranches(repo.bare), result.branch)
@@ -410,7 +410,7 @@ test("team lesson reports where the remote work stopped, with nothing claimed in
   assert.equal(noBase.stage, "default_branch")
   const noPr = await run({ gh: fakeGh(repo.bare, { create: { code: 1 } }).gh })
   assert.deepEqual([noPr.stage, noPr.reason], ["pull_request", "could not open the pull request: GraphQL: no permission"])
-  assert.equal(noPr.message, "Not in effect: the team write stopped at pull_request (could not open the pull request: GraphQL: no permission).")
+  assert.equal(noPr.message, "Fix what the parentheses name, then call it again: Not in effect: the team write stopped at pull_request (could not open the pull request: GraphQL: no permission).")
   // No branch is left behind for a pull request that never opened.
   assert.equal(lessonBranches(repo.bare), "")
   const noUrl = await run({ gh: fakeGh(repo.bare, { create: { code: 0, stdout: "something else" } }).gh })
@@ -451,7 +451,7 @@ test("team lesson failure after the pull request opened says the pull request is
   const result = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo, gh: fake.gh, spawnGit }))
   assert.equal(result.status, "failed")
   assert.equal(result.stage, "push")
-  assert.equal(result.message, `Not in effect: the team write stopped at push (the push was refused: remote: denied). The pull request ${PR} is open, on branch ${result.branch}.`)
+  assert.equal(result.message, `Fix what the parentheses name, then call it again: Not in effect: the team write stopped at push (the push was refused: remote: denied). The pull request ${PR} is open, on branch ${result.branch}.`)
   // A commit hook or signing that refuses is reported as such, never skipped.
   const silent = toBare(repo.bare, (cmd, args, options) => (args.includes("commit") ? { status: 1 } : spawnSync(cmd, args, options)))
   const noCommit = await addTeamLesson(lesson({ deskRoot: repo.base, repo: repo, gh: fake.gh, spawnGit: silent }))
