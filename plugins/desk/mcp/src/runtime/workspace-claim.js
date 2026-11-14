@@ -12,12 +12,12 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
   const repository = nativeGitPath(givenRepository)
   const worktree = nativeGitPath(givenWorktree)
   if (!path.isAbsolute(repository) || !path.isAbsolute(worktree) || !/^refs\/heads\/.+/u.test(branch) || typeof owner !== "string" || !owner) {
-    throw new Error("exact resource claim requires repository, worktree, branch and owner")
+    throw new Error("Pass repository, worktree, branch and owner: exact resource claim requires repository, worktree, branch and owner")
   }
-  if (!samePath(await fs.realpath(repository), repository)) throw new Error("claim repository identity is not canonical")
+  if (!samePath(await fs.realpath(repository), repository)) throw new Error("Pass the canonical repository identity: claim repository identity is not canonical")
   const directory = path.join(repository, "desk-resource-claims")
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
-  if (!(await fs.lstat(directory)).isDirectory()) throw new Error("unsafe resource claim directory")
+  if (!(await fs.lstat(directory)).isDirectory()) throw new Error("Use a real directory for the claim: unsafe resource claim directory")
   const token = randomUUID()
   const record = JSON.stringify({ token, owner, repository, worktree, branch, pid: process.pid, start: await readProcessStart(process.pid) })
   const claims = []
@@ -25,7 +25,7 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
     for (const claim of claims) {
       const info = await fs.lstat(claim.file, EXACT)
       if (!info.isFile() || info.nlink !== 1n || !sameFile(info, claim) ||
-          await fs.readFile(claim.file, "utf8") !== record) throw new Error("exact resource claim changed; cleanup refused")
+          await fs.readFile(claim.file, "utf8") !== record) throw new Error("Run it again: exact resource claim changed; cleanup refused")
     }
   }
   try {
@@ -33,7 +33,7 @@ export async function withWorkspaceClaim({ repository: givenRepository, worktree
       const file = path.join(directory, `${createHash("sha256").update(identity).digest("hex")}.lock`)
       let handle
       try { handle = await fs.open(file, "wx", 0o600) } catch (error) {
-        if (error.code === "EEXIST") throw new Error(`resource already claimed: ${identity}`)
+        if (error.code === "EEXIST") throw new Error(`Release the claim or choose another resource: resource already claimed: ${identity}`)
         throw error
       }
       try {

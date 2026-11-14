@@ -252,7 +252,7 @@ export function loadRuntimeSupportMatrix({
 } = {}) {
   const matrixPath = deriveRuntimeSupportMatrixPath({ mcpRoot, packageJson })
   if (!existsSync(matrixPath)) {
-    throw new Error(`runtime support matrix is missing: ${matrixPath}`)
+    throw new Error(`Add the runtime support matrix back: runtime support matrix is missing: ${matrixPath}`)
   }
   const matrix = readJson(matrixPath)
   const errors = validateRuntimeSupportMatrix({
@@ -920,7 +920,7 @@ function runtimeFilesForDependency(dependency, { mcpRoot }) {
   // The explicit addon is required; optional compiler outputs and test extensions are not runtime dependencies.
   const runtimeFiles = unique([...explicitFiles, ...inferredFiles])
   if (runtimeFiles.length === 0) {
-    throw new Error(`runtime dependency archive must require a non-marker runtime file for ${dependency.name}`)
+    throw new Error(`Add a non-marker runtime file for the dependency: runtime dependency archive must require a non-marker runtime file for ${dependency.name}`)
   }
   return runtimeFiles
 }
@@ -1025,7 +1025,7 @@ function splitTarPath(name) {
       return { headerName, prefix }
     }
   }
-  throw new Error(`runtime dependency archive path is too long for tar header: ${name}`)
+  throw new Error(`Use a shorter dependency path: runtime dependency archive path is too long for tar header: ${name}`)
 }
 
 function extractTarGzContents(archivePath) {

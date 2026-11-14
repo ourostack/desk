@@ -436,13 +436,13 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
   const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
   const token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
-  if (!token) throw new Error(`the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`)
+  if (!token) throw new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`)
   const get = async (route) => {
     const response = await fetchImpl(`https://api.github.com${route}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains" },
       signal: AbortSignal.timeout(30_000),
     })
-    if (!response.ok) throw new Error(`GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`)
+    if (!response.ok) throw new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`)
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? "") }
   }
   const all = async (route) => {

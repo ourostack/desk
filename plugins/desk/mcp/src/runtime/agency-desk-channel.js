@@ -308,7 +308,7 @@ export async function replaceIfUnchanged({ target, seen, next, backup, lockWaitM
 export async function runAgencyDeskChannelCli({ argv, env, io, readFile = (file) => readFileSync(file, "utf8"), homeDir = os.homedir(), replace = replaceIfUnchanged, loadLock = async () => (await import("../desk/improvement-cards.js")).holdLock }) {
   const mode = argv[0]
   if (mode !== "--detect" && mode !== "--migrate") {
-    io.stderr.write("usage: agency-desk-channel.js --detect | --migrate\n")
+    io.stderr.write("usage: Run it with --detect or --migrate: agency-desk-channel.js --detect | --migrate\n")
     return 2
   }
   const toml = typeof env.AGENCY_TOML === "string" && env.AGENCY_TOML !== "" ? env.AGENCY_TOML : path.join(homeDir, ".local", "agency", "agency.toml")

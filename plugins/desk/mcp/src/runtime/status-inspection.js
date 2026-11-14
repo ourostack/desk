@@ -39,7 +39,7 @@ export function createStatusInspection(deskRoot, {
   if (signal) ownedInspections.set(signal, { child, wait })
   const nonexit = () => {
     terminationTimer = null
-    const error = Object.assign(new Error(`status inspection child did not exit after bounded termination (pid ${resource.pid})`), {
+    const error = Object.assign(new Error(`Stop that child process by hand: status inspection child did not exit after bounded termination (pid ${resource.pid})`), {
       code: "status_reader_not_exited", pid: resource.pid,
       signals: [...resource.signals], failures: [...resource.failures],
     })
@@ -57,14 +57,14 @@ export function createStatusInspection(deskRoot, {
       unsent = !child.kill(name)
     } catch (error) {
       resource.failures.push(`${name}: ${error.message}`)
-      failure ??= Object.assign(new Error(`status inspection child termination failed (pid ${resource.pid}, ${name}): ${error.message}`), {
+      failure ??= Object.assign(new Error(`Stop that child process by hand: status inspection child termination failed (pid ${resource.pid}, ${name}): ${error.message}`), {
         code: "status_reader_termination_failed", pid: resource.pid, signal: name,
       })
     }
     if (!ended) terminationTimer = setTimeout(() => {
       if (unsent) {
         resource.failures.push(`${name}: child.kill returned false`)
-        failure ??= Object.assign(new Error(`status inspection child termination failed (pid ${resource.pid}, ${name})`), {
+        failure ??= Object.assign(new Error(`Stop that child process by hand: status inspection child termination failed (pid ${resource.pid}, ${name})`), {
           code: "status_reader_termination_failed", pid: resource.pid, signal: name,
         })
       }
@@ -89,13 +89,13 @@ export function createStatusInspection(deskRoot, {
   signal?.addEventListener("abort", abort, { once: true })
   child.once("error", stop)
   child.on("message", (message) => {
-    if (!pending) return stop(new Error("status inspection child sent an unexpected reply"))
+    if (!pending) return stop(new Error("Call desk_status again: status inspection child sent an unexpected reply"))
     const reply = pending
     pending = null
     if (message?.ok === true) reply.resolve(message.value)
     else if (message?.ok === false) reply.reject(reviveError(message.error))
     else {
-      const error = new Error("status inspection child sent an invalid reply")
+      const error = new Error("Call desk_status again: status inspection child sent an invalid reply")
       reply.reject(error)
       stop(error)
     }
@@ -109,8 +109,8 @@ export function createStatusInspection(deskRoot, {
     signal?.removeEventListener("abort", abort)
     if (signal) ownedInspections.delete(signal)
     failure ??= closing && (code === 0 || resource.signals.includes(exitSignal)) ? null :
-      new Error(`status inspection child exited before completing (code ${code})`)
-    if (pending && failure === null) failure = new Error("status inspection child exited before completing its request")
+      new Error(`Call desk_status again: status inspection child exited before completing (code ${code})`)
+    if (pending && failure === null) failure = new Error("Call desk_status again: status inspection child exited before completing its request")
     pending?.reject(failure)
     pending = null
     resolveClosed({ error: null })
@@ -121,8 +121,8 @@ export function createStatusInspection(deskRoot, {
     resource,
     inspect(phase, rootContext) {
       signal?.throwIfAborted()
-      if (ended) return Promise.reject(failure ?? new Error("status inspection already closed"))
-      if (pending) return Promise.reject(new Error("status inspection already running"))
+      if (ended) return Promise.reject(failure ?? new Error("Open a new status inspection: status inspection already closed"))
+      if (pending) return Promise.reject(new Error("Wait for the running inspection to finish: status inspection already running"))
       return new Promise((resolve, reject) => {
         pending = { resolve, reject }
         child.send({ deskRoot, phase, rootContext }, (error) => { if (error) stop(error) })

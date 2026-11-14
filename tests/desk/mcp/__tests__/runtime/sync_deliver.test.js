@@ -276,7 +276,7 @@ test("malformed published PR policy fails before any push", async () => {
   const server = publicationServer(shared)
   const result = deliver({ root: shared.desk, spawnGit: server.spawnGit, publicationClock: server.clock })
   assert.equal(result.state, "failed")
-  assert.match(result.error, /publication\.json.*Fix:/u)
+  assert.match(result.error, /^Fix \.desk\/publication\.json through a PR, then run .*: /u)
   assert.deepEqual(server.pushes, [])
 })
 
@@ -460,7 +460,7 @@ test("a sparse replay still delivers when the touched paths cannot be read, and 
 
   const second = await mkDiverged()
   const noPatternFile = intercept((args) => args.includes("--git-path"), () => ({ status: 128, stdout: "", stderr: "fatal: not a git repository\n" }))
-  assert.deepEqual(deliver({ root: second.desk, spawnGit: noPatternFile }), { state: "failed", reason: "replay_failed", error: "could not locate the replay worktree's sparse-checkout file", delivered: [], skipped: [] })
+  assert.deepEqual(deliver({ root: second.desk, spawnGit: noPatternFile }), { state: "failed", reason: "replay_failed", error: "Check the replay worktree's sparse-checkout setup: could not locate the replay worktree's sparse-checkout file", delivered: [], skipped: [] })
   const noReadTree = intercept((args) => args.includes("read-tree"), () => ({ status: 128, stdout: "", stderr: "fatal: no space left on device\n" }))
   assert.deepEqual(deliver({ root: second.desk, spawnGit: noReadTree }), { state: "failed", reason: "replay_failed", error: "fatal: no space left on device", delivered: [], skipped: [] })
 })

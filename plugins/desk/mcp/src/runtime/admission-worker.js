@@ -95,7 +95,7 @@ const JOBS = { resolve: resolveAdmissionInputs, runtime: prepareRuntimeInputs }
 /** Run one job in this thread. */
 export function runAdmissionJob(job, { onPhase } = {}) {
   const run = JOBS[job?.kind]
-  if (typeof run !== "function") throw new TypeError(`unknown admission job: ${job?.kind}`)
+  if (typeof run !== "function") throw new TypeError(`Use a known admission job kind: unknown admission job: ${job?.kind}`)
   return run(job.input, { onPhase })
 }
 
@@ -134,7 +134,7 @@ export function runInWorker(job, { createWorker = (url, options) => new Worker(u
       return reply.ok ? finish(resolve, reply.value) : finish(reject, reviveError(reply.error))
     })
     worker.once("error", (error) => finish(reject, error))
-    worker.once("exit", (code) => finish(reject, new Error(`the admission worker exited (code ${code}) before answering`)))
+    worker.once("exit", (code) => finish(reject, new Error(`Run it again: the admission worker exited (code ${code}) before answering`)))
     worker.postMessage(job)
   })
 }
@@ -163,7 +163,7 @@ export function createResolveRunner({ createWorker = (url, options) => new Worke
       settle((waiting) => reply.ok ? waiting.resolve(reply.value) : waiting.reject(reviveError(reply.error)))
     })
     started.once("error", lost)
-    started.once("exit", (code) => lost(new Error(`the admission worker exited (code ${code}) before answering`)))
+    started.once("exit", (code) => lost(new Error(`Run it again: the admission worker exited (code ${code}) before answering`)))
     return started
   }
   return {

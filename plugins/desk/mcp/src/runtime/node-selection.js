@@ -72,7 +72,7 @@ export function probeNodeRuntime({
       typeof runtime.arch !== "string" ||
       typeof runtime.node_abi !== "string"
     ) {
-      throw new Error("invalid probe response")
+      throw new Error("Use a Node that answers the version probe: invalid probe response")
     }
     return {
       ok: true,

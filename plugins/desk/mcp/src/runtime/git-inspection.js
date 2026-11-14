@@ -21,7 +21,7 @@ export function resolveInspectionGit({ platform = process.platform, env = HOST_E
     ? [...new Set(["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].map((name) => windowsEnvValue(env, name)).filter(Boolean))].map((root) => path.win32.join(root, "Git", "cmd", "git.exe"))
     : ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]
   const executable = candidates.find(accessible)
-  if (!executable) throw new Error("trusted Git is unavailable; install Git in a standard system location")
+  if (!executable) throw new Error("Install Git in a standard system location: trusted Git is unavailable; install Git in a standard system location")
   return executable
 }
 
@@ -163,7 +163,7 @@ function runInspection({ file, argv, env, cwd, signal, timeoutMs }) {
     const collect = (chunk, which) => {
       if (which === "out") stdout += chunk; else stderr += chunk
       if (stdout.length + stderr.length > MAX_OUTPUT) {
-        error ??= Object.assign(new Error("Git inspection output exceeded its limit"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
+        error ??= Object.assign(new Error("Inspect a smaller scope: Git inspection output exceeded its limit"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
         killProcessGroup(child)
       }
     }
@@ -194,7 +194,7 @@ export async function readInspectionGit(cwd, args, { signal, timeoutMs = INSPECT
   }
   const { error, stdout, stderr, timedOut, aborted } = result
   // A killed child is reported only as a SIGKILLed "Command failed"; name the cause so a retained resource explains itself.
-  if (timedOut && error) throw Object.assign(new Error(`Git inspection timed out after ${timeoutMs} ms: git ${args.join(" ")}`), { code: "ETIMEDOUT", cause: error })
+  if (timedOut && error) throw Object.assign(new Error(`Run it again, or inspect a smaller scope: Git inspection timed out after ${timeoutMs} ms: git ${args.join(" ")}`), { code: "ETIMEDOUT", cause: error })
   if (aborted && error) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: error })
   if (error && (error.killed || typeof error.code !== "number")) throw error
   return { ok: !error, stdout: stdout.includes("\0") ? stdout : stdout.trim(), stderr: stderr.trim(), code: error?.code }
