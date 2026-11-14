@@ -669,6 +669,7 @@ function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
   return recordResult(suiteFile, () => (resultFile === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : readJson(path.resolve(root, resultFile))), root);
 }
 
+// The run command's options (--case, --keep, --dry-run) are documented in evals/README.md and parsed in scripts/skill-evals-run.cjs.
 function usage() {
   return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
 }

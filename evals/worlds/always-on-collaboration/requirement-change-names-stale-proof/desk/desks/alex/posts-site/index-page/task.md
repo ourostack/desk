@@ -5,12 +5,12 @@ status: in_progress
 created: "2026-11-12T09:00:00Z"
 updated: "2026-11-13T12:20:00Z"
 track: posts-site
-repos: ["alex-example/posts-site"]
+repos: []
 ---
 
 # Build the index page
 
-A tool that builds the index page from the posts folder, with tests passing and the output checked.
+A tool that builds the index page from the posts folder, with tests passing and the output checked. Its code and tests are in this task's folder.
 
 ## Evidence so far
 

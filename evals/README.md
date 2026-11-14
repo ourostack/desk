@@ -30,7 +30,7 @@ The subject defaults to `gpt-6.1-sol`, the model the accepted receipts were reco
 
 The receipt's `run` records the harness command and version, the plugins loaded, the models, whether the judge was independent, and the case and check pass counts, beside the per-check evidence. A run with any failed check writes no receipt and exits non-zero, because a receipt records only a passing run. A suite with a `knownFailure` still runs: while only the named case fails it exits zero, writes nothing and keeps the annotation; once everything passes it writes the receipt and tells you to delete the annotation.
 
-`--dry-run` runs and judges without writing. `--harness <command>` replaces `copilot` with another command that accepts the same flags (a `.js`, `.cjs` or `.mjs` path runs under Node), which is how `scripts/test-skill-evals.cjs` tests the runner with a fake. `--base <ref>` changes the `--changed` comparison point from `origin/main`, then `main`.
+`--case <id[,id...]>` runs only those cases and never writes a receipt, and `--keep <directory>` saves each case's final response, tool requests, workspace evidence and verdicts there as JSON, so a case that passes only some runs can be read run by run. `--dry-run` runs and judges without writing. `--harness <command>` replaces `copilot` with another command that accepts the same flags (a `.js`, `.cjs` or `.mjs` path runs under Node), which is how `scripts/test-skill-evals.cjs` tests the runner with a fake. `--base <ref>` changes the `--changed` comparison point from `origin/main`, then `main`.
 
 Add scenarios from observed regressions, not to inflate counts.
 

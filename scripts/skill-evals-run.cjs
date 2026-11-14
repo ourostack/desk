@@ -16,11 +16,11 @@ const judgeTimeoutSeconds = 300;
 const maxResponseCharacters = 30000;
 const maxToolTraceEntries = 60;
 
-const usage = "usage: node scripts/skill-evals.cjs run <suite-file|suite-id|--changed> [--subject-model <model>] [--judge-model <model>] [--self-judge] [--harness <copilot-compatible-command>] [--base <ref>] [--concurrency <n>] [--timeout-seconds <n>] [--dry-run]";
+const usage = "usage: node scripts/skill-evals.cjs run <suite-file|suite-id|--changed> [--subject-model <model>] [--judge-model <model>] [--self-judge] [--harness <copilot-compatible-command>] [--base <ref>] [--concurrency <n>] [--timeout-seconds <n>] [--case <id[,id...]>] [--keep <directory>] [--dry-run]";
 
 function parseOptions(args, fail) {
-  const options = { target: null, changed: false, selfJudge: false, dryRun: false, base: null, harness: process.env.DESK_EVAL_HARNESS || "copilot", subjectModel: process.env.DESK_EVAL_SUBJECT_MODEL || defaultSubjectModel, judgeModel: process.env.DESK_EVAL_JUDGE_MODEL || defaultJudgeModel, concurrency: 3, timeoutSeconds: null };
-  const valued = { "--subject-model": "subjectModel", "--judge-model": "judgeModel", "--harness": "harness", "--base": "base", "--concurrency": "concurrency", "--timeout-seconds": "timeoutSeconds" };
+  const options = { target: null, changed: false, selfJudge: false, dryRun: false, base: null, harness: process.env.DESK_EVAL_HARNESS || "copilot", subjectModel: process.env.DESK_EVAL_SUBJECT_MODEL || defaultSubjectModel, judgeModel: process.env.DESK_EVAL_JUDGE_MODEL || defaultJudgeModel, concurrency: 3, timeoutSeconds: null, cases: null, keep: null };
+  const valued = { "--subject-model": "subjectModel", "--judge-model": "judgeModel", "--harness": "harness", "--base": "base", "--concurrency": "concurrency", "--timeout-seconds": "timeoutSeconds", "--case": "cases", "--keep": "keep" };
   const seen = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -45,6 +45,12 @@ function parseOptions(args, fail) {
     if (!Number.isInteger(number) || number < 1) fail(`${flag} must be a positive whole number`);
     options[field] = number;
   }
+  if (options.cases !== null) {
+    options.cases = options.cases.split(",").map((id) => id.trim()).filter((id) => id !== "");
+    if (options.cases.length === 0) fail(`--case needs at least one case id\n${usage}`);
+    options.dryRun = true;
+  }
+  if (options.keep !== null) options.keep = path.resolve(options.keep);
   if (options.subjectModel === options.judgeModel && !options.selfJudge) {
     fail(`the subject and judge are both ${options.subjectModel}; pick a different --judge-model, or pass --self-judge to record a run marked self-judged`);
   }
@@ -393,7 +399,7 @@ function defaultAgent(pluginDirs) {
 
 // The scratch workspace cannot hold the world a scenario describes, so the subject is told the scenario is true; without this it
 // stops to ask which repository or package the prompt means, and no case can show the behavior it tests.
-const scenarioNote = "This is a skill evaluation in a scratch workspace with no network and no credentials. The scenario below is true even where the workspace does not show it: the repository, package, pull request, task or account it mentions may not exist here, and a real command against them fails harmlessly. Respond and act exactly as you would if the scenario were real. The evaluation judges what you do, including actions that fail, so do not hold back an action you would take only because its target is missing here, and do not stop to ask for context the scenario already gives.";
+const scenarioNote = "This is a skill evaluation in a scratch workspace with no network and no credentials. The scenario below is true even where the workspace does not show it: the repository, package, pull request, task or account it mentions may not exist here, and a real command against them fails harmlessly. Respond and act exactly as you would if the scenario were real. The evaluation judges what you do, including actions that fail, so do not hold back an action you would take only because its target is missing here, and do not stop to ask for context the scenario already gives. A person reads your final message, so a question the rules you follow require, a decision only they can make, may end it; nothing here forbids that. Whatever those rules let you do yourself, do without asking.";
 
 function subjectArguments(testCase, options, pluginDirs) {
   const args = ["-p", `${scenarioNote}\n\n${testCase.prompt}`, "--output-format", "json", "--model", options.subjectModel, "--no-ask-user", "--no-auto-update", "--allow-all-tools", "--allow-all-paths", "--disable-builtin-mcps"];
@@ -456,12 +462,24 @@ function describeFailure(run) {
   return `${run.timedOut ? "timed out" : `exited ${run.code}`}: ${run.stderr.trim().slice(-400)}`;
 }
 
-async function runCase(testCase, context) {
+async function runCaseOnce(testCase, context) {
   const workspace = cloneTemplate(context.template, testCase.id);
   try {
     return await runCaseIn(testCase, context, workspace);
   } finally {
     removeScratch(workspace.directory);
+  }
+}
+
+// A subject that exits without a final message is the harness dropping the run, not behavior; one fresh attempt keeps it from
+// aborting the whole suite. A timeout is behavior and is not retried.
+async function runCase(testCase, context) {
+  try {
+    return await runCaseOnce(testCase, context);
+  } catch (error) {
+    if (!/the subject produced no final response/u.test(error.message)) throw error;
+    context.log(`  ${testCase.id}: the subject produced no final response; running the case once more`);
+    return runCaseOnce(testCase, context);
   }
 }
 
@@ -486,6 +504,10 @@ async function runCaseIn(testCase, context, workspace) {
     try {
       const checks = parseVerdict(judgeRun.stdout, testCase);
       context.log(`  ${testCase.id}: ${checks.filter((check) => check.passed).length}/${checks.length} checks passed`);
+      if (options.keep !== null) {
+        fs.mkdirSync(options.keep, { recursive: true });
+        fs.writeFileSync(path.join(options.keep, `${testCase.id}-${Date.now()}.json`), `${JSON.stringify({ case: testCase.id, response: subject.response, tools: subject.tools, evidence, checks }, null, 2)}\n`);
+      }
       return { id: testCase.id, checks };
     } catch (error) {
       lastError = error;
@@ -542,6 +564,11 @@ function findEntry(entries, root, target, fail) {
 async function runSuite(entry, context, api) {
   const { options, root, command, log } = context;
   const { suite } = entry;
+  if (options.cases !== null) {
+    const unknown = options.cases.filter((id) => !suite.cases.some((testCase) => testCase.id === id));
+    if (unknown.length > 0) throw new Error(`${suite.id} has no case ${unknown.join(", ")}`);
+    suite.cases = suite.cases.filter((testCase) => options.cases.includes(testCase.id));
+  }
   const label = path.relative(root, entry.file).replaceAll(path.sep, "/");
   log(`Running ${suite.id}: ${suite.cases.length} case(s); subject ${options.subjectModel}, judge ${options.judgeModel}`);
   const startedAt = new Date();

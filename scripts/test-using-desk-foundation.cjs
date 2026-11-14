@@ -369,7 +369,7 @@ function main() {
     "\"on track\" means they'll enjoy it, not that it ships",
     "Test on synthetic data shaped like theirs, never their real data or account, nor ask to",
     "counts-only telemetry",
-    "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring, and when that will be done.",
+    "Relay no unmeasured plan, cause or date: say a trustworthy date needs measuring, and the time you will report the measured numbers.",
   ]);
   assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state"\)/u);
   assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
