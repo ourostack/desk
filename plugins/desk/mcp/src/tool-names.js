@@ -68,7 +68,7 @@ export const TOOL_DESCRIPTIONS = {
   desk_save:
     "After you write a file with Write or Edit (a planning doc, a spec, a report), call this with its path to commit it. `paths` are relative to the desk root, inside this session's write prefix (desks/<alias>/ in a shared workspace). Stages and commits exactly `paths` with `message`. A task card is refused: use the task tools. `tidy: true` commits a desk tidy or its undo. A client with no filesystem passes `files` ({ path, content } text) with or instead of `paths`.",
   desk_search:
-    "Use when you need to find something on the desk: hybrid lexical+semantic search. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'.",
+    "Use when you cannot tell which file holds something: hybrid lexical+semantic search across the desk. Filters: track, status, kind, since, until. `scope`: 'active' (default), 'archived' or 'all'.",
   desk_recall:
     "Use for loose recall, as in `do I remember anything about X`. Ranks every desk Markdown file by meaning and exact words together. `scope`: 'active', 'archived' or 'all' (default; this is the historical lookback).",
   desk_timeline:
