@@ -4,8 +4,10 @@ import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { appSocket, envelope, nameOf, parseSessionsArgs, resolveSession, runSessionsCli, selfSessions, sendThroughApp, tailMessages, whoAmI } from "../../../../../plugins/desk/mcp/src/runtime/sessions-cli.js"
+import { fileURLToPath } from "node:url"
+import { appSocket, exchange, envelope, nameOf, parentOfProcess, parseSessionsArgs, resolveSession, runSessionsCli, selfSessions, sendThroughApp, tailMessages, whoAmI } from "../../../../../plugins/desk/mcp/src/runtime/sessions-cli.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const A = "0dc4f17b-1111-4222-8333-444455556666"
@@ -186,4 +188,140 @@ test("a refused or unreachable send is a failure with the code that files a bug"
   const nobody = capture()
   assert.equal(await runSessionsCli({ argv: ["send", "nobody", "hi"], io: nobody.io, deps: sendDeps(dir, app({ dir, deliver: false })) }), 1)
   assert.match(nobody.out.stderr, /sessions_target/u)
+})
+
+// A WebSocket that answers from a script: `script(sent)` returns the events to deliver after the open, each a string, an Error or a function.
+function fakeWebSocket(script) {
+  return class FakeWebSocket {
+    constructor(url) {
+      this.url = url
+      this.handlers = {}
+      this.closed = false
+      FakeWebSocket.last = this
+      queueMicrotask(() => this.handlers.open?.({}))
+    }
+    addEventListener(name, handler) {
+      this.handlers[name] = handler
+    }
+    send(text) {
+      for (const event of script(JSON.parse(text))) setTimeout(() => (event === "error" ? this.handlers.error?.({}) : this.handlers.message?.({ data: event })), 0)
+    }
+    close() {
+      this.closed = true
+      if (FakeWebSocket.closeThrows) throw new Error("already closed")
+    }
+  }
+}
+
+test("the app exchange sends the request, keeps only its own replies and stops at the first final one", async () => {
+  const WS = fakeWebSocket(({ request_id }) => ["not json", JSON.stringify({ type: "noise", request_id: "other" }), JSON.stringify({ type: "session_message_queued", request_id }), JSON.stringify({ type: "session_message_sent", request_id })])
+  const reply = await exchange({ port: "4001", token: "a b" }, [{ type: "send_message", request_id: "r9" }], {
+    keep: (message) => message.request_id === "r9", done: (message) => message.type === "session_message_queued", waitMs: 2000,
+  }, WS)
+  assert.deepEqual(reply.map(({ type }) => type), ["session_message_queued"])
+  assert.equal(WS.last.url, "ws://127.0.0.1:4001/?token=a%20b&observer=1")
+  assert.equal(WS.last.closed, true)
+  WS.closeThrows = true
+  const again = await exchange({ port: "1", token: "t" }, [{ request_id: "r" }], { keep: () => true, done: () => true, waitMs: 2000 }, WS)
+  assert.equal(again.length, 1, "a socket that is already closed does not break the answer")
+})
+
+test("a socket error or silence ends the exchange with what it has", async () => {
+  const broken = fakeWebSocket(() => ["error"])
+  assert.deepEqual(await exchange({ port: "1", token: "t" }, [{}], { keep: () => true, done: () => false, waitMs: 2000 }, broken), [{ type: "socket_error" }])
+  const silent = fakeWebSocket(() => [])
+  assert.deepEqual(await exchange({ port: "1", token: "t" }, [{}], { keep: () => true, done: () => false, waitMs: 20 }, silent), [])
+})
+
+test("send goes through the real defaults: the app socket files, the WebSocket and the waiting between looks", async () => {
+  const { root, dir } = await state()
+  mkdirSync(path.join(root, "run"))
+  writeFileSync(path.join(root, "run", "ws.port"), `4001\n${process.pid}\n`)
+  writeFileSync(path.join(root, "run", "ws.token"), "tok\n")
+  const original = globalThis.WebSocket
+  globalThis.WebSocket = fakeWebSocket(({ request_id }) => [JSON.stringify({ type: "session_message_sent", request_id })])
+  try {
+    const run = capture()
+    // The fake app does not write the history, so the message is accepted but never seen; the default clock and sleep run out the wait.
+    const code = await runSessionsCli({ argv: ["send", B, "hello there friend", "--from", "none", "--wait", "1"], io: run.io, env: { COPILOT_HOME: root } })
+    assert.equal(code, 0, run.out.stderr)
+    const result = JSON.parse(run.out.stdout)
+    assert.deepEqual([result.to, result.accepted, result.delivered], [B, true, false])
+    assert.ok(typeof dir === "string")
+  } finally {
+    globalThis.WebSocket = original
+  }
+})
+
+test("whoami says it cannot walk processes on Windows, and anything else resolves nothing quietly", async () => {
+  const { dir } = await state()
+  const win = capture()
+  assert.equal(await runSessionsCli({ argv: ["whoami"], io: win.io, deps: { stateDir: dir, platform: "win32" } }), 1)
+  assert.match(win.out.stderr, /sessions_whoami_platform/u)
+  const here = capture()
+  assert.equal(await runSessionsCli({ argv: ["whoami", "--hint", "x"], io: here.io, deps: { stateDir: dir, platform: "linux", parentOf: () => 1 } }), 0)
+  assert.deepEqual(JSON.parse(here.out.stdout), { ids: [], id: null })
+})
+
+test("a missing session-state folder is named, and the sessions.js script runs end to end", async () => {
+  const { root, dir } = await state()
+  const nowhere = path.join(root, "nowhere")
+  assert.match(resolveSession(nowhere, "abcdef").reason, /no session-state folder/u)
+  assert.deepEqual(selfSessions(nowhere, { parentOf: () => 1 }), [])
+  assert.equal(nameOf(nowhere, A), null)
+  appendFileSync(path.join(dir, A, "events.jsonl"), event("user.message", "from the script", "t1"))
+  const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/sessions.js", import.meta.url))
+  const run = (...argv) => spawnSync(process.execPath, [script, ...argv], { encoding: "utf8", env: { ...process.env, COPILOT_HOME: root } })
+  assert.match(run("--help").stdout, /^Usage: sessions\.js whoami/u)
+  assert.equal(JSON.parse(run("tail", "0dc4f17b-1").stdout).messages[0].text, "from the script")
+  assert.equal(run("whoami", "--hint", "nothing like it").status, 0)
+  const send = run("send", A, "hello there friend", "--from", "none")
+  assert.equal(send.status, 1)
+  assert.match(send.stderr, /sessions_app_socket/u)
+})
+
+test("the helpers cope with what a real machine leaves lying around", async () => {
+  const { root, dir } = await state()
+  assert.ok(parentOfProcess(process.pid) > 1)
+  assert.equal(parentOfProcess(1, () => ({ stdout: null })), 0, "a machine without ps says no parent")
+  const bare = "22222222-1111-4222-8333-444455556666"
+  const empty = "33333333-1111-4222-8333-444455556666"
+  mkdirSync(path.join(dir, bare))
+  writeFileSync(path.join(dir, bare, "workspace.yaml"), "id: x\n")
+  mkdirSync(path.join(dir, empty))
+  writeFileSync(path.join(dir, empty, "workspace.yaml"), "name: ''\n")
+  assert.equal(nameOf(dir, bare), null)
+  assert.equal(nameOf(dir, empty), null)
+  assert.equal(resolveSession(dir, "22222222").id, bare, "an unnamed session is found by id")
+  mkdirSync(path.join(dir, "22222222-9999-4222-8333-444455556666"))
+  assert.match(resolveSession(dir, "22222222").reason, /unnamed \(22222222\), unnamed \(22222222\)/u)
+  assert.deepEqual(tailMessages(`${JSON.stringify({ type: "user.message", timestamp: "t1" })}\n${JSON.stringify({ type: "user.message", timestamp: "t2", data: {} })}\n${JSON.stringify({ type: "user.message", timestamp: "t3", data: null })}\n`, 5).map(({ at, text }) => [at, text]), [["t1", ""], ["t2", ""], ["t3", ""]])
+  writeFileSync(path.join(dir, bare, "inuse.800.lock"), "")
+  writeFileSync(path.join(dir, A, "inuse.800.lock"), "")
+  appendFileSync(path.join(dir, A, "events.jsonl"), event("user.message", "marker text", "t1"))
+  assert.equal(whoAmI(dir, { pid: 800, parentOf: () => 1, hint: "marker text" }).id, A, "a candidate with no history is skipped")
+  assert.match(appSocket({ env: {}, home: root }).reason, /not running/u)
+})
+
+test("the app's replies are filtered to this session, and an empty answer is not an acceptance", async () => {
+  let filters
+  const ask = (replies) => sendThroughApp({ id: A, prompt: "p", socket: {}, newRequestId: () => "r1", send: async (_s, _m, options) => { filters = options; return replies } })
+  assert.deepEqual(await ask([]), { accepted: false, reply: "no reply", error: null })
+  assert.equal(filters.keep({ session_id: A, type: "session_message_delivery_unknown" }), true)
+  assert.equal(filters.keep({ session_id: B, type: "session_message_sent" }), false)
+  assert.equal(filters.keep({ session_id: A, type: "other" }), false)
+  assert.equal(filters.keep({ type: "socket_error" }), true)
+})
+
+test("a refusal without a reason from the app, and a target with no history yet, are both reported plainly", async () => {
+  const { dir } = await state()
+  const orphan = "44444444-1111-4222-8333-444455556666"
+  const refused = capture()
+  assert.equal(await runSessionsCli({ argv: ["send", orphan, "hi there", "--from", "none"], io: refused.io, deps: sendDeps(dir, { send: async () => ({ accepted: false, reply: "error", error: null }) }) }), 1)
+  assert.match(refused.out.stderr, /the app answered error; the session may be archived/u)
+  const quiet = capture()
+  assert.equal(await runSessionsCli({ argv: ["send", orphan, "hi there", "--from", "none", "--wait", "0"], io: quiet.io, deps: sendDeps(dir, { send: async () => ({ accepted: true, reply: "session_message_queued", error: null }) }) }), 0)
+  assert.equal(JSON.parse(quiet.out.stdout).delivered, false)
+  const home = capture()
+  assert.equal(await runSessionsCli({ argv: ["tail", "nobody"], env: {}, io: home.io }), 1)
 })

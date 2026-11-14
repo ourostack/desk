@@ -75,8 +75,10 @@ export function parseSessionsArgs(argv) {
   return { command, ref: positional[0], message, from: flags.from ?? null, asUser: flags["as-user"] === true, waitMs: wait * 1000 }
 }
 
+const copilotHome = ({ env, home }) => env.COPILOT_HOME || path.join(home, ".copilot")
+
 /** The folder every session's state lives in. */
-const sessionStateDir = ({ env = process.env, home = os.homedir() } = {}) => path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state")
+const sessionStateDir = (where) => path.join(copilotHome(where), "session-state")
 
 const yamlField = (text, key) => {
   const match = new RegExp(`^${key}:[ \\t]*(.*)$`, "mu").exec(String(text))
@@ -85,18 +87,19 @@ const yamlField = (text, key) => {
 
 /** The last `bytes` of a session's history and when it was last written, or null when it has none. */
 function readHistoryTail(stateDir, id, bytes = TAIL_BYTES) {
-  let fd
   try {
-    fd = openSync(path.join(stateDir, id, "events.jsonl"), "r")
-    const { size, mtime } = fstatSync(fd)
-    const length = Math.min(size, bytes)
-    const buffer = Buffer.alloc(length)
-    readSync(fd, buffer, 0, length, size - length)
-    return { text: buffer.toString("utf8"), mtime: mtime.toISOString() }
+    const fd = openSync(path.join(stateDir, id, "events.jsonl"), "r")
+    try {
+      const { size, mtime } = fstatSync(fd)
+      const length = Math.min(size, bytes)
+      const buffer = Buffer.alloc(length)
+      readSync(fd, buffer, 0, length, size - length)
+      return { text: buffer.toString("utf8"), mtime: mtime.toISOString() }
+    } finally {
+      closeSync(fd)
+    }
   } catch {
     return null
-  } finally {
-    if (fd !== undefined) closeSync(fd)
   }
 }
 
@@ -139,7 +142,8 @@ export function resolveSession(stateDir, ref) {
   const prefixed = /^[0-9a-f-]{6,}$/iu.test(ref) ? ids.filter((id) => id.startsWith(ref.toLowerCase())) : []
   const hits = prefixed.length > 0 ? prefixed : ids.filter((id) => nameOf(stateDir, id)?.toLowerCase() === ref.toLowerCase())
   if (hits.length === 1) return { id: hits[0] }
-  return { reason: hits.length === 0 ? `no session on this machine has the id prefix or exact name ${JSON.stringify(ref)}` : `${JSON.stringify(ref)} matches ${hits.length} sessions: ${hits.map((id) => `${nameOf(stateDir, id) ?? "unnamed"} (${id.slice(0, 8)})`).join(", ")}` }
+  if (hits.length === 0) return { reason: `no session on this machine has the id prefix or exact name ${JSON.stringify(ref)}` }
+  return { reason: `${JSON.stringify(ref)} matches ${hits.length} sessions: ${hits.map((id) => `${nameOf(stateDir, id) ?? "unnamed"} (${id.slice(0, 8)})`).join(", ")}` }
 }
 
 /** The sessions whose live host process is this one or one of its ancestors. `parentOf(pid)` is the parent process id, or 0. */
@@ -166,7 +170,8 @@ export function whoAmI(stateDir, { hint = null, ...options } = {}) {
   return { ids, id: hits.length === 1 ? hits[0] : null }
 }
 
-const parentOfProcess = (pid) => Number(spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", windowsHide: true }).stdout?.trim() || 0)
+/** The parent process id of `pid`, or 0 when `ps` cannot say. */
+export const parentOfProcess = (pid, run = spawnSync) => Number(String(run("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", windowsHide: true }).stdout ?? "").trim())
 
 /** The message with a header naming the sender and how to reply. The nonce is how the send finds it again in the target's history. */
 export function envelope({ nonce, from, name, host, text, script }) {
@@ -187,8 +192,8 @@ const alive = (pid) => {
 }
 
 /** The app's local WebSocket address and token as `{ port, token }`, or `{ reason }` in a plain sentence when the app is not running. */
-export function appSocket({ env = process.env, home = os.homedir() } = {}) {
-  const run = path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "run")
+export function appSocket(where) {
+  const run = path.join(copilotHome(where), "run")
   let port
   let owner
   let token
@@ -203,10 +208,10 @@ export function appSocket({ env = process.env, home = os.homedir() } = {}) {
 }
 
 /** Sends `messages` to the app and collects the replies `keep` accepts until `done` says stop or `waitMs` passes. */
-function exchange(socket, messages, { done, keep, waitMs }) {
+export function exchange(socket, messages, { done, keep, waitMs }, WebSocketImpl = globalThis.WebSocket) {
   return new Promise((resolve) => {
     const got = []
-    const ws = new WebSocket(`ws://127.0.0.1:${socket.port}/?token=${encodeURIComponent(socket.token)}&observer=1`)
+    const ws = new WebSocketImpl(`ws://127.0.0.1:${socket.port}/?token=${encodeURIComponent(socket.token)}&observer=1`)
     const finish = () => {
       clearTimeout(timer)
       try {
@@ -250,24 +255,27 @@ export async function sendThroughApp({ id, prompt, socket, send = exchange, newR
   return { accepted: Boolean(last && /^session_message_(?:sent|queued)$/u.test(last.type)), reply: last?.type ?? "no reply", error: last?.type === "error" ? String(last.message).slice(0, 300) : null }
 }
 
-const defaults = () => ({
-  stateDir: sessionStateDir(),
+const defaults = (env) => ({
+  stateDir: sessionStateDir({ env, home: os.homedir() }),
   parentOf: parentOfProcess,
-  socket: () => appSocket(),
+  socket: () => appSocket({ env, home: os.homedir() }),
   send: sendThroughApp,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
+  platform: process.platform,
   host: os.hostname().split(".")[0].toLowerCase(),
   nonce: () => randomBytes(4).toString("hex"),
 })
 
 /** Waits for `seen()` to turn true, looking every 1.5 s, for at most `waitMs`. */
 async function seenWithin(seen, waitMs, { sleep, now }) {
-  for (const end = now() + waitMs; ; ) {
-    if (seen()) return true
-    if (now() >= end) return false
+  const end = now() + waitMs
+  let found = seen()
+  while (!found && now() < end) {
     await sleep(1500)
+    found = seen()
   }
+  return found
 }
 
 async function runSend({ parsed, script, io, deps }) {
@@ -312,9 +320,9 @@ export async function runSessionsCli({ argv, script = "sessions.js", env = proce
     io.stderr.write(`${parsed.error}\n${USAGE}\n`)
     return 2
   }
-  const deps = { ...defaults(), ...(env.COPILOT_HOME ? { stateDir: sessionStateDir({ env }) } : {}), ...overrides }
+  const deps = { ...defaults(env), ...overrides }
   if (parsed.command === "whoami") {
-    if (process.platform === "win32" && overrides.parentOf === undefined) {
+    if (deps.platform === "win32" && overrides.parentOf === undefined) {
       return fail(io, failure("sessions_whoami_platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead"))
     }
     io.stdout.write(`${JSON.stringify(whoAmI(deps.stateDir, { hint: parsed.flags.hint ?? null, parentOf: deps.parentOf }), null, 1)}\n`)
