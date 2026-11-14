@@ -351,6 +351,8 @@ test("team lesson leaves the pull request open, not in effect, when it cannot me
   assert.equal(result.reason, "BLOCKED")
   assert.deepEqual(result.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
   assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
+  assert.equal(Object.keys(result)[0], "next", "the answer opens with the next step")
+  assert.match(result.next, /^The change is on a pull request that has not merged: run route_around\.steps now, in order, then read back that it merged\.$/u)
   assert.equal(result.message, `Not in effect: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). It takes effect when it merges.`)
   assert.equal(blocked.state.merges, 1)
   // The open pull request keeps its branch.

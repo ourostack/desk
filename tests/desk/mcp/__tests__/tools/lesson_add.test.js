@@ -472,7 +472,7 @@ test("lesson_add desk says plainly when no improvement card opened", async () =>
   assert.deepEqual(result.route_around.steps[0].arguments, { scope: "desk", owner: "foundation", topic: "Rule", body: "Do it." })
   assert.equal(result.route_around.steps[0].tool, "lesson_add")
   assert.equal(Object.keys(result)[0], "next", "the answer opens with the next step")
-  assert.match(result.next, /run route_around\.steps now, in order/u)
+  assert.match(result.next, /^The lesson is recorded but its improvement card isn't written yet: run route_around\.steps now, in order, then read back that the card is open\.$/u)
   assert.match(await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8"), /Lesson for `foundation`: \*\*Rule\.\*\* Do it\./u)
 })
 

@@ -201,7 +201,7 @@ test("note_leave leaves the pull request open, and says the note is not delivere
   assert.deepEqual(result.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
   assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
   assert.equal(Object.keys(result)[0], "next", "the answer opens with the next step")
-  assert.match(result.next, /^The change is on disk but not committed or on the remote yet: run route_around\.steps now, in order/u)
+  assert.match(result.next, /^The change is on a pull request that has not merged: run route_around\.steps now, in order, then read back that it merged\.$/u)
 })
 
 test("note_leave's failure says how to finish it by hand, with a read-back: the pull request it opened, else the same note again", async () => {

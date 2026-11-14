@@ -18,7 +18,7 @@ import { printedPart } from "../runtime/agents-md.js"
 import { crewWorkspace } from "../desk/crew-roster.js"
 import { SECTION, lead, lessonLine, oneLine, withLesson } from "./lesson-lines.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
-import { pullRequestRoute, retryRoute, withNext } from "../util/route-around.js"
+import { pullRequestRoute, retryRoute, UNFINISHED, withNext } from "../util/route-around.js"
 
 const DATE = /\b\d{4}-\d{2}-\d{2}\b/u
 
@@ -150,7 +150,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
         tool: "lesson_add",
         arguments: { scope: "team", topic, body, source, repo: top },
       })
-    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` })
+    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.COMMIT)
   }
   if (outcome.status === "unchanged") {
     const who = loaders()
@@ -158,7 +158,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
   }
   if (outcome.status === "pr_open") {
     const why = outcome.reason
-    return withNext({ ...result, status: "pr_open", reason: why, route_around: outcome.route_around, message: `Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` })
+    return withNext({ ...result, status: "pr_open", reason: why, route_around: outcome.route_around, message: `Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }, UNFINISHED.PULL_REQUEST)
   }
   result.commit = outcome.commit
   const who = loaders()

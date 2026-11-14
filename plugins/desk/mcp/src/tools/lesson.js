@@ -29,7 +29,7 @@ import { improvementPerson } from "../desk/improvement-person.js"
 import { holdLock } from "../desk/improvement-cards.js"
 import { TOOL_NAMES } from "../tool-names.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
-import { commitFailureWords, heldFileRouteFor, unfinishedNext, withNext } from "../util/route-around.js"
+import { commitFailureWords, heldFileRouteFor, UNFINISHED, unfinishedNext, withNext } from "../util/route-around.js"
 import { factoryPluginScan } from "./factory-context.js"
 import { friction_add } from "./friction.js"
 import { installedPlugins } from "./lesson-owners.js"
@@ -218,7 +218,7 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
   }
   for (const field of ["improvement_key", "improvement_path", "commit", "improvement_commit", "improvement_route_around"]) if (added[field] !== undefined) result[field] = added[field]
   if (result.improvement_route_around !== undefined) return { next: unfinishedNext(result.improvement_route_around, "improvement_route_around"), ...result }
-  return withNext(result)
+  return withNext(result, UNFINISHED.UNOPENED_CARD)
 }
 
 /**
