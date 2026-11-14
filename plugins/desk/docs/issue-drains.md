@@ -38,11 +38,11 @@ An issue is news when something other than the drain changed it since the revisi
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
 - comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
-- closes and assignments, and cross-references: a `cross-referenced` event is never news, including the one the drain's own marked comment on another issue creates when it names this one. A closed issue is not polled at all.
+- closes and assignments, and cross-references: a `cross-referenced` event is never news, including the one the drain's own marked comment, or the drain's own pull request (branch `drain-<n>-…`), creates when it names this issue. The poll reads comments and the issue events feed, which has no cross-references, and a pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
 
 ## Seeing a gap
 
-`status` (and the `status` lines `poll` prints) show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it.
+`status` (and the `status` lines `poll` prints) show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
 
 ## Delivering a wake
 
