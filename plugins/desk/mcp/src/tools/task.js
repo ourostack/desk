@@ -155,25 +155,25 @@ const DONE_EVIDENCE_REF_CHECKS = {
 async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
   // A card with a `## Steps` heading Desk cannot read is not closed: its author meant it to have steps.
   if (card.steps?.unreadable !== undefined) {
-    throw new Error(`${toolName}: this card has a \`## Steps\` table Desk cannot read, because ${card.steps.unreadable}, so it cannot tell whether the steps are delivered. Fix the table, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+    throw new Error(`${toolName}: Fix the \`## Steps\` table, then repeat this call with \`evidence: { kind: "steps" }\`: this card has a \`## Steps\` table Desk cannot read, because ${card.steps.unreadable}, so it cannot tell whether the steps are delivered. Fix the table, then repeat this call with \`evidence: { kind: "steps" }\`.`)
   }
   // A card with a readable `## Steps` table closes on its steps, refreshed just before this check, and on nothing else.
   if (card.steps != null) {
     if (evidence?.kind !== "steps") {
-      throw new Error(`${toolName}: this card has a \`## Steps\` table, so it closes only with \`evidence: { kind: "steps" }\` once every step is delivered or dropped (Desk checks each step against its pull request). Got ${evidence === undefined ? "no evidence" : JSON.stringify(evidence)}.`)
+      throw new Error(`${toolName}: Pass \`evidence: { kind: "steps" }\` once every step is delivered or dropped: this card has a \`## Steps\` table, so it closes only with \`evidence: { kind: "steps" }\` once every step is delivered or dropped (Desk checks each step against its pull request). Got ${evidence === undefined ? "no evidence" : JSON.stringify(evidence)}.`)
     }
     const unsettled = unsettledSteps(card.steps.rows, card.steps.derived)
     if (unsettled.length > 0) {
-      throw new Error(`${toolName}: not done: ${unsettled.length} step${unsettled.length === 1 ? " is" : "s are"} not delivered or dropped: ${unsettled.join("; ")}. Finish or drop ${unsettled.length === 1 ? "it" : "each"}, then repeat this call with \`evidence: { kind: "steps" }\`.`)
+      throw new Error(`${toolName}: Finish or drop the unsettled steps, then repeat this call with \`evidence: { kind: "steps" }\`: not done: ${unsettled.length} step${unsettled.length === 1 ? " is" : "s are"} not delivered or dropped: ${unsettled.join("; ")}. Finish or drop ${unsettled.length === 1 ? "it" : "each"}, then repeat this call with \`evidence: { kind: "steps" }\`.`)
     }
     return null
   }
   if (evidence?.kind === "steps") {
-    throw new Error(`${toolName}: \`evidence: { kind: "steps" }\` needs a card with a readable \`## Steps\` table, and this card has none. Use pr, commit, ci_run or non_code evidence.`)
+    throw new Error(`${toolName}: Use pr, commit, ci_run or non_code evidence: \`evidence: { kind: "steps" }\` needs a card with a readable \`## Steps\` table, and this card has none. Use pr, commit, ci_run or non_code evidence.`)
   }
   if (evidence === undefined) {
     throw new Error(
-      `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
+      `${toolName}: Pass \`evidence: { kind, ref }\`: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
         `${DONE_EVIDENCE_USAGE} Example: ${DONE_EVIDENCE_EXAMPLE}.`,
     )
   }
@@ -181,14 +181,14 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
   const refPresent = typeof evidence.ref === "string" && evidence.ref.trim().length > 0
   if (!kindOk || !refPresent) {
     throw new Error(
-      `${toolName}: \`evidence\` is not valid (got ${JSON.stringify(evidence)}) -- ${DONE_EVIDENCE_USAGE} ` +
+      `${toolName}: Pass \`evidence: { kind, ref }\`: \`evidence\` is not valid (got ${JSON.stringify(evidence)}) -- ${DONE_EVIDENCE_USAGE} ` +
         `Example: ${DONE_EVIDENCE_EXAMPLE}.`,
     )
   }
   const check = DONE_EVIDENCE_REF_CHECKS[evidence.kind]
   if (!(await check.test(evidence.ref.trim(), deskRoot))) {
     throw new Error(
-      `${toolName}: \`evidence.ref\` is not a checkable ${evidence.kind} reference (got ${JSON.stringify(evidence.ref)}) -- ` +
+      `${toolName}: Pass a checkable \`evidence.ref\`: \`evidence.ref\` is not a checkable ${evidence.kind} reference (got ${JSON.stringify(evidence.ref)}) -- ` +
         `for kind "${evidence.kind}", \`ref\` must be ${check.shape}.`,
     )
   }
@@ -197,7 +197,7 @@ async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
     const target = path.resolve(deskRoot, evidence.ref.trim())
     if (card.files.some((file) => path.resolve(file) === target)) {
       throw new Error(
-        `${toolName}: \`evidence.ref\` ${JSON.stringify(evidence.ref)} is the task card itself, which proves nothing: the card is what the evidence backs. ` +
+        `${toolName}: Point \`evidence.ref\` at a proof separate from the card: \`evidence.ref\` ${JSON.stringify(evidence.ref)} is the task card itself, which proves nothing: the card is what the evidence backs. ` +
           "For kind \"non_code\", point at a separate proof (a file or folder in the desk that holds the outcome, or an https URL to it).",
       )
     }
@@ -360,9 +360,9 @@ function checkReturnReason(data, { to, returnReason }) {
   const from = movingFrom(data)
   const needs = needsReturnReason({ from, to, reached: readRecord(data).flow?.reached })
   const given = returnReason !== undefined && returnReason !== null
-  if (given && !needs) throw new Error("task_update: `return_reason` is only for moving a task back; this call is not a return, so drop it.")
-  if (needs && !given) throw new Error(`task_update: moving this task from ${from} back to ${to} is a return and needs a reason. Repeat the call with \`return_reason\` set to one of ${REASON_LIST}.`)
-  if (needs && !RETURN_REASONS.includes(returnReason)) throw new Error(`task_update: \`return_reason\` must be one of ${RETURN_REASONS.join(", ")}.`)
+  if (given && !needs) throw new Error("task_update: Drop `return_reason`: `return_reason` is only for moving a task back; this call is not a return, so drop it.")
+  if (needs && !given) throw new Error(`task_update: Repeat the call with \`return_reason\`: moving this task from ${from} back to ${to} is a return and needs a reason. Repeat the call with \`return_reason\` set to one of ${REASON_LIST}.`)
+  if (needs && !RETURN_REASONS.includes(returnReason)) throw new Error(`task_update: Pass \`return_reason\` as one of the listed values: \`return_reason\` must be one of ${RETURN_REASONS.join(", ")}.`)
   return needs ? returnReason : undefined
 }
 
@@ -551,7 +551,7 @@ async function assertArchiveSourceIsRelocationSafe({
   archiveDir,
 }) {
   if ((await fs.lstat(srcDir)).isSymbolicLink()) {
-    throw new Error(`task_archive: source directory symlink cannot be archived safely: ${srcDir}`)
+    throw new Error(`task_archive: Use a real file or folder instead of the symlink: source directory symlink cannot be archived safely: ${srcDir}`)
   }
   if (!(await pathExists(srcFile))) return
 
@@ -561,7 +561,7 @@ async function assertArchiveSourceIsRelocationSafe({
   const realSrcDir = await fs.realpath(srcDir)
   const realArchiveDir = await prospectiveArchiveDir(archiveDir)
   if (isPathContained(realSrcDir, realArchiveDir)) {
-    throw new Error(`task_archive: archive destination cannot be inside source directory: ${archiveDir}`)
+    throw new Error(`task_archive: Choose an archive destination outside the source: archive destination cannot be inside source directory: ${archiveDir}`)
   }
 
   const sourceReferent = await fs.realpath(srcFile)
@@ -576,7 +576,7 @@ async function assertArchiveSourceIsRelocationSafe({
   // link written with an 8.3 short name or other letter case), so a referent that already exists is compared by that.
   const relocatedSpelling = relocatedReferent === null ? null : await realpathOrSame(relocatedReferent)
   if (relocatedSpelling !== expectedReferent) {
-    throw new Error(`task_archive: task.md symlink would change referent when archived: ${srcFile}`)
+    throw new Error(`task_archive: Use a real file or folder instead of the symlink: task.md symlink would change referent when archived: ${srcFile}`)
   }
 }
 
@@ -708,20 +708,20 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
-    throw new Error("task_create: `track` is required (string)")
+    throw new Error("task_create: Pass `track` as a string: `track` is required (string)")
   }
   if (!Object.hasOwn(values, "slug")) {
-    throw new Error("task_create: `slug` is required (string)")
+    throw new Error("task_create: Pass `slug` as a string: `slug` is required (string)")
   }
   if (!title || typeof title !== "string") {
-    throw new Error("task_create: `title` is required (string)")
+    throw new Error("task_create: Pass `title` as a string: `title` is required (string)")
   }
 
   if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
     throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
   }
   if (values.focus !== undefined && typeof values.focus !== "boolean") {
-    throw new Error("task_create: `focus` must be true or false")
+    throw new Error("task_create: Pass `focus` as true or false: `focus` must be true or false")
   }
   refuseRecordKeys("task_create", values, values.frontmatter)
   // A proposal is the worker's actual content, not manufactured agreement or
@@ -732,14 +732,14 @@ export async function task_create({ deskRoot, input, person = null, search, stat
     const fields = ["outcome", "assumptions", "recommended_decisions", "completion_checks"]
     if (p === null || typeof p !== "object" || Array.isArray(p) || Object.keys(p).length !== fields.length
       || fields.some((key) => !Object.hasOwn(p, key) || typeof p[key] !== "string" || !p[key].trim() || p[key].length > 2000 || p[key].includes("\0"))) {
-      throw new Error("task_create: intake_proposal needs exactly four nonempty worker-authored strings: outcome, assumptions, recommended_decisions, completion_checks; nothing was created. Reflect supplied scope and existing Go; do not invent choices or agreement.")
+      throw new Error("task_create: Pass exactly four nonempty worker-authored strings in intake_proposal: intake_proposal needs exactly four nonempty worker-authored strings: outcome, assumptions, recommended_decisions, completion_checks; nothing was created. Reflect supplied scope and existing Go; do not invent choices or agreement.")
     }
     proposal = Object.fromEntries(fields.map((key) => [key, p[key].trim()]))
   }
   // The steps are checked and placed before anything is written: a bad one refuses the whole create.
   let body = values.body ?? ""
   if (values.steps !== undefined) {
-    if (!Array.isArray(values.steps)) throw new Error("task_create: `steps` must be a list of step objects; nothing was created")
+    if (!Array.isArray(values.steps)) throw new Error("task_create: Pass `steps` as a list of step objects: `steps` must be a list of step objects; nothing was created")
     for (const step of values.steps) body = applyStep(body, objectInput(step, { ...STEP_INPUT, tool: "task_create" }), "task_create", recordedRepos(values.repos).map((repo) => repo.name), stepVerdict(values.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body
   }
   if (proposal) {
@@ -760,17 +760,17 @@ export async function task_create({ deskRoot, input, person = null, search, stat
   const nameResult = validateName(slug)
   if (!nameResult.ok) {
     throw new Error(
-      `task_create: invalid slug: ${describeNameRejection(nameResult)}`,
+      `task_create: Pass a valid value: invalid slug: ${describeNameRejection(nameResult)}`,
     )
   }
   if (await pathExists(filePath)) {
     throw new Error(
-      `task_create: task already exists at ${relPath(deskRoot, filePath)}`,
+      `task_create: Choose another name: task already exists at ${relPath(deskRoot, filePath)}`,
     )
   }
   // A delivered task sits in the archive under its own slug; creating over it would start the job again with a clean record.
   if (await pathExists(await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug] }))) {
-    throw new Error(`task_create: ${track}/${slug} already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.`)
+    throw new Error(`task_create: Use task_move (unarchive: true) to bring it back, or choose another slug: ${track}/${slug} already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.`)
   }
 
   const ts = nowIso()
@@ -961,7 +961,7 @@ function patchedCardText(raw, existing, fields) {
 // `note` and `next_step` are checked before any write: an empty one would record progress that says nothing.
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`task_update: \`${field}\` must be a non-empty string`)
+    throw new Error(`task_update: Pass \`${field}\` as a non-empty string: \`${field}\` must be a non-empty string`)
   }
   return value
 }
@@ -975,7 +975,7 @@ const LOOKS_BODY_READ = /^(?:next|block|wait)/u
 function refuseBodyOnlyKeys(frontmatter) {
   const key = frontmatter == null ? undefined : Object.keys(frontmatter).find((name) => BLOCKER_KEYS.has(looseKey(name)))
   if (key !== undefined) {
-    throw new Error(`task_update: \`frontmatter.${key}\` is not read: Desk takes a card's blocker from its body (a \`## Blocker\` section or a \`Blocker:\` line), so nothing was changed. Say the blocker with \`body_append\`, or in \`note\`.`)
+    throw new Error(`task_update: Use \`body_append\`, or \`note\`, to say the blocker: \`frontmatter.${key}\` is not read: Desk takes a card's blocker from its body (a \`## Blocker\` section or a \`Blocker:\` line), so nothing was changed. Use \`body_append\`, or \`note\`, to say the blocker.`)
   }
 }
 
@@ -985,7 +985,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
   if (unknown.length > 0) {
     throw new Error(
-      `task_update: unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; nothing was changed. Accepted fields: ${TASK_UPDATE_FIELDS.map((key) => `\`${key}\``).join(", ")}. Other card fields go inside \`frontmatter\`. Example: {"track": "t", "slug": "s", "status": "validating", "note": "what happened"}.`,
+      `task_update: Remove the unknown field: unknown field${unknown.length === 1 ? "" : "s"} ${unknown.map((key) => `\`${key}\``).join(", ")}; nothing was changed. Accepted fields: ${TASK_UPDATE_FIELDS.map((key) => `\`${key}\``).join(", ")}. Other card fields go inside \`frontmatter\`. Example: {"track": "t", "slug": "s", "status": "validating", "note": "what happened"}.`,
     )
   }
   const { track, slug, body_append } = values
@@ -993,7 +993,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     !Object.hasOwn(values, "track") ||
     !Object.hasOwn(values, "slug")
   ) {
-    throw new Error("task_update: `track` and `slug` are required")
+    throw new Error("task_update: Pass `track` and `slug`: `track` and `slug` are required")
   }
   const contentAdmission = admitContent({
     deskRoot,
@@ -1008,7 +1008,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   const givenFrontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
   // Top-level `status` is an alias for `frontmatter.status`, the field an agent reaches for first.
   if (values.status !== undefined && givenFrontmatter != null && Object.hasOwn(givenFrontmatter, "status") && givenFrontmatter.status !== values.status) {
-    throw new Error("task_update: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
+    throw new Error("task_update: Pass the status once, as `status`: `status` and `frontmatter.status` disagree; pass the status once, as `status`")
   }
   const statusMerged = values.status === undefined ? givenFrontmatter : { ...(givenFrontmatter ?? {}), status: values.status }
   // Desk reads a card's next step and blocker from its body, so a frontmatter key of that name would be written and never read. The next step takes the same path as top-level `next_step`; a blocker has no field, so it is refused.
@@ -1022,9 +1022,9 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     for (const key of aliasKeys) {
       const given = frontmatter[key]
       delete frontmatter[key]
-      if (typeof given !== "string") throw new Error(`task_update: \`frontmatter.${key}\` must be a non-empty string; nothing was changed`)
+      if (typeof given !== "string") throw new Error(`task_update: Pass \`frontmatter.${key}\` as a non-empty string: \`frontmatter.${key}\` must be a non-empty string; nothing was changed`)
       if (nextStepValue !== undefined && (typeof nextStepValue !== "string" || given.trim() !== nextStepValue.trim())) {
-        throw new Error(`task_update: \`${nextStepKey}\` and \`frontmatter.${key}\` disagree; pass the next step once, as the top-level \`next_step\``)
+        throw new Error(`task_update: Pass the next step once, as the top-level \`next_step\`: \`${nextStepKey}\` and \`frontmatter.${key}\` disagree; pass the next step once, as the top-level \`next_step\``)
       }
       if (nextStepValue === undefined) {
         nextStepValue = given
@@ -1067,7 +1067,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
   }
   if (!(await pathExists(filePath))) {
     throw new Error(
-      `task_update: task does not exist at ${relPath(deskRoot, filePath)}`,
+      `task_update: Check the track and slug, then try again: task does not exist at ${relPath(deskRoot, filePath)}`,
     )
   }
   assertCleanContentTarget(deskRoot, relPath(deskRoot, filePath), contentAdmission, "task_update")
@@ -1103,7 +1103,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     const reason = typeof values.repos_removed_reason === "string" ? values.repos_removed_reason.trim() : ""
     if (reason === "") {
       throw new Error(
-        "task_update: this call would remove every repo from a card that names code repos, which would let the task finish without code evidence. " +
+        "task_update: Repeat the call with `repos_removed_reason`: this call would remove every repo from a card that names code repos, which would let the task finish without code evidence. " +
           "If the work turned out not to touch them, repeat the call with `repos_removed_reason: \"<one line on why>\"` (it is recorded on the card as `repos_removed`), " +
           "and finish the task in a separate call afterwards; to abandon the task, set `status: \"cancelled\"` instead; if the repos were recorded wrongly, fix the entries instead of emptying the list. " +
           "See `task-lifecycle` and `task-card-format`.",
@@ -1111,7 +1111,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     }
     if (merged.status === "done") {
       throw new Error(
-        "task_update: a call that removes every repo cannot also set `status: \"done\"`. Remove the repos with `repos_removed_reason` in this call, then finish the task in a separate call with `non_code` evidence that is not the task card itself.",
+        "task_update: Remove the repos in this call, then finish the task in a separate call: a call that removes every repo cannot also set `status: \"done\"`. Remove the repos with `repos_removed_reason` in this call, then finish the task in a separate call with `non_code` evidence that is not the task card itself.",
       )
     }
     merged.repos_removed = [...asList(existing.data.repos_removed), ...priorRepos.map((repo) => ({ name: repo.name, reason, at: merged.updated }))]
@@ -1428,7 +1428,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     !Object.hasOwn(values, "track") ||
     !Object.hasOwn(values, "slug")
   ) {
-    throw new Error("task_archive: `track` and `slug` are required")
+    throw new Error("task_archive: Pass `track` and `slug`: `track` and `slug` are required")
   }
   const evidence = objectInput(values.evidence, {
     tool: "task_archive",
@@ -1439,7 +1439,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   const outcome = values.outcome
   if (outcome !== undefined && outcome !== "cancelled") {
     throw new Error(
-      `task_archive: \`outcome\`, when given, must be "cancelled" (got ${JSON.stringify(outcome)}) -- ` +
+      `task_archive: Omit \`outcome\`, or pass "cancelled": \`outcome\`, when given, must be "cancelled" (got ${JSON.stringify(outcome)}) -- ` +
         "omit it for a completed task and pass `evidence` instead.",
     )
   }
@@ -1500,12 +1500,12 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
   }
   if (!srcExists && !dstExists) {
     throw new Error(
-      `task_archive: task does not exist at ${relPath(deskRoot, srcDir)}`,
+      `task_archive: Check the track and slug, then try again: task does not exist at ${relPath(deskRoot, srcDir)}`,
     )
   }
   if (srcExists && dstExists) {
     throw new Error(
-      `task_archive: archive destination already exists at ${relPath(
+      `task_archive: Choose another name: archive destination already exists at ${relPath(
         deskRoot,
         archiveDir,
       )} but source ${relPath(deskRoot, srcDir)} also exists`,
@@ -1540,13 +1540,13 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
       try {
         archiveBump.record = applyMove(sourceCard.data, { to: archiveBump.status, at: archiveBump.updated })
       } catch (error) {
-        throw new Error(`task_archive: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
+        throw new Error(`task_archive: Set the card's status with task_update first: nothing was moved. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused (${error.message}). Set the card's status with task_update first (a move back from done takes \`return_reason\`), then archive it.`)
       }
     }
   }
 
   if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
-    throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
+    throw new Error("task_archive: Call task_archive again: the card changed during completion preflight; nothing was moved")
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
   const trackFile = await target([track, "track.md"])
   let trackPlan = await archiveTrackPlan(trackFile, slug, archiveBump?.status ?? null)
@@ -1616,7 +1616,7 @@ export async function task_archive({ deskRoot, input, person = null, search, sta
     let report = null
     if (await pathExists(filePath)) {
       if (sourceCardBytes === null || !(await fs.readFile(filePath)).equals(sourceCardBytes))
-        throw new Error("task_archive: card changed after admission; outside edits were retained")
+        throw new Error("task_archive: Call task_archive again: card changed after admission; outside edits were retained")
       const raw = sourceCardBytes.toString("utf8"), existing = parseMarkdownText(raw, filePath)
       finalStatus = existing.data.status
       cardBody = existing.content

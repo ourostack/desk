@@ -150,7 +150,7 @@ test("a missing card throws card not found and leaves the focus as it was", asyn
   await card(root, "tr", "alpha-work")
   const { focus, statusContext } = ctx()
   await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
-  await assert.rejects(taskFocus({ deskRoot: root, input: { track: "tr", slug: "nope-nope" }, statusContext }), /^Error: card not found: tr\/nope-nope$/u)
+  await assert.rejects(taskFocus({ deskRoot: root, input: { track: "tr", slug: "nope-nope" }, statusContext }), /^Error: Check the track and slug, then try again: card not found: tr\/nope-nope$/u)
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
 })
 

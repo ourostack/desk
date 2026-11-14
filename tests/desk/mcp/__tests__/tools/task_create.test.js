@@ -502,7 +502,7 @@ test("task_create refuses a slug that sits in the archive, names the fix and wri
   await fs.writeFile(path.join(archived, "task.md"), "---\ntitle: Old\nstatus: done\n---\n", "utf8")
   await assert.rejects(
     task_create({ deskRoot: root, input: { track: "t", slug: "old-job", title: "Again" } }),
-    (error) => error.message === "task_create: t/old-job already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.",
+    (error) => error.message === "task_create: Use task_move (unarchive: true) to bring it back, or choose another slug: t/old-job already exists in the archive. To work on it again, bring it back with task_move (unarchive: true), then task_update with return_reason. To start different work, choose another slug.",
   )
   assert.equal(await exists(path.join(root, "t", "old-job")), false)
   const made = await task_create({ deskRoot: root, input: { track: "t", slug: "brand-new", title: "New" } })

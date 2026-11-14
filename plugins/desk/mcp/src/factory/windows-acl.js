@@ -39,7 +39,7 @@ const DEFAULT_IDLE_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 const ENTRY_FIELDS = new Set(["path", "kind", "created"])
 const KINDS = new Set(["directory", "file"])
-const TRANSIENT_READBACK = /Windows ACL protection failed: Check the access rules, because (?:inherited ones still apply|exactly one was expected)/u
+const TRANSIENT_READBACK = new Set(["acl_inherited_rules", "acl_rule_count"])
 const SID_PATTERN = /^S-1-[\d-]+$/u
 
 // The whole program, fixed at build time. Paths never appear in it — they
@@ -53,17 +53,23 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8
 $self = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $administrators = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+# A refusal carries a stable code beside its words, so the parent decides what to retry from the code, not from the text.
+function Fail($code, $message) {
+  $failure = New-Object System.Exception($message)
+  $failure.Data['code'] = $code
+  throw $failure
+}
 function Protect-Request($request) {
   $results = @()
   foreach ($entry in $request.paths) {
     $target = $entry.path
     $item = Get-Item -LiteralPath $target -Force
     if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-      throw "Use a path that is not a reparse point: $target"
+      Fail 'acl_reparse_point' "Use a path that is not a reparse point: $target"
     }
     $isDirectory = $item.PSIsContainer
     if ($isDirectory -ne ($entry.kind -eq 'directory')) {
-      throw "Use a path that is a $($entry.kind): $target"
+      Fail 'acl_wrong_kind' "Use a path that is a $($entry.kind): $target"
     }
     # Read only the owner and access sections. Get-Acl also loads the audit
     # section (SACL), and writing that section back needs
@@ -76,7 +82,7 @@ function Protect-Request($request) {
         $acl.SetOwner($self)
         $reassigned = $true
       } else {
-        throw "Use a path you own, not one owned by another user ($owner): $target"
+        Fail 'acl_foreign_owner' "Use a path you own, not one owned by another user ($owner): $target"
       }
     }
     $acl.SetAccessRuleProtection($true, $false)
@@ -95,27 +101,27 @@ function Protect-Request($request) {
     $item.SetAccessControl($acl)
     $applied = Get-Acl -LiteralPath $target
     if ($applied.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $self) {
-      throw "Check the owner of the path, which was not applied: $target"
+      Fail 'acl_owner_not_applied' "Check the owner of the path, which was not applied: $target"
     }
     if (-not $applied.AreAccessRulesProtected) {
-      throw "Check the access rules, because inherited ones still apply: $target"
+      Fail 'acl_inherited_rules' "Check the access rules, because inherited ones still apply: $target"
     }
     $rules = @($applied.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
     if ($rules.Count -ne 1) {
-      throw "Check the access rules, because exactly one was expected and $($rules.Count) were found: $target"
+      Fail 'acl_rule_count' "Check the access rules, because exactly one was expected and $($rules.Count) were found: $target"
     }
     if ($rules[0].IdentityReference.Value -ne $self.Value) {
-      throw "Check the access rule, because it grants another identity ($($rules[0].IdentityReference.Value)): $target"
+      Fail 'acl_rule_identity' "Check the access rule, because it grants another identity ($($rules[0].IdentityReference.Value)): $target"
     }
     if ($rules[0].AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
-      throw "Check the access rule, because it is not an Allow rule: $target"
+      Fail 'acl_rule_not_allow' "Check the access rule, because it is not an Allow rule: $target"
     }
     $full = [System.Security.AccessControl.FileSystemRights]::FullControl
     if (($rules[0].FileSystemRights -band $full) -ne $full) {
-      throw "Check the access rule, because it does not grant FullControl: $target"
+      Fail 'acl_rule_rights' "Check the access rule, because it does not grant FullControl: $target"
     }
     if ($rules[0].InheritanceFlags -ne $inheritance) {
-      throw "Check the access rule, because it carries the wrong inheritance flags: $target"
+      Fail 'acl_rule_inheritance' "Check the access rule, because it carries the wrong inheritance flags: $target"
     }
     $results += [pscustomobject]@{
       path = $target
@@ -145,6 +151,7 @@ while ($true) {
     [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 3 -InputObject ([pscustomobject]@{
       status = 'error'
       message = $_.Exception.Message
+      code = $_.Exception.Data['code']
     })))
   }
 }
@@ -183,8 +190,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
 const PRIVATE_ARGS = ["-NoProfile", "-NonInteractive", "-EncodedCommand",
   Buffer.from(PRIVATE_PROGRAM, "utf16le").toString("base64")]
 
-function fail(label, message) {
-  throw new Error(`${label}: ${message}`)
+function fail(label, message, code) {
+  throw Object.assign(new Error(`${label}: ${message}`), code === undefined ? {} : { code })
 }
 
 /**
@@ -522,7 +529,7 @@ function readResponse({ code, stdout, stderr }, label) {
     parsed = null
   }
   if (parsed !== null && typeof parsed === "object" && parsed.status === "error") {
-    fail(label, `Windows ACL protection failed: ${parsed.message}`)
+    fail(label, `Windows ACL protection failed: ${parsed.message}`, typeof parsed.code === "string" ? parsed.code : undefined)
   }
   if (code !== 0) {
     fail(
@@ -633,7 +640,7 @@ export async function protectWindowsPaths(
     // call read back a half-applied list: inherited rules not yet cut off, or a rule not yet removed. Protection is idempotent,
     // so one more pass on exactly those two refusals settles it; a second refusal, or any other one, is final.
     const verified = await attempt().catch((error) => {
-      if (!TRANSIENT_READBACK.test(error.message)) throw error
+      if (!TRANSIENT_READBACK.has(error.code)) throw error
       return attempt()
     })
     if (memoized) for (const result of verified) rememberVerified(result, verifiedPaths)

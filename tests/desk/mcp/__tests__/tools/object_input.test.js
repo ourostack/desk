@@ -68,7 +68,7 @@ test("track_update parses a JSON-string frontmatter and validates its scope", as
   assert.equal(after.data.status, "paused")
   await assert.rejects(
     track_update({ deskRoot: root, input: { slug: "desk-plugin", frontmatter: JSON.stringify({ scope: "" }) } }),
-    /track_update: invalid `scope`/,
+    /track_update: Pass a valid value: invalid `scope`/,
   )
 })
 

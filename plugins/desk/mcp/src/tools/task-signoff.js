@@ -27,23 +27,23 @@ function folderName(field, value) {
   try {
     validateWriteSegment(value)
   } catch {
-    throw new Error(`task_signoff: \`${field}\` is not a valid task folder name.`)
+    throw new Error(`task_signoff: Pass \`${field}\` as a task folder name: \`${field}\` is not a valid task folder name.`)
   }
 }
 
 // Everything the call can get wrong, checked before the card is read.
 function checkInput(values) {
   const { track, slug, outcome, reason, return_reason: returnReason } = values
-  if (typeof track !== "string" || typeof slug !== "string") throw new Error("task_signoff: `track` and `slug` are required.")
-  if (outcome !== "accepted" && outcome !== "refused") throw new Error("task_signoff: `outcome` must be accepted or refused.")
+  if (typeof track !== "string" || typeof slug !== "string") throw new Error("task_signoff: Pass `track` and `slug`: `track` and `slug` are required.")
+  if (outcome !== "accepted" && outcome !== "refused") throw new Error("task_signoff: Pass `outcome` as one of the listed values: `outcome` must be accepted or refused.")
   folderName("track", track)
   folderName("slug", slug)
   if (outcome === "accepted") {
-    if (given(reason) || given(returnReason)) throw new Error("task_signoff: an acceptance takes no `reason` or `return_reason`; drop them.")
+    if (given(reason) || given(returnReason)) throw new Error("task_signoff: Drop `reason` and `return_reason` from an acceptance: an acceptance takes no `reason` or `return_reason`; drop them.")
     return
   }
-  if (!REFUSAL_REASONS.includes(reason)) throw new Error(`task_signoff: a refusal needs \`reason\`, the operator's reason, one of ${REFUSAL_REASONS.join(", ")}.`)
-  if (!RETURN_REASONS.includes(returnReason)) throw new Error(`task_signoff: a refusal needs \`return_reason\`, your own reading of the cause, one of ${RETURN_REASONS.join(", ")}.`)
+  if (!REFUSAL_REASONS.includes(reason)) throw new Error(`task_signoff: Pass \`reason\` with a refusal: a refusal needs \`reason\`, the operator's reason, one of ${REFUSAL_REASONS.join(", ")}.`)
+  if (!RETURN_REASONS.includes(returnReason)) throw new Error(`task_signoff: Pass \`return_reason\` with a refusal: a refusal needs \`return_reason\`, your own reading of the cause, one of ${RETURN_REASONS.join(", ")}.`)
 }
 
 // The one sentence the agent includes in its reply.
@@ -73,12 +73,12 @@ export async function taskSignoff({
   const { track, slug, outcome, reason, return_reason: returnReason } = values
 
   const found = await findCard({ deskRoot, person, track, slug })
-  if (found === null) throw new Error(`task_signoff: there is no task ${track}/${slug} in this desk; check the track and slug. Nothing was recorded.`)
+  if (found === null) throw new Error(`task_signoff: Check the track and slug, then try again: there is no task ${track}/${slug} in this desk; check the track and slug. Nothing was recorded.`)
   const card = await readMarkdown(found.file)
   if (card.data.status !== "done") {
     const shown = STATUSES.includes(card.data.status) ? card.data.status : "no recognised status"
     // A task that is not at done was never delivered, so nobody should have been asked to accept it: say what to do instead.
-    throw new Error(`task_signoff: only a delivered task can be signed; this one is at ${shown}. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask "Accept or send back?" in that delivery.`)
+    throw new Error(`task_signoff: Finish the task and move it to done with task_update first: only a delivered task can be signed; this one is at ${shown}. Nothing was recorded. It is not delivered yet, so do not ask the person to accept it: tell them what is left, finish it, move the task to done with task_update, and ask "Accept or send back?" in that delivery.`)
   }
 
   const atMs = now()
@@ -105,13 +105,13 @@ export async function taskSignoff({
     const how = existsSync(liveTrack)
       ? `A live track ${track} exists too: from the desk root, move the task into it with \`git mv ${relPath(deskRoot, taskDir)} ${relPath(deskRoot, path.join(liveTrack, slug))}\``
       : `From the desk root, bring the track back with \`git mv ${relPath(deskRoot, archivedTrack)} ${relPath(deskRoot, liveTrack)}\``
-    throw new Error(`task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded. ${how}, commit that, then call task_signoff again.`)
+    throw new Error(`task_signoff: Move the track back out of the archive, commit that, then call task_signoff again: the task's track is archived, so the task cannot go back to processing there; nothing was recorded. ${how}, commit that, then call task_signoff again.`)
   }
   if (refused && found.archived) {
     try {
       await task_move({ deskRoot, input: { track, slug, unarchive: true }, person, search, statusContext, spawnGit, schedulePush })
     } catch (error) {
-      throw new Error(`task_signoff: the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_move (unarchive: true), then call task_signoff again.`)
+      throw new Error(`task_signoff: Use task_move (unarchive: true) to bring it back, then try again: the archived task could not be brought back (${error.message}); nothing was recorded. Bring it back with task_move (unarchive: true), then call task_signoff again.`)
     }
     file = path.join(path.dirname(path.dirname(path.dirname(found.file))), slug, "task.md")
     result.path = relPath(deskRoot, file)

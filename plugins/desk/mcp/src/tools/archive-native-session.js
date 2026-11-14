@@ -330,7 +330,7 @@ const methods = ["CreateFileW", "GetFileInformationByHandleEx", "GetVolumeInform
 const phases = ["setup", "capture", "admit", "delete_open", "held_validate", "current_open", "current_validate", "rename", "close"]
 const uint = value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff
 const version = value => typeof value === "string" && /^\d{1,6}(?:\.\d{1,6}){1,3}$/u.test(value)
-const problem = message => Object.assign(new Error(`task_archive: native handle ${message}`), { code: "ARCHIVE_NATIVE_MOVE" })
+const problem = message => Object.assign(new Error(`task_archive: Check the native session handle: native handle ${message}`), { code: "ARCHIVE_NATIVE_MOVE" })
 function supported(file) {
   if (typeof file !== "string" || !/^[A-Za-z]:\\/u.test(file) || file.length >= 248 ||
       /[/:<>"|?*\u0000-\u001f]/u.test(file.slice(2)) ||

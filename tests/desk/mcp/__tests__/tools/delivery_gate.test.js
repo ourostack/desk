@@ -52,7 +52,7 @@ test("a pull request that carries the label is delivered", async () => {
 
 test("an unlabeled pull request that changes a ruled path is refused, naming the pull request and that no release carried it", async () => {
   await assert.rejects(run(fakeGitHub()), (error) => {
-    assert.match(error.message, /^task_update: ourostack\/desk#200 is not delivered yet/u)
+    assert.match(error.message, /^task_update: Leave the task at `validating` and check the release run, then repeat this call: ourostack\/desk#200 is not delivered yet/u)
     assert.match(error.message, /must carry the `released` label, and it does not/u)
     assert.match(error.message, /The release has not carried it yet\./u)
     assert.doesNotMatch(error.message, /not merged/u)
@@ -392,7 +392,7 @@ async function deskWithTask(slug) {
 test("task_update refuses done on an undelivered PR and leaves the card alone; the labeled PR closes it and says why", async () => {
   const root = await deskWithTask("gated")
   const file = path.join(root, "t", "gated", "task.md")
-  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "gated", frontmatter: { status: "done" }, evidence: PR }, fetchFn: fakeGitHub().fetchFn }), /task_update: ourostack\/desk#200 is not delivered yet/u)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "gated", frontmatter: { status: "done" }, evidence: PR }, fetchFn: fakeGitHub().fetchFn }), /task_update: Leave the task at `validating` and check the release run, then repeat this call: ourostack\/desk#200 is not delivered yet/u)
   assert.notEqual((await readFront(file)).data.status, "done")
   const released = fakeGitHub({ pr: { status: 200, body: { labels: [{ name: "released" }], merged_at: "x" } } })
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "gated", frontmatter: { status: "done" }, evidence: PR }, fetchFn: released.fetchFn })

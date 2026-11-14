@@ -550,7 +550,7 @@ test("lesson_add desk accepts a skill of a plugin installed for any host on this
   // The newest install of a plugin is the one that counts.
   await assert.rejects(() => desk("skill:ms-desk:removed-since"), /the ms-desk plugin has no skill named removed-since/u)
   // A plugin no host has installed is refused, with how to file a lesson for a real one.
-  await assert.rejects(() => desk("skill:made-up:thing"), /^Error: lesson_add: no plugin named made-up is installed for any host on this machine \(installed: claude-only, codex-only, copilot-only, desk, ms-desk\)\. If made-up is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues\.$/u)
+  await assert.rejects(() => desk("skill:made-up:thing"), /^Error: lesson_add: Install the plugin for any host and record the lesson again: no plugin named made-up is installed for any host on this machine \(installed: claude-only, codex-only, copilot-only, desk, ms-desk\)\. If made-up is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues\.$/u)
   // CODEX_HOME, COPILOT_HOME and CLAUDE_CONFIG_DIR move those hosts' folders.
   const moved = await mkTempDeskRoot()
   await fs.rename(path.join(home, ".codex"), path.join(moved, "codex"))

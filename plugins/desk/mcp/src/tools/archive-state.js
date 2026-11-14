@@ -15,7 +15,7 @@ function gitPath(git, file) {
   if (isPathContained(git.physicalRoot, file)) return relative(git.root, file)
   const suffix = path.relative(git.logicalRoot, file)
   if (suffix === ".." || suffix.startsWith(`..${path.sep}`) || path.isAbsolute(suffix))
-    throw new Error("task_archive: a Git path leaves the effective desk")
+    throw new Error("task_archive: Keep the path inside the desk: a Git path leaves the effective desk")
   return relative(git.root, path.resolve(git.physicalRoot, suffix))
 }
 async function present(file) {
@@ -26,14 +26,14 @@ async function present(file) {
 }
 function readGit(root, args, spawnGit, input) {
   const answer = spawnGit("git", ["-C", root, ...args], { windowsHide: true, encoding: "utf8", timeout: 10000, ...(input === undefined ? {} : { input }) })
-  if (answer.status !== 0) throw new Error(`task_archive: Git precondition unavailable (${args[0]}): ${answer.stderr || answer.error?.code || answer.status}`)
+  if (answer.status !== 0) throw new Error(`task_archive: Check that Git works in this desk, then run it again: Git precondition unavailable (${args[0]}): ${answer.stderr || answer.error?.code || answer.status}`)
   return answer.stdout
 }
 function gitBoolean(root, name, spawnGit) {
   const answer = spawnGit("git", ["-C", root, "config", "--bool", "--get", name], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (answer.status === 1) return true
   if (answer.status !== 0 || !["true", "false"].includes(answer.stdout.trim()))
-    throw new Error(`task_archive: Git ${name} could not be qualified`)
+    throw new Error(`task_archive: Check that Git works in this desk, then run it again: Git ${name} could not be qualified`)
   return answer.stdout.trim() === "true"
 }
 // `deskRoot` is the root a successful archive schedules its push for; every route publishes exactly it (R6).
@@ -47,7 +47,7 @@ async function gitContext(root, spawnGit, deskRoot = root) {
   if (!marker) return null
   const top = readGit(root, ["rev-parse", "--show-toplevel"], spawnGit).trim()
   const head = spawnGit("git", ["-C", top, "rev-parse", "--verify", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
-  if (head.status !== 0 && head.status !== 1) throw new Error("task_archive: HEAD could not be qualified; nothing was moved")
+  if (head.status !== 0 && head.status !== 1) throw new Error("task_archive: Check that Git works in this desk, then run it again: HEAD could not be qualified; nothing was moved")
   return { root: top, deskRoot, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null,
     fileMode: gitBoolean(top, "core.filemode", spawnGit), symlinks: gitBoolean(top, "core.symlinks", spawnGit), spawnGit }
 }
@@ -62,9 +62,9 @@ function headEntries(git, folder) {
 }
 function destinationVacant(git, archiveDir) {
   const entries = indexEntries(git.root, [gitPath(git, archiveDir)], git.spawnGit)
-  if (entries === null) throw new Error("task_archive: archive destination index state is unavailable; nothing was moved")
+  if (entries === null) throw new Error("task_archive: Check that Git works in this desk, then run it again: archive destination index state is unavailable; nothing was moved")
   if (entries.length || headEntries(git, archiveDir).length)
-    throw new Error("task_archive: archive destination is occupied in HEAD or the index (including a staged deletion); nothing was moved")
+    throw new Error("task_archive: Remove or rename what occupies the archive destination, then run it again: archive destination is occupied in HEAD or the index (including a staged deletion); nothing was moved")
 }
 async function tree(directory) {
   const result = new Map()
@@ -77,14 +77,14 @@ async function tree(directory) {
       for (const name of (await fs.readdir(file)).sort()) await visit(path.join(file, name), key ? `${key}/${name}` : name)
       return
     }
-    if (!before.isFile() && !before.isSymbolicLink()) throw new Error("task_archive: an unsupported companion type cannot be admitted")
+    if (!before.isFile() && !before.isSymbolicLink()) throw new Error("task_archive: Remove the unsupported entry from the task folder, then run it again: an unsupported companion type cannot be admitted")
     entry.kind = before.isSymbolicLink() ? "link" : "file"
     entry.bytes = before.isSymbolicLink() ? Buffer.from(await fs.readlink(file)) : await fs.readFile(file)
     entry.hash = hash(entry.bytes)
     const after = await fs.lstat(file, { bigint: true })
     if (identity(after) !== entry.identity || before.size !== after.size ||
         before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
-      throw new Error("task_archive: source changed while its bytes were being admitted")
+      throw new Error("task_archive: Run it again: source changed while its bytes were being admitted")
     result.set(key, entry)
   }
   await visit(directory, "")
@@ -99,7 +99,7 @@ function sameTree(actual, expected) {
 }
 function cleanHash(git, file, bytes) {
   const oid = readGit(git.root, ["hash-object", "--path", gitPath(git, file), "--stdin"], git.spawnGit, bytes).trim()
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(oid)) throw new Error("task_archive: Git did not return a qualified clean blob")
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(oid)) throw new Error("task_archive: Check that Git works in this desk, then run it again: Git did not return a qualified clean blob")
   return oid
 }
 function gitMode(entry, previous, git) {
@@ -113,10 +113,10 @@ function blobHash(git, file, bytes, mode) {
     : cleanHash(git, file, bytes)
 }
 function assertGitState(git) {
-  if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed after preflight")
+  if (headSha(git) !== git.head) throw new Error("task_archive: Run it again: HEAD changed after preflight")
   if (gitBoolean(git.root, "core.filemode", git.spawnGit) !== git.fileMode ||
       gitBoolean(git.root, "core.symlinks", git.spawnGit) !== git.symlinks)
-    throw new Error("task_archive: Git mode/type policy changed after preflight")
+    throw new Error("task_archive: Run it again: Git mode/type policy changed after preflight")
 }
 function indexMatches(entries, expected) {
   return entries !== null && entries.length === expected.size && entries.every((entry) =>
@@ -171,7 +171,7 @@ async function ancestry(boundary, destination) {
     const info = await present(cursor)
     if (!info) continue
     const real = await fs.realpath(cursor)
-    if (!isPathContained(physical, real)) throw new Error("task_archive: destination ancestry is outside the effective desk")
+    if (!isPathContained(physical, real)) throw new Error("task_archive: Keep the path inside the desk: destination ancestry is outside the effective desk")
     nodes.set(cursor, { identity: identity(info), real, target: identity(await fs.stat(cursor, { bigint: true })) })
   }
   return { physical, async assert() {
@@ -179,10 +179,10 @@ async function ancestry(boundary, destination) {
       const info = await present(file)
       if (!info || identity(info) !== expected.identity || await fs.realpath(file) !== expected.real ||
           identity(await fs.stat(file, { bigint: true })) !== expected.target)
-        throw new Error("task_archive: destination ancestor identity changed")
+        throw new Error("task_archive: Run it again: destination ancestor identity changed")
     }
     const parent = await fs.realpath(path.dirname(destination))
-    if (!isPathContained(physical, parent)) throw new Error("task_archive: destination ancestry is outside the effective desk")
+    if (!isPathContained(physical, parent)) throw new Error("task_archive: Keep the path inside the desk: destination ancestry is outside the effective desk")
   } }
 }
 
@@ -206,7 +206,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
     const card = gitPath(git, srcFile)
     const entries = indexEntries(git.root, [source], spawnGit)
     if (entries === null || entries.some((entry) => entry.stage !== "0" || entry.mode === "160000"))
-      throw new Error("task_archive: source index conflicts/submodules cannot be admitted; nothing was moved")
+      throw new Error("task_archive: Remove the unsupported entry from the task folder, then run it again: source index conflicts/submodules cannot be admitted; nothing was moved")
     const baseline = new Map(headEntries(git, srcDir).map((entry) => [entry.path, entry]))
     sourceIndex = new Map(entries.map((entry) => [entry.path, entry]))
     if (relocated && entries.length === 0 && baseline.size > 0) {
@@ -214,29 +214,29 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
         [`${destination}${file.slice(source.length)}`, entry]))
       if (headEntries(git, archiveDir).length ||
           !indexMatches(indexEntries(git.root, [destination], spawnGit), destinationIndex))
-        throw new Error("task_archive: the interrupted staged move does not exactly match the source HEAD; preserve the index and archive before retrying")
+        throw new Error("task_archive: Keep the index and the archive, resolve the difference, then run it again: the interrupted staged move does not exactly match the source HEAD; preserve the index and archive before retrying")
       stagedRelocation = true
     } else destinationVacant(git, archiveDir)
     originals = stagedRelocation ? baseline : sourceIndex
     tracked = [...originals.keys()]
     for (const [name, entry] of snapshot) {
       if (entry.kind !== "directory" && name !== "task.md" && !originals.has(`${source}/${name}`))
-        throw new Error("task_archive: an untracked companion is not implicitly owned; nothing was moved")
+        throw new Error("task_archive: Commit or move the extra changes out of the task folder, then run it again: an untracked companion is not implicitly owned; nothing was moved")
     }
     if (relocated) {
       if (!stagedRelocation && (entries.length === 0 || entries.length !== baseline.size ||
           entries.some((entry) => baseline.get(entry.path)?.sha !== entry.sha || baseline.get(entry.path)?.mode !== entry.mode)))
-        throw new Error("task_archive: the interrupted move has no unchanged source HEAD/index to reconcile")
+        throw new Error("task_archive: Keep the index and the archive, resolve the difference, then run it again: the interrupted move has no unchanged source HEAD/index to reconcile")
       for (const [key, entry] of snapshot) {
         if (entry.kind === "directory") continue
         const held = baseline.get(`${source}/${key}`)
         const mode = gitMode(entry, held, git)
         const sha = blobHash(git, path.join(srcDir, key), entry.bytes, mode)
         if (!held || held.sha !== sha || held.mode !== mode)
-          throw new Error("task_archive: relocated bytes differ from the source HEAD/index; preserve the archive and resolve the discrepancy before retrying")
+          throw new Error("task_archive: Keep the archive and resolve the discrepancy, then run it again: relocated bytes differ from the source HEAD/index; preserve the archive and resolve the discrepancy before retrying")
       }
       if ([...baseline.keys()].some((file) => !snapshot.has(file.slice(source.length + 1))))
-        throw new Error("task_archive: the interrupted move is missing a tracked source file")
+        throw new Error("task_archive: Keep the index and the archive, resolve the difference, then run it again: the interrupted move is missing a tracked source file")
     }
     for (const entry of originals.values()) {
       if (entry.path === card) continue
@@ -246,7 +246,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
       if (!previous || previous.sha !== entry.sha || previous.mode !== entry.mode || !bytes ||
           gitMode(current, entry, git) !== entry.mode ||
           blobHash(git, path.join(srcDir, key), bytes, entry.mode) !== entry.sha)
-        throw new Error("task_archive: a staged or dirty companion is not implicitly owned; nothing was moved")
+        throw new Error("task_archive: Commit or move the extra changes out of the task folder, then run it again: a staged or dirty companion is not implicitly owned; nothing was moved")
     }
     for (const args of relocated ? [] : [
       ["diff", "--name-only", "-z", "--", source],
@@ -255,7 +255,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
     ]) {
       const changes = readGit(git.root, args, spawnGit).split("\0").filter(Boolean)
       if (changes.some((file) => file !== card))
-        throw new Error("task_archive: dirty, staged, or untracked companion bytes cannot be adopted; nothing was moved")
+        throw new Error("task_archive: Commit or move the extra changes out of the task folder, then run it again: dirty, staged, or untracked companion bytes cannot be adopted; nothing was moved")
     }
     if (stagedRelocation && trackFile) {
       const key = gitPath(git, trackFile)
@@ -269,7 +269,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
           if (!stat.isFile() || gitMode({ kind: "file", mode: stat.mode & 0o777 }, held[0], git) !== held[0].mode ||
               await fs.readFile(trackFile, "utf8") !== after ||
               !indexMatches(indexEntries(git.root, [key], spawnGit), new Map([[key, expected]])))
-            throw new Error("task_archive: the interrupted track link update differs from its source HEAD; outside edits were retained")
+            throw new Error("task_archive: Keep the index and the archive, resolve the difference, then run it again: the interrupted track link update differs from its source HEAD; outside edits were retained")
           trackPlan = { file: trackFile, before: after, after }
           trackEntry = expected
           recoveredTrack = true
@@ -279,7 +279,7 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
   }
   if (trackPlan) {
     const stat = await fs.lstat(trackPlan.file, { bigint: true })
-    if (!stat.isFile()) throw new Error("task_archive: a track link update requires a regular track card")
+    if (!stat.isFile()) throw new Error("task_archive: Use a regular file, then run it again: a track link update requires a regular track card")
     track = { ...trackPlan, identity: identity(stat), mode: Number(stat.mode & 0o777n) }
   }
   if (git) {
@@ -288,13 +288,13 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
       ["diff", "--cached", "--name-only", "--", gitPath(git, track.file)],
       ["ls-files", "--others", "--", gitPath(git, track.file)],
     ].some((args) => readGit(git.root, args, spawnGit).trim()))
-      throw new Error("task_archive: the track row/link has outside edits; nothing was moved")
+      throw new Error("task_archive: Commit or move the extra changes out of the task folder, then run it again: the track row/link has outside edits; nothing was moved")
     if (track) {
       const held = indexEntries(git.root, [gitPath(git, track.file)], spawnGit)
       if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
-        throw new Error("task_archive: the track's regular Git file state could not be qualified")
+        throw new Error("task_archive: Check that Git works in this desk, then run it again: the track's regular Git file state could not be qualified")
       if (recoveredTrack && !indexMatches(held, new Map([[trackEntry.path, trackEntry]])))
-        throw new Error("task_archive: interrupted track index changed during preflight; outside staged bytes were retained")
+        throw new Error("task_archive: Run it again: interrupted track index changed during preflight; outside staged bytes were retained")
       trackEntry = held[0]
     }
   }
@@ -302,20 +302,20 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
     if (!track) return
     const stat = await fs.lstat(track.file, { bigint: true })
     if (identity(stat) !== track.identity || !Buffer.from(await fs.readFile(track.file)).equals(Buffer.from(track.before)))
-      throw new Error("task_archive: the track changed after preflight; outside edits were retained")
+      throw new Error("task_archive: Run it again: the track changed after preflight; outside edits were retained")
   }
   function assertSourceIndex() {
     if (!indexMatches(indexEntries(git.root, [gitPath(git, srcDir)], spawnGit), sourceIndex))
-      throw new Error("task_archive: source index changed after preflight; outside staged bytes were retained")
+      throw new Error("task_archive: Run it again: source index changed after preflight; outside staged bytes were retained")
   }
   function assertDestinationIndex() {
     if (!stagedRelocation) return destinationVacant(git, archiveDir)
     if (headEntries(git, archiveDir).length ||
         !indexMatches(indexEntries(git.root, [gitPath(git, archiveDir)], spawnGit), destinationIndex))
-      throw new Error("task_archive: interrupted destination index changed after preflight; outside staged bytes were retained")
+      throw new Error("task_archive: Run it again: interrupted destination index changed after preflight; outside staged bytes were retained")
     if (track && !indexMatches(indexEntries(git.root, [gitPath(git, track.file)], spawnGit),
       new Map([[trackEntry.path, trackEntry]])))
-      throw new Error("task_archive: interrupted track index changed after preflight; outside staged bytes were retained")
+      throw new Error("task_archive: Run it again: interrupted track index changed after preflight; outside staged bytes were retained")
   }
   return {
     git, snapshot, fence, trackPlan,
@@ -323,9 +323,9 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
       await fence.assert()
       await assertTrack()
       if (!sameTree(await tree(relocated ? archiveDir : srcDir), snapshot))
-        throw new Error("task_archive: source changed after preflight")
+        throw new Error("task_archive: Run it again: source changed after preflight")
       if (await present(relocated ? srcDir : archiveDir))
-        throw new Error("task_archive: the other archive path appeared before publication")
+        throw new Error("task_archive: Run it again: the other archive path appeared before publication")
       if (git) {
         assertDestinationIndex()
         assertSourceIndex()
@@ -334,12 +334,12 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
     },
     async afterMove() {
       await fence.assert()
-      if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: relocated payload changed; outside bytes retained")
+      if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: Run it again: relocated payload changed; outside bytes retained")
     },
     assertTrack,
     async cardWritten(expectedBytes, name = "task.md") {
       const real = await fs.realpath(path.join(archiveDir, name))
-      if (!(await fs.readFile(real)).equals(Buffer.from(expectedBytes))) throw new Error("task_archive: card bytes changed during its patch; no publication was admitted")
+      if (!(await fs.readFile(real)).equals(Buffer.from(expectedBytes))) throw new Error("task_archive: Run it again: card bytes changed during its patch; no publication was admitted")
       if (isPathContained(await fs.realpath(archiveDir), real)) {
         const key = relative(await fs.realpath(archiveDir), real)
         const stat = await fs.lstat(real, { bigint: true })
@@ -368,15 +368,15 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
     },
     async publish(message) {
       await fence.assert()
-      if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: relocated bytes changed before staging; outside edits retained")
+      if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: Run it again: relocated bytes changed before staging; outside edits retained")
       if (track && (!(await fs.lstat(track.file)).isFile() ||
           !isPathContained(fence.physical, await fs.realpath(track.file)) ||
           !(await fs.readFile(track.file)).equals(Buffer.from(track.after))))
-        throw new Error("task_archive: track changed before publication")
+        throw new Error("task_archive: Run it again: track changed before publication")
       if (!git) return undefined
       assertDestinationIndex()
       assertSourceIndex()
-      if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed before publication")
+      if (headSha(git) !== git.head) throw new Error("task_archive: Run it again: HEAD changed before publication")
       const expected = new Map()
       const source = gitPath(git, srcDir)
       const destination = gitPath(git, archiveDir)
@@ -406,9 +406,9 @@ export async function prepareArchiveState({ effectiveRoot, deskRoot = effectiveR
 
 export async function prepareArchivedCardPublication({ effectiveRoot, deskRoot = effectiveRoot, file, before, spawnGit }) {
   const physical = await fs.realpath(file), boundary = await fs.realpath(effectiveRoot)
-  if (!isPathContained(boundary, physical)) throw new Error("task_archive: archived card target is outside the effective desk")
+  if (!isPathContained(boundary, physical)) throw new Error("task_archive: Keep the archived card inside the desk, then run it again: archived card target is outside the effective desk")
   const stat = await fs.lstat(physical, { bigint: true })
-  if (!stat.isFile()) throw new Error("task_archive: archived card target is not a regular file")
+  if (!stat.isFile()) throw new Error("task_archive: Use a regular file for the archived card, then run it again: archived card target is not a regular file")
   const git = await gitContext(effectiveRoot, spawnGit, deskRoot)
   let previous = null
   let key
@@ -416,13 +416,13 @@ export async function prepareArchivedCardPublication({ effectiveRoot, deskRoot =
     key = gitPath(git, physical)
     const held = indexEntries(git.root, [key], spawnGit)
     if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
-      throw new Error("task_archive: archived card Git state could not be qualified")
+      throw new Error("task_archive: Check that Git works in this desk, then run it again: archived card Git state could not be qualified")
     previous = held[0]
     for (const args of [
       ["diff", "--name-only", "--", key], ["diff", "--cached", "--name-only", "--", key],
       ["ls-files", "--others", "--", key],
     ]) if (readGit(git.root, args, spawnGit).trim())
-      throw new Error("task_archive: archived card has outside edits; no report fields were changed")
+      throw new Error("task_archive: Commit or move the outside edits on the archived card, then run it again: archived card has outside edits; no report fields were changed")
   }
   async function sameTarget(expected) {
     return await fs.realpath(file) === physical &&
@@ -440,7 +440,7 @@ export async function prepareArchivedCardPublication({ effectiveRoot, deskRoot =
       } catch { return null }
     },
     async assertBefore() {
-      if (!(await sameTarget(before))) throw new Error("task_archive: archived card changed before its report patch")
+      if (!(await sameTarget(before))) throw new Error("task_archive: Run it again: archived card changed before its report patch")
       if (git) assertGitState(git)
     },
     async publish(expected, message) {
@@ -456,7 +456,7 @@ export async function prepareArchivedCardPublication({ effectiveRoot, deskRoot =
 function headSha(git) {
   const answer = git.spawnGit("git", ["-C", git.root, "rev-parse", "--verify", "-q", "HEAD"], { windowsHide: true, encoding: "utf8", timeout: 10000 })
   if (answer.status === 1) return null
-  if (answer.status !== 0) throw new Error("task_archive: current HEAD could not be qualified")
+  if (answer.status !== 0) throw new Error("task_archive: Check that Git works in this desk, then run it again: current HEAD could not be qualified")
   return answer.stdout.trim()
 }
 

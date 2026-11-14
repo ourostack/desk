@@ -143,7 +143,7 @@ export function assertLocalOnlyUnchanged(repos, prior) {
     if (entry === null || typeof entry !== "object" || entry.local_only === undefined) continue
     if (entry.local_only !== true || !recorded.has(repoKey(entry))) {
       throw new Error(
-        "task_update: `local_only` on a repos entry is written by Desk itself (when `task_create` or boot first sees the clone with no remote and the entry has no `url`), " +
+        "task_update: Leave `local_only` out of the entry, or copy it unchanged: `local_only` on a repos entry is written by Desk itself (when `task_create` or boot first sees the clone with no remote and the entry has no `url`), " +
           "so a call cannot set or change it. Leave it out of the entry, or copy it unchanged from the card's current entry.",
       )
     }

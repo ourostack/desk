@@ -338,7 +338,7 @@ test("task_archive applies the same rule when it bumps a card with repos to done
   const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
   await assert.rejects(
     task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "non_code", ref: "https://example.invalid/x" } } }),
-    /task_archive: `non_code` evidence cannot complete a task that names code repos/,
+    /task_archive: Use evidence that names a code repository: `non_code` evidence cannot complete a task that names code repos/,
   )
   const ok = await task_archive({ deskRoot: root, input: { track: "t", slug: "ship-it", evidence: { kind: "pr", ref: "https://github.com/acme/widgets/pull/2" } } })
   assert.equal(ok.status, "archived")

@@ -145,7 +145,7 @@ test("a card with steps closes only with evidence kind steps, and refuses while 
   await assert.rejects(update(root, { ...DONE, evidence: { kind: "pr", ref: url(1) } }, fake), /has a `## Steps` table, so it closes only with `evidence: \{ kind: "steps" \}`/u)
   await assert.rejects(update(root, DONE, fake), /Got no evidence/u)
   await assert.rejects(update(root, { ...DONE, evidence: { kind: "steps" } }, fake), (error) => {
-    assert.match(error.message, /^task_update: not done: 4 steps are not delivered or dropped: /u)
+    assert.match(error.message, /^task_update: Finish or drop the unsettled steps, then repeat this call with `evidence: \{ kind: "steps" \}`: not done: 4 steps are not delivered or dropped: /u)
     assert.match(error.message, /a is merged \(o\/widgets#1 is merged but not delivered: it must carry the `released` label\)/u)
     assert.match(error.message, /b is pending/u)
     assert.match(error.message, /c is blocked \(waits on infra\)/u)

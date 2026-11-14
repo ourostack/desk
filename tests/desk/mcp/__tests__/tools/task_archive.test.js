@@ -428,7 +428,7 @@ test("task_archive refuses to archive a non-terminal task with neither evidence 
 
   await assert.rejects(
     task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } }),
-    /task_archive: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
+    /task_archive: Pass `evidence: \{ kind, ref \}`: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
   )
 
   assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
@@ -462,7 +462,7 @@ test("task_archive refuses an `outcome` other than \"cancelled\", naming the bad
 
   await assert.rejects(
     task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", outcome: "abandoned" } }),
-    /task_archive: `outcome`, when given, must be "cancelled" \(got "abandoned"\)/,
+    /task_archive: Omit `outcome`, or pass "cancelled": `outcome`, when given, must be "cancelled" \(got "abandoned"\)/,
   )
 
   assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
@@ -512,7 +512,7 @@ test("task_archive refuses malformed `evidence` the same way task_update does, m
       deskRoot: root,
       input: { track: "t", slug: "book-flights", evidence: { kind: "vibes", ref: "trust me" } },
     }),
-    /task_archive: `evidence` is not valid.*"kind":"vibes"/,
+    /task_archive: Pass `evidence: \{ kind, ref \}`: `evidence` is not valid.*"kind":"vibes"/,
   )
 
   assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
@@ -530,7 +530,7 @@ test("task_archive's evidence is shape-checked per kind, the same as task_update
       deskRoot: root,
       input: { track: "t", slug: "book-flights", evidence: { kind: "pr", ref: "not a url" } },
     }),
-    /task_archive: `evidence\.ref` is not a checkable pr reference.*PR URL/,
+    /task_archive: Pass a checkable `evidence\.ref`: `evidence\.ref` is not a checkable pr reference.*PR URL/,
   )
 
   assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
@@ -707,7 +707,7 @@ test("task_archive refuses to cancel a hand-damaged card whose record cannot mov
   await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/^status: done$/mu, "status: weird"))
   await assert.rejects(
     task_archive({ deskRoot: root, input: { track: "t", slug: "damaged", outcome: "cancelled" } }),
-    /^Error: task_archive: nothing was moved\. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused \(this move sends work back and needs a return reason\)\. Set the card's status with task_update first/u,
+    /^Error: task_archive: Set the card's status with task_update first: nothing was moved\. This card's status is not one Desk knows, so Desk took the last status in the card's record as where the task moves from, and that move is refused \(this move sends work back and needs a return reason\)\. Set the card's status with task_update first/u,
   )
   assert.ok(await exists(file), "the live folder is where it was")
   assert.equal(await exists(path.join(root, "t", "_archive", "damaged")), false)

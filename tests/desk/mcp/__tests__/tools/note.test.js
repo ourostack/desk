@@ -167,7 +167,7 @@ test("note_leave reports where the remote work stopped, with the note not left",
   git(ws.seed, ["push", "-q", ws.bare, "main"])
   const gone = await leave(ws, { gh: fakeGh(ws.bare).gh })
   assert.deepEqual([gone.status, gone.stage], ["failed", "member"])
-  assert.equal(gone.message, "Not left: the note stopped at member (saranya is not on the roster in _meta/desks.md on the default branch of acme/cit).")
+  assert.equal(gone.message, "Fix what the parentheses name, then call it again: Not left: the note stopped at member (saranya is not on the roster in _meta/desks.md on the default branch of acme/cit).")
   git(ws.seed, ["rm", "-q", "_meta/desks.md"])
   git(ws.seed, ["commit", "-q", "-m", "no roster"])
   git(ws.seed, ["push", "-q", ws.bare, "main"])
@@ -186,7 +186,7 @@ test("note_leave reports where the remote work stopped, with the note not left",
   const spawnGit = toBare(missing.bare, (cmd, args, options) => (args.includes("push") && args.includes("--force") && (pushes += 1) === 2 ? { status: 1, stdout: "", stderr: "remote: denied" } : spawnSync(cmd, args, options)))
   const late = await leave(missing, { gh: fakeGh(missing.bare, { merge: () => ({ code: 1 }) }).gh, spawnGit })
   assert.equal(late.stage, "push")
-  assert.match(late.message, new RegExp(`^Not left: the note stopped at push \\(the push was refused: remote: denied\\)\\. The pull request ${PR} is open, on branch note/saranya-`, "u"))
+  assert.match(late.message, new RegExp(`^Fix what the parentheses name, then call it again: Not left: the note stopped at push \\(the push was refused: remote: denied\\)\\. The pull request ${PR} is open, on branch note/saranya-`, "u"))
   // A bug is thrown, not reported.
   await assert.rejects(() => leave(missing, { gh: fakeGh(missing.bare, { merge: () => { throw new Error("gh crashed") } }).gh }), /gh crashed/u)
 })
@@ -196,7 +196,7 @@ test("note_leave leaves the pull request open, and says the note is not delivere
   const blocked = fakeGh(ws.bare, { merge: () => ({ code: 1 }), view: () => ({ code: 0, stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }) }) })
   const result = await leave(ws, { gh: blocked.gh })
   assert.deepEqual([result.status, result.reason, result.pr], ["pr_open", "BLOCKED", PR])
-  assert.equal(result.message, `Not delivered yet: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). saranya sees the note once it merges.`)
+  assert.equal(result.message, `Wait for the pull request to merge, or merge it yourself: Not delivered yet: the pull request ${PR} is open on branch ${result.branch} and has not merged (BLOCKED). saranya sees the note once it merges.`)
   assert.equal(branches(ws.bare), result.branch)
   assert.deepEqual(result.route_around.steps.map((step) => step.argv), [["gh", "pr", "view", PR, "--json", "state,mergeable,mergeStateStatus"], ["gh", "pr", "merge", PR, "--squash"]])
   assert.deepEqual(result.route_around.landed_when, { argv: ["gh", "pr", "view", PR, "--json", "state", "--jq", ".state"], expect: "prints MERGED" })
@@ -228,7 +228,7 @@ test("note_leave refuses an exact duplicate of a note already in the recipient's
   const fake = fakeGh(ws.bare)
   const again = await leave(ws, { gh: fake.gh, now: () => at("2026-10-31T09:00:00Z", 420) })
   assert.deepEqual([again.status, again.note, again.note_status], ["duplicate", first.note, "open"])
-  assert.equal(again.message, `Not left: saranya already has this note from you (${first.note}, open).`)
+  assert.equal(again.message, `Leave a different note if you have something new to say: Not left: saranya already has this note from you (${first.note}, open).`)
   assert.equal(fake.calls.some((args) => args[1] === "create"), false)
   // Another subject, body or set of links is a new note.
   const other = await leave(ws, { gh: fakeGh(ws.bare).gh, input: { to: INPUT.to, subject: INPUT.subject, body: INPUT.body } })
@@ -289,7 +289,7 @@ test("note_ack marks the person's own note acknowledged, commits it and pushes, 
   // The bare file name works too, and a second acknowledgement changes nothing.
   const again = await ack(desk.name)
   assert.deepEqual([again.status, again.committed], ["unchanged", true])
-  assert.equal(again.message, `${desk.rel} is already acknowledged.`)
+  assert.equal(again.message, `Leave it as it is: ${desk.rel} is already acknowledged.`)
   assert.equal(pushes.length, 1)
 })
 

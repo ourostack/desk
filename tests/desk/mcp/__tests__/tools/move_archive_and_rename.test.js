@@ -378,7 +378,7 @@ test("task_move refuses to edit a track.md that holds another session's uncommit
   const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b" } }).catch((e) => e)
   assert.equal(
     error.message,
-    "task_move: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    "task_move: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
   )
   assert.ok(await exists(path.join(root, "track-a", "clean-task", "task.md")), "nothing moved")
 
@@ -403,7 +403,7 @@ test("task_move into_task refuses to hide a live task inside a done one, and mer
 
   await assert.rejects(
     task_move({ deskRoot: root, input: { track: "main-track", slug: "live-task", into_task: "done-task" } }),
-    /^Error: task_move: this task is still live but the task to merge into is done or cancelled; keep the live task \(merge the finished one into it instead\) or skip the merge$/,
+    /^Error: task_move: Merge the finished task into the live one instead, or skip the merge: this task is still live but the task to merge into is done or cancelled; keep the live task \(merge the finished one into it instead\) or skip the merge$/,
   )
   assert.ok(await exists(path.join(root, "main-track", "live-task", "task.md")), "the live task stays where it is")
 
@@ -423,7 +423,7 @@ test("track_rename refuses a track with uncommitted work unless allow_dirty is t
   await fs.writeFile(path.join(root, "old-track", "task-one", "doing.md"), "in progress\n")
 
   const error = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } }).catch((e) => e)
-  assert.match(error.message, /^track_rename: the source has unstaged changes or untracked files, so another session may be working there/)
+  assert.match(error.message, /^track_rename: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/)
   assert.doesNotMatch(error.message, /old-track|task-one/)
   assert.ok(await exists(path.join(root, "old-track", "track.md")))
 
@@ -566,7 +566,7 @@ test("track_rename renames nothing when a task card's frontmatter cannot be patc
   for (let attempt = 0; attempt < 2; attempt++) {
     await assert.rejects(
       track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => assert.fail("nothing to push") }),
-      (error) => error.message.startsWith("track_rename: nothing was renamed") && error.message.includes(brokenCard) && /duplicated mapping key/u.test(error.message),
+      (error) => error.message.startsWith("track_rename: Fix the card, then try again: nothing was renamed") && error.message.includes(brokenCard) && /duplicated mapping key/u.test(error.message),
     )
   }
   assert.equal(await exists(path.join(root, "new-track")), false)
@@ -910,7 +910,7 @@ test("track_rename errors show a credential-like track name redacted", async () 
   await assert.rejects(
     () => track_rename({ deskRoot: root, input: { track: "pw-hunter2-track", to: "access-work" } }),
     (error) => {
-      assert.equal(error.message, "track_rename: track does not exist at <redacted segment>")
+      assert.equal(error.message, "track_rename: Check the track and slug, then try again: track does not exist at <redacted segment>")
       return true
     },
   )
