@@ -680,6 +680,104 @@ test("an ignore rule skips only its author and its pattern: the same text from s
   assert.deepEqual(w.sent, [], "a rule with no pattern skips every comment by its author")
 })
 
+test("a pull request the drain's marked status comment on the issue names is the drain's own, on any branch, and one it does not name still wakes", async () => {
+  const status = (body) => ({ id: 70, body: `${body}\n${DRAIN_STATUS_MARKER}`, created_at: T(1), updated_at: T(1), user: { login: "maintainer" } })
+  const cases = [
+    ["a bare number", crossReference(T(5), sourceIssue(50, { pull_request: {} })), "PR #50 carries the fix", false],
+    ["a pull request link", crossReference(T(5), sourceIssue(50, { pull_request: {} })), "PR https://github.com/acme/widgets/pull/50", false],
+    ["another repository's pull request by its full name", crossReference(T(5), { number: 3, pull_request: {}, repository_url: "https://api.github.com/repos/other/thing" }), "PR other/thing#3", false],
+    ["a pull request body with the marker", crossReference(T(5), sourceIssue(50, { pull_request: {}, body: `Fix.\n${DRAIN_STATUS_MARKER}` })), "nothing yet", false],
+    ["a pull request the comment does not name", crossReference(T(5), sourceIssue(50, { pull_request: {} })), "PR #5 and #500 and acme/widgets#150", true],
+    ["a bare number when the pull request is in another repository", crossReference(T(5), { number: 3, pull_request: {}, repository_url: "https://api.github.com/repos/other/thing" }), "PR #3", true],
+  ]
+  for (const [name, event, text, wakes] of cases) {
+    const w = await quiet({ timeline: async () => [event] })
+    const own = status(text)
+    w.comments = async (_repo, n) => (n === 1 ? [own] : [])
+    w.pull = async () => ({ head: { ref: "window/typing-key-cheaper" } })
+    const out = await w.poll()
+    assert.equal(out.wakes.length, wakes ? 1 : 0, name)
+    matches(w.state().seen["1"], seenAt(T(5)))
+  }
+  const w = await quiet({ timeline: async () => [crossReference(T(5), sourceIssue(50, { pull_request: {} }))] })
+  w.comments = async (_repo, n) => (n === 1 ? [{ ...statusComment(70, T(1), "someone"), body: `PR #50\n${DRAIN_STATUS_MARKER}` }] : [])
+  assert.equal((await w.poll()).wakes.length, 1, "a marked comment by someone else is not the drain's")
+  const unread = await quiet({ timeline: async () => [crossReference(T(5), sourceIssue(50, { pull_request: {} }))] })
+  unread.comments = async (_repo, n, since) => {
+    if (n === 1 && since.startsWith("1970")) throw new Error("HTTP 502")
+    return []
+  }
+  assert.equal((await unread.poll()).wakes.length, 1, "comments that cannot be read link nothing")
+})
+
+const turnAt = (iso) => Date.parse(iso)
+const byDrain = (event) => ({ ...event, actor: { login: "maintainer" } })
+
+test("a label or state change by the polling account during the drain's turn is the drain's own work, whatever the label; before the wake, after the turn or by someone else it still wakes", async () => {
+  const delivered = "2026-11-13T02:00:00.000Z"
+  const start = async () => {
+    const w = await world([issue(1, "2026-11-13T01:00:00Z")])
+    await w.poll(turnAt("2026-11-13T01:00:00Z"))
+    w.issues[0] = issue(1, "2026-11-13T01:59:00Z")
+    w.comments = async () => [{ id: 9, body: "please look", updated_at: "2026-11-13T01:59:00Z", user: { login: "someone" } }]
+    await w.poll(turnAt(delivered))
+    assert.equal(w.sent.length, 1)
+    assert.deepEqual(w.state().turns, [delivered])
+    w.comments = async () => []
+    return w
+  }
+  const cases = [
+    ["a label the drain's scripts apply", [byDrain(labelEvent("2026-11-13T02:04:00Z", "waiting:external")), byDrain(labelEvent("2026-11-13T02:04:00Z", "lane:window")), byDrain(labelEvent("2026-11-13T02:04:00Z", "agent:drain"))], "2026-11-13T02:04:00Z", false],
+    ["a label it removes", [byDrain(labelEvent("2026-11-13T02:10:00Z", "waiting:external", "unlabeled"))], "2026-11-13T02:10:00Z", false],
+    ["a reopen it does", [byDrain(lifecycle("reopened", "2026-11-13T02:20:00Z"))], "2026-11-13T02:20:00Z", false],
+    ["a label just before the wake was acknowledged", [byDrain(labelEvent("2026-11-13T01:59:30Z", "lane:window"))], "2026-11-13T02:00:30Z", false],
+    ["a label by someone else in the turn", [labelEvent("2026-11-13T02:04:00Z", "lane:window"), { ...labelEvent("2026-11-13T02:04:00Z", "lane:window"), actor: { login: "someone" } }], "2026-11-13T02:04:00Z", true],
+    ["a reopen by someone else in the turn", [{ ...lifecycle("reopened", "2026-11-13T02:20:00Z"), actor: { login: "someone" } }], "2026-11-13T02:20:00Z", true],
+    ["a label by the account after the turn ran out", [byDrain(labelEvent("2026-11-13T03:31:00Z", "lane:window"))], "2026-11-13T03:31:00Z", true],
+  ]
+  for (const [name, events, at, wakes] of cases) {
+    const w = await start()
+    w.issues[0] = issue(1, at)
+    w.events = async () => events
+    const before = w.sent.length
+    await w.poll(turnAt(at) + 5000)
+    assert.equal(w.sent.length - before, wakes ? 1 : 0, name)
+  }
+})
+
+test("the turns are kept per drain, only the recent ones, and a wake that is refused opens none", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll(turnAt("2026-11-13T00:00:00Z"))
+  for (const hour of [1, 2, 3, 4, 5, 6]) {
+    w.issues[0] = issue(1, `2026-11-13T0${hour}:00:00Z`)
+    w.comments = async () => [{ id: hour, body: "x", updated_at: `2026-11-13T0${hour}:00:00Z`, user: { login: "someone" } }]
+    if (hour === 6) w.refuse = "app busy"
+    await w.poll(turnAt(`2026-11-13T0${hour}:01:00Z`))
+  }
+  assert.deepEqual(w.state().turns, ["02:01", "03:01", "04:01", "05:01"].map((time) => `2026-11-13T${time}:00.000Z`), "turns older than twice the turn length are dropped, and the refused wake opened none")
+  for (let i = 0; i < 60; i += 1) {
+    w.issues[0] = issue(1, `2026-11-13T07:${String(i).padStart(2, "0")}:30Z`)
+    w.comments = async () => [{ id: 100 + i, body: "x", updated_at: w.issues[0].updated_at, user: { login: "someone" } }]
+    await w.poll(turnAt(`2026-11-13T07:${String(i).padStart(2, "0")}:40Z`))
+  }
+  assert.equal(w.state().turns.length, 50)
+})
+
+test("an ignoreLabels pattern skips every label whose name matches it, case-insensitively, and only those", async () => {
+  const lanes = { ...DRAIN, ignoreLabels: ["^waiting:", "^lane:"] }
+  const w = await world([issue(1, T(0))], { drain: lanes })
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  w.events = async () => [labelEvent(T(5), "Waiting:External"), labelEvent(T(5), "lane:window", "unlabeled")]
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  w.issues[0] = issue(1, T(10))
+  w.events = async () => [labelEvent(T(10), "bug"), labelEvent(T(10), "not-waiting:x")]
+  await w.poll()
+  assert.equal(w.sent.length, 1)
+  assert.match(w.sent[0][1], /labeled bug/u)
+})
+
 test("an ignored label, and the drain: prefix beside it, wake nobody; any other label still does", async () => {
   const lanes = { ...DRAIN, ignoredLabels: ["agent:drain"] }
   const w = await world([issue(1, T(0))], { drain: lanes })
@@ -945,8 +1043,8 @@ test("status lines show the last successful poll and its lag, the last attempt, 
 })
 
 test("the config is validated, never silently trimmed to fewer drains", () => {
-  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "], ignoreComments: [{ author: " ci[bot] ", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }] }), "config.json")
-  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"], ignoreComments: [{ author: "ci[bot]", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }])
+  const ok = parseDrainConfig(JSON.stringify({ drains: [{ repo: "a/b", session: " s ", account: " me ", ignoredBodyTrailers: [" Active-at "], ignoredLabels: [" agent:drain "], ignoreLabels: [" ^waiting: "], ignoreComments: [{ author: " ci[bot] ", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }] }), "config.json")
+  assert.deepEqual(ok, [{ repo: "a/b", session: "s", account: "me", ignoredBodyTrailers: ["Active-at"], ignoredLabels: ["agent:drain"], ignoreLabels: ["^waiting:"], ignoreComments: [{ author: "ci[bot]", match: "^took" }, { author: "other[bot]" }] }, { repo: "c/d", session: "t" }])
   for (const [entry, message] of [
     [null, "drains[0] is not an object"],
     [{ repo: "no-slash", session: "s" }, "drains[0].repo"],
@@ -957,6 +1055,9 @@ test("the config is validated, never silently trimmed to fewer drains", () => {
     [{ repo: "a/b", session: "s", ignoredBodyTrailers: [3] }, "drains[0].ignoredBodyTrailers"],
     [{ repo: "a/b", session: "s", ignoredLabels: "agent:drain" }, "drains[0].ignoredLabels"],
     [{ repo: "a/b", session: "s", ignoredLabels: [" "] }, "drains[0].ignoredLabels"],
+    [{ repo: "a/b", session: "s", ignoreLabels: "^waiting:" }, "drains[0].ignoreLabels is not a list"],
+    [{ repo: "a/b", session: "s", ignoreLabels: [" "] }, "drains[0].ignoreLabels is not a list"],
+    [{ repo: "a/b", session: "s", ignoreLabels: ["("] }, "drains[0].ignoreLabels[0] is not a valid regular expression"],
     [{ repo: "a/b", session: "s", ignoreComments: "ci[bot]" }, "drains[0].ignoreComments is not a list"],
     [{ repo: "a/b", session: "s", ignoreComments: [null] }, "drains[0].ignoreComments[0].author"],
     [{ repo: "a/b", session: "s", ignoreComments: [{ author: " " }] }, "drains[0].ignoreComments[0].author"],
