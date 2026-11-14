@@ -273,6 +273,11 @@ test("waitingOnChecks names every required check that is missing, pending or not
   assert.deepEqual(waitingOnChecks(["a.b"], [check("axb")]), ["a.b: not started"], "only * is a wildcard")
 })
 
+test("waitingOnChecks judges the newest attempt of a check, and a plain list with no attempt times takes its later entry", () => {
+  assert.deepEqual(waitingOnChecks(["x"], [check("x", "failure"), check("x")]), [])
+  assert.deepEqual(waitingOnChecks(["x"], [check("x"), check("x", "failure")]), ["x: x failure"])
+})
+
 test("waitingOnChecks with skippedPasses: skipped and neutral pass, while every other conclusion, a pending check and a missing one still hold", () => {
   const verdict = (runs) => waitingOnChecks(["typecheck", "shard-*"], runs, true)
   assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "neutral"), check("shard-2")]), [])
