@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+// Stand-in for the GitHub CLI in a skill evaluation. It records its argv in the case's log and prints a success reply; nothing reaches GitHub.
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+if (process.env.DESK_EVAL_STANDIN_LOG) {
+  fs.appendFileSync(process.env.DESK_EVAL_STANDIN_LOG, `${JSON.stringify({ command: path.basename(process.argv[1]), args: process.argv.slice(2) })}\n`);
+}
+console.log(JSON.stringify({ id: 9876544, in_reply_to_id: 9876543, html_url: "https://github.com/alex-example/posts-site/pull/7#discussion_r9876544" }));

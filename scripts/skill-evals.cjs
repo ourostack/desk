@@ -388,8 +388,8 @@ function loadSuites(repoRoot) {
   return files.map((file) => ({ file: path.join(directory, file), suite: readJson(path.join(directory, file)) }));
 }
 
-// A case's scenario world: the folders the runner lays over the scratch desk and repository copy, or lands on the case's origin.
-const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person"];
+// A case's scenario world: the folders the runner lays over the scratch desk and repository copy, lands on the case's origin, or puts on the subject's PATH.
+const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person", "bin"];
 const branchName = /^[a-z0-9][a-z0-9-]*$/u;
 const personLine = /^[a-z0-9-]+\n?$/u;
 

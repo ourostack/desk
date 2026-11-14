@@ -163,13 +163,13 @@ function prepareTemplate(suite, root, log) {
 
 // Local state the subject could otherwise reach through the operator's profile: GitHub, npm and Git credentials, and Desk's own
 // protected state. The subject's shell can still use ambient environment tokens, so run where none are set.
-function subjectEnvironment(caseDirectory, desk, person) {
+function subjectEnvironment(caseDirectory, desk, person, standIns) {
   const config = path.join(caseDirectory, "config");
   fs.mkdirSync(path.join(config, "gh"), { recursive: true });
   fs.mkdirSync(path.join(config, "state"), { recursive: true });
   fs.writeFileSync(path.join(config, "npmrc"), "");
   fs.writeFileSync(path.join(config, "gitconfig"), `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`);
-  return {
+  const env = {
     ...process.env,
     DESK: desk,
     ...(person === null ? {} : { DESK_PERSON: person }),
@@ -181,6 +181,14 @@ function subjectEnvironment(caseDirectory, desk, person) {
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: "false",
   };
+  if (standIns !== null) {
+    // The stand-ins go first on PATH, so the subject's own commands of those names reach them before the real ones.
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === "PATH") env[key] = `${standIns.bin}${path.delimiter}${env[key]}`;
+    }
+    env.DESK_EVAL_STANDIN_LOG = standIns.log;
+  }
+  return env;
 }
 
 function cloneTemplate(template, testCaseId) {
@@ -215,6 +223,13 @@ function materializeLinks(directory) {
 function worldPerson(root, world) {
   const file = path.join(root, world, "person");
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : null;
+}
+
+// A case's `bin` folder holds stand-in commands for what the scratch environment cannot reach (a release, a comment, a form). Each
+// stand-in appends its argv to the case's log, which the judge reads as "Commands the stand-ins received".
+function worldStandIns(root, world, caseDirectory) {
+  const bin = path.join(root, world, "bin");
+  return fs.existsSync(bin) ? { bin, log: path.join(caseDirectory, "stand-in-commands.jsonl") } : null;
 }
 
 function seedWorld(workspace, world, root, template) {
@@ -275,6 +290,14 @@ function limited(text, limit) {
   return text.length > limit ? `${text.slice(0, limit)}\n[truncated]` : text;
 }
 
+function standInCommands(log) {
+  if (!fs.existsSync(log)) return "(none)";
+  return fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => {
+    const { command, args } = JSON.parse(line);
+    return `- ${command} ${JSON.stringify(args)}`;
+  }).join("\n");
+}
+
 // The judge sees only the subject's reply and tool requests, so state checks (writes, commits, tests) need the state itself. The desk
 // diff covers HEAD only, so each tree also lists the commits on every local branch since its baseline and the worktrees it has, since
 // the subject may commit on another branch or work in a linked worktree. Clones outside the tree are not inspected.
@@ -299,6 +322,7 @@ function workspaceEvidence(workspace, baselines) {
       parts.push(`Production-code diff against the baseline:\n${limited(patch.trim() || "(none)", 6000)}`);
     }
   }
+  if (workspace.standIns !== null) parts.push(`Commands the stand-ins received, in order (argv as JSON):\n${standInCommands(workspace.standIns.log)}`);
   return parts.join("\n\n");
 }
 
@@ -416,7 +440,8 @@ async function runCaseIn(testCase, context, workspace) {
   const { options, command, root, pluginDirs, template } = context;
   const baselines = testCase.world === undefined ? { desk: template.deskBaseline, repo: template.repoBaseline } : seedWorld(workspace, testCase.world, root, template);
   const person = testCase.world === undefined ? null : worldPerson(root, testCase.world);
-  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk, person), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
+  workspace.standIns = testCase.world === undefined ? null : worldStandIns(root, testCase.world, workspace.directory);
+  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk, person, workspace.standIns), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
   if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
