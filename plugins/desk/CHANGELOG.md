@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.147 — 2026-11-14
+
+A Factory context's task-card lookup on a slow machine no longer drops its card. Each Git call now gets the time left in its preparation budget, at least 2 s and at most 10 s, instead of a fixed 500 ms.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.146 — 2026-11-14
 
 A subagent's first prompt now gets one short line (about 190 bytes) instead of the whole Desk boot (about 4 KB, with its instructions for the operator's session), and no boot of its own. The line says the agent is a child agent that follows its brief, names the `desk-<name>` tool prefix and points at the `plain-language` skill. Copilot's prompt hook names the agent running the prompt (`agentId` and `parentAgentId`), which is how the hook tells a subagent from a main session.
