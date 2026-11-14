@@ -191,6 +191,15 @@ function cloneTemplate(template, testCaseId) {
   return { directory, desk: path.join(directory, "desk"), repo: template.repo === null ? null : path.join(directory, "repo") };
 }
 
+// Scratch folders are the runner's own; a folder that cannot be removed must not fail a finished run.
+function removeScratch(directory) {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true });
+  } catch {
+    // Left behind in the system temporary folder.
+  }
+}
+
 function limited(text, limit) {
   return text.length > limit ? `${text.slice(0, limit)}\n[truncated]` : text;
 }
@@ -300,7 +309,7 @@ async function runCase(testCase, context) {
   try {
     return await runCaseIn(testCase, context, workspace);
   } finally {
-    fs.rmSync(workspace.directory, { recursive: true, force: true, maxRetries: 5 });
+    removeScratch(workspace.directory);
   }
 }
 
@@ -387,7 +396,7 @@ async function runSuite(entry, context, api) {
   try {
     cases = await mapLimit(suite.cases, options.concurrency, (testCase) => runCase(testCase, suiteContext));
   } finally {
-    fs.rmSync(template.directory, { recursive: true, force: true, maxRetries: 5 });
+    removeScratch(template.directory);
   }
   const completedAt = new Date();
   const total = cases.reduce((sum, testCase) => sum + testCase.checks.length, 0);
