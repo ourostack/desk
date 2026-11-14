@@ -163,6 +163,7 @@ export function transformSource(url, source, scope) {
     ]
   } else return { source, coverage: "outside" }
   if (replacements.some(([anchor]) => source.split(anchor).length !== 2)) {
+    process.stderr.write("[anchor-debug] " + JSON.stringify({ url, counts: replacements.map(([anchor]) => source.split(anchor).length - 1), length: source.length, crlf: source.includes("\r\n") }) + "\n")
     return { source, coverage: "unknown", name }
   }
   let changed = source
