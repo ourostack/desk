@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.133 — 2026-11-14
+
+Every error thrown by Desk's tool code (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `track_*`, `note_*`, `lesson_add`, `friction_add` and `desk_save`) now carries a stable `code` on the error, such as `desk_save_path_nul` or `task_update_evidence_is_not_valid`, so a caller can branch on it. The messages are unchanged.
+
+The issue-drain poller is cheap on an account's REST quota. Between hourly full syncs it asks only for issues changed since the last poll, with `If-None-Match`, so an unchanged repository costs one 304 that GitHub does not count; the account's login is kept for a day; timelines are read only when a change needs one. `drains status` shows each account's remaining quota and what the last poll spent, and a drain on an account that is nearly out of quota is polled less often, or not until the window resets. See [issue drains](docs/issue-drains.md#spending-little-quota).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.132 — 2026-11-14
 
 The errors in Desk's runtime bootstrap (a missing `mcpRoot`, an incomplete atomic publication, a source mirror with links or other files, a source identity that does not match, and an unsafe path in the dependency pack) now open with what to do, then say what went wrong, and keep their meaning.

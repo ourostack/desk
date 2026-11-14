@@ -1,1 +1,0 @@
-Every error thrown by Desk's tool code (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `track_*`, `note_*`, `lesson_add`, `friction_add` and `desk_save`) now carries a stable `code` on the error, such as `desk_save_path_nul` or `task_update_evidence_is_not_valid`, so a caller can branch on it. The messages are unchanged.
