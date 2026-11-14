@@ -151,17 +151,17 @@ export function transformSource(url, source, scope) {
   } else if (owned(url, "runtime/bootstrap.js", scope)) {
     name = "mirror"
     replacements = [
-      // The anchor is a statement the coverage gate's instrumentation leaves as written: a changed file is instrumented,
-      // and an anchor on a line it reformats, such as the `lockIo` object, would no longer match there.
-      ["if (build === null)",
-        `if (__rm(destinationDir)) {
+      // The coverage gate instruments every changed production file, and instrumentation rewrites the source's layout and
+      // spacing. These anchors therefore match the statements' tokens, not their whitespace, so they hold for an instrumented copy too.
+      [/if\s*\(\s*build\s*===\s*null\s*\)/u,
+        match => `if (__rm(destinationDir)) {
     if (build !== null) build = __rw("build", build)
     const __validate = validateDestination
     validateDestination = function(candidate) { return __rw(candidate === stagingDir ? "stage" : "dest", __validate).call(this, candidate) }
     rename = __rw("rename", rename)
   }
-  if (build === null)`],
-      ["cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {", '__rw("copy", cpSync)(path.join(mcpRoot, entry), path.join(stagingPath, entry), {'],
+  ` + match],
+      [/cpSync\(\s*path\.join\(\s*mcpRoot,\s*entry\s*\),\s*path\.join\(\s*stagingPath,\s*entry\s*\),\s*\{/u, () => '__rw("copy", cpSync)(path.join(mcpRoot, entry), path.join(stagingPath, entry), {'],
     ]
   } else return { source, coverage: "outside" }
   if (replacements.some(([anchor]) => source.split(anchor).length !== 2)) {
