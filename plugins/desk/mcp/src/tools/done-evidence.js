@@ -226,13 +226,13 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
     throw Object.assign(new Error(
       `${toolName}: commit ${sha} exists in ${unpushed.name} (${unpushed.localPath}) but no remote-tracking branch contains it, so it is not pushed. ` +
         (localOnlyWhy === null ? "" : `${localOnlyWhy}. `) +
-        "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), run `git fetch` in that clone and repeat this call. " +
-        "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or open a pull request and supply its URL (`evidence: { kind: \"pr\", ref: \"<URL>\" }`); " +
+        "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), fetch that clone and repeat this call. " +
+        "Otherwise push the branch (which also updates the remote-tracking branch), then repeat; or open a pull request and supply its URL (`evidence: { kind: \"pr\", ref: \"<URL>\" }`); " +
         `or leave the task at \`validating\` and tell the operator the commit sha ${sha.slice(0, 7)}, which is waiting to be pushed.`), { code: "done_evidence_commit_exists_in_but_no" })
   }
   throw Object.assign(new Error(
     `${toolName}: commit ${sha} does not resolve in any of this task's repo clones (${describeRepos(repos)}). ` +
-      "If the commit is on the remote (for example a squash-merged PR), run `git fetch` in the recorded clone first and repeat this call. " +
+      "If the commit is on the remote (for example a squash-merged PR), fetch the recorded clone first and repeat this call. " +
       "A commit made in the desk, or in a repo the card does not list, does not count. Supply a commit from one of those repos that is pushed, or the pull request URL."), { code: "done_evidence_commit_does_not_resolve_in" })
 }
 

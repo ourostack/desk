@@ -1,21 +1,22 @@
 // Desk's agent-facing words held to Ouro AX by its surface checker: errors lead with their fix and carry a code,
 // tool descriptions say when to use the tool and stay short, and nothing sends an agent to run a script.
-// A finding is recorded in ax-surfaces-baseline.json, counted per check and file; a new one fails, and so does a recorded one that is fixed.
+// Nothing is recorded as a known finding any more: any finding fails this test. A text that is not an error an agent reads
+// goes in NOT_ERRORS with its reason, and the list can only be made longer by raising its cap in the same change.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkSurfaces, countFindings, extractSurfaces, ratchet, surfacesText } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/surfaces.ts"
+import { checkSurfaces, extractSurfaces, ratchet, surfacesText } from "../../../../../plugins/desk/mcp/src/lib/ouro-ui/registry/ouro/ax/surfaces.ts"
 import { TOOL_DESCRIPTIONS } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "../../../../..")
-const baselinePath = path.join(here, "ax-surfaces-baseline.json")
 
 // Strings the extractor reads as errors that are not: they stay in the manifest as texts, which are still checked for
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
+const NOT_ERRORS_AT_MOST = 158
 const NOT_ERRORS = {
   "plugins/desk/hooks/copilot-session-start.cjs#desk-memory-use-the-supported": "a hook's stderr line",
   "plugins/desk/hooks/lib/copilot-intake-context.cjs#check-desk-s-intake-context": "a hook's stderr line",
@@ -199,20 +200,11 @@ function deskSurfaces() {
   }
 }
 
-test("every error and tool description in Desk is within Ouro AX, or recorded in the baseline that only shrinks", (t) => {
+test("every error and tool description in Desk is within Ouro AX, with no known findings", () => {
   const surfaces = deskSurfaces()
   assert.deepEqual(Object.keys(NOT_ERRORS).filter((id) => !surfaces.texts.some((text) => text.id === id)), [], "NOT_ERRORS names a text that is gone: remove it")
+  assert.ok(Object.keys(NOT_ERRORS).length <= NOT_ERRORS_AT_MOST, `NOT_ERRORS holds ${Object.keys(NOT_ERRORS).length} texts; fix the new error instead of exempting it, or raise NOT_ERRORS_AT_MOST with the reason in the same change`)
   const report = checkSurfaces(surfaces)
-  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"))
-  assert.equal(baseline.ax, "surfaces-baseline/2")
-  const result = ratchet(report, baseline.findings)
-  if (process.env.UPDATE_AX_SURFACES_BASELINE === "1" && result.added.length === 0) {
-    writeFileSync(baselinePath, `${JSON.stringify({ ax: baseline.ax, findings: Object.fromEntries(Object.entries(countFindings(report)).sort(([a], [b]) => (a < b ? -1 : 1))) }, null, 2)}\n`)
-    return
-  }
-  assert.ok(
-    result.ok,
-    `${surfacesText(report, result, { baselinePath: "tests/desk/mcp/__tests__/runtime/ax-surfaces-baseline.json" })}\nA new finding is fixed in the code. A fixed one leaves the baseline: run this test with UPDATE_AX_SURFACES_BASELINE=1.`,
-  )
-  t.diagnostic(`${Object.values(baseline.findings).reduce((a, b) => a + b, 0)} findings recorded in ${report.surfaces} surfaces`)
+  const result = ratchet(report, {})
+  assert.ok(result.ok, `${surfacesText(report, result)}\nFix the finding in the code: nothing is recorded as known any more.`)
 })

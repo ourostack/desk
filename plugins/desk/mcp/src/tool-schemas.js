@@ -246,7 +246,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     to_track: text("The destination track; its track.md must already exist."),
     to_slug: text("The new task folder name: an outcome name."),
     unarchive: flag("Reopen an archived task into a live folder."),
-    into_task: text("Merge this duplicate task into the named keeper task."),
+    into_task: text("Merge this duplicate task into the named keeper task, under the keeper's _iterations/ folder. A live task cannot merge into a done or cancelled one."),
     allow_dirty: flag("Move even though the folder has unstaged or untracked changes."),
   }),
   track_create: schema({
@@ -273,7 +273,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     about: {
       type: "string",
       enum: ["setup", "system"],
-      description: "What the friction is about. \"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself.",
+      description: "What the friction is about. \"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself, built by Desk from your `title` and never from your text; `improvement_key` and `improvement_path` in the result name it.",
     },
     title: text("Required when about is \"system\": the card's title, on one line."),
     plugin: text("For \"system\": the plugin the friction is in; defaults to \"desk\"."),
@@ -292,7 +292,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     scope: {
       type: "string",
       enum: ["personal", "desk", "team"],
-      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, in their AGENTS.md. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner`. \"team\": every teammate's agents in a shared repository; needs `source`.",
+      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, in their AGENTS.md. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner`. \"team\": every teammate's agents in a shared repository; needs `source`. The reply says `tier` and `shelved` for personal, `improvement`, `improvement_key` and `improvement_path` for desk, and `merged`, `pr_open` or `failed` for team; a team line is refused if it would push AGENTS.md past 16 KB.",
     },
     topic: text("The rule's short name, on one line; a later lesson with the same topic replaces it."),
     body: text("The rule, on one line."),

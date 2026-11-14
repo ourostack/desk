@@ -112,7 +112,7 @@ test("remote, branch, JSON, lookup, creation and merge failures refuse without c
     [{ remote: "file:///example/workspace" }, /needs a GitHub/u],
     [{ remote: "https://github.example/ambiguous" }, /unambiguous/u],
     [{ remote: "git@bad!host:example/workspace" }, /unambiguous/u],
-    [{ pushResult: { status: 1 } }, /branch push was refused.*Fix: git push/u],
+    [{ pushResult: { status: 1 } }, /^Push .* to .* yourself to read its admission diagnostic: the contribution branch push was refused/u],
     [{ list: {} }, /unambiguous publication PR/u],
     [{ list: [{}, {}] }, /unambiguous publication PR/u],
     [{ create: true, noReadback: true }, /could not be read back/u],

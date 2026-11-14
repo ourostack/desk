@@ -345,7 +345,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   const cards = rels.filter(isCard)
   const others = rels.filter((p) => !isCard(p))
   if (cards.length > 0 && hasUnstagedWork(deskRoot, cards, spawnGit)) {
-    throw Object.assign(new Error("desk_save: Run task_update for a card edit, or restore the card and pass only moved cards: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves"), { code: "desk_save_a_task_card_in_paths_2" })
+    throw Object.assign(new Error("desk_save: Run task_update for a card edit, or restore the card and pass only moved cards: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or unstage and restore the card, and pass only cards that task_move, track_rename or a Git move staged as moves"), { code: "desk_save_a_task_card_in_paths_2" })
   }
   // Only the paths that hold unstaged work are staged. The old side of a move `git mv` already staged is neither on disk nor in the index, and `git add` refuses the whole call for one such path.
   const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
@@ -367,13 +367,13 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   for (const change of changes) {
     const card = change.paths.find(isCard)
     if (card !== undefined && change.status !== "R100" && change.status !== "D") {
-      throw Object.assign(new Error(`desk_save: unstage ${card} (git restore --staged -- <path>) and change that task card with task_update; a tidy commits a task card only as a move or a delete, not an edit`), { code: "desk_save_unstage_git_restore_staged_path" })
+      throw Object.assign(new Error(`desk_save: unstage ${card} and change that task card with task_update; a tidy commits a task card only as a move or a delete, not an edit`), { code: "desk_save_unstage_git_restore_staged_path" })
     }
   }
   const entries = indexEntries(deskRoot, rels, spawnGit)
   if (entries === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), "git could not read the index") }
   if (entries.filter((entry) => isCard(entry.path)).some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
-    throw Object.assign(new Error("desk_save: Run git restore --staged and git restore on the card, then pass only the moved cards: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards"), { code: "desk_save_a_task_card_in_paths" })
+    throw Object.assign(new Error("desk_save: Unstage and restore the card, then pass only the moved cards: a task card in `paths` is not a regular file (a link, for example); unstage and restore it, then pass only the moved cards"), { code: "desk_save_a_task_card_in_paths" })
   }
   const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
   if (!committed.ok) return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: rels, message: tidyTrailer(message), committed }) }
