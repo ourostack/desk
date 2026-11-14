@@ -126,7 +126,7 @@ export function prepareRuntime({
   onPhase = () => {},
 } = {}) {
   if (!hasText(mcpRoot)) {
-    throw new Error("desk-mcp: mcpRoot is required for runtime dependency bootstrap")
+    throw new Error("desk-mcp: Pass mcpRoot to the bootstrap: mcpRoot is required for runtime dependency bootstrap")
   }
   const resolvedMcpRoot = path.resolve(mcpRoot)
   const packageJson = readJson(path.join(resolvedMcpRoot, "package.json"))
@@ -487,7 +487,7 @@ export function publishDirectoryAtomically({
         rename(backupDir, destinationDir)
         hadDestination = false
       }
-      throw new Error(`atomic publication produced an incomplete directory: ${destinationDir}`)
+      throw new Error(`Run the bootstrap again: atomic publication produced an incomplete directory: ${destinationDir}`)
     }
     rmSync(backupDir, { recursive: true, force: true })
     return {
@@ -510,11 +510,11 @@ export function publishDirectoryAtomically({
 
 function assertStagingComplete({ stagingDir, validateDestination }) {
   if (!existsSync(stagingDir)) {
-    throw new Error(`atomic publication staging directory is missing: ${stagingDir}`)
+    throw new Error(`Run the bootstrap again: atomic publication staging directory is missing: ${stagingDir}`)
   }
   if (!directoryIsValid(validateDestination, stagingDir)) {
     rmSync(stagingDir, { recursive: true, force: true })
-    throw new Error(`atomic publication staging directory is incomplete: ${stagingDir}`)
+    throw new Error(`Run the bootstrap again: atomic publication staging directory is incomplete: ${stagingDir}`)
   }
 }
 
@@ -594,11 +594,11 @@ function publicationLockTimeoutMessage({ lockDir, elapsedMs, processAlive }) {
   }
   const waited = `waited ${elapsedMs} ms`
   if (!Number.isInteger(pid) || pid <= 0) {
-    return `atomic publication lock timed out: ${lockDir} (no readable owner record; ${waited})`
+    return `Run the bootstrap again: atomic publication lock timed out: ${lockDir} (no readable owner record; ${waited})`
   }
   return processAlive(pid)
-    ? `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which is still running, so its build is taking longer than the wait; ${waited})`
-    : `atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which has exited; ${waited})`
+    ? `Run the bootstrap again: atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which is still running, so its build is taking longer than the wait; ${waited})`
+    : `Run the bootstrap again: atomic publication lock timed out: ${lockDir} (held by pid ${pid}, which has exited; ${waited})`
 }
 
 // A lock folder another process holds, is creating, or is deleting. EEXIST and ENOTEMPTY say so everywhere. On Windows, mkdir and rmdir answer EPERM, EACCES or EBUSY while the folder is delete-pending or another process has a handle open in it; none of them means this caller is denied the lock, so it waits and tries again within its bounded wait.
@@ -1047,7 +1047,7 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
         const stat = lstatSync(absolute)
         const relative = normalizePath(path.relative(mirrorPath, absolute))
         if (stat.isSymbolicLink()) {
-          throw new Error("source mirror must not contain symbolic links")
+          throw new Error("Remove the symbolic links from the source mirror: source mirror must not contain symbolic links")
         }
         if (stat.isDirectory()) {
           directories.push(relative)
@@ -1055,7 +1055,7 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
         } else if (stat.isFile()) {
           files.push(relative)
         } else {
-          throw new Error("source mirror must contain only regular files and directories")
+          throw new Error("Keep only regular files and directories in the source mirror: source mirror must contain only regular files and directories")
         }
       }
     }
@@ -1077,7 +1077,7 @@ export function syncSourceMirror({
   const sourceHash = hashCurrentSource(mcpRoot)
   if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
     throw new Error(
-      `Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
+      `Update Desk so its source matches its recorded identity: Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
     )
   }
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
@@ -1335,7 +1335,7 @@ function safeArchivePath(name) {
     normalized.startsWith("/") ||
     normalized.split("/").includes("..")
   ) {
-    throw new Error(`desk-mcp: runtime dependency pack contains unsafe path ${name}`)
+    throw new Error(`desk-mcp: Remove that path from the runtime dependency pack: runtime dependency pack contains unsafe path ${name}`)
   }
   return normalized
 }

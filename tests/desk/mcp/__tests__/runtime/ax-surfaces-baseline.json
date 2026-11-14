@@ -121,7 +121,6 @@
     "error.leads-with-fix:plugins/desk/mcp/src/activation/validate.js": 1,
     "error.leads-with-fix:plugins/desk/mcp/src/artifacts/tombstones.js": 1,
     "error.leads-with-fix:plugins/desk/mcp/src/indexer/exclusions.js": 1,
-    "error.leads-with-fix:plugins/desk/mcp/src/runtime/bootstrap.js": 8,
     "error.leads-with-fix:plugins/desk/mcp/src/search/embedder.js": 2,
     "error.leads-with-fix:plugins/desk/mcp/src/search/engine.js": 1,
     "error.leads-with-fix:plugins/desk/mcp/src/util/agency-session.cjs": 1,
