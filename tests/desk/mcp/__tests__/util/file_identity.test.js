@@ -49,6 +49,6 @@ test("lstatExactIfPresent reads a BigInt stat, answers null for a missing path a
   assert.equal(await lstatExactIfPresent(path.join(root, "missing"), naming), null)
   // Which error a path below a file gives differs by platform (ENOTDIR, or ENOENT on Windows), so the failure is injected.
   t.mock.method(fsp, "lstat", async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }) })
-  await assert.rejects(lstatExactIfPresent(present, naming), /^Error: outbox: Check that .* can be read, then run again: the private state path could not be inspected \(EACCES\)$/u)
+  await assert.rejects(lstatExactIfPresent(present, naming), /^Error: outbox: private state path .* could not be inspected \(EACCES\)$/u)
   assert.equal(EXACT.bigint, true)
 })

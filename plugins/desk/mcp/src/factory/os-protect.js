@@ -41,7 +41,7 @@ export async function lstatIfPresent(target, naming) {
     return await fsp.lstat(target)
   } catch (error) {
     if (error.code === "ENOENT") return null
-    throw new Error(`${label}: Check that ${target} can be read, then run again: the private ${subject} path could not be inspected (${error.code})`)
+    throw new Error(`${label}: Check that ${target} can be read, then run again: inspecting the private ${subject} path returned ${error.code}`)
   }
 }
 

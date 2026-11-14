@@ -56,7 +56,7 @@ test("lstatIfPresent rethrows a non-ENOENT failure as a labeled error, rather th
     await fs.writeFile(file, "not a directory")
     await assert.rejects(
       () => lstatIfPresent(path.join(file, "child"), NAMING),
-      /desk_test: Check that .* can be read, then run again: the private test thing path could not be inspected \(ENOTDIR\)/u,
+      /desk_test: Check that .* can be read, then run again: inspecting the private test thing path returned ENOTDIR/u,
     )
   })
 })
