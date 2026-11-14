@@ -18,7 +18,6 @@ const baselinePath = path.join(here, "ax-surfaces-baseline.json")
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
 const NOT_ERRORS = {
   // Runtime texts that are labels, log lines or mimics of another program's message, not errors an agent reads.
-  "plugins/desk/mcp/src/runtime/drains-cli.js#drains": "carrier of an argument error whose texts are checked themselves",
   "plugins/desk/mcp/src/runtime/front-door.js#method-not-found": "the JSON-RPC protocol's own method-not-found reply",
   "plugins/desk/mcp/src/runtime/git-inspection.js#command-failed-killed-by": "mirrors the message Node gives for a killed or aborted process",
   "plugins/desk/mcp/src/runtime/git-inspection.js#command-failed-with-exit-code": "mirrors the message Node gives for a killed or aborted process",
