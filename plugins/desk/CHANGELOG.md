@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.127 — 2026-11-14
+
+The errors in Desk's tool code (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `track_*`, `note_*`, `lesson_add`, `friction_add` and `desk_save`) now open with what to do, then say what went wrong, and keep their meaning. Replies that are successes, statuses or commit messages keep their wording.
+
+The Windows ACL provider now tells the parent why it refused a path with a stable `code` beside the message (for example `acl_inherited_rules`). The one retry for a half-applied access list follows that code (`acl_inherited_rules` or `acl_rule_count`) instead of matching the message, so rewording a message no longer changes the retry.
+
+The Ouro AX baseline drops by 231 findings.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.126 — 2026-11-14
 
 The alignment note for new work now ends with one plain question asking for go on the outcome and definition of done, then stops without editing product, test or docs files. It replaces the earlier wording that only said to stop. Approved work with an explicit go is unchanged.
