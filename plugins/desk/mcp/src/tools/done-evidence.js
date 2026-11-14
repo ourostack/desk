@@ -201,10 +201,9 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
   const sha = (isUrl ? SHA_IN_URL : SHA_PREFIX).exec(ref)[isUrl ? 1 : 0]
   const clones = repos.filter((repo) => repo.localPath !== "").map((repo) => ({ repo, dir: resolveLocalPath(repo.localPath, { homeDir, deskRoot }) }))
   if (clones.length === 0) {
-    throw new Error(
+    throw Object.assign(new Error(
       `${toolName}: commit evidence needs a local clone to check, and none of this task's repos (${describeRepos(repos)}) records one. ` +
-        "Supply a pull request URL instead (`evidence: { kind: \"pr\", ref: \"<URL>\" }`), or record the clone's `local_path` on the card first.",
-    )
+        "Supply a pull request URL instead (`evidence: { kind: \"pr\", ref: \"<URL>\" }`), or record the clone's `local_path` on the card first."), { code: "done_evidence_commit_evidence_needs_a_local" })
   }
   let unpushed = null
   let localOnlyWhy = null
@@ -224,19 +223,17 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
     unpushed ??= repo
   }
   if (unpushed !== null) {
-    throw new Error(
+    throw Object.assign(new Error(
       `${toolName}: commit ${sha} exists in ${unpushed.name} (${unpushed.localPath}) but no remote-tracking branch contains it, so it is not pushed. ` +
         (localOnlyWhy === null ? "" : `${localOnlyWhy}. `) +
         "If the commit was pushed or merged elsewhere (a squash-merged PR's commit reaches the default branch only after a fetch), run `git fetch` in that clone and repeat this call. " +
         "Otherwise push the branch (`git push`, which also updates the remote-tracking branch), then repeat; or open a pull request and supply its URL (`evidence: { kind: \"pr\", ref: \"<URL>\" }`); " +
-        `or leave the task at \`validating\` and tell the operator the commit sha ${sha.slice(0, 7)}, which is waiting to be pushed.`,
-    )
+        `or leave the task at \`validating\` and tell the operator the commit sha ${sha.slice(0, 7)}, which is waiting to be pushed.`), { code: "done_evidence_commit_exists_in_but_no" })
   }
-  throw new Error(
+  throw Object.assign(new Error(
     `${toolName}: commit ${sha} does not resolve in any of this task's repo clones (${describeRepos(repos)}). ` +
       "If the commit is on the remote (for example a squash-merged PR), run `git fetch` in the recorded clone first and repeat this call. " +
-      "A commit made in the desk, or in a repo the card does not list, does not count. Supply a commit from one of those repos that is pushed, or the pull request URL.",
-  )
+      "A commit made in the desk, or in a repo the card does not list, does not count. Supply a commit from one of those repos that is pushed, or the pull request URL."), { code: "done_evidence_commit_does_not_resolve_in" })
 }
 
 /**
@@ -247,7 +244,7 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
 export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit = spawnSync, homeDir = os.homedir(), existingRepos = [], created }) {
   if (repos.length === 0) return
   if (evidence.kind === "non_code" || evidence.kind === "ci_run") {
-    throw new Error(`${toolName}: Use evidence that names a code repository: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`)
+    throw Object.assign(new Error(`${toolName}: Use evidence that names a code repository: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`), { code: "done_evidence_use_evidence_that_names_a" })
   }
   if (evidence.kind === "pr") {
     const identities = repoIdentities(repos, { spawnGit, homeDir, deskRoot })
