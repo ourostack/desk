@@ -228,7 +228,7 @@ await new Promise((resolve, reject) => {
   assert.equal(result.status, 0, result.stderr)
   const facts = result.stderr.split("\n").filter(line => line.startsWith("[readiness-failure] "))
     .map(line => JSON.parse(line.slice("[readiness-failure] ".length)))
-  assert.ok(facts.some(row => row.r === "m" && row.e === "cov" && row.m === "mirror"))
+  assert.ok(facts.some(row => row.r === "m" && row.e === "cov" && row.m === "mirror"), result.stderr.slice(0, 3000))
   assert.ok(facts.some(row => row.r === "w" && row.e === "cov" && row.m === "mirror"))
   assert.ok(facts.every(row => row.e === "cov"), "declaration imports must not claim execution of publication phases")
   assert.equal(existsSync(fixture.runtimeCache), false)
