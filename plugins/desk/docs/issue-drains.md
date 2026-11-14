@@ -23,7 +23,7 @@ Both live in Desk's state folder, `$XDG_STATE_HOME/ouroboros-skills/desk/drains/
 
 ```json
 { "drains": [
-  { "repo": "owner/name", "session": "<session id>", "account": "<gh login>", "ignoredBodyTrailers": ["Active-at"], "ignoredLabels": ["agent:drain"], "ignoreComments": [{ "author": "some-bot[bot]", "match": "^Routine report" }] }
+  { "repo": "owner/name", "session": "<session id>", "account": "<gh login>", "ignoredBodyTrailers": ["Active-at"], "ignoredLabels": ["agent:drain"], "ignoreLabels": ["^waiting:"], "ignoreComments": [{ "author": "some-bot[bot]", "match": "^Routine report" }] }
 ] }
 ```
 
@@ -37,13 +37,14 @@ An issue is news when something other than the drain changed it since the revisi
 
 - a new issue the drain filed or already triaged: a label in its `drain:` namespace, or the `<!-- ouro-drain-status -->` marker in its body, is there before the poll first sees it, so the issue is recorded as seen and only later changes by others count;
 - the drain's own status comment, matched by the `<!-- ouro-drain-status -->` marker and the polling account, including its edits. The polling account is whoever the drain's token is (`GET /user` on its own `account`'s token), resolved per repository, so a drain on a work account and one on a personal account each recognise only their own comments;
-- labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
+- labels starting with `drain:`, any label in the drain's `ignoredLabels`, and any label whose name matches a regular expression in its `ignoreLabels` (case-insensitive, for example `["^waiting:", "^lane:"]`): the escape hatch for a lane's own labels;
+- a label or state change (a label added or removed, a reopen) made by the polling account during the drain's turn, whatever the label. The turn opens when a wake is delivered (a minute earlier, for a drain that acts before the delivery is acknowledged) and lasts 90 minutes; the poller keeps each drain's recent delivery times in its state (`turns`). The same account's changes outside a turn, and anyone else's inside one, still wake the drain;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
 - comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
 - a bot's comment that repeats that bot's previous comment on the issue: the two texts are the same once run URLs and IDs, dates, times and durations (`took 14 min`) are replaced, so a daily "checks failed" report or a CI-budget note wakes the drain the first time and when its text changes, not on every repeat. A person's comment, a bot's first comment and a changed text still wake it;
 - a reopen that is the drain claiming the issue: the polling account reopens it within a minute of its own `drain:` label change;
 - commit references (`referenced` events) and edits to the drain's own marked comment, which the rules above already skip;
-- closes and assignments, and cross-references: a cross-reference the drain made itself. When an issue's `updated_at` moved and nothing above was news, the poll reads its timeline, and a `cross-referenced` event after the last marker wakes the drain unless its source is the drain's own work: a body with the `<!-- ouro-drain-status -->` marker, a pull request on a `drain-…` or `drain/…` branch, or the drain's marked comment on that issue that names this one around then. Any other cross-reference is news, and its event says where it came from. A pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
+- closes and assignments, and cross-references: a cross-reference the drain made itself. When an issue's `updated_at` moved and nothing above was news, the poll reads its timeline, and a `cross-referenced` event after the last marker wakes the drain unless its source is the drain's own work: a body with the `<!-- ouro-drain-status -->` marker, a pull request on a `drain-…` or `drain/…` branch, the drain's marked status comment on this issue that names the source (`#50`, `owner/name#50` or a link), or its marked comment on the source that names this issue around then. Put the marker in the body of every pull request the drain opens: it is the one deterministic link between a drain's pull request and the issue it fixes, on any branch name. Any other cross-reference is news, and its event says where it came from. A pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all. GitHub does not move an issue's `updated_at` for a cross-reference or a commit reference, so an outside cross-reference is noticed with the issue's next change, which can be hours later; the poll does not read every open issue's timeline to find it sooner.
 
 ## Spending little quota
 

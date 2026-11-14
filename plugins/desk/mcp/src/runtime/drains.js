@@ -20,6 +20,10 @@ const DRAIN_LABEL_PREFIX = "drain:"
 const CROSS_REFERENCE_SLACK_MS = 120_000
 const CLAIM_SLACK_MS = 60_000
 const HISTORY = 200
+/** The drain's turn: from a wake's delivery (a minute of lead, for a drain that acts before the delivery is acknowledged) to this long after. A label or state change by the polling account inside it is the drain's own work. */
+const TURN_LEAD_MS = 60_000
+const TURN_MS = 90 * 60_000
+const TURNS_KEPT = 50
 /** A closed issue's record is kept this long, so one that comes back unchanged is not mistaken for a new issue. */
 const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
@@ -128,6 +132,17 @@ function checkIgnoreComments(rules, where, bad) {
   })
 }
 
+function checkIgnoreLabels(patterns, where, bad) {
+  if (!textList(patterns)) throw bad(`${where} is not a list of regular expressions for label names such as "^waiting:"`)
+  patterns.forEach((pattern, i) => {
+    try {
+      new RegExp(pattern, "iu")
+    } catch {
+      throw bad(`${where}[${i}] is not a valid regular expression`)
+    }
+  })
+}
+
 /** The drains in a config file's text, validated. A bad entry is an error, not a silent drop: a dropped drain would stop watching its repository. */
 export function parseDrainConfig(raw, file) {
   const bad = (what) => problem("desk_drains_config_invalid", "drains config", `${file} ${what}, probably a hand edit`, "open the file and compare it with docs/issue-drains.md", "correct the entry and run the command again")
@@ -142,12 +157,13 @@ export function parseDrainConfig(raw, file) {
   const seen = new Set()
   return list.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw bad(`drains[${index}] is not an object`)
-    const { repo, session, account, ignoredBodyTrailers, ignoredLabels, ignoreComments } = entry
+    const { repo, session, account, ignoredBodyTrailers, ignoredLabels, ignoreLabels, ignoreComments } = entry
     if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/u.test(repo)) throw bad(`drains[${index}].repo is not "owner/name"`)
     if (!isText(session)) throw bad(`drains[${index}].session is not a session id`)
     if (account !== undefined && !isText(account)) throw bad(`drains[${index}].account is not a GitHub login`)
     if (ignoredBodyTrailers !== undefined && (!textList(ignoredBodyTrailers) || ignoredBodyTrailers.some((key) => key.includes(":")))) throw bad(`drains[${index}].ignoredBodyTrailers is not a list of trailer keys such as "Active-at"`)
     if (ignoredLabels !== undefined && !textList(ignoredLabels)) throw bad(`drains[${index}].ignoredLabels is not a list of label names such as "agent:drain"`)
+    if (ignoreLabels !== undefined) checkIgnoreLabels(ignoreLabels, `drains[${index}].ignoreLabels`, bad)
     if (ignoreComments !== undefined) checkIgnoreComments(ignoreComments, `drains[${index}].ignoreComments`, bad)
     if (seen.has(repo)) throw bad(`drains[${index}].repo ${repo} is listed twice`)
     seen.add(repo)
@@ -157,6 +173,7 @@ export function parseDrainConfig(raw, file) {
       ...(account === undefined ? {} : { account: account.trim() }),
       ...(ignoredBodyTrailers === undefined ? {} : { ignoredBodyTrailers: ignoredBodyTrailers.map((key) => key.trim()) }),
       ...(ignoredLabels === undefined ? {} : { ignoredLabels: ignoredLabels.map((name) => name.trim()) }),
+      ...(ignoreLabels === undefined ? {} : { ignoreLabels: ignoreLabels.map((pattern) => pattern.trim()) }),
       ...(ignoreComments === undefined ? {} : { ignoreComments: ignoreComments.map(({ author, match }) => ({ author: author.trim(), ...(match === undefined ? {} : { match }) })) }),
     }
   })
@@ -298,41 +315,48 @@ async function repeatsPrevious(api, repo, issue, comment, all) {
 
 const isDrainLabel = (event) => (event.event === "labeled" || event.event === "unlabeled") && (event.label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)
 
-/** What made a reopen or a label change news, or null: a label outside the drain's namespace and ignored list, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). Closes, assignments and mentions are not news. */
-function newsEvent(event, ignoredLabels, claims, login) {
+/** A label or state change by the polling account while the drain was working: after a wake's delivery and before its turn ran out. The drain does its work through that account, whatever label it touches. */
+const duringTurn = (event, login, turns) => {
+  const at = Date.parse(event.created_at)
+  return event.actor?.login?.toLowerCase() === login.toLowerCase() && turns.some((from) => at >= from - TURN_LEAD_MS && at <= from + TURN_MS)
+}
+
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace, ignored list and ignored patterns, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). A label or reopen by the polling account during the drain's turn is its own work. Closes, assignments and mentions are not news. */
+function newsEvent(event, rules, claims, login) {
   if (event.event === "reopened") {
     const own = event.actor?.login?.toLowerCase() === login.toLowerCase() && claims.some((claim) => claim.actor?.login?.toLowerCase() === login.toLowerCase() && Math.abs(Date.parse(claim.created_at) - Date.parse(event.created_at)) <= CLAIM_SLACK_MS)
-    return own ? null : "reopened"
+    return own || duringTurn(event, login, rules.turns) ? null : "reopened"
   }
   if (event.event !== "labeled" && event.event !== "unlabeled") return null
   const name = (event.label?.name ?? "").toLowerCase()
-  return name.startsWith(DRAIN_LABEL_PREFIX) || ignoredLabels.includes(name) ? null : `${event.event} ${name}`
+  const ignored = name.startsWith(DRAIN_LABEL_PREFIX) || rules.labels.includes(name) || rules.patterns.some((pattern) => pattern.test(name))
+  return ignored || duringTurn(event, login, rules.turns) ? null : `${event.event} ${name}`
 }
 
 /** An issue the drain filed or already triaged: a label in its `drain:` namespace, or its status marker in the body, is there before the poll first sees it, so it is already seen. */
 const filedByDrain = (issue) => (issue.labels ?? []).some((label) => (label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)) || (issue.body ?? "").includes(DRAIN_STATUS_MARKER)
 
 /** What someone but the drain changed since `before` (a new issue, an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
-async function changedByOthers(api, repo, issue, before, digest, ignored, ignoredLabels, ignoredComments) {
+async function changedByOthers(api, repo, issue, before, digest, ignored, rules) {
   if (!before) return filedByDrain(issue) ? null : "new issue"
   if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return "title or body edited"
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const all = {}
   for (const entry of comments) {
-    if (ownStatus(entry, api.login) || ignoredComment(entry, ignoredComments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry, all)))) continue
+    if (ownStatus(entry, api.login) || ignoredComment(entry, rules.comments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry, all)))) continue
     return `comment ${entry.id} by ${entry.user?.login ?? "nobody"}`
   }
   const feed = await api.issueEvents(repo, issue.number)
   const claims = feed.filter(isDrainLabel)
-  const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, ignoredLabels, claims, api.login)).find(Boolean)
+  const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, rules, claims, api.login)).find(Boolean)
   return news ?? (await crossReference(api, repo, issue, since))
 }
 
 const DRAIN_BRANCH_PREFIXES = ["drain-", "drain/"]
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
-/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` or `drain/` branch, or the drain's marked comment on that issue that names this one around then. */
+/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` or `drain/` branch, the drain's marked comment on this issue that names the source, or its marked comment on the source that names this issue around then. */
 async function selfCaused(api, repo, issue, event) {
   const source = event.source?.issue ?? {}
   if ((source.body ?? "").includes(DRAIN_STATUS_MARKER)) return true
@@ -341,6 +365,11 @@ async function selfCaused(api, repo, issue, event) {
     const pull = await api.pull(where, source.number).catch(() => null)
     if (DRAIN_BRANCH_PREFIXES.some((prefix) => String(pull?.head?.ref ?? "").startsWith(prefix))) return true
   }
+  // The drain's marked status comment on this issue names the source: the link between an issue and the pull request the drain opened for it.
+  const ref = `${escapePattern(where)}(?:#|/(?:pull|issues)/)${source.number}(?!\\d)`
+  const mention = new RegExp(where === repo ? `(?:^|[^\\w/])#${source.number}(?!\\d)|${ref}` : ref, "u")
+  const here = await api.comments(repo, issue.number, "1970-01-01T00:00:00Z").catch(() => [])
+  if (here.some((comment) => ownStatus(comment, api.login) && mention.test(comment.body))) return true
   const names = new RegExp(`#${issue.number}(?!\\d)|/${escapePattern(repo)}/issues/${issue.number}(?!\\d)`, "u")
   const at = Date.parse(event.created_at)
   const comments = await api.comments(where, source.number, "1970-01-01T00:00:00Z").catch(() => [])
@@ -411,6 +440,7 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
   const ignored = trailers.join(",")
   const labels = (drain.ignoredLabels ?? []).map((name) => name.toLowerCase())
   const quiet = (drain.ignoreComments ?? []).map(({ author, match }) => ({ author: author.toLowerCase(), match: match === undefined ? null : new RegExp(match, "u") }))
+  const rules = { labels, comments: quiet, patterns: (drain.ignoreLabels ?? []).map((pattern) => new RegExp(pattern, "iu")), turns: (state.turns ?? []).map((at) => Date.parse(at)).filter(Number.isFinite) }
   const seen = full ? {} : { ...state.seen }
   const recorded = []
   const closed = new Set()
@@ -429,7 +459,7 @@ async function recordChanges(api, drain, state, { full, issues }, { now, desk })
     const digest = digestOf(issue, trailers)
     seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
     if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-    const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)
+    const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, rules)
     if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
   }
   for (const [key, entry] of Object.entries(state.seen)) {
@@ -534,6 +564,7 @@ export function ackWake({ paths, repo, wake, error, now }) {
   } else {
     state.lastWakeCount = state.pending.length
     state.lastWakeAt = new Date(now).toISOString()
+    state.turns = [...(state.turns ?? []), state.lastWakeAt].filter((at) => now - Date.parse(at) <= 2 * TURN_MS).slice(-TURNS_KEPT)
     state.pending = []
   }
   writeDrainStates(paths.state, states)
