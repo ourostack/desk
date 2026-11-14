@@ -592,6 +592,53 @@ test("forgets a closed issue's marker after a month", async () => {
 
 const budget = (id, updated_at, body = "CI's critical path took 14 min", login = "automation[bot]") => ({ id, body, updated_at, user: { login } })
 
+const daily = (id, created_at, body, login = "automation[bot]", extra = {}) => ({ id, body, created_at, updated_at: created_at, user: { login, type: "Bot" }, ...extra })
+const identity = (day, run) => `Identity checks for prod failed on 2026-11-${day}T06:0${run % 10}:12Z (see https://github.com/acme/widgets/actions/runs/98765${run}/job/1). Run ID: ${run}. Took ${run + 2} min 4.5s at ${day}:30 PM.`
+
+test("a bot comment that repeats the same bot's previous comment on the issue, apart from dates, times, durations and run links, wakes nobody; a changed text, a first comment, another author or a person still wakes", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  const before = [daily(1, T(1), identity("10", 1)), daily(2, T(2), "Heads up: unrelated"), daily(3, T(3), "someone's note", "alice", { user: { login: "alice", type: "User" } })]
+  const wake = async (at, fresh, expected, name) => {
+    w.issues[0] = issue(1, at)
+    w.comments = async () => [...before, ...fresh]
+    const count = w.sent.length
+    await w.poll()
+    assert.equal(w.sent.length - count, expected, name)
+    before.push(...fresh)
+  }
+  // The first comment of a bot has nothing before it.
+  w.issues[0] = issue(1, T(1))
+  w.comments = async () => before.slice(0, 1)
+  await w.poll()
+  assert.equal(w.sent.length, 1, "a first comment is news")
+  before.splice(1)
+  await wake(T(10), [daily(4, T(10), identity("11", 2))], 0, "the next day's run says the same")
+  await wake(T(11), [daily(5, T(11), identity("12", 3).replace("prod failed", "staging failed"))], 1, "a changed text")
+  await wake(T(12), [daily(6, T(12), identity("13", 4).replace("prod failed", "staging failed"), "other[bot]")], 1, "another bot has no previous comment of its own")
+  await wake(T(13), [daily(7, T(13), "Identity checks for prod failed", "alice", { user: { login: "alice", type: "User" } })], 1, "a person's comment")
+  await wake(T(14), [daily(8, T(14), identity("14", 5).replace("prod failed", "staging failed"))], 0, "the repeat is against that bot's latest comment")
+  // An edit of a bot comment is compared with the comment before it.
+  w.issues[0] = issue(1, T(15))
+  w.comments = async () => [...before, { ...daily(8, T(14), identity("14", 5).replace("prod failed", "staging failed")), updated_at: T(15) }]
+  const count = w.sent.length
+  await w.poll()
+  assert.equal(w.sent.length, count, "an edit that still repeats")
+  matches(w.state().seen["1"], seenAt(T(15)))
+  // A bot known only by its login, and bodies or authors that are missing, compare as what they are.
+  const bare = (id, created_at, body) => ({ id, created_at, updated_at: created_at, user: { login: "plain[bot]" }, ...(body === undefined ? {} : { body }) })
+  const listed = [bare(20, T(16)), { id: 21, created_at: T(16), updated_at: T(16) }]
+  w.issues[0] = issue(1, T(16))
+  w.comments = async () => listed
+  const quiet = w.sent.length
+  await w.poll()
+  assert.equal(w.sent.length, quiet + 1, "a bot's first comment, and a comment with no author, are news")
+  listed.push(bare(22, T(17)))
+  w.issues[0] = issue(1, T(17))
+  await w.poll()
+  assert.equal(w.sent.length, quiet + 1, "two comments with no text repeat each other")
+})
+
 test("a comment by an ignored author that matches the rule's pattern wakes nobody, new or edited, while any other comment by that author still does", async () => {
   const quiet = { ...DRAIN, ignoreComments: [{ author: "Automation[bot]", match: "^CI's critical path took" }] }
   const w = await world([issue(1, T(0))], { drain: quiet })
