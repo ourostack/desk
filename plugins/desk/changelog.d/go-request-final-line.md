@@ -1,0 +1,1 @@
+The alignment note for new work now ends with a direct request for go, such as "Say go and I'll start on <outcome>.". A final-message request is not a mid-run question; a host that forbids even that must be named plainly. Approved work with an explicit go is unchanged.

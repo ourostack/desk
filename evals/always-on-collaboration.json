@@ -3,7 +3,7 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md", "plugins/desk/skills/interaction-style/SKILL.md", "plugins/desk/skills/operator-voice-comments/SKILL.md"],
-  "reviewedSourceFingerprint": "e85c69ce68bacea2d4d65589949cebfa466c9383a4477603d18a83186886ca3a",
+  "reviewedSourceFingerprint": "b13025aed0c0efe7c8d5e5a7374771a53b5bcab4f529de1e789810d03ea24b02",
   "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/852", "case": "voice-and-deletion-gates", "observed": "2026-11-13"},
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
