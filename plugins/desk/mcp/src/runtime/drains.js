@@ -264,7 +264,7 @@ const oneLine = (text) => {
 }
 
 /** What every wake for a repository starts with: a runner uses it to take older undelivered wakes back before it sends a newer one. */
-export const wakePrefix = (repo) => `New or changed issues in ${repo}:`
+const wakePrefix = (repo) => `New or changed issues in ${repo}:`
 
 export function wakeMessage(repo, events) {
   const shown = events.slice(0, MAX_TITLES).map((event) => `#${event.number} ${oneLine(event.title)}${event.why ? ` (${event.why})` : ""}`)
