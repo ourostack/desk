@@ -49,7 +49,7 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "1ec1a9a233d28220e0d40c1ff2de366dbf3407136105dd307f06986ec987ea1f",
+  "reviewedSourceFingerprint": "c1b9b358ceb0d048c8a79901ee2619722f87d415d42e6ba20a8c2126cd1baec9",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},

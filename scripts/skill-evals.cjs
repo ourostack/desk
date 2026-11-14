@@ -64,13 +64,14 @@ function escapes(root, target) {
   return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 }
 
-// A symlink source is fingerprinted by its link text and never followed, so a scenario world can hold a link to somewhere outside the repository.
+// A symlink source is fingerprinted by the bytes git stores for it, its link text, and never followed, so a scenario world can hold a
+// link to somewhere outside the repository. A checkout without symlink support writes that same text as a file, so it hashes alike.
 function sourceHash(repoRoot, source) {
   if (!hasText(source) || path.isAbsolute(source)) fail(`source path must be repo-relative: ${source}`);
   const root = fs.realpathSync(repoRoot);
   const candidate = path.resolve(root, source);
   if (escapes(root, candidate)) fail(`source path escapes repo root: ${source}`);
-  if (isSymlink(candidate)) return crypto.createHash("sha256").update(`symlink ${fs.readlinkSync(candidate)}`).digest("hex");
+  if (isSymlink(candidate)) return crypto.createHash("sha256").update(fs.readlinkSync(candidate)).digest("hex");
   if (!fs.existsSync(candidate)) fail(`missing source: ${source}`);
   const resolved = fs.realpathSync(candidate);
   if (escapes(root, resolved)) fail(`source path resolves outside repo root: ${source}`);

@@ -219,6 +219,14 @@ try {
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" })));
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/person`]: "alex\n" })), "a person file holding one alias is valid");
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" }, { link: { file: `${world}/desk/outside.md`, target: "../../../../skill-eval-outside/notes.md" } })), "a dangling symlink source is fingerprinted by its link");
+    {
+      // git stores a link as its target text, so a checkout without symlink support fingerprints the same as the link.
+      const linkTarget = "../../../../skill-eval-outside/notes.md";
+      const sources = ["source.txt", seeded, `${world}/desk/outside.md`];
+      const linked = withWorld(world, { [seeded]: "seeded\n" }, { link: { file: `${world}/desk/outside.md`, target: linkTarget } });
+      const copied = withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md`]: linkTarget });
+      assert.equal(sourceFingerprint(sources, linked), sourceFingerprint(sources, copied));
+    }
     for (const [worldPath, files, options, message] of [
       ["evals/worlds/fixture/other", { [seeded]: "x\n" }, {}, /world must be the string evals\/worlds\/fixture\/case-1, not "evals\/worlds\/fixture\/other"/u],
       [5, {}, {}, /world must be the string evals\/worlds\/fixture\/case-1, not 5/u],
