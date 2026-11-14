@@ -1,0 +1,1 @@
+Each issue-drain wake names `replaces`, the prefix every wake for its repository starts with, so a runner can take older undelivered wakes back from the session's queue before it sends the newer one. See [issue drains](docs/issue-drains.md#delivering-a-wake).

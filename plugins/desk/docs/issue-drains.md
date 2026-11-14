@@ -63,10 +63,10 @@ Every answer's `x-ratelimit-*` headers are kept per account. When an account has
 ```json
 { "at": "…", "status": ["desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)", "issue drain owner/name -> 58fbd57e: last ok poll 2026-11-13T23:43:29.106Z (lag 2m), polled just now, 7 open, 0 waiting, last wake 12m ago (1 issue)"],
   "errors": [{ "repo": "owner/name", "error": "GitHub answered HTTP 502" }],
-  "wakes": [{ "id": "…", "repo": "owner/name", "session": "…", "message": "New or changed issues in owner/name: #12 Title. Drain them.", "events": [], "done": ["node", ".../drains.js", "ack", "--repo", "owner/name", "--wake", "…"] }] }
+  "wakes": [{ "id": "…", "repo": "owner/name", "session": "…", "message": "New or changed issues in owner/name: #12 Title. Drain them.", "replaces": "New or changed issues in owner/name:", "events": [], "done": ["node", ".../drains.js", "ack", "--repo", "owner/name", "--wake", "…"] }] }
 ```
 
-The runner sends each `message` to its `session`, then runs `done`; if the send failed it runs `done` with `--error <text>` added. Events are saved before `poll` prints them, so a wake that is never acknowledged comes back with the next poll, and a crash loses nothing. An acknowledgement for an older batch never clears a newer one. A failed poll (no token, network, GitHub error) wakes no one, moves no marker, and shows in `errors` and `status`.
+`replaces` is the prefix every wake for that repository starts with: a runner that can should take the session's older undelivered wakes with that prefix back before it sends the new one, since each wake carries the whole current state (Ouroboros does this through the app's session queue, so stale wakes never pile up). The runner sends each `message` to its `session`, then runs `done`; if the send failed it runs `done` with `--error <text>` added. Events are saved before `poll` prints them, so a wake that is never acknowledged comes back with the next poll, and a crash loses nothing. An acknowledgement for an older batch never clears a newer one. A failed poll (no token, network, GitHub error) wakes no one, moves no marker, and shows in `errors` and `status`.
 
 One poll or ack runs at a time: a second one stops with an error while the first holds `poll.lock`, and takes over a lock whose process has died.
 
