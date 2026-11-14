@@ -84,7 +84,9 @@
 //   session away. Three invariants hold. I1: only a `here` session is
 //   published, or released from quarantine, to the store; unknown, stale,
 //   stalled and held (facts quarantined) sessions are frozen, never published
-//   and never deleted, and never send a flush online. "Away" is durable
+//   and never deleted, and never send a flush online. Placement follows the
+//   route, except a proof-marked session with a published record, which is
+//   `suppressed` and always withdrawn (I3). "Away" is durable
 //   outside `status.json`: the local copies of every session that is not
 //   here leave the outbox for `retracted-copies/` (the sweep does the same
 //   for every store a session no longer routes to, or for every store when
@@ -103,9 +105,11 @@
 //   pushed they are retracting (`retracting/<store-slug>.json`), and when the
 //   default branch no longer holds them the record becomes a tombstone
 //   (`done: true`). A delete always needs a positive current route or a
-//   tombstone. A truncated tree listing proves no file absent. Online anyway,
-//   the flush also deletes an away session's file it has no record of when
-//   the store holds exactly the blob this Desk would publish for it. A delete
+//   tombstone, except a suppressed session's, which needs only the exact-blob
+//   check whatever its route. A truncated tree listing proves no file absent.
+//   Online anyway, the flush also deletes an away session's file it has no
+//   record of when the store holds exactly the blob this Desk would publish
+//   for it. A delete
 //   the store refuses returns the session to delivered and is not retried
 //   while it stays away.
 
@@ -168,6 +172,8 @@ import {
   pendingFiles,
   pendingLabels,
   proofSessionSet,
+  appendProofAudit,
+  proofSessionHash,
   quarantine,
   readConsent,
   recordDeskUnprotected,
@@ -648,6 +654,14 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
 
 // The session a facts name or a local labels key belongs to, or `undefined` for any other name.
 const sessionOfName = (name) => LABELS_KEY.exec(name)?.[2] ?? FACTS_SESSION.exec(name)?.[1]
+// The places whose delete the store is asked to make: an away session's, and a proof-suppressed session's, which is withdrawn whatever its route says.
+const withdrawnPlace = (place) => place === "away" || place === "suppressed"
+
+// The withdrawal of a proof-marked session's record, audited by the session's hash in `proof-audit.json` with reason `proof`: `pushed` once its delete
+// is in a pull request, `withdrawn` once the store no longer holds it (its tombstone).
+async function auditWithdrawal(env, session, stateBefore, outcome) {
+  await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: stateBefore, action: "withdraw", outcome, reason: "proof", at: new Date().toISOString() })
+}
 
 // ---------------------------------------------------------------------------
 // Store side.
@@ -970,6 +984,8 @@ async function deliver(env, context) {
   // Each session's retracting records and tombstones for this store.
   const recordsOf = new Map()
   for (const [name, item] of [...Object.entries(delivered.retracting), ...Object.entries(delivered.retracted)]) recordsOf.set(sessionOfName(name), [...(recordsOf.get(sessionOfName(name)) ?? []), item])
+  // Every session with a delivered, retracting or retracted record for this store: a proof-marked one of these is suppressed below.
+  const publishedSessions = new Set([...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting), ...Object.keys(delivered.retracted)].map(sessionOfName))
   // A positive route is kept in the session's receipts (`recordRoutes`) with its desk root, so the session keeps it once its marker is pruned.
   const routes = {}
   for (const session of new Set([...localNames.map(sessionOfName), ...keptNow].filter((session) => session !== undefined))) {
@@ -986,6 +1002,9 @@ async function deliver(env, context) {
     const recorded = [marker?.desk_root, deskRoot].filter((root) => typeof root === "string")
     const deskGone = recorded.length > 0 && !recorded.some(isFolder)
     if (place === "here" && route.kind !== "store" && deskGone) place = "stale"
+    // A proof-marked session with a published record is withdrawn whatever its route says: `suppressed` is never published again, and its delete goes
+    // through the same exact-blob check and tombstone as an away session's.
+    if (proofs.has(session) && publishedSessions.has(session)) place = "suppressed"
     places.set(session, place)
     if (route.kind !== "store") continue
     const root = marker?.desk_root ?? deskRoot
@@ -1037,7 +1056,7 @@ async function deliver(env, context) {
   for (const name of Object.keys(delivered.blobs)) {
     if (LABELS_KEY.test(name) && placeOf(name) === "here" && !heldSessions.has(sessionOfName(name)) && (await labelBinding(env, store, name)) === "unbound") unbound.add(name)
   }
-  const withdrawn = (name) => placeOf(name) === "away" || unbound.has(name)
+  const withdrawn = (name) => withdrawnPlace(placeOf(name)) || unbound.has(name)
   // A delivered file of an away session whose record names no trusted path is found by publishing it again: an older Desk's record, trusted only when the blob matches.
   const needsPath = new Set(Object.keys(delivered.blobs).filter((name) => withdrawn(name) && !heldSessions.has(sessionOfName(name)) && recordedPath(name) === undefined))
   const here = (name) => placeOf(name) === "here" && !(receipts[name]?.binding_version > BINDING_VERSION)
@@ -1209,7 +1228,7 @@ async function deliver(env, context) {
     if (where !== undefined) away.push({ name, path: where, blob: delivered.blobs[name], labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "delivered", unbound: unbound.has(name) })
   }
   for (const [name, item] of Object.entries(delivered.retracting)) {
-    if (placeOf(name) === "away") away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting" })
+    if (withdrawnPlace(placeOf(name))) away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting" })
   }
   // A retracting or retracted session that positively routes back is retracting no more: its delete leaves the intake branch below, then its
   // record or tombstone goes, and its local files publish as any undelivered file does. A retracting record with no positive route is stalled:
@@ -1346,6 +1365,7 @@ async function deliver(env, context) {
   }
   // A tombstone keeps the session away from this store once the delete is done, so losing `status.json` never publishes it again.
   await finishRetracting(env, store, ended.filter((item) => !item.unbound))
+  for (const item of ended) if (proofs.has(item.session)) await auditWithdrawal(env, item.session, "retracting", "withdrawn")
   await keepRetractedCopies(env, store, ended.filter((item) => !item.unbound).map((item) => item.session))
   // A withdrawn label's session is still here: only that label is held back, and its session's other files stay where they are.
   await withdrawLabels(env, store, ended.filter((item) => item.unbound).map((item) => item.name))
@@ -1392,6 +1412,7 @@ async function deliver(env, context) {
   if (contextBatch.length > 0) await contextSafely(null, () => saveContextSent(env, store, contextBatch, pr.number))
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting" && !item.unbound))
+  for (const item of takenDeletes) if (proofs.has(item.session) && item.from !== "retracting") await auditWithdrawal(env, item.session, "published", "pushed")
   await keepRetractedCopies(env, store, takenDeletes.filter((item) => !item.unbound).map((item) => item.session))
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return settle({ result: "intake_stale_retried", pr, stale_retries: rejections.stale })
