@@ -315,7 +315,6 @@ function main() {
     "Human and agent",
     "Alignment, then ownership",
     "Delivery and sign-off",
-    "Coaching the collaboration",
     "Authority",
     "Waste judgment",
     "Cite every factual claim",
@@ -323,12 +322,11 @@ function main() {
     "Engineering work",
     "Source and channels",
     "Durable context and attribution",
-    "Requirements that arrive during execution",
     "Instruction coherence",
     "Child agents",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fourteen foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the twelve foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
@@ -387,11 +385,10 @@ function main() {
     /own routine choices and safe scoped work to done after corrections or apologies and while questions wait/u,
     /Return only for blockers, human requests or gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
     /Grants lift only named gates/u,
-    // Cold dry runs, 2026-10-12, and the 2026-11-12 cut: without this line, agents told of the human leaving did not say they needed nothing.
-    /When they say they're leaving, open with your needs, even if none/u,
     /`interaction-style` §6/u,
   ]);
   for (const phrase of [
+    "the last message's first sentence is \"I need nothing from you for this.\" or the list of everything you need",
     "No jargon menus, reapproval or imagined future gates.",
     "Ask only for irreducible human input after explaining plain meaning, recommendation and concrete consequence.",
     "Use permitted noninteractive tools to avoid host prompt traps; never bypass safeguards or self-authorize.",
@@ -406,15 +403,11 @@ function main() {
     assert.ok(owned("interaction-style").includes(phrase), `interaction-style must carry the rule the foundation points to: ${phrase}`);
   }
 
-  assertSectionConcepts(section(skill, "Coaching the collaboration"), [
-    /`interaction-style` §10 lists the signs/u,
-    /same correction twice goes to lesson_add/u,
-    /let's step back and reset how we're working/u,
-    /concrete adjustment/iu,
-    /once/iu,
-    /never a recurring gate and never widens authority/u,
-  ]);
-  // The coaching signs and the rest of the rule live in interaction-style §10; the foundation keeps the reset line and a pointer.
+  // The reset line and the signs live in interaction-style §10, which loads when the collaboration slips; the foundation no longer repeats them.
+  assert.doesNotMatch(skill, /## Coaching the collaboration/u, "coaching lives in interaction-style §10");
+  assert.match(owned("interaction-style"), /when the collaboration slips/u, "interaction-style's description must trigger on a slipping collaboration");
+  assert.ok(owned("interaction-style").includes("let's step back and reset how we're working"), "interaction-style §10 must carry the reset line");
+  // The rest of the coaching rule lives in interaction-style §10.
   for (const phrase of [
     "## 10. Coaching the collaboration",
     "steps handed over one at a time; micromanagement or hovering; a one-shot request with no alignment; the human acting as glue",
@@ -523,12 +516,9 @@ function main() {
   ]);
 
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
-  assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
-    "same durable task",
-    "first reply names invalidated checks or says no affected checks passed",
-    "implementation and review gates",
-    "`work-orchestration`",
-  ]);
+  // The reply rule moved to the top of interaction-style, which loads on new input; the procedure stays in work-orchestration.
+  assert.doesNotMatch(skill, /## Requirements that arrive during execution/u, "the requirement-change reply lives in interaction-style");
+  assert.ok(owned("interaction-style").includes("**A requirement changes mid-task:** the next message names each earlier test run, review and by-eye check the change no longer proves, or says none is affected."), "interaction-style must carry the requirement-change reply");
   assertSectionPhrases(section(owned("work-orchestration"), "Requirements that arrive during execution"), "work-orchestration Requirements that arrive during execution", [
     "governing spec",
     "numbered plan",
@@ -569,6 +559,16 @@ function main() {
     "artificial screenshots",
   ]);
 
+  // The brief's contents and what a child gains are the dispatching root's to read, so they live where it dispatches.
+  for (const phrase of [
+    "outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions, cleanup and return contract",
+    "no new authority and no new durable task identity",
+    "early-return framing is input, not authority",
+    "retains final accountability",
+  ]) {
+    assert.ok(owned("work-orchestration").includes(phrase), `work-orchestration must carry the child-brief rule: ${phrase}`);
+  }
+
   assertSectionPhrases(section(skill, "Instruction coherence"), "using-desk Instruction coherence", [
     "confusing, redundant or in conflict",
     "record the friction",
@@ -578,19 +578,7 @@ function main() {
 
   assertSectionPhrases(section(skill, "Child agents"), "using-desk Child agents", [
     "not assumed to rerun startup hooks",
-    "outcome",
-    "scope",
-    "authority",
-    "source",
-    "write set",
-    "dependencies",
-    "success evidence",
-    "prohibited actions",
-    "return contract",
-    "no new authority",
-    "no new durable task identity",
-    "early-return framing is input, not authority",
-    "retains final accountability",
+    "`work-orchestration`",
     "A child agent with a bounded brief follows the brief, not this text",
     "skips session-start, host probes, sync and any real-desk boot ceremony",
     "A child agent never calls task_focus.",
