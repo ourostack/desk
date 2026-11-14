@@ -1,1 +1,0 @@
-When Desk cannot read the process table as a browser context opens, it reads again before giving up, and if it still cannot find the browser's processes, `browser_context` close now says so with a `processesUnknown` field and a hint, so a browser left running is no longer silent.

@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.145 — 2026-11-14
+
+When Desk cannot read the process table as a browser context opens, it reads again before giving up, and if it still cannot find the browser's processes, `browser_context` close now says so with a `processesUnknown` field and a hint, so a browser left running is no longer silent.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.144 — 2026-11-14
 
 Plain Language now loads when an agent writes the CSS that lays out rendered text. Its line-width rule never reached that task, because the skill's description named only prose, so an agent styling an article page capped the text at a fixed `max-width` and the `plain-language-corrections` eval's line-width case failed. The description now ends with "or the CSS that lays out rendered text", Plain Language is 0.2.13, and the case passes again with a receipt from the new eval runner. The `human-owned-work` eval, which shares the skill's text, already failed three cases on main; it is recorded as a known failure in [#963](https://github.com/ourostack/desk/issues/963).
