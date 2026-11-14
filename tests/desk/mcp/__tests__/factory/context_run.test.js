@@ -1321,8 +1321,8 @@ test("context launch prerequisites refuse billing, missing native hosts and unkn
 
 test("context launch keeps both deadline checks and refuses a denied reservation", async () => {
   const f = await fixture()
-  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, now: "invalid" }), /valid now and deadline required/u)
-  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, deadline: "invalid" }), /valid now and deadline required/u)
+  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, now: "invalid" }), /Pass a valid now and deadline/u)
+  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, deadline: "invalid" }), /Pass a valid now and deadline/u)
   const early = await runner.runTaskContextStep(f.env, {
     ...f.options, deadline: NOW + 1, probeSignIn: () => assert.fail("not enough time even before sign-in"),
   })

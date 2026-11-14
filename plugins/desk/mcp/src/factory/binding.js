@@ -178,7 +178,7 @@ function stripSuffixes(text) {
  * only loses its `.git` suffix and trailing slashes.
  */
 export function normalizeRemote(remote) {
-  if (typeof remote !== "string" || remote.trim() === "") throw new TypeError("normalizeRemote: remote must be a non-empty string")
+  if (typeof remote !== "string" || remote.trim() === "") throw new TypeError("normalizeRemote: Pass remote as a non-empty string")
   const text = remote.trim()
   if (text.startsWith("local:")) return text
   if (WINDOWS_PATH.test(text)) return stripSuffixes(text)
@@ -202,7 +202,7 @@ export function isTaskSegment(value) {
 export function checkPersonPrefix(personPrefix, caller) {
   const match = typeof personPrefix === "string" ? PERSON_PREFIX.exec(personPrefix) : null
   if (match === null || match[1] === "." || match[1] === "..") {
-    throw new TypeError(`${caller}: personPrefix must be "" or "desks/<alias>"`)
+    throw new TypeError(`${caller}: Pass personPrefix as "" or "desks/<alias>"`)
   }
   return match[1] ?? null
 }
@@ -210,7 +210,7 @@ export function checkPersonPrefix(personPrefix, caller) {
 /** `jobId({ deskRemote, personPrefix, track, slug })`: the first 32 hex of the job's SHA-256. */
 export function jobId({ deskRemote, personPrefix, track, slug }) {
   checkPersonPrefix(personPrefix, "jobId")
-  if (!isTaskSegment(track) || !isTaskSegment(slug)) throw new TypeError("jobId: track and slug must be task folder names")
+  if (!isTaskSegment(track) || !isTaskSegment(slug)) throw new TypeError("jobId: Pass track and slug as task folder names")
   const input = `${normalizeRemote(deskRemote)}\n${personPrefix}\n${track}/${slug}`
   return createHash("sha256").update(input).digest("hex").slice(0, 32)
 }
@@ -344,7 +344,7 @@ export function taskCommitRule({ alias, isCardHousekeeping }) {
 }
 
 function requireFunction(value, name) {
-  if (typeof value !== "function") throw new TypeError(`bindSession: ${name} must be a function`)
+  if (typeof value !== "function") throw new TypeError(`bindSession: Pass ${name} as a function`)
 }
 
 /**
@@ -357,7 +357,7 @@ function requireFunction(value, name) {
  * empty when it has none (the job IDs then use `local:` plus the desk root).
  */
 export function bindSession({ events, agents, session, deskRoot, deskRemote, personPrefix, readTask, mergedInto = () => null, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity, repoLookup }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: Pass deskRoot as an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
@@ -365,7 +365,7 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   requireFunction(resolveJobIdentity, "resolveJobIdentity")
   // One reader with three answers, so a caller cannot take evidence that is not available for a true none; a caller that omits it is an error.
   requireFunction(repoLookup, "repoLookup")
-  if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
+  if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: Pass deskRemote as a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
   const roots = deskRootsOf(deskRoot)

@@ -147,12 +147,12 @@ const sum = (buckets) => BUCKETS.reduce((all, bucket) => all + (buckets[bucket] 
 export function assertPartition(coverage) {
   if (coverage.state !== "counted") {
     const extra = Object.keys(coverage).filter((key) => key !== "state" && key !== "unverified")
-    if (extra.length > 0) throw new Error("a host that was not counted carries counts")
+    if (extra.length > 0) throw new Error("Check the host's counts: a host that was not counted carries counts")
     return
   }
-  if (sum(coverage) !== coverage.on_disk) throw new Error("the buckets do not add up to on_disk")
+  if (sum(coverage) !== coverage.on_disk) throw new Error("Check the buckets: they do not add up to on_disk")
   for (const bucket of BUCKETS) {
     const owners = Object.values(coverage.by_owner).reduce((all, buckets) => all + (buckets[bucket] ?? 0), 0)
-    if (owners !== (coverage[bucket] ?? 0)) throw new Error(`the owners' ${bucket} do not add up to the host's`)
+    if (owners !== (coverage[bucket] ?? 0)) throw new Error(`Check the owners' counts: their ${bucket} do not add up to the host's`)
   }
 }

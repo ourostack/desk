@@ -150,8 +150,8 @@ test("work and result events cannot smuggle waiting fields or mismatched anchor-
 })
 
 test("source fingerprints require actual bound facts and retain the legacy absent-outcomes case", () => {
-  assert.throws(() => context.contextSource({}, JOB), /valid bound published facts required/u)
-  assert.throws(() => context.contextSource(facts(), "f".repeat(32)), /valid bound published facts required/u)
+  assert.throws(() => context.contextSource({}, JOB), /Pass valid bound published facts/u)
+  assert.throws(() => context.contextSource(facts(), "f".repeat(32)), /Pass valid bound published facts/u)
   const legacy = facts()
   delete legacy.outcomes
   const before = JSON.stringify(legacy)

@@ -20,13 +20,13 @@ const RESULT_CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
 
 function requireStep(name) {
-  if (!STEPS.includes(name)) throw new TypeError(`step: unknown step`)
+  if (!STEPS.includes(name)) throw new TypeError("step: Pass a known step")
 }
 
 function toTime(value) {
-  if (value === null) throw new TypeError("now: must be a valid time")
+  if (value === null) throw new TypeError("Pass now as a valid time")
   const time = new Date(value).getTime()
-  if (Number.isNaN(time)) throw new TypeError("now: must be a valid time")
+  if (Number.isNaN(time)) throw new TypeError("Pass now as a valid time")
   return time
 }
 
@@ -48,8 +48,8 @@ function stepsOf(status) {
  */
 export async function recordStep(env, name, { ok, result, now = new Date() } = {}) {
   requireStep(name)
-  if (typeof ok !== "boolean") throw new TypeError("ok: must be a boolean")
-  if (typeof result !== "string" || !RESULT_CODE.test(result)) throw new TypeError("result: must be a lowercase code of at most 64 characters")
+  if (typeof ok !== "boolean") throw new TypeError("Pass ok as a boolean")
+  if (typeof result !== "string" || !RESULT_CODE.test(result)) throw new TypeError("Pass result as a lowercase code of at most 64 characters")
   const at = new Date(toTime(now)).toISOString()
   let record
   await updateStatus(env, (current) => {

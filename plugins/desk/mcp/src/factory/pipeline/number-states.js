@@ -142,13 +142,13 @@ export function reasonsOf(result) {
 export function withState(result) {
   const state = stateOf(result)
   const reasons = reasonsOf(result)
-  if (state !== "measured" && reasons.length === 0) throw new Error(`a ${state} number has no reason`)
+  if (state !== "measured" && reasons.length === 0) throw new Error(`Add a reason to the ${state} number: it has none`)
   return { ...result, state, reasons }
 }
 
 // Each result passes through `withState` here, and a result whose hand-set `state` or `reasons` differ from what `withState` derives throws, so a disagreement stops the build instead of being rewritten silently.
 export function stated(result) {
   const derived = withState(result)
-  if (derived.state !== result.state || JSON.stringify(derived.reasons) !== JSON.stringify(result.reasons)) throw new Error(`an outcome result disagrees with its derived state: ${result.state}`)
+  if (derived.state !== result.state || JSON.stringify(derived.reasons) !== JSON.stringify(result.reasons)) throw new Error(`Use withState to set an outcome result's state and reasons: it disagrees with its derived state: ${result.state}`)
   return derived
 }

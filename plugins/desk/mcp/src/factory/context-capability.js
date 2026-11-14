@@ -1,7 +1,7 @@
 import { isPlainObject } from "./schema.js"
 
 export async function storeAcceptsContext(client, store, ref, feature = "task_context") {
-  if (!["task_context", "loop_context"].includes(feature)) throw new TypeError("unsupported context capability")
+  if (!["task_context", "loop_context"].includes(feature)) throw new TypeError("Pass task_context or loop_context as the context capability: anything else is unsupported")
   const response = await client.api("GET", `repos/${store}/contents/context.json?ref=${encodeURIComponent(ref)}`)
   if (response.status !== 200 || response.json?.type !== "file" || response.json.encoding !== "base64" || typeof response.json.content !== "string") return false
   const bytes = Buffer.from(response.json.content, "base64")

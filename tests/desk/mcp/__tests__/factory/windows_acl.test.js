@@ -129,7 +129,7 @@ async function withTimeoutProvider(t, body) {
 }
 
 function checkTimeoutDetails(error, expected) {
-  assert.equal(error.message, "desk_feedback: Windows ACL provider timed out after 20000ms")
+  assert.equal(error.message, "desk_feedback: Retry the request: the Windows ACL provider timed out after 20000ms")
   assert.ok(Object.hasOwn(error, "details"), "provider timeout must have own stage metadata")
   assert.deepEqual(Object.keys(error.details).sort(), TIMEOUT_DETAIL_KEYS)
   assert.equal(Object.isFrozen(error.details), true)
@@ -338,7 +338,7 @@ test("timeout diagnostics: close before timeout preserves the existing exit refu
     children[0].emit("close", null, "SIGTERM")
     t.mock.timers.tick(20000)
     const error = await result
-    assert.equal(error.message, "desk_feedback: Windows ACL provider exited with code null: no diagnostic output")
+    assert.equal(error.message, "desk_feedback: Retry the request: the Windows ACL provider exited with code null: no diagnostic output")
     assert.equal(Object.hasOwn(error, "details"), false)
   })
 })
@@ -1156,7 +1156,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
     // The second request is queued behind the stalled first; it must not be answered by, or lost with, the dead process.
     const stalled = protectWindowsPaths([entryAt(1)], { env, timeoutMs: 6000 })
     const queued = protectWindowsPaths([entryAt(2)], { env, timeoutMs: 20000 })
-    await assert.rejects(() => stalled, /desk_feedback: Windows ACL provider timed out after 6000ms/u)
+    await assert.rejects(() => stalled, /desk_feedback: Retry the request: the Windows ACL provider timed out after 6000ms/u)
     const answered = await queued
     assert.equal(answered[0].path, entryAt(2).path)
     const stalledPid = Number(await fs.readFile(marker, "utf8"))
@@ -1306,7 +1306,7 @@ test("a readback that caught another process mid-rewrite is protected and verifi
   try {
     await mkProvider(base, ECHO_PROVIDER)
     const env = { SystemRoot: base }
-    for (const message of ["inherited access rules still apply: C:\\state\\desk", "expected exactly one access rule, found 2: C:\\state\\desk"]) {
+    for (const message of ["Check the access rules, because inherited ones still apply: C:\\state\\desk", "Check the access rules, because exactly one was expected and 2 were found: C:\\state\\desk"]) {
       const runner = sequencedRunner([{ status: "error", message }, OK_DIR])
       const result = await protectWindowsPaths([DIR_ENTRY], { env, runner })
       assert.equal(result[0].path, DIR_ENTRY.path)
@@ -1314,7 +1314,7 @@ test("a readback that caught another process mid-rewrite is protected and verifi
       assert.equal(runner.calls[0].payload, runner.calls[1].payload)
 
       const stuck = sequencedRunner([{ status: "error", message }])
-      await assert.rejects(() => protectWindowsPaths([DIR_ENTRY], { env, runner: stuck }), /inherited access rules still apply|expected exactly one access rule/u)
+      await assert.rejects(() => protectWindowsPaths([DIR_ENTRY], { env, runner: stuck }), /inherited ones still apply|exactly one was expected/u)
       assert.equal(stuck.calls.length, 2, "never a third pass")
     }
     // Every other refusal, and an unverified answer, is not retried.
@@ -1417,7 +1417,7 @@ test("a provider that never answers costs several waiting callers one limit in t
     const elapsed = Date.now() - started
     for (const outcome of outcomes) {
       assert.equal(outcome.status, "rejected")
-      assert.match(outcome.reason.message, /desk_feedback: Windows ACL provider timed out after 500ms/u)
+      assert.match(outcome.reason.message, /desk_feedback: Retry the request: the Windows ACL provider timed out after 500ms/u)
     }
     assert.ok(elapsed < 1800, `five callers waited ${elapsed} ms; one limit is 500 ms`)
   } finally {
@@ -1445,7 +1445,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", as
     for (let i = 0; i < 300 && fs.readdirSync(shared).filter((name) => name.startsWith("inflight-")).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20))
     const overlapped = fs.readdirSync(shared).filter((name) => name.startsWith("inflight-")).length >= 2
     fs.writeFileSync(shared + "/overlapped-" + process.pid, String(overlapped))
-    answer = overlapped ? { status: "error", message: "inherited access rules still apply: " + request.paths[0].path } : null
+    answer = overlapped ? { status: "error", message: "Check the access rules, because inherited ones still apply: " + request.paths[0].path } : null
   }
   fs.appendFileSync(shared + "/requests-" + process.pid, "x")
   answer ??= { status: "ok", results: request.paths.map((entry) => ({ path: entry.path, kind: entry.kind, owner_sid: "S-1-5-21-" + process.pid, owner_reassigned: false, protected: true, rule_count: 1 })) }

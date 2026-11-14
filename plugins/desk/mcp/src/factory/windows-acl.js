@@ -39,7 +39,7 @@ const DEFAULT_IDLE_MS = 60_000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 const ENTRY_FIELDS = new Set(["path", "kind", "created"])
 const KINDS = new Set(["directory", "file"])
-const TRANSIENT_READBACK = /Windows ACL protection failed: (inherited access rules still apply|expected exactly one access rule)/u
+const TRANSIENT_READBACK = /Windows ACL protection failed: Check the access rules, because (?:inherited ones still apply|exactly one was expected)/u
 const SID_PATTERN = /^S-1-[\d-]+$/u
 
 // The whole program, fixed at build time. Paths never appear in it — they
@@ -59,11 +59,11 @@ function Protect-Request($request) {
     $target = $entry.path
     $item = Get-Item -LiteralPath $target -Force
     if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-      throw "refusing a reparse point: $target"
+      throw "Use a path that is not a reparse point: $target"
     }
     $isDirectory = $item.PSIsContainer
     if ($isDirectory -ne ($entry.kind -eq 'directory')) {
-      throw "path is not a $($entry.kind): $target"
+      throw "Use a path that is a $($entry.kind): $target"
     }
     # Read only the owner and access sections. Get-Acl also loads the audit
     # section (SACL), and writing that section back needs
@@ -76,7 +76,7 @@ function Protect-Request($request) {
         $acl.SetOwner($self)
         $reassigned = $true
       } else {
-        throw "refusing a path owned by another user ($owner): $target"
+        throw "Use a path you own, not one owned by another user ($owner): $target"
       }
     }
     $acl.SetAccessRuleProtection($true, $false)
@@ -95,27 +95,27 @@ function Protect-Request($request) {
     $item.SetAccessControl($acl)
     $applied = Get-Acl -LiteralPath $target
     if ($applied.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $self) {
-      throw "owner was not applied: $target"
+      throw "Check the owner of the path, which was not applied: $target"
     }
     if (-not $applied.AreAccessRulesProtected) {
-      throw "inherited access rules still apply: $target"
+      throw "Check the access rules, because inherited ones still apply: $target"
     }
     $rules = @($applied.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
     if ($rules.Count -ne 1) {
-      throw "expected exactly one access rule, found $($rules.Count): $target"
+      throw "Check the access rules, because exactly one was expected and $($rules.Count) were found: $target"
     }
     if ($rules[0].IdentityReference.Value -ne $self.Value) {
-      throw "access rule grants another identity ($($rules[0].IdentityReference.Value)): $target"
+      throw "Check the access rule, because it grants another identity ($($rules[0].IdentityReference.Value)): $target"
     }
     if ($rules[0].AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
-      throw "access rule is not an Allow rule: $target"
+      throw "Check the access rule, because it is not an Allow rule: $target"
     }
     $full = [System.Security.AccessControl.FileSystemRights]::FullControl
     if (($rules[0].FileSystemRights -band $full) -ne $full) {
-      throw "access rule does not grant FullControl: $target"
+      throw "Check the access rule, because it does not grant FullControl: $target"
     }
     if ($rules[0].InheritanceFlags -ne $inheritance) {
-      throw "access rule carries the wrong inheritance flags: $target"
+      throw "Check the access rule, because it carries the wrong inheritance flags: $target"
     }
     $results += [pscustomobject]@{
       path = $target
@@ -275,7 +275,7 @@ const MAX_STDERR_CHARS = 4096
 // Ends the provider processes this process started. A test that ends its own fixture calls it, so the provider does not hold the
 // fixture for its idle timeout.
 export function closeWindowsAclSessions() {
-  for (const session of [...sessions.values()]) session.retire(new Error("Windows ACL provider closed"))
+  for (const session of [...sessions.values()]) session.retire(new Error("Run the command again: the Windows ACL provider closed"))
 }
 
 function createSession(executable, args, idleMs) {
@@ -318,7 +318,7 @@ function createSession(executable, args, idleMs) {
     waiting.outputBytes += Buffer.byteLength(chunk, "utf8")
     waiting.stdout += chunk
     if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
-      return retire(new Error(`${waiting.label}: Windows ACL provider produced too much output`))
+      return retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`))
     }
     const newline = waiting.stdout.indexOf("\n")
     if (newline === -1) return
@@ -326,7 +326,7 @@ function createSession(executable, args, idleMs) {
     // One line is one answer. Anything after it means the framing is broken, so the answer is not trusted either.
     if (waiting.stdout.slice(newline + 1).trim() !== "") {
       session.pending = waiting
-      return retire(new Error(`${waiting.label}: Windows ACL provider returned unreadable output`))
+      return retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider returned unreadable output`))
     }
     waiting.settle(null, { code: 0, stdout: waiting.stdout.slice(0, newline), stderr: session.stderr })
   })
@@ -336,7 +336,7 @@ function createSession(executable, args, idleMs) {
     if (!waiting) return
     waiting.stderrBytes += Buffer.byteLength(chunk, "utf8")
     if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
-      retire(new Error(`${waiting.label}: Windows ACL provider produced too much output`))
+      retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`))
     }
   })
   const streamError = error => { session.closeError = true; retire(error) }
@@ -345,7 +345,7 @@ function createSession(executable, args, idleMs) {
   child.on("close", (code) => {
     const diagnostic = session.stderr.trim().slice(0, 500) || "no diagnostic output"
     const label = session.pending?.label ?? DEFAULT_LABEL
-    retire(new Error(`${label}: Windows ACL provider exited with code ${code}: ${diagnostic}`))
+    retire(new Error(`${label}: Retry the request: the Windows ACL provider exited with code ${code}: ${diagnostic}`))
   })
   return session
 }
@@ -359,7 +359,7 @@ const sessionKey = (executable, args) => `${executable}\0${args.join("\0")}`
 function timedOutError(label, timeoutMs, session, request) {
   const now = performance.now()
   const queued = request.askedAt === null
-  const error = new Error(`${label}: Windows ACL provider timed out after ${timeoutMs}ms`)
+  const error = new Error(`${label}: Retry the request: the Windows ACL provider timed out after ${timeoutMs}ms`)
   Object.defineProperty(error, "details", { value: Object.freeze({
     phase: queued ? "queued_expired" :
       !session.spawned ? "awaiting_spawn" :

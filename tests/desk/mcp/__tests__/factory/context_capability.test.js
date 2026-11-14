@@ -37,7 +37,7 @@ test("capability transport failures remain errors and unsupported features never
   const failed = { api: async () => { throw new Error("transport_failed") } }
   await assert.rejects(storeAcceptsContext(failed, "synthetic/store", "main"), /transport_failed/u)
   await assert.rejects(storeAcceptsContext({ api: () => assert.fail("unsupported feature must not reach transport") },
-    "synthetic/store", "main", "other"), /unsupported context capability/u)
+    "synthetic/store", "main", "other"), /Pass task_context or loop_context as the context capability/u)
   await storeAcceptsContext({ api: async (method, url) => {
     assert.equal(method, "GET")
     assert.equal(url, "repos/synthetic/store/contents/context.json?ref=refs%2Fheads%2Frelease")

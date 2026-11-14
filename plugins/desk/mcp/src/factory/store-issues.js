@@ -60,9 +60,9 @@ function commentView(raw) {
  * the store `repo`.
  */
 export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (typeof runner !== "function") throw new TypeError("issuesClient: runner must be a function")
-  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo)) throw new TypeError("issuesClient: repo must be owner/repo")
-  if (typeof token !== "string" || token === "") throw new TypeError("issuesClient: token must be a non-empty string")
+  if (typeof runner !== "function") throw new TypeError("issuesClient: Pass runner as a function")
+  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo)) throw new TypeError("issuesClient: Pass repo as owner/repo")
+  if (typeof token !== "string" || token === "") throw new TypeError("issuesClient: Pass token as a non-empty string")
 
   async function api(method, route, body) {
     const args = ["api", "--method", method, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]
@@ -97,7 +97,7 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
   const base = `repos/${repo}`
   return {
     async listIssues({ label, state }) {
-      if (typeof label !== "string" || !STATES.has(state)) throw new TypeError("listIssues: label and state are required")
+      if (typeof label !== "string" || !STATES.has(state)) throw new TypeError("listIssues: Pass a label and a state")
       return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView, "too_many_issues")
     },
     async listComments(number) {

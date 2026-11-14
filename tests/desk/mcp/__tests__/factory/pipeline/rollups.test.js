@@ -896,8 +896,8 @@ test("every non-measured totals leaf and tool-kind row names a reason, in every 
 })
 
 test("a rollup number with a state other than measured and no reason is refused", () => {
-  assert.throws(() => assertNamed({ state: "partial", reasons: [] }), /no reason/u)
-  assert.throws(() => assertNamed({ state: "unavailable", reasons: [] }), /no reason/u)
+  assert.throws(() => assertNamed({ state: "partial", reasons: [] }), /Add a reason to the partial rollup number/u)
+  assert.throws(() => assertNamed({ state: "unavailable", reasons: [] }), /Add a reason to the unavailable rollup number/u)
   assert.deepEqual(assertNamed({ state: "measured", reasons: [] }), { state: "measured", reasons: [] })
   assert.deepEqual(assertNamed({ state: "partial", reasons: ["capped"] }), { state: "partial", reasons: ["capped"] })
 })

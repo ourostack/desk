@@ -41,7 +41,7 @@ export async function lstatIfPresent(target, naming) {
     return await fsp.lstat(target)
   } catch (error) {
     if (error.code === "ENOENT") return null
-    throw new Error(`${label}: private ${subject} path ${target} could not be inspected (${error.code})`)
+    throw new Error(`${label}: Check that ${target} can be read, then run again: the private ${subject} path could not be inspected (${error.code})`)
   }
 }
 
@@ -50,8 +50,8 @@ export async function assertNotGitCheckout(dir, naming) {
   const { label, subject } = naming
   if ((await lstatIfPresent(path.join(dir, ".git"), naming)) !== null) {
     throw new Error(
-      `${label}: refusing to write private ${subject} inside the Git checkout at ${dir}. ` +
-        "Point XDG_STATE_HOME at a directory that is not under version control.",
+      `${label}: Point XDG_STATE_HOME at a directory that is not under version control: ` +
+        `refusing to write private ${subject} inside the Git checkout at ${dir}.`,
     )
   }
 }
@@ -114,7 +114,7 @@ export function clearExtendedAcl(target, platform, naming) {
   if (!hasAcl()) return true
   childProcess.execFileSync("/bin/chmod", ["-N", target], options)
   if (hasAcl()) {
-    throw new Error(`${label}: private ${subject} path retains an extended ACL: ${target}`)
+    throw new Error(`${label}: Remove the extended ACL from ${target}: the private ${subject} path retains an extended ACL`)
   }
   return false
 }
@@ -202,10 +202,10 @@ export async function ensureOwnerOnlyDirectory(dir, platform, naming) {
     existing = await fsp.lstat(dir)
   }
   if (existing.isSymbolicLink()) {
-    throw new Error(`${label}: private ${subject} path component is a symlink and will not be used: ${dir}`)
+    throw new Error(`${label}: Use a real directory instead of ${dir}: the private ${subject} path component is a symlink and will not be used`)
   }
   if (!existing.isDirectory()) {
-    throw new Error(`${label}: private ${subject} path component is not a directory: ${dir}`)
+    throw new Error(`${label}: Use a directory instead of ${dir}: the private ${subject} path component is not a directory`)
   }
   if (platform !== "win32") {
     clearExtendedAclOnce(dir, existing, platform, naming)
@@ -225,13 +225,13 @@ export async function protectLeafFile(file, platform, naming) {
   const { label, subject } = naming
   const stat = await fsp.lstat(file)
   if (stat.isSymbolicLink()) {
-    throw new Error(`${label}: private ${subject} path is a symlink and will not be used: ${file}`)
+    throw new Error(`${label}: Use a regular file instead of ${file}: the private ${subject} path is a symlink and will not be used`)
   }
   if (!stat.isFile()) {
-    throw new Error(`${label}: private ${subject} path is not a regular file: ${file}`)
+    throw new Error(`${label}: Use a regular file instead of ${file}: the private ${subject} path is not a regular file`)
   }
   if (stat.nlink !== 1) {
-    throw new Error(`${label}: private ${subject} is hard-linked and will not be used: ${file}`)
+    throw new Error(`${label}: Use a file with a single link instead of ${file}: the private ${subject} is hard-linked and will not be used`)
   }
   if (platform !== "win32") {
     clearExtendedAclOnce(file, stat, platform, naming)

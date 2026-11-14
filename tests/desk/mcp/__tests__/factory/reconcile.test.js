@@ -734,7 +734,7 @@ test("a store_only row for a keyed job this desk cannot map prints job null, nev
 test("an unexpected failure is a result, not a throw", () => scratch(async ({ desk }) => {
   const repo = await standardDesk(desk, [["t", "a"]])
   repo.commit("2026-09-25T10:00:00Z", { "t/a/work.md": "x\n" })
-  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env: null }), { ok: false, error: "reconcile: unexpected failure" })
+  assert.deepEqual(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env: null }), { ok: false, error: "reconcile: Run it again: it failed unexpectedly" })
 }))
 
 test("the commit rule is the binder's: housekeeping drops, a sweep binds nothing, and the verdict says which", () => {

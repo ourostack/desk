@@ -916,7 +916,7 @@ function repositoryRoot(directory) {
  * `deskCommitsBetween`, which `factory reconcile` still reads.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: deskRoot must be an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: Pass deskRoot as an absolute path")
   checkPersonPrefix(personPrefix, "createDeskReaders")
   const base = path.join(deskRoot, personPrefix)
   const options = { git, deskRoot, timeoutMs }
@@ -1125,7 +1125,7 @@ export function resolveJobIdentity({
   deadline = null, clock = () => performance.now(), spawn = spawnSync,
 }) {
   const current = { track, slug }
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveJobIdentity: deskRoot must be an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveJobIdentity: Pass deskRoot as an absolute path")
   const alias = checkPersonPrefix(personPrefix, "resolveJobIdentity")
   if (!isTaskSegment(track) || !isTaskSegment(slug)) return current
 

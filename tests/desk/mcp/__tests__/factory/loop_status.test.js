@@ -68,7 +68,7 @@ test("recordStep on failure raises the counters, keeps last_ok_at, and a success
 }))
 
 test("a step that is not one of the seven, such as the removed triage step, is refused", () => scratch(async (env) => {
-  await assert.rejects(recordStep(env, "triage", { ok: true, result: "ran", now: at("2026-10-05T12:00:00Z") }), /unknown step/u)
+  await assert.rejects(recordStep(env, "triage", { ok: true, result: "ran", now: at("2026-10-05T12:00:00Z") }), /Pass a known step/u)
 }))
 
 test("a first failure leaves last_ok_at null, never looking like a success", () => scratch(async (env) => {

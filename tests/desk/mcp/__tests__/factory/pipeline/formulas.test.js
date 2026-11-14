@@ -907,7 +907,7 @@ test("a job whose sessions lack turns but have other waits reports the longest w
 })
 
 test("a result that is partial with no reason is refused where its state is set", () => {
-  assert.throws(() => withState({ class: "measured", value: 1, partial: true }), /partial.*no reason/)
+  assert.throws(() => withState({ class: "measured", value: 1, partial: true }), /Add a reason to the partial number/)
 })
 
 const codexSession = () => {

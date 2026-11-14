@@ -148,7 +148,7 @@ test("gh failures while choosing are one stable result each", async () => {
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[0] === "--version" ? { code: 0, stdout: "gh version 2.20.0 (2022-11-01)\n", stderr: "" } : undefined)) }), { result: "gh_too_old" })
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[1] === "status" ? { code: 0, stdout: Symbol("not text"), stderr: "" } : undefined)) }), { result: "unexpected" })
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[1] === "status" ? { code: 0 } : undefined)) }), { result: "no_account_can_deliver", accounts: [] })
-  await assert.rejects(chooseAccount({ store: "not a store", runner: base.runner }), /store must be/u)
+  await assert.rejects(chooseAccount({ store: "not a store", runner: base.runner }), /Pass store as <owner>\/<repo>/u)
 })
 
 test("factory.js account refuses a malformed store and, with the real runner and no gh on PATH, reports gh_missing", () => scratch(async ({ env, base }) => {

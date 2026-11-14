@@ -33,7 +33,7 @@ export function readCopilotConversation({ env = process.env, sessionId, recorded
   const until = normalizeTimestamp(recordedUntil)
   if (typeof sessionId !== "string" || !SESSION_ID_V4.test(sessionId) || until === null ||
       typeof expectedDesk !== "string" || !path.isAbsolute(expectedDesk))
-    throw new TypeError("readCopilotConversation: native session and capture boundary required")
+    throw new TypeError("readCopilotConversation: Pass the native session and its capture boundary")
   const file = localRecordsPath(env)
   try {
     const stat = lstatSync(file)
