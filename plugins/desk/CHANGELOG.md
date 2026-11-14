@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.150 — 2026-11-14
+
+When an agent makes a change that a member asked for on another member's desk, the commit and pull request now name who asked for the change as well as whose desk it touched, so the owner can see who asked. The change itself, the attribution-free rules and the protected-write limits are unchanged. See [shared-desk-conventions](../../crew/skills/shared-desk-conventions/SKILL.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.149 — 2026-11-14
 
 Desk's boot no longer tells an agent to run `factory.js` to record the factory contribution answer. The agent asks the operator once, then calls `desk_doctor` with `{"factory_consent": "yes"}` or `{"factory_consent": "no"}`; Desk finds the GitHub account that can open the intake pull requests itself and writes the same `consent.json` the script writes. `{"factory_told": true}` records that the operator was told, in place of `factory.js consent --mentioned yes`. The tool takes an answer only while the store is undecided, so an agent cannot overwrite a recorded decision. A yes with no usable account is not recorded and says why. `factory.js consent` stays for people at a shell. The question now says that one of the operator's signed-in accounts, named when they answer, appears as the pull request author.
