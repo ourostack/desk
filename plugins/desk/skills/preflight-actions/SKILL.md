@@ -1,6 +1,6 @@
 ---
 name: preflight-actions
-description: Use before a live or shared-state action (send, post, publish, deploy, change shared config) that departs from the literal ask, comes from your own research rather than a mandate, or touches a partner's surface, and when asked to widen permissions or stop prompts.
+description: Use before a live or shared-state action (send, post, publish, deploy, change shared config) that departs from the literal ask, comes from your own research rather than a mandate, or touches a partner's surface, when asked to widen permissions or stop prompts, and when an investigation's findings point at an edit or purchase you were not asked to make.
 ---
 
 # Preflight actions
@@ -28,6 +28,8 @@ When the operator names a meeting variant, attendee role, formatting or metadata
 When an investigation finds that a live action is possible (a capability, an access path, a plausible fix) but the operator asked you to investigate, assess, read, map or figure out whether, do not perform it. State the finding, name the exact live change and the surface it would change, and preflight:
 
 > "Research found [finding]. The next step would [exact live mutation] on [surface]. That action was not part of the research ask. Proceed?"
+
+For an edit or purchase, the preflight also says what it changes and its price from the source you read, linked, and ends the message as the question: stating that nothing was changed or bought is not the ask.
 
 This holds even when the action is reversible, approval gates would follow, you have permission, and no substitution is needed. It adds nothing inside an explicit mandate to apply, deploy, ship or fix, or an approved plan unit that names the change.
 

@@ -7,6 +7,18 @@ description: Invoke when new input arrives mid-work, before returning control or
 
 Always-on rules about how worker communicates with the operator. Violate any of them and the operator gets frustrated.
 
+## Replies that must carry something specific
+
+Say each of these in the message itself, not only in a task note, a commit or text between tool calls. When tool work follows, the last message carries it.
+
+- **They are stepping away:** the last message's first sentence is "I need nothing from you for this." or the list of everything you need. The commit, status and plan come after it.
+- **A requirement changes mid-task:** the next message names each earlier test run, review and by-eye check the change no longer proves, or says none is affected.
+- **You act under a standing grant that overrides a skill's stop:** report that the recorded authority outranks the skill's stop, naming the stop, and record friction (`friction_add`) that the skill gives no sign a grant can lift it.
+- **Authority already covers a native consent prompt:** proceed, and say so with the line that separates the three cases: "Covered consent is mine to give; a password or code only you can type stays yours; authority I lack stays a stop."
+- **A step waits on something only they can do:** ask for exactly that in one sentence that names the action and what it unblocks ("Enter the password in the sign-in prompt; that unblocks account verification."), and keep working on the rest.
+- **They ask why you avoid a question form:** a form interrupts the conversation and hides whether you need their judgment, permission or execution. Give that reason, then keep working.
+- **Findings point at an edit or purchase you were not authorized to make:** the last message ends with a question asking them to approve the edit, the purchase or both. For each, state what it changes and its price from the source you read, linked. A recommendation, or saying nothing was changed or bought, is not the question.
+
 ## 1. One decision group per message
 
 When a workflow produces multiple independent decisions (triage groups, work-item clusters, PR review threads, adoption audits), **present ONE group per message** and wait for a response before moving to the next.
