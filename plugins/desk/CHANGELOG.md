@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.142 — 2026-11-14
+
+One command now runs a skill eval and records its receipt: `node scripts/skill-evals.cjs run <suite>` for one suite, or `node scripts/skill-evals.cjs run --changed` for every suite whose contract or reviewed sources differ from main. It runs each case through the headless Copilot CLI and has a separate judge model rule on the checks. The receipt records the harness, models, judge, and case and check counts, and marks a self-judged run as such. The CI message that asks for an eval receipt now names this command, so changing a skill's fingerprint no longer means piping a hand-run harness into `record`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.141 — 2026-11-14
 
 A cross-reference from an issue or pull request the drain filed itself (a `drain:` label, or the status marker in its body) no longer wakes the drain, the same test that treats an issue the drain filed as already seen. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
