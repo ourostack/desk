@@ -236,7 +236,7 @@ function replay({ git, spawnGit, paths, onto, commits, prefix }) {
   const inTree = runner(spawnGit, paths.tree)
   const wt = (args, timeout) => inTree(["-c", `core.hooksPath=${paths.hooks}`, "-c", "core.sparseCheckout=true", "-c", "core.sparseCheckoutCone=false", ...args], timeout)
   const patternFile = wt(["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"]).stdout.trim()
-  if (patternFile === "") return { error: "could not locate the replay worktree's sparse-checkout file" }
+  if (patternFile === "") return { error: "Check the replay worktree's sparse-checkout setup: could not locate the replay worktree's sparse-checkout file" }
   mkdirSync(path.dirname(patternFile), { recursive: true })
   // A pattern no file matches keeps the list from ever being empty, which some Git versions refuse.
   writeFileSync(patternFile, [exactPattern(".desk-replay-nothing"), ...touchedPaths(git, commits).map(exactPattern)].join("\n") + "\n")
@@ -301,7 +301,7 @@ export function deliver({ root, env = process.env, spawnGit = spawnSync, deliver
     if (commits.length === 0) return { state: "nothing", delivered: [], skipped: [], checkout: followsUpstream({ git, upstream, head, target: onto }) }
     let policy
     try { policy = publicationPolicy(git, onto) } catch (error) {
-      return { state: "failed", reason: "publication_blocked", error: `${error.message}. Fix: repair .desk/publication.json through a PR, then run ${publicationRecovery(root)}`, delivered: [], skipped: [] }
+      return { state: "failed", reason: "publication_blocked", error: `Fix .desk/publication.json through a PR, then run ${publicationRecovery(root)}: ${error.message}`, delivered: [], skipped: [] }
     }
     const fastForward = git(["merge-base", "--is-ancestor", onto, head]).status === 0
     const built = fastForward ? { head, replayed: commits, skipped: [] } : replay({ git, spawnGit, paths, onto, commits, prefix })

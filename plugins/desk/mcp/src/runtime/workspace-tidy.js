@@ -98,25 +98,25 @@ function cardRepositories(matter) {
   const block = /^repos:\s*\n((?:[ \t]+[^\n]*\n?|[ \t]*\n)*)/mu.exec(matter)
   if (!block) {
     if (/^repos:\s*\[\s*\]\s*$/mu.test(matter)) return []
-    throw new Error("repos must be a block list or []")
+    throw new Error("Set repos as a block list or []: repos must be a block list or []")
   }
   const lines = block[1].split("\n")
   const indent = /^([ \t]+)- /u.exec(lines.find((line) => /^[ \t]+- /u.test(line)) ?? "")?.[1]
-  if (!indent) throw new Error("repos must contain repository-level list items")
+  if (!indent) throw new Error("Set repos as repository-level list items: repos must contain repository-level list items")
   const items = []
   for (const line of lines) {
     if (line.startsWith(`${indent}- `)) items.push([line.slice(indent.length + 2)])
     else if (line.trim()) {
-      if (!items.length || !line.startsWith(`${indent}  `)) throw new Error("unsupported repository indentation")
+      if (!items.length || !line.startsWith(`${indent}  `)) throw new Error("Set the repository indentation the repos block supports: unsupported repository indentation")
       items.at(-1).push(line.slice(indent.length + 2))
     }
   }
   return items.map((item) => {
     const body = item.join("\n")
     const { data } = parseFrontmatterLite(`---\n${body}\n---`)
-    if (!["local", "remote"].includes(data.mode)) throw new Error("repo mode missing")
+    if (!["local", "remote"].includes(data.mode)) throw new Error("Add a mode to the repo: repo mode missing")
     if (data.mode === "remote") return null
-    if (!text(data.local_path)) throw new Error("local repo path missing")
+    if (!text(data.local_path)) throw new Error("Add a local path to the repo: local repo path missing")
     return data.local_path
   }).filter(Boolean)
 }
@@ -220,7 +220,7 @@ export async function inspectWorkspace({
   const combined = anySignal([signal, cancellation.signal])
   const stopSignal = combined.signal
   let timer
-  const stop = () => { if (expired || stopSignal.aborted) throw new Error("workspace-tidy budget exceeded") }
+  const stop = () => { if (expired || stopSignal.aborted) throw new Error("Use a smaller workspace for the tidy: workspace-tidy budget exceeded") }
   const inventory = async () => {
     const root = await fs.realpath(deskRoot)
     stop()
@@ -232,18 +232,18 @@ export async function inspectWorkspace({
     const skipped = []
     while (queue.length) {
       stop()
-      if (++directories > maxDirectories) throw new Error("workspace-tidy directory budget exceeded")
+      if (++directories > maxDirectories) throw new Error("Use a smaller workspace for the tidy: workspace-tidy directory budget exceeded")
       const { dir, depth } = queue.shift()
       const entries = []
       const directory = await fs.opendir(dir)
       for await (const entry of directory) {
         stop()
-        if (++entryCount > maxEntries) throw new Error("workspace-tidy entry budget exceeded")
+        if (++entryCount > maxEntries) throw new Error("Use a smaller workspace for the tidy: workspace-tidy entry budget exceeded")
         entries.push(entry)
       }
       stop()
       if (entries.some((entry) => entry.name === "task.md")) {
-        if (result.cards.length >= maxCards) throw new Error("workspace-tidy card budget exceeded")
+        if (result.cards.length >= maxCards) throw new Error("Use a smaller workspace for the tidy: workspace-tidy card budget exceeded")
         const file = path.join(dir, "task.md")
         // One card that cannot be read is skipped by name; it authorizes no
         // removal, and every other card still counts.
@@ -270,7 +270,7 @@ export async function inspectWorkspace({
           stop()
           for (const canonical of cardRepos) {
             repositories.add(canonical)
-            if (repositories.size > maxRepositories) throw new Error("workspace-tidy repository budget exceeded")
+            if (repositories.size > maxRepositories) throw new Error("Use a smaller workspace for the tidy: workspace-tidy repository budget exceeded")
           }
           result.cardRecords[file] = { body, repositories: cardRepos }
         }
@@ -281,7 +281,7 @@ export async function inspectWorkspace({
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith(".") || (entry.name.startsWith("_") && entry.name !== "_archive")) continue
         if (["node_modules", "artifacts"].includes(entry.name)) continue
-        if (depth >= 6) throw new Error("workspace-tidy layout depth budget exceeded")
+        if (depth >= 6) throw new Error("Use a smaller workspace for the tidy: workspace-tidy layout depth budget exceeded")
         queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
       }
     }
@@ -293,17 +293,17 @@ export async function inspectWorkspace({
       stop()
       const common = await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { signal: stopSignal })
       stop()
-      if (!common.ok) throw new Error(`cannot inspect repository: ${repo}`)
+      if (!common.ok) throw new Error(`Check that Git can read the repository: cannot inspect repository: ${repo}`)
       if (repo === root) result.commonDirectory = common.stdout
       if (commonDirs.has(common.stdout)) continue
       commonDirs.add(common.stdout)
       const listing = await git(repo, ["worktree", "list", "--porcelain", "-z"], { signal: stopSignal })
       stop()
-      if (!listing.ok) throw new Error(`cannot list worktrees: ${repo}`)
+      if (!listing.ok) throw new Error(`Check that Git can read the repository: cannot list worktrees: ${repo}`)
       const worktrees = parseWorktrees(listing.stdout, repo)
       // The first entry is the primary checkout, which is never a cleanup target.
       result.worktrees.push(...worktrees.slice(1).filter((item) => !samePath(item.path, root)))
-      if (result.worktrees.length > maxWorktrees) throw new Error("workspace-tidy worktree budget exceeded")
+      if (result.worktrees.length > maxWorktrees) throw new Error("Use a smaller workspace for the tidy: workspace-tidy worktree budget exceeded")
     }
     return result
   }
@@ -324,7 +324,7 @@ export async function inspectWorkspace({
 
 async function mustGit(git, cwd, args) {
   const result = await git(cwd, args)
-  if (!result.ok) throw new Error(`Git inspection failed: ${args[0]}`)
+  if (!result.ok) throw new Error(`Check that Git can read the repository: Git inspection failed: ${args[0]}`)
   return result.stdout
 }
 

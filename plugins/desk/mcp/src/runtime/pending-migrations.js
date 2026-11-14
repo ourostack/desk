@@ -525,12 +525,12 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
 
 function parseRunArgs(argv) {
   const [command, id, ...rest] = argv
-  if (command !== "run" || typeof id !== "string" || id === "") throw new Error("usage: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]")
+  if (command !== "run" || typeof id !== "string" || id === "") throw new Error("usage: Run it as migrations.js run <id>: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]")
   const args = { id, toolsRoot: "", toolsPerson: "" }
   for (let index = 0; index < rest.length; index += 2) {
     const flag = rest[index]
     const value = rest[index + 1]
-    if (!["--tools-root", "--tools-person"].includes(flag) || typeof value !== "string") throw new Error(`migrations.js: unknown or incomplete argument ${JSON.stringify(flag)}`)
+    if (!["--tools-root", "--tools-person"].includes(flag) || typeof value !== "string") throw new Error(`migrations.js: Pass a complete, known argument: unknown or incomplete argument ${JSON.stringify(flag)}`)
     args[flag === "--tools-root" ? "toolsRoot" : "toolsPerson"] = value
   }
   return args
@@ -571,7 +571,7 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
   }
   const migration = readMigrations(pluginRoot).find((candidate) => candidate.id === args.id)
   if (migration === undefined) {
-    io.stderr.write(`migrations.js: Desk has no migration ${args.id}\n`)
+    io.stderr.write(`migrations.js: Name a migration Desk has: Desk has no migration ${args.id}\n`)
     return 2
   }
   const blockEnv = { ...env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: args.toolsRoot, DESK_TOOLS_PERSON: args.toolsPerson }
@@ -602,7 +602,7 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
 
   const detect = await run("Detect")
   if (detect.unavailable) {
-    io.stderr.write("migrations.js: bash is required to run Desk's migrations\n")
+    io.stderr.write("migrations.js: Install bash first: bash is required to run Desk's migrations\n")
     return 1
   }
   if (detect.status !== 0) {

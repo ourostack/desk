@@ -790,16 +790,16 @@ test("the run command walks one migration the way the migrations skill describes
   assert.ok(long.stdout.length > 20_000, String(long.stdout.length))
   assert.match(long.stdout, /\nfinding 400: [^\n]*\nSteps, in order:\n7\. Record\.\n\nAnnounce line, filled in with this run's own counts and commit link:\nTidied\.\n$/u)
 
-  const usage = "usage: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]\n"
+  const usage = "usage: Run it as migrations.js run <id>: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]\n"
   assert.deepEqual(await run([]), { code: 2, stdout: "", stderr: usage })
   assert.deepEqual(await run(["list"]), { code: 2, stdout: "", stderr: usage })
-  assert.deepEqual(await run(["run", "08-fixed", "--force"]), { code: 2, stdout: "", stderr: 'migrations.js: unknown or incomplete argument "--force"\n' })
-  assert.deepEqual(await run(["run", "08-fixed", "--tools-root"]), { code: 2, stdout: "", stderr: 'migrations.js: unknown or incomplete argument "--tools-root"\n' })
-  assert.deepEqual(await run(["run", "99-none"]), { code: 2, stdout: "", stderr: "migrations.js: Desk has no migration 99-none\n" })
+  assert.deepEqual(await run(["run", "08-fixed", "--force"]), { code: 2, stdout: "", stderr: 'migrations.js: Pass a complete, known argument: unknown or incomplete argument "--force"\n' })
+  assert.deepEqual(await run(["run", "08-fixed", "--tools-root"]), { code: 2, stdout: "", stderr: 'migrations.js: Pass a complete, known argument: unknown or incomplete argument "--tools-root"\n' })
+  assert.deepEqual(await run(["run", "99-none"]), { code: 2, stdout: "", stderr: "migrations.js: Name a migration Desk has: Desk has no migration 99-none\n" })
 
   const captured = io()
   const code = await runMigrationCli({ argv: ["run", "08-fixed"], io: captured.io, pluginRoot: root, cwd: root, spawn: noBash })
-  assert.deepEqual({ code, ...captured.out }, { code: 1, stdout: "", stderr: "migrations.js: bash is required to run Desk's migrations\n" })
+  assert.deepEqual({ code, ...captured.out }, { code: 1, stdout: "", stderr: "migrations.js: Install bash first: bash is required to run Desk's migrations\n" })
 })
 
 // ── Index tracing on `runMigrationCli` (spec.md §3) ─────────────────────────

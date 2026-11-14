@@ -135,7 +135,7 @@ export async function repairStateBranch({ inspection, git = runGit }) {
   // The checks above took several git calls; a commit or checkout in between would make them stale.
   const now = await readHead(git, inspection.toplevel)
   if (now.headBranch !== inspection.head.branch || now.sha !== inspection.head.sha) {
-    return { repaired: false, reason: "head_moved", message: "HEAD moved while Desk was checking it", blockers: inspection.blockers }
+    return { repaired: false, reason: "head_moved", message: "Run it again: HEAD moved while Desk was checking it", blockers: inspection.blockers }
   }
   const switched = await git({ cwd: inspection.toplevel, args: ["switch", "--no-guess", inspection.branch] })
   if (!switched.ok) {
