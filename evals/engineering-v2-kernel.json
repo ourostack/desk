@@ -22,7 +22,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/lesson_add.test.js",
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js"
   ],
-  "reviewedSourceFingerprint": "d5f7d039f659e7e919354c8736a84aeb726670ff6fdd9a0a1c4a7f77b7eb890a",
+  "reviewedSourceFingerprint": "47fb4a339516473dee9d57297d35ca52ec6a3aa0bd8d82368ac847627201414e",
   "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/876", "case": "v2-new-work-alignment", "observed": "2026-11-13"},
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
