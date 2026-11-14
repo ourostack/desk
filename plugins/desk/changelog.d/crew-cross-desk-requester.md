@@ -1,0 +1,1 @@
+When an agent makes a change that a member asked for on another member's desk, the commit and pull request now name who asked for the change as well as whose desk it touched, so the owner can see who asked. The change itself, the attribution-free rules and the protected-write limits are unchanged. See [shared-desk-conventions](../../crew/skills/shared-desk-conventions/SKILL.md).

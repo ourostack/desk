@@ -200,6 +200,44 @@ try {
   }
 
   {
+    // A case's world lives at evals/worlds/<suite>/<case>; every file in it is a source, as a fixture's files are.
+    const world = "evals/worlds/fixture/case-1";
+    const seeded = `${world}/desk/seeded.md`;
+    const withWorld = (worldPath, files, { sources } = {}) => {
+      const { dir, suite } = makeFixture();
+      for (const [name, text] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+        fs.writeFileSync(path.join(dir, name), text);
+      }
+      suite.cases[0].world = worldPath;
+      suite.sources = sources ?? ["source.txt", ...Object.keys(files)];
+      suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, dir);
+      fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
+      return dir;
+    };
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" })));
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/person`]: "alex\n" })), "a person file holding one alias is valid");
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md.symlink`]: "../../../../skill-eval-outside/notes.md\n" })), "a link is a .symlink file in the world");
+    for (const [worldPath, files, options, message] of [
+      ["evals/worlds/fixture/other", { [seeded]: "x\n" }, {}, /world must be the string evals\/worlds\/fixture\/case-1, not "evals\/worlds\/fixture\/other"/u],
+      [5, {}, {}, /world must be the string evals\/worlds\/fixture\/case-1, not 5/u],
+      [world, {}, {}, /world folder does not exist: evals\/worlds\/fixture\/case-1/u],
+      [world, { [`${world}/notes/x.md`]: "x\n" }, {}, /unknown folder\(s\) notes; expected desk, repo, desk-origin-ahead, desk-origin-branches, person/u],
+      [world, { [seeded]: "x\n", [`${world}/person`]: "Alex Smith\n" }, {}, /person must be a file holding one roster alias/u],
+      [world, { [seeded]: "x\n", [`${world}/person`]: "alex\nsam\n" }, {}, /person must be a file holding one roster alias/u],
+      [world, { [seeded]: "x\n" }, { sources: ["source.txt"] }, /world evals\/worlds\/fixture\/case-1 is not covered by the suite's sources/u],
+      [world, { [seeded]: "x\n", [`${world}/desk/other.md`]: "y\n" }, { sources: ["source.txt", seeded] }, /world file evals\/worlds\/fixture\/case-1\/desk\/other\.md is not in sources/u],
+      [world, { [`${world}/repo/src.js`]: "x\n" }, {}, /has repo\/ but suite fixture has no evals\/fixtures\/<name> source/u],
+      [world, { [`${world}/desk-origin-branches/Sam Pending/x.md`]: "x\n" }, {}, /desk-origin-branches\/Sam Pending must be a folder named with a lowercase branch name/u],
+      [world, { [`${world}/desk-origin-branches/readme.md`]: "x\n" }, {}, /desk-origin-branches\/readme\.md must be a folder named with a lowercase branch name/u],
+      [world, { [seeded]: "x\n", [`${world}/person/x.md`]: "y\n" }, {}, /person must be a file holding one roster alias/u],
+    ]) {
+      const dir = withWorld(worldPath, files, options);
+      assert.throws(() => validateRepo(dir), message, JSON.stringify(worldPath));
+    }
+  }
+
+  {
     const { dir, suite } = makeFixture();
     const resultFile = path.join(dir, "result.json");
     fs.writeFileSync(resultFile, `${JSON.stringify(receipt(suite), null, 2)}\n`);
@@ -880,6 +918,8 @@ try {
     const fakeHarness = [
       '"use strict";',
       'const fs = require("node:fs");',
+      'const { spawnSync } = require("node:child_process");',
+      'const path = require("node:path");',
       "const args = process.argv.slice(2);",
       'const mode = process.env.FAKE_MODE || "";',
       'if (args.includes("--version")) { if (mode !== "no-version") console.log(process.env.FAKE_VERSION || "Fake Harness 9.9.9."); process.exit(0); }',
@@ -889,8 +929,14 @@ try {
       'const earlier = log && fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\\n").filter((line) => line.includes(\'"role":"judge"\')).length : 0;',
       'const prompt = value("-p");',
       'const cwd = process.cwd();',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, prompt }) + "\\n");',
+      'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
+      'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
+      'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
+      'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
+      'if (!judging && mode === "idle") { spawnSync("git", ["worktree", "add", "-q", "--detach", cwd + "/../idle"], { cwd }); }',
+      'if (!judging && mode === "branch") { spawnSync("git", ["checkout", "-q", "-b", "side"], { cwd }); fs.writeFileSync(cwd + "/side.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Side change"], { cwd }); spawnSync("git", ["checkout", "-q", "main"], { cwd }); }',
       'if (!judging && mode === "bigdiff") fs.writeFileSync(cwd + "/src/code.js", "x".repeat(7000) + "\\n");',
       'if (mode === "hang-" + (judging ? "judge" : "subject")) setTimeout(() => {}, 60000);',
       'else if (mode === "exit-" + (judging ? "judge" : "subject")) { console.error("fake failure\\n"); process.exit(3); }',
@@ -1093,7 +1139,165 @@ try {
     }
 
     {
-      // The subject loads the plugins that own the suite's sources.
+    {
+      // A case with a world starts in a desk that already holds it, committed on top of the baseline; the judge sees only what the subject changed after that.
+      const worldDesk = (suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1", "desk");
+        fs.mkdirSync(path.join(world, "_shared"), { recursive: true });
+        fs.writeFileSync(path.join(world, "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "_shared", "card.md"), "card\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/desk/_shared/card.md"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      };
+      const { run, calls } = runFixture(worldDesk);
+      const seeded = run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(seeded.status, 0, seeded.stderr);
+      const [subjectCall] = calls();
+      assert.ok(subjectCall.tracked.includes("seeded.md") && subjectCall.tracked.includes("_shared/card.md"), "the world's files are tracked in the subject's desk");
+      assert.deepEqual(subjectCall.commits, ["Scenario world", "Baseline"], "the world is committed as the subject's starting point");
+      assert.deepEqual(subjectCall.status, [""], "the subject starts with a clean desk");
+
+      const changed = runFixture(worldDesk);
+      assert.equal(changed.run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "commit" }).status, 0);
+      const judge = changed.calls()[1].prompt;
+      assert.match(judge, /### desk\nUncommitted or untracked changes:\n\(none\)\nCommits made after the baseline:\n[0-9a-f]+ Subject change\n/u, "only the subject's commit is after the seed");
+      assert.match(judge, /subject\.txt \|/u, "the changed-files list shows the subject's file");
+      assert.doesNotMatch(judge, /seeded\.md \||card\.md \|/u, "the world's own files are not reported as changes");
+    }
+
+    {
+      // A world's branches and linked worktrees are part of the evidence, since the subject may work in a worktree.
+      const { run, calls } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1", "desk");
+        fs.mkdirSync(world, { recursive: true });
+        fs.writeFileSync(path.join(world, "seeded.md"), "seeded\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      const result = run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "worktree" });
+      assert.equal(result.status, 0, result.stderr);
+      const judge = calls()[1].prompt;
+      assert.match(judge, /Branches and remote-tracking refs:\n[\s\S]*main [0-9a-f]+ Scenario world/u);
+      assert.match(judge, /Linked worktree on refs\/heads\/fix:\nUncommitted or untracked changes:\n\?\? worktree-note\.md\nCommits made after the baseline:\n[0-9a-f]+ Subject change/u);
+    }
+
+    {
+      // A world's `<name>.symlink` file becomes the link `<name>` in the subject's desk, and the desk commits the link itself.
+      const { run, calls } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1", "desk");
+        fs.mkdirSync(world, { recursive: true });
+        fs.writeFileSync(path.join(world, "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "linked.md.symlink"), "../outside.md\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/desk/linked.md.symlink"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      const [subjectCall] = calls();
+      assert.equal(subjectCall.linkTo, "../outside.md", "the subject finds a symlink to the stated target");
+      assert.ok(subjectCall.tracked.includes("linked.md") && !subjectCall.tracked.includes("linked.md.symlink"), "git tracks the link, not its marker");
+    }
+
+    {
+      // A world's `person` file makes DESK_PERSON that alias for its subject; a case without one leaves the environment as it was.
+      const { run, calls } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1");
+        fs.mkdirSync(path.join(world, "desk"), { recursive: true });
+        fs.writeFileSync(path.join(world, "desk", "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "person"), "alex\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/person"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      assert.equal(calls()[0].deskPerson, "alex", "the subject acts as the world's person");
+
+      const plain = runFixture();
+      assert.equal(plain.run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      assert.equal(plain.calls()[0].deskPerson, process.env.DESK_PERSON ?? null, "no person file leaves DESK_PERSON as the environment set it");
+    }
+
+    {
+      // A world's repo folder is laid over the fixture copy and committed there, and a world without a desk folder leaves the desk alone.
+      const withRepoWorld = (suite, root) => {
+        const repo = path.join(root, "evals", "fixtures", "repo");
+        fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+        fs.writeFileSync(path.join(repo, "src", "code.js"), "original\n");
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1", "repo", "src");
+        fs.mkdirSync(world, { recursive: true });
+        fs.writeFileSync(path.join(world, "code.js"), "scenario\n");
+        suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js", "evals/worlds/fixture/case-1/repo/src/code.js"];
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      };
+      const { run, calls } = runFixture(withRepoWorld);
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      const [subjectCall] = calls();
+      assert.equal(path.basename(subjectCall.cwd), "repo", "the subject works in the repository copy");
+      assert.deepEqual(subjectCall.commits, ["Scenario world", "Baseline"], "the world is committed in the repository copy");
+      assert.deepEqual(subjectCall.status, [""]);
+    }
+
+    {
+      // The world's origin overlays land on the case's origin: a newer main that the desk has not fetched, and a pending branch.
+      const { run, calls } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1");
+        fs.mkdirSync(path.join(world, "desk"), { recursive: true });
+        fs.mkdirSync(path.join(world, "desk-origin-ahead"), { recursive: true });
+        fs.mkdirSync(path.join(world, "desk-origin-branches", "side", "desks"), { recursive: true });
+        fs.writeFileSync(path.join(world, "desk", "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "desk-origin-ahead", "card.md"), "another writer\n");
+        fs.writeFileSync(path.join(world, "desk-origin-branches", "side", "desks", "side.md"), "pending\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/desk-origin-ahead/card.md", "evals/worlds/fixture/case-1/desk-origin-branches/side/desks/side.md"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      const [subjectCall] = calls();
+      assert.deepEqual(subjectCall.originMain, ["Another writer's latest-main update", "Scenario world", "Baseline"], "origin's main has the other writer's commit");
+      assert.deepEqual(subjectCall.commits, ["Scenario world", "Baseline"], "the desk has not fetched it");
+      assert.ok(subjectCall.originBranches.some((line) => /^\s*side$/u.test(line)), "origin has the pending branch");
+    }
+
+    {
+      // An overlay the origin refuses fails the run with the reason, rather than landing half a scenario.
+      const { run } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1");
+        fs.mkdirSync(path.join(world, "desk"), { recursive: true });
+        fs.mkdirSync(path.join(world, "desk-origin-ahead"), { recursive: true });
+        fs.mkdirSync(path.join(world, "desk-origin-branches", "main"), { recursive: true });
+        fs.writeFileSync(path.join(world, "desk", "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "desk-origin-ahead", "ahead.md"), "ahead\n");
+        fs.writeFileSync(path.join(world, "desk-origin-branches", "main", "branch.md"), "branch\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/desk-origin-ahead/ahead.md", "evals/worlds/fixture/case-1/desk-origin-branches/main/branch.md"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      const refused = run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /git push failed for evals\/worlds\/fixture\/case-1/u);
+    }
+
+    {
+      // A detached linked worktree with nothing in it is still listed, with its empty state reported as none.
+      const { run, calls } = runFixture();
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "idle" }).status, 0);
+      assert.match(calls()[1].prompt, /Linked worktree on \(detached\):\nUncommitted or untracked changes:\n\(none\)\nCommits made after the baseline:\n\(none\)\nChanged files against the baseline \(committed and uncommitted\):\n\(none\)/u);
+    }
+
+    {
+      // A commit on a local branch that is not checked out is part of the evidence, though the desk's HEAD diff does not show it.
+      const { run, calls } = runFixture();
+      const result = run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "branch" });
+      assert.equal(result.status, 0, result.stderr);
+      const judge = calls()[1].prompt;
+      assert.match(judge, /Commits made after the baseline:\n\(none\)/u, "HEAD has no new commit");
+      assert.match(judge, /Commits made after the baseline on any local branch:\n[0-9a-f]+ .*Side change/u, "the side branch's commit is shown");
+      assert.match(judge, /Worktrees:\n\S+ [0-9a-f]+ \[main\]/u, "the worktree list is shown");
+    }
+
       const { run, calls, receipt: written, dir } = runFixture((suite, root) => {
         for (const name of ["alpha", "beta", "broken", "default"]) fs.mkdirSync(path.join(root, "plugins", name), { recursive: true });
         fs.writeFileSync(path.join(root, "plugins", "alpha", "plugin.json"), "{}");

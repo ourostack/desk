@@ -163,7 +163,7 @@ function prepareTemplate(suite, root, log) {
 
 // Local state the subject could otherwise reach through the operator's profile: GitHub, npm and Git credentials, and Desk's own
 // protected state. The subject's shell can still use ambient environment tokens, so run where none are set.
-function subjectEnvironment(caseDirectory, desk) {
+function subjectEnvironment(caseDirectory, desk, person) {
   const config = path.join(caseDirectory, "config");
   fs.mkdirSync(path.join(config, "gh"), { recursive: true });
   fs.mkdirSync(path.join(config, "state"), { recursive: true });
@@ -172,6 +172,7 @@ function subjectEnvironment(caseDirectory, desk) {
   return {
     ...process.env,
     DESK: desk,
+    ...(person === null ? {} : { DESK_PERSON: person }),
     XDG_STATE_HOME: path.join(config, "state"),
     GH_CONFIG_DIR: path.join(config, "gh"),
     NPM_CONFIG_USERCONFIG: path.join(config, "npmrc"),
@@ -191,6 +192,80 @@ function cloneTemplate(template, testCaseId) {
   return { directory, desk: path.join(directory, "desk"), repo: template.repo === null ? null : path.join(directory, "repo") };
 }
 
+// A case's world is the state its prompt describes. Its desk folder is laid over the scratch desk, which is pushed to the case's
+// origin, and its repo folder over the repository copy. Each touched tree is committed, and that commit is the baseline the judge's
+// evidence diffs against. `desk-origin-ahead` lands one more commit on the origin's main, and each `desk-origin-branches/<name>`
+// lands a branch from the seeded commit, so the subject has to fetch what another writer pushed.
+// A world keeps a link as `<name>.symlink` holding its target, because a tracked symlink to a missing target breaks the repository's
+// scans of tracked files. The copy the runner lays down gets the link `<name>` instead.
+function materializeLinks(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) materializeLinks(file);
+    else if (entry.name.endsWith(".symlink")) {
+      const target = fs.readFileSync(file, "utf8").trim();
+      fs.rmSync(file);
+      fs.symlinkSync(target, file.slice(0, -".symlink".length));
+    }
+  }
+}
+
+// A case's `person` file names the Desk person its subject acts as (a roster alias), so Desk's writes resolve to that row.
+function worldPerson(root, world) {
+  const file = path.join(root, world, "person");
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : null;
+}
+
+function seedWorld(workspace, world, root, template) {
+  const source = path.join(root, world);
+  const baselines = { desk: template.deskBaseline, repo: template.repoBaseline };
+  const desk = path.join(source, "desk");
+  if (fs.existsSync(desk)) {
+    fs.cpSync(desk, workspace.desk, { recursive: true, verbatimSymlinks: true });
+    materializeLinks(workspace.desk);
+    baselines.desk = commitWorld(workspace.desk, "Scenario world");
+    gitChecked(workspace.desk, ["push", "-q", "origin", "HEAD:main"], world);
+  }
+  const repo = path.join(source, "repo");
+  if (fs.existsSync(repo)) {
+    fs.cpSync(repo, workspace.repo, { recursive: true, verbatimSymlinks: true });
+    materializeLinks(workspace.repo);
+    baselines.repo = commitWorld(workspace.repo, "Scenario world");
+  }
+  const branches = path.join(source, "desk-origin-branches");
+  if (fs.existsSync(branches)) {
+    for (const name of fs.readdirSync(branches).sort()) {
+      landOnOrigin(workspace, { overlay: path.join(branches, name), branch: name, base: baselines.desk, message: `Another writer's pending branch ${name}`, world });
+    }
+  }
+  const ahead = path.join(source, "desk-origin-ahead");
+  if (fs.existsSync(ahead)) landOnOrigin(workspace, { overlay: ahead, branch: "main", base: baselines.desk, message: "Another writer's latest-main update", world });
+  return baselines;
+}
+
+function commitWorld(directory, message) {
+  scratchGit(directory, ["add", "-A"]);
+  gitChecked(directory, ["commit", "-q", "--allow-empty", "-m", message], directory);
+  return scratchGit(directory, ["rev-parse", "HEAD"]).stdout.trim();
+}
+
+function gitChecked(directory, args, label) {
+  const result = scratchGit(directory, args);
+  if (result.status !== 0) throw new Error(`git ${args[0]} failed for ${label}: ${`${result.stderr}`.trim().slice(-400)}`);
+}
+
+function landOnOrigin(workspace, { overlay, branch, base, message, world }) {
+  const clone = path.join(workspace.directory, `origin-${branch}`);
+  gitChecked(workspace.directory, ["clone", "-q", path.join(workspace.directory, "origin.git"), clone], world);
+  gitChecked(clone, ["checkout", "-q", "-B", branch, base], world);
+  fs.cpSync(overlay, clone, { recursive: true, verbatimSymlinks: true });
+  materializeLinks(clone);
+  commitWorld(clone, message);
+  gitChecked(clone, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`], world);
+  fs.rmSync(clone, { recursive: true, force: true });
+}
+
 // Scratch folders are the runner's own; a folder that cannot be removed is left in the system temporary folder and never fails a finished run.
 function removeScratch(directory) {
   fs.rm(directory, { recursive: true, force: true }, () => {});
@@ -200,16 +275,19 @@ function limited(text, limit) {
   return text.length > limit ? `${text.slice(0, limit)}\n[truncated]` : text;
 }
 
-// The judge sees only the subject's reply and tool requests, so state checks (writes, commits, tests) need the state itself.
-function workspaceEvidence(workspace, template) {
+// The judge sees only the subject's reply and tool requests, so state checks (writes, commits, tests) need the state itself. The desk
+// diff covers HEAD only, so each tree also lists the commits on every local branch since its baseline and the worktrees it has, since
+// the subject may commit on another branch or work in a linked worktree. Clones outside the tree are not inspected.
+function workspaceEvidence(workspace, baselines) {
   const parts = [];
-  for (const [label, directory, baseline] of [["desk", workspace.desk, template.deskBaseline], ["repository", workspace.repo, template.repoBaseline]]) {
+  for (const [label, directory, baseline] of [["desk", workspace.desk, baselines.desk], ["repository", workspace.repo, baselines.repo]]) {
     if (directory === null) continue;
     const status = scratchGit(directory, ["status", "--short", "--untracked-files=all"]).stdout.trim();
     const commits = scratchGit(directory, ["log", "--format=%h %s", `${baseline}..HEAD`]).stdout.trim();
     const diff = scratchGit(directory, ["diff", "--stat", baseline]).stdout.trim();
     const unpushed = label === "desk" ? `\nCommits not yet pushed to the desk's remote:\n${scratchGit(directory, ["log", "--format=%h %s", "@{u}..HEAD"]).stdout.trim() || "(none)"}` : "";
     parts.push(`### ${label}\nUncommitted or untracked changes:\n${status || "(none)"}\nCommits made after the baseline:\n${commits || "(none)"}${unpushed}\nChanged files against the baseline (committed and uncommitted):\n${diff || "(none)"}`);
+    parts.push(branchAndWorktreeEvidence(directory, baseline));
     if (label === "repository" && fs.existsSync(path.join(directory, "__tests__"))) {
       // Inside a test runner process, NODE_TEST_CONTEXT would make this run report to its parent instead of printing a summary.
       const env = { ...process.env };
@@ -222,6 +300,28 @@ function workspaceEvidence(workspace, template) {
     }
   }
   return parts.join("\n\n");
+}
+
+function branchAndWorktreeEvidence(directory, baseline) {
+  const branches = scratchGit(directory, ["for-each-ref", "--format=%(refname:short) %(objectname:short) %(subject)", "refs/heads", "refs/remotes"]).stdout.trim();
+  const branchCommits = scratchGit(directory, ["log", "--branches", "--format=%h %d %s", `${baseline}..`]).stdout.trim();
+  const worktrees = scratchGit(directory, ["worktree", "list"]).stdout.trim();
+  const sections = [
+    `Branches and remote-tracking refs:\n${branches}`,
+    `Commits made after the baseline on any local branch:\n${branchCommits || "(none)"}`,
+    `Worktrees:\n${worktrees}`,
+  ];
+  // `git worktree list` names the main worktree first; every entry after it is a linked worktree the subject made.
+  const linked = scratchGit(directory, ["worktree", "list", "--porcelain"]).stdout.split("\n\n").filter(Boolean).slice(1).map((block) => block.split("\n"));
+  for (const block of linked) {
+    const worktree = block[0].slice("worktree ".length);
+    const branch = block.find((line) => line.startsWith("branch "))?.slice("branch ".length) ?? "(detached)";
+    const status = scratchGit(worktree, ["status", "--short", "--untracked-files=all"]).stdout.trim();
+    const commits = scratchGit(worktree, ["log", "--format=%h %s", `${baseline}..HEAD`]).stdout.trim();
+    const diff = scratchGit(worktree, ["diff", "--stat", baseline]).stdout.trim();
+    sections.push(`Linked worktree on ${branch}:\nUncommitted or untracked changes:\n${status || "(none)"}\nCommits made after the baseline:\n${commits || "(none)"}\nChanged files against the baseline (committed and uncommitted):\n${diff || "(none)"}`);
+  }
+  return sections.join("\n");
 }
 
 // The plugin's default Copilot agent, which the app runs unless the person picks another.
@@ -314,11 +414,13 @@ async function runCase(testCase, context) {
 
 async function runCaseIn(testCase, context, workspace) {
   const { options, command, root, pluginDirs, template } = context;
-  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
+  const baselines = testCase.world === undefined ? { desk: template.deskBaseline, repo: template.repoBaseline } : seedWorld(workspace, testCase.world, root, template);
+  const person = testCase.world === undefined ? null : worldPerson(root, testCase.world);
+  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk, person), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
   if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
-  const evidence = workspaceEvidence(workspace, template);
+  const evidence = workspaceEvidence(workspace, baselines);
   const judgeArgs = ["-p", judgePrompt(testCase, subject, evidence), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
