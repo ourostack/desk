@@ -76,7 +76,7 @@ export function parseSessionsArgs(argv) {
 }
 
 /** The folder every session's state lives in. */
-export const sessionStateDir = ({ env = process.env, home = os.homedir() } = {}) => path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state")
+const sessionStateDir = ({ env = process.env, home = os.homedir() } = {}) => path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state")
 
 const yamlField = (text, key) => {
   const match = new RegExp(`^${key}:[ \\t]*(.*)$`, "mu").exec(String(text))
@@ -84,7 +84,7 @@ const yamlField = (text, key) => {
 }
 
 /** The last `bytes` of a session's history and when it was last written, or null when it has none. */
-export function readHistoryTail(stateDir, id, bytes = TAIL_BYTES) {
+function readHistoryTail(stateDir, id, bytes = TAIL_BYTES) {
   let fd
   try {
     fd = openSync(path.join(stateDir, id, "events.jsonl"), "r")
@@ -166,7 +166,7 @@ export function whoAmI(stateDir, { hint = null, ...options } = {}) {
   return { ids, id: hits.length === 1 ? hits[0] : null }
 }
 
-const parentOfProcess = (pid) => Number(spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).stdout?.trim() || 0)
+const parentOfProcess = (pid) => Number(spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", windowsHide: true }).stdout?.trim() || 0)
 
 /** The message with a header naming the sender and how to reply. The nonce is how the send finds it again in the target's history. */
 export function envelope({ nonce, from, name, host, text, script }) {
@@ -203,7 +203,7 @@ export function appSocket({ env = process.env, home = os.homedir() } = {}) {
 }
 
 /** Sends `messages` to the app and collects the replies `keep` accepts until `done` says stop or `waitMs` passes. */
-export function exchange(socket, messages, { done, keep, waitMs }) {
+function exchange(socket, messages, { done, keep, waitMs }) {
   return new Promise((resolve) => {
     const got = []
     const ws = new WebSocket(`ws://127.0.0.1:${socket.port}/?token=${encodeURIComponent(socket.token)}&observer=1`)
