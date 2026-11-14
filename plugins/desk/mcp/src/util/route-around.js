@@ -171,12 +171,13 @@ export function commitFailure({ root, paths, message, committed, card = null, de
  * Where an unfinished change is, which sets the first sentence of its `next` (#623): a commit's, a pull request's, or a lesson
  * whose improvement card is not written. The caller passes it, because the route's own shape does not say which it is.
  */
-export const UNFINISHED = Object.freeze({ COMMIT: "commit", PULL_REQUEST: "pull_request", UNOPENED_CARD: "unopened_card" })
+export const UNFINISHED = Object.freeze({ COMMIT: "commit", PULL_REQUEST: "pull_request", UNOPENED_CARD: "unopened_card", UNPUBLISHED: "unpublished" })
 
 // `where` names the route's field in the result, so the sentence points at it.
 export function unfinishedNext(route, where, kind = UNFINISHED.COMMIT) {
   if (kind === UNFINISHED.PULL_REQUEST) return `The change is on a pull request that has not merged: run ${where}.steps now, in order, then read back that it merged.`
   if (kind === UNFINISHED.UNOPENED_CARD) return `The lesson is recorded but its improvement card isn't written yet: run ${where}.steps now, in order, then read back that the card is open.`
+  if (kind === UNFINISHED.UNPUBLISHED) return `The change was not published: no pull request for it has opened. Run ${where}.steps now, in order, then read back that it landed.`
   if (route.held) return `The change is on disk but not committed, and Desk will not finish it from here: read back with ${where}.steps step 1 (it only reads), then report its JSON together with the tool's failure.`
   return `The change is on disk but not committed or on the remote yet: run ${where}.steps now, in order, then read back the remote.`
 }

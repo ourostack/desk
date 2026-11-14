@@ -195,7 +195,7 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
         tool: "note_leave",
         arguments: { to, subject, body, related },
       })
-    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.COMMIT)
+    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.UNPUBLISHED)
   }
   if (outcome.status === "unchanged") {
     return { ...result, status: "duplicate", note: existing.note, note_status: existing.status, message: `Not left: ${to} already has this note from you (${existing.note}, ${existing.status}).` }
