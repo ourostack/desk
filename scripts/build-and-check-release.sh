@@ -3,11 +3,13 @@
 # The Desk release workflow (.github/workflows/desk-release.yml) and the release dry run in pull request CI
 # (.github/workflows/desk-mcp-tests.yml) both call this script, so the two lists of steps cannot drift apart.
 #
-#   scripts/build-and-check-release.sh [--dry-run] [--stage auto|rc|stable]
+#   scripts/build-and-check-release.sh [--dry-run] [--skip-release-tests] [--stage auto|rc|stable]
 #
 # Run from the repository root with the Desk MCP dependencies installed (npm ci in plugins/desk/mcp) and a clean tree.
 # Folds the pending changelog fragments with scripts/release-desk.cjs, commits the result, then checks that commit.
 #   - A release run leaves the release commit on the checked-out branch.
+#   - --skip-release-tests leaves out the release test step at the end. The release workflow passes it because the same step already ran in
+#     the pull request's dry run; a dry run and any other caller run it.
 #   - A --dry-run puts the same commit on a detached HEAD, runs the same checks, then restores the checked-out commit
 #     and tree, so nothing it built survives. A failed check fails the dry run, which fails the pull request.
 # Environment: RELEASE_RUN_URL (named in the commit message; default "a release dry run"),
@@ -16,14 +18,16 @@
 set -euo pipefail
 
 dry_run=false
+skip_release_tests=false
 stage=auto
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
+    --skip-release-tests) skip_release_tests=true; shift ;;
     --stage)
-      [ "$#" -ge 2 ] || { echo "usage: $0 [--dry-run] [--stage auto|rc|stable]" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "usage: $0 [--dry-run] [--skip-release-tests] [--stage auto|rc|stable]" >&2; exit 2; }
       stage="$2"; shift 2 ;;
-    *) echo "usage: $0 [--dry-run] [--stage auto|rc|stable]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--dry-run] [--skip-release-tests] [--stage auto|rc|stable]" >&2; exit 2 ;;
   esac
 done
 case "$stage" in
@@ -77,25 +81,27 @@ for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-g
   node "scripts/$check.cjs"
 done
 
-# A pattern that matches no file, or a run that counts no test, passes silently under node --test, which hid a release
-# whose Node tests matched none. Both fail here (the count is of passing tests; skipped ones do not count).
-patterns=(release activation artifacts docs scripts launch)
-globs=()
-for name in "${patterns[@]}"; do globs+=("../../../tests/desk/mcp/__tests__/$name/**/*.test.js"); done
-(
-  cd plugins/desk/mcp
-  for glob in "${globs[@]}"; do
-    matched="$(node --no-warnings -e 'console.log(require("node:fs").globSync(process.argv[1]).length)' "$glob")"
-    [ "$matched" -gt 0 ] || { echo "::error::The test pattern $glob matches no test file."; exit 1; }
-  done
-  tap="$scratch/tests.tap"
-  node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test \
-    --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination="$tap" "${globs[@]}"
-  # Skipped and todo tests count in "# tests", and a file that registers no test counts as one pass, so only passes count.
-  ran="$(sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' "$tap")"
-  [ "${ran:-0}" -gt 0 ] || { echo "::error::The release test step passed ${ran:-0} tests; a step that passes no test is a failure."; exit 1; }
-  echo "The release test step passed $ran tests."
-)
+if [ "$skip_release_tests" != true ]; then
+  # A pattern that matches no file, or a run that counts no test, passes silently under node --test, which hid a release
+  # whose Node tests matched none. Both fail here (the count is of passing tests; skipped ones do not count).
+  patterns=(release activation artifacts docs scripts launch)
+  globs=()
+  for name in "${patterns[@]}"; do globs+=("../../../tests/desk/mcp/__tests__/$name/**/*.test.js"); done
+  (
+    cd plugins/desk/mcp
+    for glob in "${globs[@]}"; do
+      matched="$(node --no-warnings -e 'console.log(require("node:fs").globSync(process.argv[1]).length)' "$glob")"
+      [ "$matched" -gt 0 ] || { echo "::error::The test pattern $glob matches no test file."; exit 1; }
+    done
+    tap="$scratch/tests.tap"
+    node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test \
+      --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination="$tap" "${globs[@]}"
+    # Skipped and todo tests count in "# tests", and a file that registers no test counts as one pass, so only passes count.
+    ran="$(sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' "$tap")"
+    [ "${ran:-0}" -gt 0 ] || { echo "::error::The release test step passed ${ran:-0} tests; a step that passes no test is a failure."; exit 1; }
+    echo "The release test step passed $ran tests."
+  )
+fi
 
 output "released=true" "summary=$summary" "sha=$sha" "base=$base"
 echo "The release of $version builds and passes every check."

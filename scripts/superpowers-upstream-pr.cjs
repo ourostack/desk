@@ -326,8 +326,8 @@ function publish({ gh, repo, branch, base, sha, report, workflows, runUrl, sleep
   }
   closeIssues({ gh, repo, pullUrl: pull.url });
   // A merge made with the workflow token starts no push-triggered run. The CI workflows are dispatched on main, because main may have
-  // moved while they ran on the branch, and the Desk release waits for a run that tested the merge commit (main-ci-gate.mjs). A failed
-  // dispatch is not fatal here: the release then finds no covering run and reports it.
+  // moved while they ran on the branch, and a red result on the merge commit opens a "main is red" issue that holds the Desk release. A failed
+  // dispatch is not fatal here: the branch's own run already passed.
   for (const workflow of workflows) {
     gh.call(["workflow", "run", workflow, "--repo", repo, "--ref", base], { allowFailure: true });
   }

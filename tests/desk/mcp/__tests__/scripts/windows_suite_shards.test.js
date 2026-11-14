@@ -124,7 +124,7 @@ test("refresh takes the median per file, so one outlier run does not set the wei
   }
 })
 
-test("the workflow's shard list, shard arguments and verdict all say the same number, and main skips it only for the docs no test reads", () => {
+test("the workflow's shard list, shard arguments and verdict all say the same number, and it skips only the docs no test reads", () => {
   const text = readFileSync(path.join(scripts, "..", "workflows", "desk-windows-suite.yml"), "utf8")
   const workflow = load(text)
   assert.equal(workflow.jobs["windows-suite"].strategy["max-parallel"], WINDOWS_SHARDS)
@@ -134,8 +134,10 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   assert.ok(totals.length >= 3)
   for (const total of totals) assert.equal(total, shards.length)
   assert.equal(Number(/windows-suite-verdict\.mjs shard-results (\d+)/u.exec(text)[1]), shards.length)
-  // The heavy tier: every push to main, never a pull request. The docs it may skip are exactly the ones Quick checks lets a pull request skip.
-  assert.equal(workflow.on.pull_request, undefined)
+  // Every pull request and every push to main. The docs it may skip are exactly the ones Quick checks lets a pull request skip: on a pull request
+  // through its scope job (the required "Windows suite" check must still report), on main through paths-ignore.
+  assert.ok("pull_request" in workflow.on)
+  assert.equal(workflow.on.pull_request, null, "no path filter on a pull request, or the required check would never report")
   assert.deepEqual(workflow.on.push.branches, ["main"])
   assert.equal(workflow.on.push.paths, undefined)
   const tests = load(readFileSync(path.join(scripts, "..", "workflows", "desk-mcp-tests.yml"), "utf8"))
@@ -144,6 +146,10 @@ test("the workflow's shard list, shard arguments and verdict all say the same nu
   const ignored = outside.map((entry) => (entry.endsWith("/") ? `${entry}**` : entry))
   assert.deepEqual(workflow.on.push["paths-ignore"], ignored)
   assert.deepEqual(tests.on.push["paths-ignore"], ignored)
+  const scope = workflow.jobs.scope.steps.find((step) => step.id === "scope")
+  assert.equal(scope.env.BASE, "${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}")
+  assert.deepEqual(/changed-scope\.mjs --outside "\$BASE" ([^)\n]+)\)/u.exec(scope.run)[1].split(" "), outside)
+  assert.equal(workflow.jobs["windows-suite"].if, "needs.scope.outputs.code == 'true'")
   assert.equal(tests.on.push.paths, undefined)
   // A test reads the root README (superpowers_callers.test.js), so a README change is never skipped.
   assert.ok(!ignored.includes("README.md"))

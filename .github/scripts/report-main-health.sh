@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Keeps one open "main is red: <check>" issue, labelled red-main, while a check that runs on main after the merge fails there, and closes it
-# when the check passes on main again. The heavy tier runs on main, not on pull requests (AGENTS.md, "CI tiers"), so this issue is how a
-# red main reaches its owner, the PR clock and the next agent. Run only on pushes to main, with GH_TOKEN allowed to write issues.
+# when the check passes on main again. Pull requests run the same checks (AGENTS.md, "CI tiers"), so a failure here is a merge that interacts
+# badly with another; this issue is how a red main reaches its owner, the PR clock, the next agent and the Desk release, which refuses to build while it is open. Run only on pushes to main, with GH_TOKEN allowed to write issues.
 # Usage: report-main-health.sh "<check name>" <success|failure|cancelled|skipped> <run url> <commit sha>
 set -euo pipefail
 check="$1"
