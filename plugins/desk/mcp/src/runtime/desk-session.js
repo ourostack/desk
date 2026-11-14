@@ -176,6 +176,7 @@ export function createDeskSession(deps) {
     removeLeftovers = removeReadinessLeftovers,
     env = process.env,
     headIO = headFileSystem,
+    runtimeRefresher = null,
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
   const focus = createFocusHolder()
@@ -199,6 +200,7 @@ export function createDeskSession(deps) {
   // Admission may resolve in parallel, but never replaces a destination while
   // an operation is using its authority, search engine, or write branch.
   let operationTail = Promise.resolve()
+  let operationsInFlight = 0
 
   function invalidateStatus() {
     contextGeneration += 1
@@ -237,7 +239,44 @@ export function createDeskSession(deps) {
     const done = new Promise((resolve) => { release = resolve })
     const previous = operationTail
     operationTail = previous.then(() => done)
-    return previous.then(() => work(release)).finally(release)
+    operationsInFlight += 1
+    return previous.then(() => work(release)).finally(() => { operationsInFlight -= 1; release() })
+  }
+
+  // Who is serving, as desk_status reports it: the runtime's own identity, and what the refresher knows of the last check and swap.
+  function servingIdentity() {
+    return { ...runtimeIdentity({ env, runtime: context.runtime }), ...(runtimeRefresher?.describe() ?? {}) }
+  }
+
+  // Starts the background check for a newer release, once a runtime is serving. It never delays the call that started it.
+  function pokeRefresher(name) {
+    if (runtimeRefresher === null || !context.runtimeServer) return
+    runtimeRefresher.poke({ running: servingIdentity().plugin.version, soon: name === "desk_status" })
+  }
+
+  // Swaps in the runtime the refresher prepared, between calls: it takes its turn behind every operation already running, so those finish on the code they started with. A status call never waits for that turn, so it swaps only an idle session.
+  async function swapPendingRuntime(name) {
+    if (runtimeRefresher === null || !runtimeRefresher.ready) return
+    if (name === "desk_status" && operationsInFlight > 0) return
+    const next = runtimeRefresher.take()
+    // Read before anything changes, so a runtime that cannot say what it is leaves the serving one untouched.
+    let to
+    try {
+      to = runtimeIdentity({ env, runtime: next.loaded.runtimeStatus }).plugin.version
+    } catch (error) {
+      runtimeRefresher.abandoned(`the ${next.latest} runtime could not say what it is (${describe(error)})`, next.latest)
+      return
+    }
+    await operation(() => {
+      const from = servingIdentity().plugin.version
+      // The old runtime's search engine and authority stay with it; the next admission builds both with the new one.
+      forgetAuthority()
+      context.runtimeServer = next.loaded.runtimeServer
+      context.runtime = next.loaded.runtimeStatus
+      runtimeRefresher.swapped({ from, to })
+      log(`runtime swapped: ${from} to ${to}`)
+    })
+    await admission.refresh({ force: true, waitMs: 0 })
   }
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
@@ -790,6 +829,8 @@ export function createDeskSession(deps) {
     const hostedRefused = hostedRefusal(name, input, env)
     if (hostedRefused !== null) return { content: [{ type: "text", text: JSON.stringify(hostedRefused) }], isError: true }
     try {
+      pokeRefresher(name)
+      await swapPendingRuntime(name)
       if (disposed) return pendingRefusal(name)
       if (name === "desk_status") return await deskStatus(input, signal)
       if (name === "desk_skill") return deskSkill(input, { env })
@@ -943,7 +984,7 @@ export function createDeskSession(deps) {
     // Who is serving comes from this process, never from the slow runtime status, so every answer carries it; only the fields that status fills can be pending, and the answer names them.
     const full = {
       ...admitted,
-      runtime: { ...admitted.runtime, ...runtimeIdentity({ env, runtime: context.runtime }) },
+      runtime: { ...admitted.runtime, ...servingIdentity() },
       ...(payload.detail_pending === true ? { pending: PENDING_STATUS_FIELDS.filter((field) => payload[field] === undefined) } : {}),
     }
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
@@ -1051,7 +1092,7 @@ export function createDeskSession(deps) {
     const admitted = withAdmission(payload, snapshot)
     return jsonResult({
       ...admitted,
-      runtime: { ...admitted.runtime, ...runtimeIdentity({ env, runtime: context.runtime }) },
+      runtime: { ...admitted.runtime, ...servingIdentity() },
       repairs_available: DOCTOR_REPAIRS,
     })
   }
@@ -1156,6 +1197,8 @@ export function createDeskSession(deps) {
     context,
     callTool,
     recordException,
+    /** The plugin folder the serving runtime loaded from (the newest release's copy after a swap), for what the runtime itself produces, such as the boot. */
+    servingPluginRoot: () => runtimeIdentity({ env, runtime: context.runtime }).plugin_root,
     start: () => {
       scheduleLeftoverRemoval()
       return admission.start()

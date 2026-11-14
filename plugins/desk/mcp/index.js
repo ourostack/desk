@@ -53,6 +53,7 @@ import {
 } from "./src/runtime/node-selection.js"
 import { claudeBindingPath } from "./src/util/paths.js"
 import { applyPublicationMode, publicationArgs } from "./src/runtime/publication-mode.js"
+import { createRuntimeRefresher } from "./src/runtime/runtime-swap.js"
 
 export {
   resolveStartupActivationConfigPath,
@@ -164,6 +165,7 @@ export async function main({
   timers,
   offload = runInWorker,
   newestRelease,
+  runtimeRefresher: injectedRefresher,
   crashHandlers = false,
   spawnDetached = spawn,
   onClosed = () => {},
@@ -229,7 +231,16 @@ export async function main({
   const resolveRunner = offload === runInWorker ? createResolveRunner() : { run: offload, close() {} }
   let frontDoor = null
   let handshakeMs = null
+  // What a later check needs to load a newer runtime the way the first load did; set by the first load.
+  const refreshLoad = { options: null, pinned: false }
+  const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
+  // A long-running server (a host keeps one per project folder for days) loads the newest release again in the background and swaps it in between calls: see runtime-swap.js. Only the shipped importer takes part, and a pinned source is never swapped.
+  const runtimeRefresher = injectedRefresher !== undefined ? injectedRefresher
+    : runtimeImporter === importRuntimeServer || newestRelease !== undefined
+      ? createRuntimeRefresher({ env: plainEnv, log, prepare: ({ running }) => prepareNewerRuntime({ running, refreshLoad, mcpRoot, homeDir, env: plainEnv, newestRelease }) })
+      : null
   const session = createDeskSession({
+    runtimeRefresher,
     handshakeMs: () => handshakeMs,
     args,
     env,
@@ -248,18 +259,12 @@ export async function main({
       input: { args, env: plainEnv, cwd, homeDir, injectedReadinessPolicy },
     }),
     setupDiagnostic: (error) => createSetupDiagnostic({ pathsTried: error.tried, bindingPath: claudeBindingPath(env) }),
-    loadRuntime: (activation, { onPhase }) => loadNewestOrCached({
-      onPhase,
-      activation,
-      env: plainEnv,
-      homeDir,
-      mcpRoot,
-      offload,
-      preflight,
-      runtimeImporter,
-      runtimeInspector,
-      newestRelease,
-    }),
+    loadRuntime: (activation, { onPhase }) => {
+      const options = { onPhase, activation, env: plainEnv, homeDir, mcpRoot, offload, preflight, runtimeImporter, runtimeInspector, newestRelease }
+      refreshLoad.options = options
+      refreshLoad.pinned = activation.sourceIdentity != null || activation.runtimeCacheDir != null
+      return loadNewestOrCached(options)
+    },
   })
   let kicked = false
   let stopRecordWatch = () => {}
@@ -305,7 +310,7 @@ export async function main({
     serverVersion,
     instructions: hostedInstructionsText,
     serverIcons: hosted && hasText(env.DESK_MCP_ICON_URL) ? [{ src: env.DESK_MCP_ICON_URL }] : undefined,
-    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : withStartupBoot({ callTool: (call) => session.callTool(call), env, stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }) }),
+    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : withStartupBoot({ callTool: (call) => session.callTool(call), env, stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }), servingRoot: session.servingPluginRoot }),
     onHandshake: () => {
       handshakeMs = Math.round(performance.now())
       kick()
@@ -372,6 +377,23 @@ async function loadNewestOrCached(options) {
   const newer = await loadRuntime({ ...options, mcpRoot: release.mcpRoot })
   if (newer.runtimeServer !== undefined) return withRelease(newer, release)
   return withRelease(await cached(), { ...release, state: "fell_back", reason: `the ${release.latest} copy did not load` })
+}
+
+// A newer runtime, loaded beside the serving one for runtime-swap.js: the newest release's copy, restored and imported as the first load does. `running` is the version serving now. Every outcome other than a loaded runtime leaves the serving one in place and says why.
+async function prepareNewerRuntime({ running, refreshLoad, mcpRoot, homeDir, env, newestRelease }) {
+  // The session checks only once a runtime is serving, so the first load has set these.
+  const options = refreshLoad.options
+  if (refreshLoad.pinned) return { state: "not_applicable", reason: "this session pins its runtime source" }
+  const ensure = newestRelease ?? (await import("./src/runtime/newest-release.js")).ensureNewestRelease
+  const pluginRoot = path.resolve(mcpRoot, "..")
+  const release = await ensure({ env, pluginRoot, running, homeDir })
+  if (release.state === "not_applicable") return { state: "not_applicable", reason: release.reason }
+  if (release.state === "current") return { state: "current", latest: release.latest }
+  if (release.state === "fell_back") return { state: "failed", latest: release.latest, reason: release.reason }
+  const newer = await loadRuntime({ ...options, onPhase: () => {}, mcpRoot: release.mcpRoot })
+  if (newer.runtimeServer === undefined) return { state: "failed", latest: release.latest, reason: `the ${release.latest} copy did not load (${String(newer.outcome.summary).slice(0, 120)})` }
+  const newestStatus = { state: "loaded", plugin_copy: deskVersion({ DESK_PLUGIN_ROOT: pluginRoot }), newest: release.latest }
+  return { state: "ready", latest: release.latest, loaded: { ...newer, runtimeStatus: { ...newer.runtimeStatus, newest_release: newestStatus } } }
 }
 
 // Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.

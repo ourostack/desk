@@ -799,13 +799,105 @@ function createController(options) {
   };
 }
 
-// options: stdin, stdout, signals (an emitter of SIGINT/SIGTERM/SIGHUP), exit, plus the controller's own settings.
+// ---- staying current ----
+//
+// The host keeps this server for days and routes every new chat to it, so the code it started with goes stale. On a call, in the
+// background, it looks for a newer Desk release (src/runtime/runtime-swap.js, the same watcher the Desk server uses) and builds
+// that release's own controller. The next call opens browsers with the newer controller and lists the newer tools; a browser the
+// older controller opened stays with it until it is closed, and a call already running finishes on the code it started with.
+// A check that fails changes nothing and says so in the `runtime` of browser_context's answer.
+
+function pluginVersion(pluginRoot) {
+  try {
+    var version = JSON.parse(fs.readFileSync(path.join(pluginRoot, "plugin.json"), "utf8")).version;
+    return typeof version === "string" ? version : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The newer copy's controller and tool list, or why there is none.
+async function prepareNewerBrowser(o) {
+  var release = await o.newestRelease({ env: o.env, pluginRoot: o.pluginRoot, running: o.running, homeDir: o.homeDir });
+  if (release.state === "not_applicable") return { state: "not_applicable", reason: release.reason };
+  if (release.state === "current") return { state: "current", latest: release.latest };
+  if (release.state === "fell_back") return { state: "failed", latest: release.latest, reason: release.reason };
+  try {
+    var newer = require(path.join(release.mcpRoot, "web.cjs"));
+    var tools = require(path.join(release.mcpRoot, "web-catalog.json")).tools;
+    if (typeof newer.createController !== "function" || !Array.isArray(tools)) return { state: "failed", latest: release.latest, reason: "the " + release.latest + " copy did not load (it has no browser server)" };
+    var controller = newer.createController({ env: o.env, homeDir: o.homeDir });
+    return { state: "ready", latest: release.latest, loaded: { controller: controller, tools: tools, version: release.latest } };
+  } catch (error) {
+    return { state: "failed", latest: release.latest, reason: "the " + release.latest + " copy did not load (" + String(error && error.message).split("\n")[0].slice(0, 100) + ")" };
+  }
+}
+
+/* istanbul ignore next -- the real server builds the watcher; tests hand serve() their own */
+async function realRefresher(o) {
+  var swap = await import(require("url").pathToFileURL(path.join(__dirname, "src", "runtime", "runtime-swap.js")).href);
+  var ensure = (await import(require("url").pathToFileURL(path.join(__dirname, "src", "runtime", "newest-release.js")).href)).ensureNewestRelease;
+  var env = o.env || process.env;
+  return {
+    refresher: swap.createRuntimeRefresher({
+      env: env,
+      log: function (line) { process.stderr.write("[desk-web] " + line + "\n"); },
+      prepare: function (input) {
+        return prepareNewerBrowser({ env: env, homeDir: os.homedir(), pluginRoot: path.resolve(__dirname, ".."), running: input.running, newestRelease: ensure });
+      }
+    })
+  };
+}
+
+// options: stdin, stdout, signals (an emitter of SIGINT/SIGTERM/SIGHUP), exit, plus the controller's own settings, and
+// `refresher` ({ refresher }, as realRefresher builds it) or `refresherFactory` to keep the server current.
 function serve(o) {
   var stdin = o.stdin;
   var controller = createController(o);
+  // Newest last. A browser stays with the controller that opened it.
+  var controllers = [controller];
   var tools = require("./web-catalog.json").tools;
   var pending = [];
   var buffered = "";
+  var refresh = o.refresher || null;
+  var wanted = o.refresherFactory || null;
+  function version() {
+    return pluginVersion(controllers[controllers.length - 1].settings.pluginRoot);
+  }
+  function ownerOf(input) {
+    var id = input && input.contextId;
+    for (var i = controllers.length - 1; i >= 0; i--) if (typeof id === "string" && controllers[i].settings.contexts[id]) return controllers[i];
+    return controllers[controllers.length - 1];
+  }
+  function keepCurrent(opening) {
+    if (!refresh && wanted) {
+      var factory = wanted;
+      wanted = null;
+      factory().then(function (made) { refresh = made; keepCurrent(opening); }, function () { /* the server keeps what it has */ });
+      return;
+    }
+    if (!refresh) return;
+    var watcher = refresh.refresher;
+    watcher.poke({ running: version(), soon: opening });
+    var next = watcher.ready ? watcher.take() : null;
+    if (next) {
+      var from = version();
+      controllers.push(next.loaded.controller);
+      tools = next.loaded.tools;
+      watcher.swapped({ from: from, to: next.loaded.version });
+    }
+  }
+  function dress(name, input, body) {
+    if (!refresh || name !== "browser_context" || !input || input.action !== "open" || body.isError) return body;
+    try {
+      var parsed = JSON.parse(body.content[0].text);
+      if (parsed && typeof parsed === "object" && parsed.runtime) {
+        parsed.runtime = Object.assign({}, parsed.runtime, refresh.refresher.describe());
+        return Object.assign({}, body, { content: [{ type: "text", text: JSON.stringify(parsed) }] });
+      }
+    } catch (error) { /* the answer is the browser's own, unchanged */ }
+    return body;
+  }
   function send(id, body) {
     o.stdout.write(JSON.stringify(Object.assign({ jsonrpc: "2.0", id: id }, body)) + "\n");
   }
@@ -826,8 +918,11 @@ function serve(o) {
     } else if (message.method === "tools/list") {
       send(message.id, { result: { tools: tools } });
     } else if (message.method === "tools/call") {
-      pending.push(controller.call(params.name, params.arguments).then(function (body) {
-        send(message.id, { result: body });
+      var input = params.arguments;
+      keepCurrent(params.name === "browser_context" && input && input.action === "open");
+      var served = ownerOf(input);
+      pending.push(served.call(params.name, input).then(function (body) {
+        send(message.id, { result: dress(params.name, input, body) });
       }));
     } else {
       send(message.id, { error: { code: -32601, message: "Method not found: " + message.method } });
@@ -839,7 +934,7 @@ function serve(o) {
     function finish() {
       if (!finishing) {
         finishing = Promise.all(pending.concat([swept])).then(function () {
-          return controller.closeAll();
+          return Promise.all(controllers.map(function (each) { return each.closeAll(); }));
         });
       }
       return finishing;
@@ -879,13 +974,16 @@ module.exports = {
   readProcessTable: readProcessTable,
   liveTree: liveTree,
   createController: createController,
+  prepareNewerBrowser: prepareNewerBrowser,
   serve: serve,
   run: run
 };
 
 /* istanbul ignore next -- the hosts start this with the real process; tests call serve() with their own streams */
 function run() {
-  return serve({ stdin: process.stdin, stdout: process.stdout, signals: process, exit: function (code) { process.exit(code); } });
+  var real = { stdin: process.stdin, stdout: process.stdout, signals: process, exit: function (code) { process.exit(code); } };
+  real.refresherFactory = function () { return realRefresher(real); };
+  return serve(real);
 }
 
 /* istanbul ignore next -- Copilot starts this file directly */
