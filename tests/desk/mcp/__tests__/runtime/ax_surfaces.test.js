@@ -37,6 +37,10 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/desk/content-home.js#nothing-was-written-or-committed": "carrier",
   "plugins/desk/mcp/src/desk/resources.js#no-resource-was-changed": "carrier",
   "plugins/desk/mcp/src/desk/steps.js#no-step-was-changed": "carrier",
+  "plugins/desk/mcp/src/factory/pipeline/build.js#factory-build": "carrier",
+  "plugins/desk/mcp/src/factory/pr-green.js#pr-green": "carrier of a code",
+  "plugins/desk/mcp/src/factory/release-version.js#release-version": "carrier of a code",
+  "plugins/desk/mcp/src/factory/store-issues.js#factory-issues": "carrier of a code",
   "plugins/desk/mcp/src/desk/improvement-person.js#no-lookup-at-session-start": "internal sentinel, caught by its caller",
   "plugins/desk/mcp/src/desk/runtime-resolver.js#cannot-find-module-in-the": "mirrors Node's own failed require",
 }

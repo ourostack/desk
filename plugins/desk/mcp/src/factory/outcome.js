@@ -23,7 +23,7 @@ const DAY_MS = 86_400_000
 // class. A wait that is negative or not a finite number is a bug upstream, so
 // it throws rather than being filed under a class.
 export function waitClass(ms) {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw new RangeError("a wait is a finite, non-negative number of milliseconds")
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw new RangeError("Pass a wait as a finite, non-negative number of milliseconds")
   if (ms < HOUR_MS) return "lt_1h"
   if (ms < DAY_MS) return "lt_1d"
   if (ms < 7 * DAY_MS) return "lt_7d"
@@ -44,7 +44,7 @@ function timeOf(value) {
 
 function requireTime(value) {
   const iso = value instanceof Date || typeof value === "string" ? timeOf(value) : null
-  if (iso === null) throw Object.assign(new Error("the time is not an ISO time"), { code: "invalid_time" })
+  if (iso === null) throw Object.assign(new Error("Pass the time as an ISO time"), { code: "invalid_time" })
   return iso
 }
 

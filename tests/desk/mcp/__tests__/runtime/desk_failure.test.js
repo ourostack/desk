@@ -19,7 +19,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const mcpRoot = path.resolve(here, "../../../../../plugins/desk/mcp")
 
 // The allow-list holds the failure texts not yet in the problem shape. It can only shrink: delete an entry when its text is converted, and lower this number with it.
-const ALLOWED_AT_MOST = 70
+const ALLOWED_AT_MOST = 69
 
 const failure = () => deskFailure({
   code: "desk_demo_failure",

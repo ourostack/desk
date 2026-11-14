@@ -60,8 +60,8 @@ export function parsePrUrl(url) {
 
 /** See the header. */
 export function githubReader({ runner, token, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (typeof runner !== "function") throw new TypeError("githubReader: runner must be a function")
-  if (typeof token !== "string" || token === "") throw new TypeError("githubReader: token must be a non-empty string")
+  if (typeof runner !== "function") throw new TypeError("githubReader: Pass runner as a function")
+  if (typeof token !== "string" || token === "") throw new TypeError("githubReader: Pass token as a non-empty string")
   return {
     async get(route) {
       const args = ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]

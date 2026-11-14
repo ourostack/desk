@@ -305,11 +305,11 @@ test("build reads facts as data only and rejects unexpected entries, invalid byt
   rmSync(link)
   const outLink = path.join(root, "out-link")
   symlinkSync(path.join(root, "elsewhere"), outLink)
-  assert.throws(() => build({ storeDir: store, outDir: outLink }), /outDir must not be a symlink/u)
+  assert.throws(() => build({ storeDir: store, outDir: outLink }), /Use a real directory, not a symlink, as outDir/u)
 
   const storeFile = path.join(root, "store-file")
   writeFileSync(storeFile, "not a directory")
-  assert.throws(() => build({ storeDir: storeFile, outDir: path.join(root, "unused") }), /store must be a real directory/u)
+  assert.throws(() => build({ storeDir: storeFile, outDir: path.join(root, "unused") }), /Use a real directory for store/u)
   const factsFileStore = path.join(root, "facts-file-store")
   mkdirSync(factsFileStore)
   writeFileSync(path.join(factsFileStore, "facts"), "not a directory")
@@ -319,17 +319,17 @@ test("build reads facts as data only and rejects unexpected entries, invalid byt
 
 test("jobReportUrl names a published job ID and refuses anything that is not 32 lowercase hex, or a store that is not owner/repo", () => {
   assert.equal(jobReportUrl({ store: "ourostack/factory", job: jobId({ deskRemote: "git@github.com:OuroStack/Desk.git", personPrefix: "", track: "factory", slug: "store-pipeline" }) }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
-  for (const store of ["not a store", null]) assert.throws(() => jobReportUrl({ store, job: "a".repeat(32) }), /store must be owner\/repo/u)
+  for (const store of ["not a store", null]) assert.throws(() => jobReportUrl({ store, job: "a".repeat(32) }), /Pass store as owner\/repo/u)
   assert.equal(jobReportUrl({ store: "ourostack/factory", job: "a".repeat(32) }), `https://github.com/ourostack/factory/blob/reports/jobs/${"a".repeat(32)}.md`)
-  for (const job of [null, "A".repeat(32), "a".repeat(31), "../secret"]) assert.throws(() => jobReportUrl({ store: "ourostack/factory", job }), /job must be 32 lowercase hex/u)
+  for (const job of [null, "A".repeat(32), "a".repeat(31), "../secret"]) assert.throws(() => jobReportUrl({ store: "ourostack/factory", job }), /Pass job as 32 lowercase hex/u)
 })
 
 test("storeRecords gives every job's rollup record exactly as the build reads the store", () => {
   const records = storeRecords(ROLLUP_STORE)
   assert.deepEqual(records.map((record) => record.job), ["1", "2", "3", "4", "5", "6"].map((digit) => digit.repeat(32)))
   assert.deepEqual(records[0].plugins, { desk: { min: "3.1.0", max: "3.1.0" } })
-  assert.throws(() => storeRecords(5), /storeDir must be a path/u)
-  assert.throws(() => storeRecords(path.join(ROLLUP_STORE, "facts", readdirSync(path.join(ROLLUP_STORE, "facts"))[0])), /store must be a real directory/u)
+  assert.throws(() => storeRecords(5), /Pass storeDir as a path/u)
+  assert.throws(() => storeRecords(path.join(ROLLUP_STORE, "facts", readdirSync(path.join(ROLLUP_STORE, "facts"))[0])), /Use a real directory for store/u)
 })
 
 test("storePublicPlugins names only plugins that facts carrying the private-plugin count publish", () => scratch((root) => {
@@ -347,8 +347,8 @@ test("storePublicPlugins names only plugins that facts carrying the private-plug
   old.plugins = [...old.plugins, { name: "ms-desk", version: "2.29.11" }]
   writeFileSync(legacy, serializePublished(old))
   assert.deepEqual(storePublicPlugins(store), ["desk", "superpowers"])
-  assert.throws(() => storePublicPlugins(5), /storeDir must be a path/u)
-  assert.throws(() => storePublicPlugins(ruled), /store must be a real directory/u)
+  assert.throws(() => storePublicPlugins(5), /Pass storeDir as a path/u)
+  assert.throws(() => storePublicPlugins(ruled), /Use a real directory for store/u)
 }))
 
 test("a store mixing legacy and per-worker files builds and legacy numbers are unchanged", () => scratch((root) => {

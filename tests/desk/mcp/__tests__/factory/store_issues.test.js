@@ -42,7 +42,7 @@ test("listIssues pages through the store's issues and keeps only the fields the 
     assert.equal(call.args.includes(TOKEN), false, "the token is never an argument")
     assert.equal(call.input, undefined)
   }
-  await assert.rejects(client.listIssues({ label: "kaizen", state: "some" }), /label and state/u)
+  await assert.rejects(client.listIssues({ label: "kaizen", state: "some" }), /Pass a label and a state/u)
 })
 
 test("listComments pages and reduces each comment to its id, author and body", async () => {

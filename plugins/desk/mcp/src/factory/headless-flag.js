@@ -18,5 +18,5 @@ export const isHeadlessFactorySession = createRequire(import.meta.url)("./headle
 /** The refusal payload for `name` under the flag, or null when the call may go ahead. Carries no input text. */
 export function headlessRefusal(name, env) {
   if (!isHeadlessFactorySession(env) || READ_ONLY_TOOLS.includes(name)) return null
-  return { status: "refused", code: HEADLESS_CODE, tool: name, message: "This is a headless evaluator session: it never changes desk state. Only read tools are available." }
+  return { status: "refused", code: HEADLESS_CODE, tool: name, message: "Use a read tool: this is a headless evaluator session, which never changes desk state, so only read tools are available." }
 }

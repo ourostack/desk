@@ -163,7 +163,7 @@ test("a failed status write leaves the 'known' result unchanged and logs one sta
   } finally {
     process.stderr.write = original
   }
-  assert.deepEqual(lines, ["desk-problem: known_hit_not_recorded status_write_failed\n"])
+  assert.deepEqual(lines, ["desk-problem: Run it again to record this hit: known_hit_not_recorded status_write_failed\n"])
 }))
 
 test("a recorder that throws or rejects never changes or breaks the 'known' result", () => scratch(async ({ env }) => {
@@ -178,7 +178,7 @@ test("a recorder that throws or rejects never changes or breaks the 'known' resu
   } finally {
     process.stderr.write = original
   }
-  assert.deepEqual(lines, Array(2).fill("desk-problem: known_hit_not_recorded record_failed\n"))
+  assert.deepEqual(lines, Array(2).fill("desk-problem: Run it again to record this hit: known_hit_not_recorded record_failed\n"))
 }))
 
 test("a headless factory session records no known hit", () => scratch(async ({ env }) => {
@@ -327,7 +327,7 @@ test("a comment write that throws a plain error is reported as record_failed, an
   }
   const { value, lines } = await withStderr(() => hit(env, runner, DAY_ONE))
   assert.deepEqual(value, { result: "known", url: `https://github.com/${STORE}/issues/5` })
-  assert.deepEqual(lines, ["desk-problem: recurrence_comment_failed record_failed\n"])
+  assert.deepEqual(lines, ["desk-problem: Run it again to add the recurrence comment: recurrence_comment_failed record_failed\n"])
 }))
 
 test("a recurrence comment that would start after the filing deadline is skipped with a stable code, and the result stays 'known'", () => scratch(async ({ env }) => {
@@ -340,7 +340,7 @@ test("a recurrence comment that would start after the filing deadline is skipped
   }
   const { value, lines } = await withStderr(() => fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected twice", runner, now: () => time, deadlineMs: 30000 }))
   assert.deepEqual(value, { result: "known", url: `https://github.com/${STORE}/issues/5` })
-  assert.deepEqual(lines, ["desk-problem: recurrence_comment_failed deadline\n"])
+  assert.deepEqual(lines, ["desk-problem: Run it again to add the recurrence comment: recurrence_comment_failed deadline\n"])
   assert.equal(gh.comments.length, 0)
 }))
 
@@ -348,7 +348,7 @@ test("a failing comment call still returns 'known', keeps the local count, and l
   const gh = fakeGh({ ...ONE_ACCOUNT, issues: OPEN_ISSUES, fail: { comment: { code: 1, stdout: "", stderr: "gh: Forbidden (HTTP 403)\n" } } })
   const { value, lines } = await withStderr(() => hit(env, gh.runner, DAY_ONE))
   assert.deepEqual(value, { result: "known", url: `https://github.com/${STORE}/issues/5` })
-  assert.deepEqual(lines, ["desk-problem: recurrence_comment_failed http_403\n"])
+  assert.deepEqual(lines, ["desk-problem: Run it again to add the recurrence comment: recurrence_comment_failed http_403\n"])
   assert.equal((await readStatus(env))[KNOWN_KEY][5].count, 1)
 }))
 
@@ -502,7 +502,7 @@ test("a drop that cannot be recorded either leaves one stable code, and a thrown
   } finally {
     process.stderr.write = original
   }
-  assert.deepEqual(lines, ["desk-problem: lost_hit_not_recorded status_write_failed\n", "desk-problem: lost_hit_not_recorded record_failed\n"])
+  assert.deepEqual(lines, ["desk-problem: Run it again to record this hit: lost_hit_not_recorded status_write_failed\n", "desk-problem: Run it again to record this hit: lost_hit_not_recorded record_failed\n"])
   const { runner: base } = fakeGh(ONE_ACCOUNT)
   const runner = async (args, options) => {
     if (args[0] === "api" && String(args[7]).startsWith(`repos/${STORE}/issues`)) throw new Error("boom")
@@ -622,8 +622,8 @@ test("two concurrent filings for the same new fingerprint create only one issue;
 // ── runFileDeskProblemCli: the detached filer's whole CLI surface, unit-tested directly ───────────
 
 test("runFileDeskProblemCli requires --mechanism, and refuses an empty one", () => scratch(async ({ env }) => {
-  await assert.rejects(runFileDeskProblemCli({ argv: [], env }), /--mechanism <name> is required/u)
-  await assert.rejects(runFileDeskProblemCli({ argv: ["--mechanism", ""], env }), /--mechanism <name> is required/u)
+  await assert.rejects(runFileDeskProblemCli({ argv: [], env }), /Pass --mechanism <name>/u)
+  await assert.rejects(runFileDeskProblemCli({ argv: ["--mechanism", ""], env }), /Pass --mechanism <name>/u)
 }))
 
 test("runFileDeskProblemCli refuses an argument that isn't a --flag", () => scratch(async ({ env }) => {

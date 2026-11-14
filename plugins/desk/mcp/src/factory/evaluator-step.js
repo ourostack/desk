@@ -127,7 +127,7 @@ const costOrNull = (value) => (typeof value === "number" && Number.isFinite(valu
 
 function toMs(value, name) {
   const ms = value === null ? Number.NaN : new Date(value).getTime()
-  if (Number.isNaN(ms)) throw new TypeError(`${name}: must be a valid time`)
+  if (Number.isNaN(ms)) throw new TypeError(`Pass ${name} as a valid time`)
   return ms
 }
 
@@ -195,12 +195,12 @@ function readDay(evaluator, clockDay) {
 export async function runEvaluatorStep(env, options = {}) {
   const impl = { ...DEFAULT_SEAMS, ...options }
   const { pluginVersion, onChild, onChildExit } = impl
-  if (typeof pluginVersion !== "string" || pluginVersion === "") throw new TypeError("pluginVersion: must be a Desk version")
+  if (typeof pluginVersion !== "string" || pluginVersion === "") throw new TypeError("Pass pluginVersion as a Desk version")
   const nowMs = toMs(impl.now === undefined ? new Date() : impl.now, "now")
   const deadlineMs = toMs(impl.deadline ?? null, "deadline")
-  if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw new TypeError("deskRoot: must be an absolute path or null")
+  if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw new TypeError("Pass deskRoot as an absolute path or null")
   const maxRuns = impl.maxRuns ?? Number.POSITIVE_INFINITY
-  if (maxRuns !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) throw new TypeError("maxRuns: must be a positive whole number")
+  if (maxRuns !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) throw new TypeError("Pass maxRuns as a positive whole number")
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return { ok: true, result: "no_factory_state" }

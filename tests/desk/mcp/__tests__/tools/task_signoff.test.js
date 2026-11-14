@@ -651,7 +651,7 @@ test("a clock that gives no usable time is refused and nothing is written", asyn
   const root = await mkTempDeskRoot()
   const file = await delivered(root, "bad-clock")
   const before = await body(file)
-  await assert.rejects(sign(root, "bad-clock", { outcome: "accepted" }, { now: () => 8.64e15 }), /task_signoff: the time is not an ISO time/)
+  await assert.rejects(sign(root, "bad-clock", { outcome: "accepted" }, { now: () => 8.64e15 }), /task_signoff: Pass the time as an ISO time/)
   assert.equal(await body(file), before)
 })
 

@@ -384,7 +384,7 @@ test("the causes rollup ranks idle time by waited_on and labeled wastes of worki
 })
 
 test("a figure that is not measured must name a reason", () => {
-  assert.throws(() => figure("partial", 1, []), /no reason/u)
+  assert.throws(() => figure("partial", 1, []), /Add a reason to the partial figure/u)
   assert.deepEqual(figure("measured", 1, ["ignored"]), { class: "inferred", state: "measured", value: 1, reasons: [] })
 })
 

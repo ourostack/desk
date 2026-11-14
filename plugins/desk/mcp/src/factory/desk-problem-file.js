@@ -197,7 +197,7 @@ export async function fileDeskProblem(env, options = {}) {
   // known issue: it is counted as a drop, so the verify step never reads it as a measured "no hit" (`desk-problem-known.js`).
   const lost = async () => {
     const counted = await Promise.resolve().then(() => recordLost(env, { now })).catch(() => ({ recorded: false, code: "record_failed" }))
-    if (!counted.recorded && counted.code !== "headless_session") process.stderr.write(`desk-problem: lost_hit_not_recorded ${counted.code}\n`)
+    if (!counted.recorded && counted.code !== "headless_session") process.stderr.write(`desk-problem: Run it again to record this hit: lost_hit_not_recorded ${counted.code}\n`)
   }
   // The attempt is recorded before any network step and cleared once its outcome is recorded, so a filer killed part way is a drop too.
   const token = await begin(env, { now })
@@ -246,12 +246,12 @@ async function attemptFiling(env, {
         // The count never changes the result; a failed write leaves one stable code on stderr.
         const recorded = await Promise.resolve().then(() => recordKnown(env, existing.number, { version: runningVersion, now })).catch(() => ({ recorded: false, code: "record_failed" }))
         const hitLost = !recorded.recorded && recorded.code !== "headless_session"
-        if (hitLost) process.stderr.write(`desk-problem: known_hit_not_recorded ${recorded.code}\n`)
+        if (hitLost) process.stderr.write(`desk-problem: Run it again to record this hit: known_hit_not_recorded ${recorded.code}\n`)
         // The public trace of the hit: one comment per account, which never changes the result either.
         const noted = remaining() > 0
           ? await recordRecurrence(env, { runner, token, timeoutMs: remaining(), number: existing.number, closed: existing.state === "closed", account: selected.account, host, version: runningVersion, now })
           : { recorded: false, code: "deadline" }
-        if (!noted.recorded && noted.code !== "headless_session") process.stderr.write(`desk-problem: recurrence_comment_failed ${noted.code}\n`)
+        if (!noted.recorded && noted.code !== "headless_session") process.stderr.write(`desk-problem: Run it again to add the recurrence comment: recurrence_comment_failed ${noted.code}\n`)
         return { result: "known", url: existing.url, hitLost }
       }
 
@@ -285,11 +285,11 @@ export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env 
   const options = new Map()
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw new Error(`file-desk-problem.js: unexpected argument ${JSON.stringify(key ?? "")}`)
+    if (typeof key !== "string" || !key.startsWith("--")) throw new Error(`file-desk-problem.js: Pass only --<name> <value> pairs: unexpected argument ${JSON.stringify(key ?? "")}`)
     options.set(key.slice(2), argv[index + 1])
   }
   const mechanism = options.get("mechanism")
-  if (typeof mechanism !== "string" || mechanism === "") throw new Error("file-desk-problem.js: --mechanism <name> is required")
+  if (typeof mechanism !== "string" || mechanism === "") throw new Error("file-desk-problem.js: Pass --mechanism <name>: it is required")
   const reason = options.get("reason") ?? ""
   try {
     await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })

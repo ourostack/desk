@@ -332,7 +332,7 @@ test("assertPartition throws on a broken sum and on counts for an uncounted host
   const good = { state: "counted", on_disk: 2, derived: 1, held: 0, frozen: 0, pending: 0, not_seen: 1, not_in_a_desk: null, unverified: false, by_owner: { "-": { derived: 1, not_seen: 1 } } }
   assertPartition(good)
   assert.throws(() => assertPartition({ ...good, on_disk: 3 }), /add up to on_disk/u)
-  assert.throws(() => assertPartition({ ...good, by_owner: { "-": { derived: 1, not_seen: 0 } } }), /owners' not_seen/u)
+  assert.throws(() => assertPartition({ ...good, by_owner: { "-": { derived: 1, not_seen: 0 } } }), /their not_seen/u)
   assert.throws(() => assertPartition({ state: "capped", unverified: true, on_disk: 0 }), /not counted/u)
   assertPartition({ state: "absent", unverified: true })
 })

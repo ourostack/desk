@@ -174,7 +174,7 @@ function attempt(reconcileImpl, options) {
 /** `runReconcileStep(env, { now, reconcileImpl, desks, personPrefix, updateStatusImpl, recordStepImpl }) -> { ok, result }`: one scheduled pass; `result` is the code recorded for the `reconcile` step. Never throws for a desk, Git or status problem. */
 export async function runReconcileStep(env, { now, reconcileImpl = reconcile, desks = undefined, personPrefix = "", updateStatusImpl = updateStatus, recordStepImpl = recordStep }) {
   const nowMs = new Date(now).getTime()
-  if (Number.isNaN(nowMs)) throw new TypeError("now: must be a valid time")
+  if (Number.isNaN(nowMs)) throw new TypeError("Pass now as a valid time")
   const at = new Date(nowMs).toISOString()
   const finish = async (ok, result) => {
     try {

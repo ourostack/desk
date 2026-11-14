@@ -299,7 +299,7 @@ test("factoryStateRoot refuses a temp-directory desk root paired with a state ho
   const outsideTemp = fakeRealPath("desk-outbox-consistency-state-")
   await assert.rejects(
     () => factoryStateRoot(osEnv({ HOME: outsideTemp }), { deskRoot }),
-    /refused a temp-directory desk root paired with a factory state home outside the OS temp directory/u,
+    /a temp-directory desk root paired with a factory state home outside the OS temp directory is refused/u,
   )
   assert.equal(existsSync(outsideTemp), false, "the refused call created nothing")
   rmSync(deskRoot, { recursive: true, force: true })

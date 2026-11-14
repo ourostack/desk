@@ -7,7 +7,6 @@
   {"match":"- Error: ${safeText}","reason":"factory/desk-problem-template.js: not yet in the Ouro AX problem shape"},
   {"match":"${label}: private ${subject} path ${target} could not be inspected (${error.code})","reason":"factory/os-protect.js: not yet in the Ouro AX problem shape"},
   {"match":"the evaluator read this wait's evidence and could not tell why the agent stopped","reason":"factory/pipeline/report.js: not yet in the Ouro AX problem shape"},
-  {"match":"reconcile: the desk folder could not be read","reason":"factory/reconcile.js: not yet in the Ouro AX problem shape"},
   {"match":"gitignore exclusion rules could not be read","reason":"indexer/exclusions.js: not yet in the Ouro AX problem shape"},
   {"match":"Desk hit an unexpected error while admitting: ${message}","reason":"runtime/admission.js: not yet in the Ouro AX problem shape"},
   {"match":"Desk could not sync: ","reason":"runtime/boot-text.js: not yet in the Ouro AX problem shape"},

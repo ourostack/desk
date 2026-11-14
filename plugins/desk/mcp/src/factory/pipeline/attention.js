@@ -28,18 +28,18 @@ function lookup(table, cls, field) {
 }
 
 function checkMs(value, field) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new EstimatorError(`${field} must be a non-negative finite number`)
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new EstimatorError(`Pass ${field} as a non-negative finite number`)
 }
 
 const BASES = Object.freeze(["first", "after_stop", "mid_turn"])
 
 // A null window means no bound and belongs to basis `first` alone; every other basis needs a window. A wrong pairing is a broken input and throws.
 export function estimateTurn(turn) {
-  if (!turn || typeof turn !== "object") throw new EstimatorError("turn must be an object")
+  if (!turn || typeof turn !== "object") throw new EstimatorError("Pass turn as an object")
   const read = lookup(READ_MS, turn.output_class, "output_class")
   const type = lookup(TYPE_MS, turn.prompt_class, "prompt_class")
   if (!BASES.includes(turn.basis)) throw new EstimatorError("unknown basis")
-  if ((turn.basis === "first") !== (turn.window_ms === null)) throw new EstimatorError("window_ms must be null exactly when basis is first")
+  if ((turn.basis === "first") !== (turn.window_ms === null)) throw new EstimatorError("Pass window_ms as null exactly when basis is first")
   let bound = Infinity
   if (turn.window_ms !== null) {
     checkMs(turn.window_ms, "window_ms")

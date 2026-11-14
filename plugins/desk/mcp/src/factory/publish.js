@@ -341,7 +341,7 @@ function validSecret(machineSecret) {
 /** The session ID as it publishes: a v4 unchanged, a v7 as a keyed v4-shaped ID, which needs the machine secret on any desk. */
 function publishedSessionId(id, machineSecret, caller) {
   if (!SESSION_ID_V7.test(id)) return id
-  if (!validSecret(machineSecret)) throw new TypeError(`${caller}: a version-7 session ID needs a machineSecret of at least 32 bytes`)
+  if (!validSecret(machineSecret)) throw new TypeError(`${caller}: Pass a machineSecret of at least 32 bytes: a version-7 session ID needs one`)
   const hex = createHmac("sha256", machineSecret).update(`session:${id}`).digest("hex").slice(0, 32)
   const variant = "89ab"[Number.parseInt(hex[16], 16) % 4]
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
@@ -351,7 +351,7 @@ function publishedSessionId(id, machineSecret, caller) {
 function deskIsPrivate(deskVisibility, machineSecret, caller) {
   const deskPrivate = deskTimingKept(deskVisibility)
   if (!deskPrivate && !validSecret(machineSecret)) {
-    throw new TypeError(`${caller}: a desk that is not private needs a machineSecret of at least 32 bytes`)
+    throw new TypeError(`${caller}: Pass a machineSecret of at least 32 bytes: a desk that is not private needs one`)
   }
   return deskPrivate
 }
@@ -502,8 +502,8 @@ function publishHumanTurns(turns, startedMs, durationMs, flag) {
  * caller contracts: a violation throws a `TypeError` that names no value.
  */
 export function toPublished(local, { visibility, deskVisibility, storeVisibility, machineSecret, now } = {}) {
-  if (typeof visibility !== "function") throw new TypeError("toPublished: visibility must be a function")
-  if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: local facts must pass validateLocalFacts")
+  if (typeof visibility !== "function") throw new TypeError("toPublished: Pass visibility as a function")
+  if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: Pass local facts that pass validateLocalFacts")
   const deskPrivate = deskIsPrivate(deskVisibility, machineSecret, "toPublished")
   const sessionId = publishedSessionId(local.session.id, machineSecret, "toPublished")
 
@@ -573,7 +573,7 @@ export function serializePublished(published) {
 
 /** `<host>-<session id>.json` for a valid published file; anything else is a caller bug. */
 export function publishedFileName(published) {
-  if (!validatePublished(published).ok) throw new TypeError("publishedFileName: the value must pass validatePublished")
+  if (!validatePublished(published).ok) throw new TypeError("publishedFileName: Pass a value that passes validatePublished")
   return `${published.session.host}-${published.session.id}.json`
 }
 
@@ -587,7 +587,7 @@ export function publishedFileName(published) {
  * label sessions test `SESSION_ID_V4` on the local ID themselves.
  */
 export function publishedClock(local) {
-  if (!validateLocalFacts(local).ok) throw new TypeError("publishedClock: local facts must pass validateLocalFacts")
+  if (!validateLocalFacts(local).ok) throw new TypeError("publishedClock: Pass local facts that pass validateLocalFacts")
   const startedMs = Date.parse(local.session.started_at)
   const durationMs = Date.parse(local.session.derived_through) - startedMs
   const reason = refusalOf(local, startedMs, durationMs)
@@ -612,7 +612,7 @@ export function publishedClock(local) {
 export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}) {
   // The labels schema is the published one (version-4 sessions), so a version-7 session is mapped before it is checked.
   const session = publishedSessionId(String(labels?.session), machineSecret, "toPublishedLabels")
-  if (!validateLabels({ ...labels, session }).ok) throw new TypeError("toPublishedLabels: labels must pass validateLabels")
+  if (!validateLabels({ ...labels, session }).ok) throw new TypeError("toPublishedLabels: Pass labels that pass validateLabels")
   const job = deskIsPrivate(deskVisibility, machineSecret, "toPublishedLabels") ? labels.job : keyedJobId(labels.job, machineSecret)
   const published = {
     schema: labels.schema,
