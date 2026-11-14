@@ -25,6 +25,16 @@ const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
 const MAX_TITLES = 20
 const PAGE = 100
+/** A full listing of the open issues is read again this often; between them only issues updated since the last change are read. */
+const FULL_SYNC_MS = 3_600_000
+/** The list is read from a little before the newest change it knew, so an update GitHub lists late is still seen. */
+const DELTA_SLACK_MS = 120_000
+const LOGIN_MS = 24 * 3_600_000
+/** At or below this many calls left in the window a drain stops polling until the window resets. */
+const QUOTA_RESERVE = 25
+/** Below 10% of the window or this many calls (whichever is more), a drain polls at most every `QUOTA_SLOW_MS`. */
+const QUOTA_LOW = 200
+const QUOTA_SLOW_MS = 15 * 60_000
 
 const blank = () => ({ seeded: false, seen: {}, pending: [] })
 
@@ -321,45 +331,95 @@ async function crossReference(api, repo, issue, since) {
   return null
 }
 
+const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/u, "Z")
+
+/** The issues to look at this poll: all the open ones, or, between full syncs, only those updated since the last change (a 304 means none). */
+async function listIssues(api, drain, state, now) {
+  const delta = api.changedIssues && state.seeded && state.cursor && state.syncedAt && now - Date.parse(state.syncedAt) < FULL_SYNC_MS
+  if (!delta) return { full: true, issues: await api.openIssues(drain.repo) }
+  const since = isoSeconds(Date.parse(state.cursor) - DELTA_SLACK_MS)
+  const changed = await api.changedIssues(drain.repo, since, state.etag?.since === since ? state.etag.tag : undefined)
+  if (changed.notModified) return { full: false, issues: [], untouched: true }
+  state.etag = changed.etag ? { since, tag: changed.etag } : undefined
+  return { full: false, issues: changed.issues }
+}
+
+/** What the account's quota says to do about this drain now: null to poll, or why not (until the window resets, or for a while). */
+export function quotaHold(quota, lastPollAt, now) {
+  if (!quota || now >= quota.reset * 1000) return null
+  const until = new Date(quota.reset * 1000).toISOString()
+  if (quota.remaining <= QUOTA_RESERVE) return `${quota.remaining}/${quota.limit} calls left, paused until ${until}`
+  const slow = Math.max(QUOTA_LOW, quota.limit / 10)
+  if (quota.remaining <= slow && lastPollAt && now - Date.parse(lastPollAt) < QUOTA_SLOW_MS) return `${quota.remaining}/${quota.limit} calls left, polling every ${QUOTA_SLOW_MS / 60_000}m until ${until}`
+  return null
+}
+
 /** Poll one drain's repository and record what changed. A failure is recorded in its state and leaves every marker where it was. */
 export async function pollDrain(drain, states, { connect, now, desk }) {
   const state = states[drain.repo] ?? (states[drain.repo] = blank())
+  let api = null
   try {
-    const api = await connect(drain.account)
-    const issues = await api.openIssues(drain.repo)
-    const trailers = drain.ignoredBodyTrailers ?? []
-    const ignored = trailers.join(",")
-    const labels = (drain.ignoredLabels ?? []).map((name) => name.toLowerCase())
-    const quiet = (drain.ignoreComments ?? []).map(({ author, match }) => ({ author: author.toLowerCase(), match: match === undefined ? null : new RegExp(match, "u") }))
-    const seen = {}
-    const recorded = []
-    for (const issue of issues) {
-      const key = String(issue.number)
-      const before = seenIssue(state.seen[key])
-      const digest = digestOf(issue, trailers)
-      seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
-      if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-      const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)
-      if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+    const knownLogin = state.loginAt && now - Date.parse(state.loginAt) < LOGIN_MS ? state.login : undefined
+    api = await connect(drain.account, { login: knownLogin })
+    if (!knownLogin) {
+      state.login = api.login
+      state.loginAt = new Date(now).toISOString()
     }
-    for (const [key, entry] of Object.entries(state.seen)) {
-      const gone = seenIssue(entry)
-      const goneAt = gone.goneAt ?? now
-      if (!(key in seen) && now - goneAt < GONE_MS) seen[key] = { ...gone, goneAt }
-    }
-    const open = new Set(issues.map((issue) => issue.number))
-    const numbers = new Set(recorded.map((event) => event.number))
-    state.pending = [...state.pending.filter((event) => open.has(event.number) && !numbers.has(event.number)), ...recorded]
-    state.history = [...(state.history ?? []), ...recorded.map((event) => (desk ? { ...event, desk } : event))].slice(-HISTORY)
-    state.seen = seen
-    state.seeded = true
-    state.openCount = issues.length
+    const listed = await listIssues(api, drain, state, now)
+    if (!listed.untouched) await recordChanges(api, drain, state, listed, { now, desk })
     state.lastOkAt = new Date(now).toISOString()
     delete state.lastError
   } catch (error) {
     state.lastError = error.message
   }
+  const quota = api?.quota?.()
+  if (quota) state.quota = quota
+  state.calls = api?.calls?.() ?? { total: 0, notModified: 0 }
+  delete state.hold
   state.lastPollAt = new Date(now).toISOString()
+}
+
+async function recordChanges(api, drain, state, { full, issues }, { now, desk }) {
+  const trailers = drain.ignoredBodyTrailers ?? []
+  const ignored = trailers.join(",")
+  const labels = (drain.ignoredLabels ?? []).map((name) => name.toLowerCase())
+  const quiet = (drain.ignoreComments ?? []).map(({ author, match }) => ({ author: author.toLowerCase(), match: match === undefined ? null : new RegExp(match, "u") }))
+  const seen = full ? {} : { ...state.seen }
+  const recorded = []
+  const closed = new Set()
+  let cursor = state.cursor ?? ""
+  for (const issue of issues) {
+    if (!full && issue.updated_at > cursor) cursor = issue.updated_at
+    if (issue.pull_request) continue
+    const key = String(issue.number)
+    const before = seenIssue(state.seen[key])
+    if (issue.state === "closed") {
+      closed.add(issue.number)
+      if (before) seen[key] = { ...before, goneAt: before.goneAt ?? now }
+      continue
+    }
+    if (full && issue.updated_at > cursor) cursor = issue.updated_at
+    const digest = digestOf(issue, trailers)
+    seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
+    if (!state.seeded || before?.updatedAt === issue.updated_at) continue
+    const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)
+    if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
+  }
+  for (const [key, entry] of Object.entries(state.seen)) {
+    const gone = seenIssue(entry)
+    const goneAt = gone.goneAt ?? now
+    if (full && !(key in seen) && now - goneAt < GONE_MS) seen[key] = { ...gone, goneAt }
+  }
+  const open = full ? new Set(issues.map((issue) => issue.number)) : null
+  const numbers = new Set(recorded.map((event) => event.number))
+  const stillOpen = (event) => (open ? open.has(event.number) : !closed.has(event.number))
+  state.pending = [...state.pending.filter((event) => stillOpen(event) && !numbers.has(event.number)), ...recorded]
+  state.history = [...(state.history ?? []), ...recorded.map((event) => (desk ? { ...event, desk } : event))].slice(-HISTORY)
+  state.seen = seen
+  state.seeded = true
+  state.openCount = Object.values(seen).filter((entry) => !seenIssue(entry).goneAt).length
+  if (cursor) state.cursor = cursor
+  if (full) state.syncedAt = new Date(now).toISOString()
 }
 
 function span(ms) {
@@ -375,19 +435,40 @@ function ago(iso, now) {
 /** When the last poll that read GitHub without an error finished. A state from before this was recorded counts its last poll when that had no error. */
 const lastOk = (state) => state.lastOkAt ?? (state.lastError ? null : state.lastPollAt)
 
-/** One line per drain: its last successful poll and how far behind that is, the last attempt, open issues, events waiting and for how long, last wake and last error. */
+/** The newest quota reading among the drains that poll with `account`: the account's quota is shared by all of them. */
+function freshestQuota(drains, states, account) {
+  return drains
+    .filter((drain) => drain.account === account)
+    .map((drain) => states[drain.repo]?.quota)
+    .filter(Boolean)
+    .sort((a, b) => b.at.localeCompare(a.at))[0] ?? null
+}
+
+/** One line per account: the calls left in its window, when it resets, and what the last cycle spent. */
+export function quotaLines(drains, states, now) {
+  return [...new Set(drains.map((drain) => drain.account))].flatMap((account) => {
+    const quota = freshestQuota(drains, states, account)
+    if (!quota) return []
+    const calls = drains.filter((drain) => drain.account === account).map((drain) => states[drain.repo]?.calls ?? { total: 0, notModified: 0 })
+    const spent = calls.reduce((sum, entry) => sum + entry.total, 0)
+    const free = calls.reduce((sum, entry) => sum + entry.notModified, 0)
+    return [`quota ${account ?? "the active account"}: ${quota.remaining}/${quota.limit} calls left, resets ${new Date(quota.reset * 1000).toISOString()} (read ${ago(quota.at, now)}); the last cycle used ${spent} calls, ${free} of them not modified`]
+  })
+}
+
+/** One line per drain: its last successful poll and how far behind that is, the last attempt, open issues, events waiting and for how long, last wake and last error. Quota lines come first. */
 export function drainStatusLines(drains, states, now) {
-  return drains.map((drain) => {
+  return [...quotaLines(drains, states, now), ...drains.map((drain) => {
     const state = states[drain.repo]
     const head = `issue drain ${drain.repo} -> ${drain.session.slice(0, 8)}`
-    if (!state?.lastPollAt) return `${head}: not polled yet`
+    if (!state?.lastPollAt) return `${head}: not polled yet${state?.hold ? `, held: ${state.hold}` : ""}`
     const ok = lastOk(state)
     const good = ok ? `last ok poll ${ok} (lag ${span(now - Date.parse(ok))})` : "no ok poll recorded"
     const since = state.pending.map((event) => Date.parse(event.seenAt)).filter(Number.isFinite)
     const waiting = `${state.pending.length} waiting${since.length ? ` (oldest ${span(now - Math.min(...since))})` : ""}`
     const wake = state.lastWakeAt ? `${ago(state.lastWakeAt, now)} (${state.lastWakeCount} issue${state.lastWakeCount === 1 ? "" : "s"})` : "never"
-    return `${head}: ${good}, polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${waiting}, last wake ${wake}${state.lastError ? `, last error: ${state.lastError}` : ""}`
-  })
+    return `${head}: ${good}, polled ${ago(state.lastPollAt, now)}, ${state.openCount ?? "?"} open, ${waiting}, last wake ${wake}${state.hold ? `, held: ${state.hold}` : ""}${state.lastError ? `, last error: ${state.lastError}` : ""}`
+  })]
 }
 
 /**
@@ -399,7 +480,11 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
   const drains = readDrainConfig(paths.config)
   const stored = readDrainStates(paths.state)
   const states = Object.fromEntries(drains.map((drain) => [drain.repo, stored[drain.repo] ?? blank()]))
-  for (const drain of drains) await pollDrain(drain, states, { connect, now, desk })
+  for (const drain of drains) {
+    const hold = quotaHold(freshestQuota(drains, states, drain.account), states[drain.repo].lastPollAt, now)
+    if (hold) Object.assign(states[drain.repo], { hold, calls: { total: 0, notModified: 0 } })
+    else await pollDrain(drain, states, { connect, now, desk })
+  }
   writeDrainStates(paths.state, states)
   const wakes = drains.filter((drain) => states[drain.repo].pending.length > 0).map((drain) => {
     const events = states[drain.repo].pending
@@ -407,7 +492,8 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
     return { id, repo: drain.repo, session: drain.session, message: wakeMessage(drain.repo, events), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
   })
   const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError }))
-  return { at: new Date(now).toISOString(), wakes, errors, status: drainStatusLines(drains, states, now) }
+  const calls = drains.reduce((sum, drain) => sum + states[drain.repo].calls.total, 0)
+  return { at: new Date(now).toISOString(), wakes, errors, calls, status: drainStatusLines(drains, states, now) }
 }
 
 /** Record how a wake went: delivered clears its events, failed keeps them and records why. A batch that has since changed is left alone. */
@@ -429,21 +515,30 @@ export function ackWake({ paths, repo, wake, error, now }) {
 
 // ── GitHub ──
 
-/** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. */
-export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env } = {}) {
+/** The drain's GitHub access: its account's token from the `gh` CLI, then the REST API. `login` skips asking GitHub who the token is. */
+export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fetch, env = process.env, login: knownLogin } = {}) {
   const tokenArgs = ["auth", "token", "--hostname", "github.com", ...(account ? ["--user", account] : [])]
   const cleaned = { ...env, PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH].filter(Boolean).join(":") }
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
   const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
   const token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
   if (!token) throw new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`)
-  const get = async (route) => {
+  // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
+  const meter = { total: 0, notModified: 0, quota: null }
+  const get = async (route, { etag } = {}) => {
     const response = await fetchImpl(`https://api.github.com${route}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "desk-issue-drains", ...(etag ? { "If-None-Match": etag } : {}) },
       signal: AbortSignal.timeout(30_000),
     })
+    meter.total += 1
+    const remaining = response.headers.get("x-ratelimit-remaining")
+    if (remaining !== null) meter.quota = { remaining: Number(remaining), limit: Number(response.headers.get("x-ratelimit-limit")), reset: Number(response.headers.get("x-ratelimit-reset")), at: new Date().toISOString() }
+    if (response.status === 304) {
+      meter.notModified += 1
+      return { notModified: true }
+    }
     if (!response.ok) throw new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`)
-    return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? "") }
+    return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
   const all = async (route) => {
     const items = []
@@ -457,12 +552,26 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     return items
   }
   // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
-  const login = (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
+  const login = knownLogin || (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
     login,
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),
     comments: (repo, issue, since) => all(`/repos/${repo}/issues/${issue}/comments?since=${encodeURIComponent(since)}`),
     issueEvents: (repo, issue) => all(`/repos/${repo}/issues/${issue}/events`),
+    changedIssues: async (repo, since, etag) => {
+      const route = `/repos/${repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(since)}&per_page=${PAGE}`
+      const first = await get(`${route}&page=1`, { etag })
+      if (first.notModified) return { notModified: true }
+      const items = [...first.body]
+      for (let page = 2, more = first.next; more; page++) {
+        const { body, next } = await get(`${route}&page=${page}`)
+        items.push(...body)
+        more = next
+      }
+      return { issues: items, etag: first.etag }
+    },
+    quota: () => meter.quota,
+    calls: () => ({ total: meter.total, notModified: meter.notModified }),
     timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
     pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,
   }

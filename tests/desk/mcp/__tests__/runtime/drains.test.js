@@ -9,7 +9,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains,
+  ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains, quotaHold, quotaLines,
   readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { parseDrainsArgs, runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
@@ -968,7 +968,7 @@ test("a lock that cannot be created for another reason than an existing owner is
   await assert.rejects(withDrainLock(path.join(dir, `${"x".repeat(400)}.lock`), () => "x"), (error) => error.code !== "EEXIST")
 })
 
-const response = (body, { status = 200, link = null } = {}) => ({ ok: status < 400, status, json: async () => body, headers: { get: () => link } })
+const response = (body, { status = 200, link = null, headers = {} } = {}) => ({ ok: status < 400, status, json: async () => body, headers: { get: (name) => (name === "link" ? link : headers[name] ?? null) } })
 
 test("lists open issues without pull requests across pages and reads comments since a time, with the account's token", async () => {
   const spawned = []
@@ -1002,6 +1002,212 @@ test("lists open issues without pull requests across pages and reads comments si
   assert.equal(urls[5], "https://api.github.com/repos/o/r/issues/5/timeline?per_page=100&page=1")
   assert.deepEqual(await api.pull("o/r", 7), { head: { ref: "drain-5-x" } })
   assert.equal(urls[6], "https://api.github.com/repos/o/r/pulls/7")
+})
+
+// A drain whose GitHub can list only what changed: the open list is read in full once an hour, and a poll in between reads the delta.
+async function deltaWorld(issues) {
+  const w = await world(issues)
+  w.opened = 0
+  w.deltaCalls = []
+  w.delta = async () => ({ notModified: true })
+  w.api.openIssues = async () => { w.opened += 1; return w.issues.filter((item) => item.state !== "closed") }
+  w.api.changedIssues = async (...args) => { w.deltaCalls.push(args); return w.delta(...args) }
+  return w
+}
+
+test("between full syncs a poll reads only what changed since the newest change it knew, and a 304 costs nothing and changes nothing", async () => {
+  const w = await deltaWorld([issue(1, T(0)), issue(2, T(0))])
+  await w.poll()
+  assert.equal(w.opened, 1)
+  matches(w.state(), { cursor: T(0), syncedAt: new Date(NOW).toISOString(), openCount: 2, login: "maintainer", loginAt: new Date(NOW).toISOString() })
+  const before = JSON.stringify(w.state().seen)
+  let out = await w.poll(NOW + 300_000)
+  assert.equal(w.opened, 1, "no full listing")
+  assert.deepEqual(w.deltaCalls, [[DRAIN.repo, "2026-11-13T00:58:00Z", undefined]], "from two minutes before the newest change")
+  assert.deepEqual(out.wakes, [])
+  assert.equal(JSON.stringify(w.state().seen), before)
+  matches(w.state(), { lastOkAt: new Date(NOW + 300_000).toISOString(), lastPollAt: new Date(NOW + 300_000).toISOString() })
+  // A change wakes, moves the newest-change time, and a new issue joins the count.
+  w.delta = async () => ({ issues: [issue(1, T(5), "Issue 1", "edited"), { ...issue(9, T(0)), pull_request: {} }, issue(3, T(6)), issue(2, T(0))], etag: '"abc"' })
+  out = await w.poll(NOW + 600_000)
+  assert.deepEqual(out.wakes.map((wake) => wake.events.map((event) => [event.number, event.why])), [[[1, "title or body edited"], [3, "new issue"]]])
+  matches(w.state(), { cursor: T(6), openCount: 3, etag: { since: "2026-11-13T00:58:00Z", tag: '"abc"' } })
+  assert.equal(w.state().seen["9"], undefined, "a pull request is not an issue")
+  // A new cursor means a new URL and no tag; the same URL asks again with its tag; a response without a tag keeps none.
+  w.delta = async () => ({ notModified: true })
+  await w.poll(NOW + 700_000)
+  assert.deepEqual(w.deltaCalls.at(-1), [DRAIN.repo, "2026-11-13T01:04:00Z", undefined])
+  w.delta = async () => ({ issues: [issue(3, T(6))], etag: '"def"' })
+  await w.poll(NOW + 800_000)
+  w.delta = async () => ({ notModified: true })
+  await w.poll(NOW + 900_000)
+  assert.deepEqual(w.deltaCalls.at(-1), [DRAIN.repo, "2026-11-13T01:04:00Z", '"def"'], "the same URL asks again with its tag")
+  w.delta = async () => ({ issues: [issue(3, T(6))] })
+  await w.poll(NOW + 1_000_000)
+  assert.equal(w.state().etag, undefined)
+  assert.equal(w.opened, 1)
+})
+
+test("a delta that lists an issue closed since marks it gone and drops its waiting event; a reopen is news; an hour on, the full list is read again", async () => {
+  const w = await deltaWorld([issue(1, T(0)), issue(2, T(0)), issue(3, T(0))])
+  await w.poll()
+  w.refuse = "queued behind the app"
+  w.delta = async () => ({ issues: [issue(2, T(5), "Issue 2", "edited")] })
+  await w.poll(NOW + 300_000)
+  assert.deepEqual(w.state().pending.map((event) => event.number), [2])
+  // Issue 2 closes (a closed item is in the delta); issue 3 was never seen before and closes too.
+  w.delta = async () => ({ issues: [{ ...issue(2, T(7), "Issue 2", "edited"), state: "closed" }, { ...issue(8, T(7)), state: "closed" }] })
+  const out = await w.poll(NOW + 600_000)
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(w.state().pending, [])
+  assert.equal(typeof w.state().seen["2"].goneAt, "number")
+  assert.equal(w.state().seen["8"], undefined)
+  assert.equal(w.state().openCount, 2)
+  matches(w.state(), { cursor: T(7) })
+  // Issue 2 comes back, reopened by someone.
+  w.events = async (_repo, n) => (n === 2 ? [lifecycle("reopened", T(9), "someone")] : [])
+  w.delta = async () => ({ issues: [issue(2, T(9), "Issue 2", "edited")] })
+  const back = await w.poll(NOW + 900_000)
+  assert.equal(back.wakes[0].events[0].why, "reopened")
+  assert.equal(w.state().openCount, 3)
+  // An hour after the last full listing the whole list is read again, and its newest change becomes the cursor.
+  w.issues = [issue(1, T(0)), issue(2, T(9), "Issue 2", "edited")]
+  await w.poll(NOW + 3_600_000 + 1000)
+  assert.equal(w.opened, 2)
+  matches(w.state(), { syncedAt: new Date(NOW + 3_600_000 + 1000).toISOString(), openCount: 2, cursor: T(9) })
+})
+
+test("the login is asked of GitHub once a day and the same one is reused in between", async () => {
+  const w = await deltaWorld([issue(1, T(0))])
+  const asked = []
+  w.connect = async (account, options) => { asked.push([account, options]); return w.api }
+  await w.poll()
+  await w.poll(NOW + 300_000)
+  await w.poll(NOW + 24 * 3_600_000 + 1000)
+  assert.deepEqual(asked.map(([account, options]) => [account, options.login]), [[DRAIN.account, undefined], [DRAIN.account, "maintainer"], [DRAIN.account, undefined]])
+  matches(w.state(), { login: "maintainer", loginAt: new Date(NOW + 24 * 3_600_000 + 1000).toISOString() })
+})
+
+test("the state keeps the quota the connection saw and what the poll spent, even when the poll failed", async () => {
+  const w = await world([issue(1, T(0))])
+  const quota = { remaining: 4001, limit: 5000, reset: Math.floor(NOW / 1000) + 1800, at: new Date(NOW).toISOString() }
+  w.api.quota = () => quota
+  w.api.calls = () => ({ total: 7, notModified: 3 })
+  await w.poll()
+  matches(w.state(), { quota, calls: { total: 7, notModified: 3 } })
+  w.api.openIssues = async () => { throw new Error("GitHub answered HTTP 403 for /repos/acme/widgets/issues") }
+  w.api.quota = () => ({ ...quota, remaining: 0 })
+  const out = await w.poll(NOW + 1000)
+  assert.equal(out.calls, 7)
+  matches(w.state(), { lastError: "GitHub answered HTTP 403 for /repos/acme/widgets/issues", quota: { remaining: 0 } })
+  w.connect = async () => { throw new Error("no token") }
+  await w.poll(NOW + 2000)
+  assert.deepEqual(w.state().calls, { total: 0, notModified: 0 })
+})
+
+test("quotaHold: nothing without a reading or after the window reset, a pause near zero, a slower pace when low, and the normal pace otherwise", () => {
+  const reset = Math.floor(NOW / 1000) + 1800
+  const reading = (remaining, limit = 5000) => ({ remaining, limit, reset, at: new Date(NOW).toISOString() })
+  const recent = new Date(NOW - 5 * 60_000).toISOString()
+  const old = new Date(NOW - 20 * 60_000).toISOString()
+  assert.equal(quotaHold(null, recent, NOW), null)
+  assert.equal(quotaHold(reading(0), recent, reset * 1000), null, "the window has reset")
+  assert.match(quotaHold(reading(25), old, NOW), /^25\/5000 calls left, paused until 2026-11-13T06:30:00\.000Z$/u)
+  assert.match(quotaHold(reading(300), recent, NOW), /^300\/5000 calls left, polling every 15m until 2026-11-13T06:30:00\.000Z$/u)
+  assert.equal(quotaHold(reading(300), old, NOW), null, "a slow poll is due")
+  assert.equal(quotaHold(reading(300), undefined, NOW), null, "never polled")
+  assert.equal(quotaHold(reading(499), recent, NOW) === null, false, "ten percent of a 5000 window")
+  assert.equal(quotaHold(reading(501), recent, NOW), null)
+  assert.equal(quotaHold(reading(150, 1000), recent, NOW) === null, false, "the floor applies to a small window")
+})
+
+test("a drain whose account is low on quota is not polled, the quota is shared by the drains on that account, and another account carries on", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const paths = { config: path.join(dir, "config.json"), state: path.join(dir, "state.json"), lock: path.join(dir, "poll.lock") }
+  const drains = [
+    { repo: "corp/tools", session: "58fbd57e-e371-4169-b013-2f413ab4a046", account: "work" },
+    { repo: "corp/apps", session: "48a0f0ab-56ad-406d-8831-5352815be337", account: "work" },
+    { repo: "acme/widgets", session: "12345678-0000", account: "personal" },
+  ]
+  writeFileSync(paths.config, JSON.stringify({ drains }))
+  const reset = Math.floor(NOW / 1000) + 1800
+  const remaining = { work: 5000, personal: 5000 }
+  const connected = []
+  const issues = { "corp/tools": [issue(1, T(0))], "corp/apps": [issue(1, T(0))], "acme/widgets": [issue(1, T(0))] }
+  const connect = async (account) => {
+    connected.push(account)
+    return { login: account, openIssues: async (repo) => issues[repo], comments: async () => [], issueEvents: async () => [], timeline: async () => [], quota: () => ({ remaining: remaining[account], limit: 5000, reset, at: new Date(NOW).toISOString() }), calls: () => ({ total: 2, notModified: 1 }) }
+  }
+  const poll = (at) => pollDrains({ paths, connect, now: at, ackCommand: ["node", "drains.js"] })
+  const first = await poll(NOW)
+  assert.deepEqual(connected, ["work", "work", "personal"])
+  assert.equal(first.calls, 6)
+  assert.match(first.status[0], /^quota work: 5000\/5000 calls left, resets 2026-11-13T06:30:00\.000Z \(read just now\); the last cycle used 4 calls, 2 of them not modified$/u)
+  assert.match(first.status[1], /^quota personal: 5000\/5000 .*used 2 calls, 1 of them not modified$/u)
+  // The work account runs low while the first of its drains is read: the second is held, the personal one is not.
+  connected.length = 0
+  remaining.work = 20
+  const second = await poll(NOW + 300_000)
+  assert.deepEqual(connected, ["work", "personal"], "corp/tools was read and found the account at 20; corp/apps and later cycles wait")
+  assert.match(second.status[0], /^quota work: 20\/5000 calls left/u)
+  assert.match(second.status.find((line) => line.startsWith("issue drain corp/apps")), /held: 20\/5000 calls left, paused until 2026-11-13T06:30:00\.000Z$/u)
+  assert.equal(readDrainStates(paths.state)["corp/apps"].calls.total, 0)
+  // Held drains keep their pending wakes, and the next cycle still holds them until the window resets.
+  connected.length = 0
+  await poll(NOW + 600_000)
+  assert.deepEqual(connected, ["personal"])
+  connected.length = 0
+  remaining.work = 5000
+  const after = await poll(reset * 1000 + 1000)
+  assert.deepEqual(connected, ["work", "work", "personal"])
+  assert.equal(after.status.some((line) => line.includes("held:")), false)
+  assert.equal(readDrainStates(paths.state)["corp/apps"].hold, undefined)
+})
+
+test("quota lines name each account once, with the active account when none is configured, and show nothing before a reading", () => {
+  const drains = [{ repo: "a/b", session: "12345678-0", account: "work" }, { repo: "c/d", session: "12345678-1" }, { repo: "e/f", session: "12345678-2", account: "work" }]
+  const reading = (remaining, at) => ({ remaining, limit: 5000, reset: Math.floor(NOW / 1000) + 600, at })
+  const states = {
+    "a/b": { pending: [], quota: reading(10, new Date(NOW - 60_000).toISOString()), calls: { total: 3, notModified: 3 } },
+    "e/f": { pending: [], quota: reading(7, new Date(NOW - 10_000).toISOString()) },
+    "c/d": { pending: [], quota: reading(900, new Date(NOW - 7_200_000).toISOString()), calls: { total: 1, notModified: 0 } },
+  }
+  assert.deepEqual(quotaLines(drains, states, NOW), [
+    "quota work: 7/5000 calls left, resets 2026-11-13T06:10:00.000Z (read just now); the last cycle used 3 calls, 3 of them not modified",
+    "quota the active account: 900/5000 calls left, resets 2026-11-13T06:10:00.000Z (read 2h ago); the last cycle used 1 calls, 0 of them not modified",
+  ])
+  assert.deepEqual(quotaLines(drains, { "a/b": { pending: [] } }, NOW), [])
+  assert.match(drainStatusLines(drains, { "a/b": { pending: [], hold: "x" }, "c/d": { pending: [], lastPollAt: new Date(NOW).toISOString(), hold: "slow" } }, NOW).join("\n"), /issue drain a\/b -> 12345678: not polled yet, held: x\nissue drain c\/d.*held: slow/u)
+})
+
+test("conditional requests: a stored tag goes out as If-None-Match, a 304 is counted as free, and every answer's quota headers are kept, errors included", async () => {
+  const spawn = () => ({ status: 0, stdout: "tok" })
+  const headers = { "x-ratelimit-remaining": "4990", "x-ratelimit-limit": "5000", "x-ratelimit-reset": "1794600000" }
+  const sent = []
+  const answers = [
+    response([issue(1, "u1")], { link: '<next>; rel="next"', headers: { ...headers, etag: '"t1"' } }),
+    response([issue(2, "u2")], { headers }),
+    response({}, { status: 304, headers: { ...headers, "x-ratelimit-remaining": "4989" } }),
+    response({}, { status: 403, headers: { ...headers, "x-ratelimit-remaining": "0" } }),
+  ]
+  const fetchImpl = async (url, init) => { sent.push([url, init.headers["If-None-Match"]]); return answers.shift() }
+  const api = await connectGithub("work", { spawn, fetchImpl, login: "work_microsoft" })
+  assert.equal(api.login, "work_microsoft")
+  assert.equal(sent.length, 0, "a known login is not asked for")
+  assert.equal(api.quota(), null)
+  const listed = await api.changedIssues("o/r", "2026-11-13T00:58:00Z", '"old"')
+  assert.deepEqual(listed.issues.map((item) => item.number), [1, 2])
+  assert.equal(listed.etag, '"t1"')
+  assert.deepEqual(sent, [
+    ["https://api.github.com/repos/o/r/issues?state=all&sort=updated&direction=desc&since=2026-11-13T00%3A58%3A00Z&per_page=100&page=1", '"old"'],
+    ["https://api.github.com/repos/o/r/issues?state=all&sort=updated&direction=desc&since=2026-11-13T00%3A58%3A00Z&per_page=100&page=2", undefined],
+  ])
+  assert.deepEqual(await api.changedIssues("o/r", "2026-11-13T00:58:00Z", '"t1"'), { notModified: true })
+  assert.equal(sent.at(-1)[1], '"t1"')
+  assert.deepEqual(api.calls(), { total: 3, notModified: 1 })
+  assert.deepEqual({ remaining: api.quota().remaining, limit: api.quota().limit, reset: api.quota().reset }, { remaining: 4989, limit: 5000, reset: 1794600000 })
+  await assert.rejects(api.changedIssues("o/r", "2026-11-13T00:58:00Z"), /GitHub answered HTTP 403 for \/repos\/o\/r\/issues$/u)
+  assert.equal(api.quota().remaining, 0, "the quota is read from the refusal too")
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {
