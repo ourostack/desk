@@ -272,6 +272,36 @@ test("waitingOnChecks names every required check that is missing, pending or not
   assert.deepEqual(waitingOnChecks(["a.b"], [check("axb")]), ["a.b: not started"], "only * is a wildcard")
 })
 
+test("waitingOnChecks with skippedPasses: skipped and neutral pass, while every other conclusion, a pending check and a missing one still hold", () => {
+  const verdict = (runs) => waitingOnChecks(["typecheck", "shard-*"], runs, true)
+  assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "neutral"), check("shard-2")]), [])
+  for (const conclusion of ["failure", "cancelled", "timed_out", "action_required", "stale", "startup_failure"]) {
+    assert.deepEqual(verdict([check("typecheck", conclusion), check("shard-1")]), [`typecheck: typecheck ${conclusion}`])
+  }
+  assert.deepEqual(verdict([check("typecheck", null, "in_progress"), check("shard-1")]), ["typecheck: typecheck in_progress"])
+  assert.deepEqual(verdict([check("shard-1")]), ["typecheck: not started"])
+  assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "skipped"), check("shard-2", "failure")]), ["shard-*: 1 of 2 not green (shard-2 failure)"])
+})
+
+test("skippedPasses is true or false on a merge relay, and anything else is named", () => {
+  const merge = (extra) => parseRelayConfig(JSON.stringify({ relays: [{ ...MERGE, ...extra }] }), "relays.json")[0]
+  assert.equal(merge({ skippedPasses: true }).skippedPasses, true)
+  assert.throws(() => merge({ skippedPasses: "yes" }), /relays\[0\]\.skippedPasses is not true or false/u)
+})
+
+test("merge-when-green: with skippedPasses a skipped or neutral check merges, and a cancelled one still holds the pull request", async () => {
+  const passing = await setup([{ ...MERGE, skippedPasses: true }])
+  mergeWorld(passing.world, { checks: [check("typecheck", "skipped"), check("npm test (ubuntu-latest, 1/2)", "neutral"), check("npm test (ubuntu-latest, 2/2)")] })
+  assert.deepEqual((await passing.poll()).errors, [])
+  assert.deepEqual(prWrites(passing.world).map((write) => write.method), ["PUT"])
+
+  const held = await setup([{ ...MERGE, skippedPasses: true }])
+  mergeWorld(held.world, { checks: [check("typecheck", "skipped"), check("npm test (ubuntu-latest, 1/2)", "cancelled"), check("npm test (ubuntu-latest, 2/2)")] })
+  await held.poll()
+  assert.deepEqual(prWrites(held.world), [])
+  assert.match(comments(held.world)[0].body.body, /npm test \(ubuntu-latest, \*\): 1 of 2 not green \(npm test \(ubuntu-latest, 1\/2\) cancelled\)/u)
+})
+
 test("merge-when-green: with every check green and main green it squash-merges at the checked head, deletes the branch and comments once", async () => {
   const w = await setup([MERGE])
   mergeWorld(w.world)

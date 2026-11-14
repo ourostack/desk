@@ -94,13 +94,14 @@ function parseDispatch({ watch, fire }, at, bad) {
   }
 }
 
-function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen }, at, bad) {
+function parseMerge({ repo, label, method, deleteBranch, requiredChecks, requireMainWorkflowGreen, skippedPasses }, at, bad) {
   if (!isRepo(repo)) throw bad(`${at}.repo is not "owner/name"`)
   if (label !== undefined && !isText(label)) throw bad(`${at}.label is not a label name`)
   if (method !== undefined && !METHODS.includes(method)) throw bad(`${at}.method is not "squash", "merge" or "rebase"`)
   if (deleteBranch !== undefined && typeof deleteBranch !== "boolean") throw bad(`${at}.deleteBranch is not true or false`)
   if (!textList(requiredChecks)) throw bad(`${at}.requiredChecks is not a non-empty list of check names (a "*" matches any text)`)
   if (requireMainWorkflowGreen !== undefined && !isText(requireMainWorkflowGreen)) throw bad(`${at}.requireMainWorkflowGreen is not a workflow file name such as ci.yml`)
+  if (skippedPasses !== undefined && typeof skippedPasses !== "boolean") throw bad(`${at}.skippedPasses is not true or false`)
   return {
     repo,
     label: (label ?? "merge-when-green").trim(),
@@ -108,6 +109,7 @@ function parseMerge({ repo, label, method, deleteBranch, requiredChecks, require
     deleteBranch: deleteBranch ?? true,
     requiredChecks: requiredChecks.map((check) => check.trim()),
     ...(requireMainWorkflowGreen === undefined ? {} : { requireMainWorkflowGreen: requireMainWorkflowGreen.trim() }),
+    ...(skippedPasses === undefined ? {} : { skippedPasses }),
   }
 }
 
@@ -258,12 +260,16 @@ const readMain = (ctx, state, repo, workflow, branch) =>
 
 const shown = (runs) => `${runs.slice(0, 3).map((run) => `${run.name} ${run.status === "completed" ? run.conclusion : run.status}`).join(", ")}${runs.length > 3 ? `, and ${runs.length - 3} more` : ""}`
 
-/** What each required check is still missing, as one line per entry that is not fully green. A check counts only when it completed with `success`. */
-export function waitingOnChecks(requiredChecks, runs) {
+/** The conclusions a `skippedPasses` relay also accepts. Every other conclusion, and a check still running, keeps the pull request waiting. */
+const SKIPPED_PASSES = new Set(["skipped", "neutral"])
+
+/** What each required check is still missing, as one line per entry that is not fully green. A check counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
+export function waitingOnChecks(requiredChecks, runs, skippedPasses = false) {
+  const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
   return requiredChecks.flatMap((required) => {
     const matching = runs.filter((run) => globPattern(required).test(run.name))
     if (matching.length === 0) return [`${required}: not started`]
-    const notGreen = matching.filter((run) => run.status !== "completed" || run.conclusion !== "success")
+    const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
   })
 }
@@ -330,7 +336,7 @@ async function handlePull(relay, state, ctx, number) {
   let mainBranch
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
   if (waiting.length === 0) {
-    waiting = waitingOnChecks(relay.requiredChecks, (await readChecks(ctx, state, relay.repo, pr.headSha)).runs)
+    waiting = waitingOnChecks(relay.requiredChecks, (await readChecks(ctx, state, relay.repo, pr.headSha)).runs, relay.skippedPasses)
     if (relay.requireMainWorkflowGreen) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
       const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
