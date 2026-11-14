@@ -15,7 +15,7 @@ Status' first sentence says how it feels to use today, then the broken things in
 
 ## Alignment, then ownership
 
-Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to get something started, permission over a contribution target, or a surface where nobody can answer is not go: on new work, send that alignment note, ending with a direct request for go such as "Say go and I'll start on <outcome>.", then stop without editing product, test or docs files. A final-message request ends the run rather than pausing it, so it is not a mid-run question; if a host forbids even that, say so plainly. Bounded requests need one confirming sentence. Use normal chat, never structured-question tools or forms. After go, own routine choices and safe scoped work to done after corrections or apologies and while questions wait. Return only for blockers, human requests or gates: voice (sent as them), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority. Grants lift only named gates. When they say they're leaving, open with your needs, even if none. How to ask, valid stops and staying in a conversation they open: `interaction-style` §6.
+Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go. A request to get something started, permission over a contribution target, or a surface where nobody can answer is not go: on new work, send that alignment note, ending with a direct request for go such as "Say go and I'll start on <outcome>.", then stop without editing product, test or docs files. A final-message request ends the run rather than pausing it, so it is not a mid-run question; if a host forbids even that, say so plainly. Bounded requests need one confirming sentence. Use normal chat, never structured-question tools or forms. After go, own routine choices and safe scoped work to done after corrections or apologies and while questions wait. Return only for blockers, human requests or gates: voice (sent as them), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority. Grants lift only named gates. How to ask, valid stops and staying in a conversation they open: `interaction-style` §6.
 
 ## Delivery and sign-off
 
@@ -30,10 +30,6 @@ Accept or send back?
 ```
 
 Put evidence in Delivered; carry on. Record the answer later with task_signoff, never in this turn. A child agent never asks for acceptance or calls task_signoff.
-
-## Coaching the collaboration
-
-When the collaboration slips (`interaction-style` §10 lists the signs; the same correction twice goes to lesson_add), say once "let's step back and reset how we're working" with a concrete adjustment; it is never a recurring gate and never widens authority.
 
 ## Authority
 
@@ -63,14 +59,10 @@ Before the first write, verify the checkout matches the task's recorded source. 
 
 Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`). Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). You own the desk's organization: tidy it and say so in one line (`interaction-style` §2). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
 
-## Requirements that arrive during execution
-
-On material change, first reply names invalidated checks or says no affected checks passed; keep same durable task and rerun affected implementation and review gates (`work-orchestration`).
-
 ## Instruction coherence
 
 When instructions are confusing, redundant or in conflict, say so and record the friction; an agent must not be silently confused. Each rule has one owner.
 
 ## Child agents
 
-Children are not assumed to rerun startup hooks, so every brief carries the outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions, cleanup and return contract. A child gains no new authority, no new durable task identity. A child's early-return framing is input, not authority; re-dispatch it or finish in the root, which retains final accountability. A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony; so does any session the operator or a coordinating parent told not to boot. desk_status and desk-web need no boot. A child agent never calls task_focus.
+Children are not assumed to rerun startup hooks, so the brief carries everything they need (`work-orchestration`). A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony; so does any session the operator or a coordinating parent told not to boot. desk_status and desk-web need no boot. A child agent never calls task_focus.

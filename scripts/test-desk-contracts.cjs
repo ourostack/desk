@@ -64,8 +64,9 @@ contract("the first-response owner carries requirement evidence invalidation bef
   assert.match(response, /first reply[\s\S]+test runs[\s\S]+review[\s\S]+invalidates[\s\S]+none[\s\S]+task card/iu);
 });
 contract("a changed requirement names the previous check and its missing coverage", () => {
-  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
-  assert.match(foundation, /first reply[\s\S]+invalidated checks[\s\S]+no affected checks passed[\s\S]+same durable task[\s\S]+rerun/iu);
+  const reply = text("plugins/desk/skills/interaction-style/SKILL.md");
+  assert.match(reply, /\*\*A requirement changes mid-task:\*\* the next message names each earlier test run, review and by-eye check the change no longer proves, or says none is affected\./u);
+  assert.match(text("plugins/desk/skills/work-orchestration/SKILL.md"), /^## Requirements that arrive during execution\n\n[^\n]*same durable task[^\n]*tests[^\n]*review/imu);
 });
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
@@ -1169,7 +1170,7 @@ contract("each new sign-off paragraph in the other skills is pinned", () => {
   assert.match(read("session-start/details.md"), /^## Delivered tasks awaiting sign-off$/mu);
   assert.match(read("session-start/details.md"), /`Delivered, awaiting sign-off:`[^\n]+In a noninteractive session, raise nothing/u);
   assert.match(read("using-superpowers-with-desk/SKILL.md"), /`Never call task_signoff\.`[^\n]+always there[^\n]+a child never calls `task_signoff`/u);
-  assert.match(read("using-desk/SKILL.md"), /re-dispatch it or finish in the root/u);
+  assert.match(read("work-orchestration/SKILL.md"), /re-dispatch it or finish in the root/u);
   assert.match(read("using-desk/SKILL.md"), /A child agent never asks for acceptance or calls task_signoff\./u);
 });
 contract("the store playbook states the outcome report keys as fact", () => {

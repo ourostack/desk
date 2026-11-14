@@ -1,6 +1,6 @@
 ---
 name: interaction-style
-description: Invoke when new input arrives mid-work, before returning control or stopping short of scope, before a blocking wait, when presenting several decisions, when organizing tracks or tasks, when the human steps away, when the host nudges about its task list or memory, or before acting on standing authority.
+description: Invoke when new input arrives mid-work, before returning control or stopping short of scope, before a blocking wait, when presenting several decisions, when organizing tracks or tasks, when the human steps away, when the collaboration slips, when the host nudges about its task list or memory, or before acting on standing authority.
 ---
 
 # Interaction style
