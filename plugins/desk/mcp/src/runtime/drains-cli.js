@@ -57,6 +57,16 @@ export function parseDrainsArgs(argv) {
   return { command, flags }
 }
 
+/** The relays' status lines; a relays.json that cannot be read is one line saying so, never a reason to hide the drains. */
+function relayLines(env, at) {
+  const files = relayPaths({ env })
+  try {
+    return relayStatusLines(readRelayConfig(files.config), readRelayStates(files.state), at)
+  } catch (error) {
+    return [`relays: ${error.message}`]
+  }
+}
+
 // A launcher that cannot be refreshed (a read-only state folder) never stops a poll; the output says so.
 function refreshLauncher(env) {
   try {
@@ -99,8 +109,7 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
       io.stdout.write(`${JSON.stringify(answer, null, 1)}\n`)
       return 0
     } else {
-      const relays = readRelayConfig(relayPaths({ env }).config)
-      result = { status: [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayStatusLines(relays, readRelayStates(relayPaths({ env }).state), now())] }
+      result = { status: [...drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()), ...relayLines(env, now())] }
     }
     if (command !== "ack") {
       const { line, ...desk } = deskInUse({ script, env })

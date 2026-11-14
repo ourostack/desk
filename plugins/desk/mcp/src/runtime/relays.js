@@ -6,7 +6,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { deskFailure } from "./desk-failure.js"
-import { drainPaths, drainsHome, quotaHold, readDrainConfig, readDrainStates } from "./drains.js"
+import { drainsHome, quotaHold, readDrainConfig, readDrainStates } from "./drains.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const DEFAULT_EVERY_SECONDS = 30
@@ -205,7 +205,10 @@ async function runDispatch(relay, state, ctx) {
   const handled = new Set(state.handled)
   const fresh = runs.filter((run) => !handled.has(run.id))
   if (fresh.length === 0) return
-  if (state.retryAt && ctx.now < Date.parse(state.retryAt)) return
+  if (state.retryAt && ctx.now < Date.parse(state.retryAt)) {
+    state.waitingOn = `a fire GitHub refused, to be tried again after ${state.retryAt}`
+    return
+  }
   const newest = fresh.find((run) => run.id === Math.max(...fresh.map((candidate) => candidate.id)))
   let target
   try {
@@ -401,7 +404,7 @@ function safely(read, fallback) {
  * Poll every due relay once. A relay's account is its own `account`, else the one its repository has in the drains config.
  * The state is written before this returns, and again right after each fire or merge, so a restart never repeats either.
  */
-export async function pollRelays({ paths, drainFiles = drainPaths(), connect, now }) {
+export async function pollRelays({ paths, drainFiles, connect, now }) {
   const relays = readRelayConfig(paths.config)
   const stored = readRelayStates(paths.state)
   const states = Object.fromEntries(relays.map((relay) => [relay.name, stored[relay.name]?.type === relay.type ? stored[relay.name] : { type: relay.type, cache: {}, history: [], ...(relay.type === "merge-when-green" ? { prs: {} } : {}) }]))

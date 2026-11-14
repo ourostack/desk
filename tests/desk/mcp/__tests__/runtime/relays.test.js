@@ -60,7 +60,7 @@ function github() {
           world.notModified += 1
           return { notModified: true }
         }
-        return { body, etag: tag, next: false }
+        return { body, etag: tag, next: world.more?.(route) ?? false }
       },
       send: async (method, route, body) => {
         world.writes.push({ method, route, body })
@@ -217,6 +217,7 @@ test("dispatch: the handled runs survive a restart, so nothing fires again, and 
   assert.equal(w.state(DISPATCH.name).lastFire, undefined)
   await w.poll(NOW + 2 * MIN)
   assert.equal(w.world.writes.length, 1, "a refused fire waits five minutes before it tries again")
+  assert.match(w.state(DISPATCH.name).waitingOn, /^a fire GitHub refused, to be tried again after 2026-11-14T12:06:00\.000Z$/u)
   refuse = false
   await w.poll(NOW + 7 * MIN)
   assert.equal(w.world.writes.length, 2)
@@ -576,8 +577,27 @@ test("the command line runs relays with flags, prints their status, and fails wi
   assert.equal((await cli(["relays", "poll", "--config", config, "--state", state])).code, 0)
   const status = JSON.parse((await cli(["relays", "status", "--config", config, "--state", state])).out)
   assert.match(status.status[1], /^relay data to pages \(dispatch\) .*never fired/u)
+  writeFileSync(path.join(dir, "xdg", "ouroboros-skills", "desk", "drains", "relays.json"), "{")
+  assert.match(JSON.parse((await cli(["status"])).out).status.at(-1), /^relays: .*relays config: .* is not valid JSON/u, "a bad relays file shows on the drains' status instead of hiding it")
   writeFileSync(config, "{")
   const failed = await cli(["relays", "poll", "--config", config, "--state", state])
   assert.equal(failed.code, 1)
   assert.match(failed.err, /relays config: .* is not valid JSON/u)
+})
+
+test("merge-when-green: its status comment is found on a later page of comments, and a search that finds none stops after five pages", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { checks: [check("typecheck", null, "queued")] })
+  w.world.more = (route) => !route.includes("page=3")
+  w.world.on("GET", /\/issues\/7\/comments\?per_page=100&page=2$/u, () => [{ id: 77, body: "<!-- desk-relay-status:pages merge -->\nold", user: { login: "relay-bot" } }])
+  w.world.on("GET", /\/issues\/7\/comments\?per_page=100&page=1$/u, () => [])
+  await w.poll(NOW)
+  assert.deepEqual(comments(w.world).map((write) => `${write.method} ${write.route.split("/").at(-1)}`), ["PATCH 77"])
+  const none = await setup([MERGE])
+  mergeWorld(none.world, { checks: [check("typecheck", null, "queued")] })
+  none.world.more = () => true
+  none.world.on("GET", /\/issues\/7\/comments\?/u, () => [])
+  await none.poll(NOW)
+  assert.equal(none.world.reads.filter((read) => read.route.includes("/comments")).length, 5)
+  assert.deepEqual(comments(none.world).map((write) => write.method), ["POST"])
 })
