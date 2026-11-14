@@ -1,1 +1,0 @@
-A browser snapshot of a page that has not rendered yet now says `[not rendered]` with advice to wait and snapshot again, instead of a tree of `[redacted]` nodes that looked like the page's content had been masked.

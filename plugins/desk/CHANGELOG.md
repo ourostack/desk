@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.140 — 2026-11-14
+
+The issue-drain poller treats a label or state change made by the polling account during the drain's own turn (from a wake's delivery until 90 minutes later) as the drain's own work, so labels such as `waiting:external` no longer wake it, and a per-repository `ignoreLabels` list of regular expressions skips labels by pattern. A cross-reference from a pull request the drain's marked status comment on the issue names is the drain's own, on any branch, and `draining-issues` asks drains to put the marker in their pull request bodies. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
+
+A browser snapshot of a page that has not rendered yet now says `[not rendered]` with advice to wait and snapshot again, instead of a tree of `[redacted]` nodes that looked like the page's content had been masked.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.139 — 2026-11-14
 
 Desk's agent-facing words now have no known Ouro AX findings, and the check refuses any new one. The last seven tool descriptions that ran over the 600-character budget (`task_move`, `friction_add`, `lesson_add`, `note_leave`, `desk_save`, `browser_context` and `browser_command`) are shorter and say when to use the tool; the detail they dropped now sits in the input schema. Seven messages that told an agent to run `git` commands now say what to do without the command. The recorded baseline is gone: a finding fails the test, and a text exempted as not an error can only be added by raising a cap in the same change.
