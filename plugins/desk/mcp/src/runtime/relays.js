@@ -308,7 +308,7 @@ async function writeStatus(ctx, relay, number, record, text, { final }) {
 
 const short = (sha) => String(sha).slice(0, 7)
 const waitingText = (relay, pr, waiting) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}\n\nThis comment is edited as that changes.`
-const mergedText = (relay, pr, sha, deleted) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every required check on the head was green${relay.requireMainWorkflowGreen ? ` and ${pr.baseRef}'s latest completed ${relay.requireMainWorkflowGreen} run was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
+const mergedText = (relay, pr, sha, deleted, mainBranch) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every required check on the head was green${relay.requireMainWorkflowGreen ? ` and ${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
 
 async function deleteBranch(ctx, relay, pr) {
   if (!relay.deleteBranch || !pr.headRepo || pr.headRepo.toLowerCase() !== pr.baseRepo.toLowerCase() || pr.headRef === pr.baseRef) return false
@@ -324,13 +324,15 @@ async function handlePull(relay, state, ctx, number) {
   const record = (prs[number] ??= {})
   record.headSha = pr.headSha
   let waiting = waitingOnPull(pr)
+  let mainBranch
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
   if (waiting.length === 0) {
     waiting = waitingOnChecks(relay.requiredChecks, (await readChecks(ctx, state, relay.repo, pr.headSha)).runs)
     if (relay.requireMainWorkflowGreen) {
-      const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, pr.baseRef)
-      if (!main) waiting.push(`${pr.baseRef} has no completed ${relay.requireMainWorkflowGreen} run yet`)
-      else if (main.conclusion !== "success") waiting.push(`${pr.baseRef}'s latest completed ${relay.requireMainWorkflowGreen} run is ${main.conclusion}`)
+      mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
+      const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
+      if (!main) waiting.push(`${mainBranch} has no completed ${relay.requireMainWorkflowGreen} run yet`)
+      else if (main.conclusion !== "success") waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run is ${main.conclusion}`)
     }
   }
   if (waiting.length === 0 && record.refused?.sha === pr.headSha && ctx.now - Date.parse(record.refused.at) < REFUSED_MS) waiting = [`GitHub refused the merge (${record.refused.reason}); trying again after ${new Date(Date.parse(record.refused.at) + REFUSED_MS).toISOString()}`]
@@ -354,10 +356,10 @@ async function handlePull(relay, state, ctx, number) {
   prs[number] = { status: "merged", headSha: pr.headSha, sha: response.body.sha, at, commentId: record.commentId, commentAt: record.commentAt }
   note(state, ctx.now, { event: "merged", number, sha: response.body.sha, branchDeleted: deleted })
   ctx.save()
-  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted), { final: true })
+  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, mainBranch), { final: true })
 }
 
-/** Merges each labelled open pull request whose required checks (and the base branch's workflow, when named) are all green, and keeps its status comment current. */
+/** Merges each labelled open pull request whose required checks (and the default branch's workflow, when named) are all green, and keeps its status comment current. */
 async function runMerge(relay, state, ctx) {
   const labelled = await cached(ctx, state, `/repos/${relay.repo}/issues?state=open&labels=${encodeURIComponent(relay.label)}&per_page=100`, (body) => body.filter((issue) => issue.pull_request).map((issue) => issue.number))
   for (const [number, record] of Object.entries(state.prs)) if (record.status !== "merged" && !labelled.includes(Number(number))) delete state.prs[number]

@@ -42,7 +42,7 @@ The first poll only records the runs that already succeeded. After that, a new s
 
 - `label`, `method` (`squash`, `merge` or `rebase`) and `deleteBranch` default to `merge-when-green`, `squash` and `true`.
 - `requiredChecks` is a non-empty list of check-run names; `*` matches any text. A pattern needs at least one match, and every match must have completed with `success`: a missing, queued, skipped or failed check keeps the pull request waiting. Name a check exactly when its count matters.
-- `requireMainWorkflowGreen` names a workflow file; the base branch's latest completed run of it must be `success`.
+- `requireMainWorkflowGreen` names a workflow file; the latest completed run of it on the repository's default branch must be `success`, whichever branch the pull request targets.
 
 A labelled open pull request merges only when it is not a draft, GitHub reports it clean (not conflicted, behind, blocked or still being computed), every required check is green on its head, and the main-branch run is green. The merge names the head it checked, so GitHub refuses it if a push landed since. The relay never passes `--admin` or any bypass: it uses GitHub's ordinary merge, and GitHub's own branch rules still apply. A merge GitHub refuses is reported and tried again after five minutes, or at once for a new head. The branch is deleted after the merge when it lives in the same repository.
 

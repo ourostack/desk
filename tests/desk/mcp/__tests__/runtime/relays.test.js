@@ -94,6 +94,7 @@ function mergeWorld(world, { checks = GREEN, main = [{ id: 9, conclusion: "succe
   world.on("GET", /\/issues\?state=open&labels=merge-when-green/u, () => [{ number: 7, pull_request: {} }, { number: 8 }])
   world.pull(7, pr)
   world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: checks.length, check_runs: checks }))
+  world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
   world.on("GET", /\/workflows\/ci\.yml\/runs\?branch=main&status=completed/u, () => ({ workflow_runs: main }))
   world.on("GET", /\/issues\/7\/comments/u, () => [])
   world.on("PUT", /\/pulls\/7\/merge$/u, () => ({ ok: true, status: 200, body: { merged: true, sha: MERGED_SHA } }))
@@ -325,6 +326,7 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
   }
   assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }] }), "main's latest completed ci.yml run is failure")
   assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "cancelled" }] }), "main's latest completed ci.yml run is cancelled")
+  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }], pr: { base: { ref: "stack", repo: { full_name: "o/pages" } } } }), "main's latest completed ci.yml run is failure", "a pull request into another branch still waits on the default branch")
   assert.equal(await why(NOW, { main: [] }), "main has no completed ci.yml run yet")
   assert.equal(await why(NOW, { pr: { draft: true } }), "it is a draft")
   assert.equal(await why(NOW, { pr: { mergeable: false, mergeable_state: "dirty" } }), "it has merge conflicts")
