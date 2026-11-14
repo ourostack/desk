@@ -66,7 +66,7 @@ export function createRuntimeRefresher({ prepare, env = process.env, now = Date.
       if (disabled !== null || checking !== null || pending !== null) return false
       if (startedAt !== null && now() - startedAt < (soon ? Math.min(intervalMs, STATUS_REFRESH_INTERVAL_MS) : intervalMs)) return false
       startedAt = now()
-      outcome = { ...outcome, state: "checking" }
+      outcome = { state: "checking" }
       checking = check(running).finally(() => { checking = null })
       return true
     },
