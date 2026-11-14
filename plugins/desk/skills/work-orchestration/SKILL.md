@@ -86,6 +86,10 @@ On failure, failure blocks only descendants: independent ready nodes already dis
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.
 
+## Waste judgment
+
+Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work, fast-follow, batch, side quests in their own lanes; redesign failures. "No waste" never means dropping proof. Agent storage has retention, run unasked (`task-lifecycle`, "Agent storage stays bounded"); verify reclaimed space, not exit; never propose deleting the human's.
+
 ## Parallelize and fast-follow
 
 This is the default for all work, not only multi-step plans. `superpowers:dispatching-parallel-agents` covers fanning independent problems out to agents; Desk adds:

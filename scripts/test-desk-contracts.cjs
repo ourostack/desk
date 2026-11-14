@@ -688,7 +688,7 @@ contract("no skill tells the agent to propose a name or wait for naming confirma
 contract("interaction-style carries the organization sentence exactly once", () => {
   const sentence = "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.";
   assert.equal(text("plugins/desk/skills/interaction-style/SKILL.md").split(sentence).length - 1, 1);
-  assert.match(text("plugins/desk/skills/using-desk/SKILL.md"), /You own the desk's organization: tidy it and say so in one line \(`interaction-style` §2\)/u);
+  assert.doesNotMatch(text("plugins/desk/skills/using-desk/SKILL.md"), /You own the desk's organization/u, "the organization rule has one owner");
 });
 contract("track-card-format owns the scope line and says it drives routing", () => {
   const skill = text("plugins/desk/skills/track-card-format/SKILL.md");
