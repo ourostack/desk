@@ -1,6 +1,6 @@
 # Issue drains
 
-A drain is an agent session that works one repository's issues. Desk owns the part that notices work: a deterministic poll that spends no model turns. It records which issues are new or changed and prints the wakes to deliver. It never delivers one. Whatever runs it (an always-on agent runtime, a launchd job, cron) delivers each wake to the named session. [How to work a drain](../skills/draining-issues/SKILL.md) is the skill; the code is [drains.js](../mcp/src/runtime/drains.js) and its [command line](../mcp/scripts/drains.js).
+A drain is an agent session that works one repository's issues. Desk owns the part that notices work: a deterministic poll that spends no model turns. It records which issues are new or changed and prints the wakes to deliver. It never delivers one. Whatever runs it (an always-on agent runtime, a launchd job, cron) delivers each wake to the named session. [How to work a drain](../skills/draining-issues/SKILL.md) is the skill; the code is [drains.js](../mcp/src/runtime/drains.js) and its [command line](../mcp/scripts/drains.js). The same runner also sends a coordinator's [scheduled prompts](schedules.md).
 
 ```sh
 node <desk>/plugins/desk/mcp/scripts/drains.js poll      # record changes, print wakes
