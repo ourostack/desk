@@ -34,6 +34,11 @@ function normalizeSource(content) {
   return content.replace(/^\uFEFF/u, "").replace(/\r\n/gu, "\n");
 }
 
+// One knownFailure object, or a list of them when several cases fail for different reasons.
+function knownFailures(suite) {
+  return suite.knownFailure === undefined ? [] : [suite.knownFailure].flat();
+}
+
 function contractFingerprint(suite) {
   // knownFailure annotates a rerun's outcome; it is not part of the behavior contract a receipt covers.
   const { knownFailure, ...contract } = suite;
@@ -436,13 +441,17 @@ function validateSuite(suite, repoRoot, label) {
   }
 
   if (suite.knownFailure !== undefined) {
-    const known = suite.knownFailure;
-    if (!exactly(known, ["issue", "case", "observed"]) || !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+$/u.test(known.issue)) {
-      fail(`${label}: knownFailure needs an issue URL, a case id and an observed date`);
-    }
-    if (!caseIds.has(known.case)) fail(`${label}: knownFailure names unknown case: ${known.case}`);
-    if (!/^\d{4}-\d{2}-\d{2}$/u.test(known.observed) || new Date(`${known.observed}T00:00:00Z`).toISOString().slice(0, 10) !== known.observed) {
-      fail(`${label}: knownFailure observed must be a valid YYYY-MM-DD date`);
+    const seen = new Set();
+    for (const known of knownFailures(suite)) {
+      if (!isObject(known) || !exactly(known, ["issue", "case", "observed"]) || !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+$/u.test(known.issue)) {
+        fail(`${label}: knownFailure needs an issue URL, a case id and an observed date`);
+      }
+      if (!caseIds.has(known.case)) fail(`${label}: knownFailure names unknown case: ${known.case}`);
+      if (seen.has(known.case)) fail(`${label}: knownFailure names case ${known.case} twice`);
+      seen.add(known.case);
+      if (!/^\d{4}-\d{2}-\d{2}$/u.test(known.observed) || new Date(`${known.observed}T00:00:00Z`).toISOString().slice(0, 10) !== known.observed) {
+        fail(`${label}: knownFailure observed must be a valid YYYY-MM-DD date`);
+      }
     }
   }
 
@@ -639,7 +648,7 @@ async function main(args) {
     const totals = requireEvidence(first);
     console.log(`Validated ${totals.suites} suite(s), ${totals.requirements} requirement(s), ${totals.cases} case(s), ${totals.checks} check(s). behavior: UNVERIFIED - validation does not run or judge an agent.`);
     for (const { suite } of totals.entries) {
-      if (suite.knownFailure) console.log(`KNOWN FAILURE ${suite.id}/${suite.knownFailure.case} (observed ${suite.knownFailure.observed}): ${suite.knownFailure.issue}`);
+      for (const known of knownFailures(suite)) console.log(`KNOWN FAILURE ${suite.id}/${known.case} (observed ${known.observed}): ${known.issue}`);
     }
     return;
   }

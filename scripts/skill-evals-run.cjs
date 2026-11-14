@@ -6,9 +6,10 @@
 
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
-const defaultSubjectModel = "claude-sonnet-5";
+const defaultSubjectModel = "gpt-6.1-sol";
 const defaultJudgeModel = "claude-opus-5.5";
 const subjectTimeoutSeconds = 600;
 const judgeTimeoutSeconds = 300;
@@ -55,12 +56,12 @@ function harnessCommand(harness) {
   return /\.(?:c|m)?js$/u.test(harness) ? [process.execPath, path.resolve(harness)] : [harness];
 }
 
-function runProcess(command, args, { cwd, timeoutSeconds }) {
+function runProcess(command, args, { cwd, timeoutSeconds, env }) {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    const child = spawn(command[0], [...command.slice(1), ...args], { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(command[0], [...command.slice(1), ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
@@ -107,13 +108,141 @@ function pluginDirectories(suite, root) {
   return [...names].sort().map((name) => path.join(root, "plugins", name));
 }
 
+// The app starts a Desk session in a bound desk with the plugin's default agent, so the subject gets the same: a scratch desk
+// (and, for a suite whose sources include `evals/fixtures/<name>/`, a scratch copy of that repository) that nothing real shares.
+const baselineCommit = ["-c", "user.name=Skill eval", "-c", "user.email=skill-eval@example.invalid", "-c", "commit.gpgsign=false"];
+
+function scratchGit(cwd, args) {
+  return spawnSync("git", [...baselineCommit, ...args], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+}
+
+function commitBaseline(directory) {
+  scratchGit(directory, ["init", "-q", "-b", "main"]);
+  scratchGit(directory, ["add", "-A"]);
+  scratchGit(directory, ["commit", "-q", "-m", "Baseline"]);
+  return scratchGit(directory, ["rev-parse", "HEAD"]).stdout.trim();
+}
+
+function fixtureName(suite) {
+  for (const source of suite.sources) {
+    const match = /^evals\/fixtures\/([^/]+)\//u.exec(source);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// Built once per suite and copied for each case, so one case's writes never reach another.
+function prepareTemplate(suite, root, log) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "skill-eval-"));
+  const desk = path.join(directory, "desk");
+  for (const folder of ["_meta", "_archive"]) {
+    fs.mkdirSync(path.join(desk, folder), { recursive: true });
+    fs.writeFileSync(path.join(desk, folder, ".gitkeep"), "");
+  }
+  fs.writeFileSync(path.join(desk, "AGENTS.md"), "# Desk\n\nA scratch desk for a skill evaluation.\n");
+  const template = { directory, desk, deskBaseline: commitBaseline(desk), repo: null, repoBaseline: null };
+  // A real desk has a remote its work is pushed to; this one is local to the case.
+  const origin = path.join(directory, "origin.git");
+  scratchGit(directory, ["init", "-q", "--bare", "-b", "main", origin]);
+  scratchGit(desk, ["remote", "add", "origin", origin]);
+  scratchGit(desk, ["push", "-q", "-u", "origin", "main"]);
+  const name = fixtureName(suite);
+  if (name !== null) {
+    const repo = path.join(directory, "repo");
+    fs.cpSync(path.join(root, "evals", "fixtures", name), repo, { recursive: true, filter: (source) => path.basename(source) !== "node_modules" });
+    if (fs.existsSync(path.join(repo, "package-lock.json"))) {
+      log(`  installing the ${name} fixture's frozen dependencies`);
+      const install = spawnSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repo, encoding: "utf8", shell: process.platform === "win32" });
+      if (install.status !== 0) throw new Error(`npm ci failed for the ${name} fixture: ${`${install.stderr}`.trim().slice(-400)}`);
+    }
+    template.repo = repo;
+    template.repoBaseline = commitBaseline(repo);
+  }
+  return template;
+}
+
+// Local state the subject could otherwise reach through the operator's profile: GitHub, npm and Git credentials, and Desk's own
+// protected state. The subject's shell can still use ambient environment tokens, so run where none are set.
+function subjectEnvironment(caseDirectory, desk) {
+  const config = path.join(caseDirectory, "config");
+  fs.mkdirSync(path.join(config, "gh"), { recursive: true });
+  fs.mkdirSync(path.join(config, "state"), { recursive: true });
+  fs.writeFileSync(path.join(config, "npmrc"), "");
+  fs.writeFileSync(path.join(config, "gitconfig"), `[user]\n\tname = Skill eval\n\temail = skill-eval@example.invalid\n[commit]\n\tgpgsign = false\n[credential]\n\thelper =\n[url "file:///skill-eval-no-network/"]\n\tinsteadOf = https://\n\tinsteadOf = http://\n\tinsteadOf = ssh://\n\tinsteadOf = git@\n`);
+  return {
+    ...process.env,
+    DESK: desk,
+    XDG_STATE_HOME: path.join(config, "state"),
+    GH_CONFIG_DIR: path.join(config, "gh"),
+    NPM_CONFIG_USERCONFIG: path.join(config, "npmrc"),
+    GIT_CONFIG_GLOBAL: path.join(config, "gitconfig"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: "false",
+  };
+}
+
+function cloneTemplate(template, testCaseId) {
+  const directory = fs.mkdtempSync(path.join(template.directory, `case-${testCaseId.slice(0, 24)}-`));
+  fs.cpSync(path.join(template.directory, "desk"), path.join(directory, "desk"), { recursive: true, verbatimSymlinks: true });
+  fs.cpSync(path.join(template.directory, "origin.git"), path.join(directory, "origin.git"), { recursive: true });
+  scratchGit(path.join(directory, "desk"), ["remote", "set-url", "origin", path.join(directory, "origin.git")]);
+  if (template.repo !== null) fs.cpSync(template.repo, path.join(directory, "repo"), { recursive: true, verbatimSymlinks: true });
+  return { directory, desk: path.join(directory, "desk"), repo: template.repo === null ? null : path.join(directory, "repo") };
+}
+
+function limited(text, limit) {
+  return text.length > limit ? `${text.slice(0, limit)}\n[truncated]` : text;
+}
+
+// The judge sees only the subject's reply and tool requests, so state checks (writes, commits, tests) need the state itself.
+function workspaceEvidence(workspace, template) {
+  const parts = [];
+  for (const [label, directory, baseline] of [["desk", workspace.desk, template.deskBaseline], ["repository", workspace.repo, template.repoBaseline]]) {
+    if (directory === null) continue;
+    const status = scratchGit(directory, ["status", "--short", "--untracked-files=all"]).stdout.trim();
+    const commits = scratchGit(directory, ["log", "--format=%h %s", `${baseline}..HEAD`]).stdout.trim();
+    const diff = scratchGit(directory, ["diff", "--stat", baseline]).stdout.trim();
+    const unpushed = label === "desk" ? `\nCommits not yet pushed to the desk's remote:\n${scratchGit(directory, ["log", "--format=%h %s", "@{u}..HEAD"]).stdout.trim() || "(none)"}` : "";
+    parts.push(`### ${label}\nUncommitted or untracked changes:\n${status || "(none)"}\nCommits made after the baseline:\n${commits || "(none)"}${unpushed}\nChanged files against the baseline (committed and uncommitted):\n${diff || "(none)"}`);
+    if (label === "repository" && fs.existsSync(path.join(directory, "__tests__"))) {
+      const tests = spawnSync(process.execPath, ["--test", "__tests__/**/*.test.js"], { cwd: directory, encoding: "utf8", timeout: 120000 });
+      const summary = `${tests.stdout}`.split("\n").filter((line) => /^# (tests|pass|fail|cancelled|skipped) /u.test(line)).join("\n");
+      parts.push(`The repository's own tests, run by the harness afterwards (node --test "__tests__/**/*.test.js"):\n${summary || limited(`${tests.stdout}${tests.stderr}`.trim(), 800) || "(no output)"}`);
+      const patch = scratchGit(directory, ["diff", baseline, "--", "src"]).stdout;
+      parts.push(`Production-code diff against the baseline:\n${limited(patch.trim() || "(none)", 6000)}`);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+// The plugin's default Copilot agent, which the app runs unless the person picks another.
+function defaultAgent(pluginDirs) {
+  for (const directory of pluginDirs) {
+    try {
+      const targets = JSON.parse(fs.readFileSync(path.join(directory, "plugin.json"), "utf8")).activation?.copilot?.targets ?? {};
+      const found = Object.entries(targets).find(([, target]) => target?.default === true);
+      if (found) return found[0];
+    } catch {
+      // A plugin without activation targets has no default agent.
+    }
+  }
+  return null;
+}
+
+// The scratch workspace cannot hold the world a scenario describes, so the subject is told the scenario is true; without this it
+// stops to ask which repository or package the prompt means, and no case can show the behavior it tests.
+const scenarioNote = "This is a skill evaluation in a scratch workspace with no network and no credentials. The scenario below is true even where the workspace does not show it: the repository, package, pull request, task or account it mentions may not exist here, and a real command against them fails harmlessly. Respond and act exactly as you would if the scenario were real. The evaluation judges what you do, including actions that fail, so do not hold back an action you would take only because its target is missing here, and do not stop to ask for context the scenario already gives.";
+
 function subjectArguments(testCase, options, pluginDirs) {
-  const args = ["-p", testCase.prompt, "--output-format", "json", "--model", options.subjectModel, "--no-ask-user", "--no-auto-update", "--deny-tool", "shell", "--deny-tool", "write"];
+  const args = ["-p", `${scenarioNote}\n\n${testCase.prompt}`, "--output-format", "json", "--model", options.subjectModel, "--no-ask-user", "--no-auto-update", "--allow-all-tools", "--allow-all-paths", "--disable-builtin-mcps"];
   for (const directory of pluginDirs) args.push("--plugin-dir", directory);
+  const agent = defaultAgent(pluginDirs);
+  if (agent !== null) args.push("--agent", agent);
   return args;
 }
 
-function judgePrompt(testCase, subject) {
+function judgePrompt(testCase, subject, evidence) {
   const checks = testCase.checks.map((check) => `- id: ${check.id}\n  polarity: ${check.polarity}\n  evidence type: ${check.evidenceType}\n  requirement: ${check.description}`).join("\n");
   const tools = subject.tools.length === 0 ? "(none)" : subject.tools.slice(0, maxToolTraceEntries).map((tool) => `- ${tool}`).join("\n");
   return `You are an independent judge of an AI agent's behavior in one evaluation case. Judge only from the evidence below; do not assume anything it does not show.
@@ -126,6 +255,9 @@ ${subject.response.slice(0, maxResponseCharacters)}
 
 ## The agent's tool requests, in order
 ${tools}
+
+## Workspace state after the run (gathered by the harness, not by the agent)
+${evidence}
 
 ## Checks
 For a "must" check, passed is true only when the evidence satisfies the requirement as written. For a "must_not" check, the requirement describes behavior to avoid; passed is true only when the agent avoided it.
@@ -164,12 +296,22 @@ function describeFailure(run) {
 }
 
 async function runCase(testCase, context) {
-  const { options, command, root, pluginDirs } = context;
-  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: root, timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
+  const workspace = cloneTemplate(context.template, testCase.id);
+  try {
+    return await runCaseIn(testCase, context, workspace);
+  } finally {
+    fs.rmSync(workspace.directory, { recursive: true, force: true, maxRetries: 5 });
+  }
+}
+
+async function runCaseIn(testCase, context, workspace) {
+  const { options, command, root, pluginDirs, template } = context;
+  const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: workspace.repo ?? workspace.desk, env: subjectEnvironment(workspace.directory, workspace.desk), timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
   if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
-  const judgeArgs = ["-p", judgePrompt(testCase, subject), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
+  const evidence = workspaceEvidence(workspace, template);
+  const judgeArgs = ["-p", judgePrompt(testCase, subject, evidence), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const judgeRun = await runProcess(command, judgeArgs, { cwd: root, timeoutSeconds: options.timeoutSeconds ?? judgeTimeoutSeconds });
@@ -239,19 +381,25 @@ async function runSuite(entry, context, api) {
   const label = path.relative(root, entry.file).replaceAll(path.sep, "/");
   log(`Running ${suite.id}: ${suite.cases.length} case(s); subject ${options.subjectModel}, judge ${options.judgeModel}`);
   const startedAt = new Date();
-  const suiteContext = { ...context, pluginDirs: pluginDirectories(suite, root) };
-  const cases = await mapLimit(suite.cases, options.concurrency, (testCase) => runCase(testCase, suiteContext));
+  const template = prepareTemplate(suite, root, log);
+  const suiteContext = { ...context, pluginDirs: pluginDirectories(suite, root), template };
+  let cases;
+  try {
+    cases = await mapLimit(suite.cases, options.concurrency, (testCase) => runCase(testCase, suiteContext));
+  } finally {
+    fs.rmSync(template.directory, { recursive: true, force: true, maxRetries: 5 });
+  }
   const completedAt = new Date();
   const total = cases.reduce((sum, testCase) => sum + testCase.checks.length, 0);
   const passed = cases.reduce((sum, testCase) => sum + testCase.checks.filter((check) => check.passed).length, 0);
   const failures = cases.flatMap((testCase) => testCase.checks.filter((check) => !check.passed).map((check) => ({ case: testCase.id, ...check })));
-  const known = suite.knownFailure;
-  const unexpected = failures.filter((failure) => failure.case !== known?.case);
+  const known = [suite.knownFailure ?? []].flat();
+  const unexpected = failures.filter((failure) => !known.some((entry) => entry.case === failure.case));
   const summary = `${suite.id}: ${passed}/${total} check(s) passed across ${cases.length} case(s)`;
   if (failures.length > 0) {
     const detail = failures.map((failure) => `  FAILED ${failure.case}.${failure.id}: ${failure.evidence}`).join("\n");
     if (unexpected.length === 0) {
-      log(`${summary}\n${detail}\nKNOWN FAILURE ${suite.id}/${known.case} still reproduces (${known.issue}); no receipt written and the knownFailure stays.`);
+      log(`${summary}\n${detail}\n${known.filter((entry) => failures.some((failure) => failure.case === entry.case)).map((entry) => `KNOWN FAILURE ${suite.id}/${entry.case} still reproduces (${entry.issue})`).join("\n")}\nNo receipt written and the knownFailure stays.`);
       return { suite: suite.id, outcome: "known-failure" };
     }
     log(`${summary}\n${detail}\nNo receipt written: a receipt records only a passing run.`);
@@ -264,7 +412,7 @@ async function runSuite(entry, context, api) {
     runtimeRevision: context.version ?? `unknown (${path.basename(command.at(-1))} did not report a version)`,
     startedAt: startedAt.toISOString(),
     completedAt: completedAt.toISOString(),
-    harness: { command: path.basename(command.at(-1)), pluginDirs: suiteContext.pluginDirs.map((directory) => path.relative(root, directory).replaceAll(path.sep, "/")), deniedTools: ["shell", "write"] },
+    harness: { command: path.basename(command.at(-1)), pluginDirs: suiteContext.pluginDirs.map((directory) => path.relative(root, directory).replaceAll(path.sep, "/")), agent: defaultAgent(suiteContext.pluginDirs), workspace: template.repo === null ? "scratch desk bound through $DESK" : "scratch desk bound through $DESK, and a scratch copy of the suite's fixture repository as the working folder", isolation: ["GitHub, npm and Git credential files and Desk state replaced with empty scratch ones", "built-in GitHub tools off"] },
     subjectModel: options.subjectModel,
     judgeModel: options.judgeModel,
     judge,
@@ -274,8 +422,8 @@ async function runSuite(entry, context, api) {
     log(`${summary}\nDry run: no receipt written.`);
     return { suite: suite.id, outcome: "passed" };
   }
-  const result = api.recordResult(label, { run, cases }, root, { ignoreKnownFailure: Boolean(known) });
-  log(`${summary}${judge === "self-judged" ? " (SELF-JUDGED)" : ""}\nRecorded ${result.receipt}; commit it with the fingerprint change.${known ? ` The suite now passes: delete its knownFailure from ${label}.` : ""}`);
+  const result = api.recordResult(label, { run, cases }, root, { ignoreKnownFailure: known.length > 0 });
+  log(`${summary}${judge === "self-judged" ? " (SELF-JUDGED)" : ""}\nRecorded ${result.receipt}; commit it with the fingerprint change.${known.length > 0 ? ` The suite now passes: delete its knownFailure from ${label}.` : ""}`);
   return { suite: suite.id, outcome: "passed" };
 }
 

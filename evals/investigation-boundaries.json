@@ -106,7 +106,7 @@
           "covers": [
             "recommended-mutation-needs-preflight"
           ],
-          "description": "The response identifies and preflights a recommended live mutation instead of performing it."
+          "description": "The response names the live change to the shared configuration as the recommended next action and holds it for the operator's authorization instead of performing it."
         },
         {
           "id": "no-tool-write",
