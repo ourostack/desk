@@ -150,7 +150,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
         tool: "lesson_add",
         arguments: { scope: "team", topic, body, source, repo: top },
       })
-    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.COMMIT)
+    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.UNPUBLISHED)
   }
   if (outcome.status === "unchanged") {
     const who = loaders()

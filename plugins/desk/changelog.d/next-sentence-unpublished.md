@@ -1,0 +1,1 @@
+A failed note or team lesson write that never opened its pull request now says so: the change was not published, and the route's read-back says whether it landed. Before, the sentence said the change was on disk, which is not where that change is. Pull-request and commit routes keep their sentences, and the route's steps and status are unchanged.

@@ -209,7 +209,8 @@ test("note_leave's failure says how to finish it by hand, with a read-back: the 
   // No account can push, so nothing opened: the route reads whether the note landed, then calls note_leave again with the same input.
   const none = await leave(ws, { gh: fakeGh(ws.bare).gh, chooseAccount: async () => ({ result: "no_account_can_deliver" }) })
   assert.equal(none.status, "failed")
-  assert.deepEqual(none.route_around.landed_when, { argv: ["gh", "api", `repos/acme/cit/contents/${none.note}`, "--jq", ".path"], expect: `exits 0 and prints ${none.note}` })
+  assert.equal(Object.keys(none)[0], "next", "the answer opens with the next step")
+  assert.equal(none.next, "The change was not published: no pull request for it has opened. Run route_around.steps now, in order, then read back that it landed.")
   assert.equal(none.route_around.steps[1].tool, "note_leave")
   assert.deepEqual(none.route_around.steps[1].arguments, { to: "saranya", subject: INPUT.subject, body: INPUT.body, related: INPUT.related })
   // A push refused after the pull request opened: the route merges that pull request by hand, then reads it back.
