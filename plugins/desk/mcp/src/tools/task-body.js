@@ -100,12 +100,12 @@ export function appendProgressNote(body, text, date) {
  */
 export function replaceSection(body, heading, markdown) {
   const name = typeof heading === "string" ? heading.trim().replace(/^##\s+/u, "").trim() : ""
-  if (name === "" || /[\r\n]/u.test(name)) throw new Error("Pass `replace_section.heading` as the name of one `## ` section on a single line: `replace_section.heading` must be the name of one `## ` section on a single line, such as \"Progress log\"")
-  if (/^(?:steps|resources)$/iu.test(name)) throw new Error(`Use the table's own field instead of \`replace_section\`: \`replace_section\` cannot replace the \`## ${name}\` table, because Desk checks every change to it; use the \`${name.toLowerCase() === "steps" ? "step" : "resource"}\` field instead`)
-  if (typeof markdown !== "string" || markdown.trim() === "") throw new Error("Pass the new text in `replace_section.markdown`: `replace_section.markdown` must be the new text of the section, not empty")
+  if (name === "" || /[\r\n]/u.test(name)) throw Object.assign(new Error("Pass `replace_section.heading` as the name of one `## ` section on a single line: `replace_section.heading` must be the name of one `## ` section on a single line, such as \"Progress log\""), { code: "task_body_pass_replace_section_heading_as" })
+  if (/^(?:steps|resources)$/iu.test(name)) throw Object.assign(new Error(`Use the table's own field instead of \`replace_section\`: \`replace_section\` cannot replace the \`## ${name}\` table, because Desk checks every change to it; use the \`${name.toLowerCase() === "steps" ? "step" : "resource"}\` field instead`), { code: "task_body_use_the_table_s_own" })
+  if (typeof markdown !== "string" || markdown.trim() === "") throw Object.assign(new Error("Pass the new text in `replace_section.markdown`: `replace_section.markdown` must be the new text of the section, not empty"), { code: "task_body_pass_the_new_text_in" })
   const inner = scan(markdown)
-  if (inner.open) throw new Error("Close the code fence in `replace_section.markdown`: `replace_section.markdown` has a code fence that is never closed; close the code fence in replace_section.markdown")
-  if (inner.lines.some((line, index) => !inner.fenced[index] && /^## /u.test(line))) throw new Error("Pass one section at a time in `replace_section.markdown`: `replace_section.markdown` must not contain its own `## ` heading; pass one section at a time")
+  if (inner.open) throw Object.assign(new Error("Close the code fence in `replace_section.markdown`: `replace_section.markdown` has a code fence that is never closed; close the code fence in replace_section.markdown"), { code: "task_body_close_the_code_fence_in" })
+  if (inner.lines.some((line, index) => !inner.fenced[index] && /^## /u.test(line))) throw Object.assign(new Error("Pass one section at a time in `replace_section.markdown`: `replace_section.markdown` must not contain its own `## ` heading; pass one section at a time"), { code: "task_body_pass_one_section_at_a" })
   const { eol, lines, fenced } = scan(body)
   const text = markdown.trim().split(/\r?\n/u)
   const start = lines.findIndex((line, index) => !fenced[index] && line.trimEnd() === `## ${name}`)

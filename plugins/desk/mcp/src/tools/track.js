@@ -100,10 +100,10 @@ export async function track_create({ deskRoot, input, person = null, search, spa
   const values = input ?? {}
   const { slug, title } = values
   if (!Object.hasOwn(values, "slug")) {
-    throw new Error("track_create: Pass `slug` as a string: `slug` is required (string)")
+    throw Object.assign(new Error("track_create: Pass `slug` as a string: `slug` is required (string)"), { code: "track_create_slug_is_required_string" })
   }
   if (!title || typeof title !== "string") {
-    throw new Error("track_create: Pass `title` as a string: `title` is required (string)")
+    throw Object.assign(new Error("track_create: Pass `title` as a string: `title` is required (string)"), { code: "track_create_title_is_required_string" })
   }
 
   const filePath = await resolveWriteTarget({
@@ -119,20 +119,18 @@ export async function track_create({ deskRoot, input, person = null, search, spa
     operatorNames: operatorNames(deskRoot),
   })
   if (!nameResult.ok) {
-    throw new Error(
-      `track_create: Pass a valid value: invalid slug: ${describeNameRejection(nameResult)}`,
-    )
+    throw Object.assign(new Error(
+      `track_create: Pass a valid value: invalid slug: ${describeNameRejection(nameResult)}`), { code: "track_create_invalid_slug" })
   }
 
   const scopeResult = validateScope(values.scope)
   if (!scopeResult.ok) {
-    throw new Error(`track_create: Pass a valid value: invalid \`scope\`: ${scopeResult.hint}`)
+    throw Object.assign(new Error(`track_create: Pass a valid value: invalid \`scope\`: ${scopeResult.hint}`), { code: "track_create_invalid_scope" })
   }
 
   if (await pathExists(filePath)) {
-    throw new Error(
-      `track_create: Choose another name: track already exists at ${relPath(deskRoot, filePath)}`,
-    )
+    throw Object.assign(new Error(
+      `track_create: Choose another name: track already exists at ${relPath(deskRoot, filePath)}`), { code: "track_create_track_already_exists_at" })
   }
 
   const ts = nowIso()
@@ -191,14 +189,14 @@ export async function track_update({ deskRoot, input, person = null, search, spa
   const values = input ?? {}
   const { slug, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
-    throw new Error("track_update: Pass `slug`: `slug` is required")
+    throw Object.assign(new Error("track_update: Pass `slug`: `slug` is required"), { code: "track_update_slug_is_required" })
   }
   const frontmatter = objectInput(values.frontmatter, { tool: "track_update", field: "frontmatter" })
 
   if (frontmatter && Object.hasOwn(frontmatter, "scope")) {
     const scopeResult = validateScope(frontmatter.scope)
     if (!scopeResult.ok) {
-      throw new Error(`track_update: Pass a valid value: invalid \`scope\`: ${scopeResult.hint}`)
+      throw Object.assign(new Error(`track_update: Pass a valid value: invalid \`scope\`: ${scopeResult.hint}`), { code: "track_update_invalid_scope" })
     }
   }
 
@@ -208,9 +206,8 @@ export async function track_update({ deskRoot, input, person = null, search, spa
     segments: [slug, "track.md"],
   })
   if (!(await pathExists(filePath))) {
-    throw new Error(
-      `track_update: Check the track and slug, then try again: track does not exist at ${relPath(deskRoot, filePath)}`,
-    )
+    throw Object.assign(new Error(
+      `track_update: Check the track and slug, then try again: track does not exist at ${relPath(deskRoot, filePath)}`), { code: "track_update_track_does_not_exist_at" })
   }
 
   const existing = await readMarkdown(filePath)

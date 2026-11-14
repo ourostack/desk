@@ -17,16 +17,16 @@ const FRONT = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u
  * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush }`.
  */
 export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resource, search, env, spawnGit, helpers }) {
-  const refuse = (why) => { throw new Error(`task_update: Pass only \`resource: {identity, disposition, details}\` for an archived card: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`) }
+  const refuse = (why, { code }) => { throw Object.assign(new Error(`task_update: Pass only \`resource: {identity, disposition, details}\` for an archived card: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`), { code }) }
   const extra = Object.keys(values).filter((key) => !["track", "slug", "resource"].includes(key))
-  if (extra.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: this call also has ${extra.map((key) => `\`${key}\``).join(", ")}`)
+  if (extra.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: this call also has ${extra.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_extra_fields" })
   const other = Object.keys(resource).filter((key) => !ALLOWED.includes(key))
-  if (other.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: the resource has ${other.map((key) => `\`${key}\``).join(", ")}`)
-  if (resource.disposition === undefined) refuse("Pass `disposition` with `details`: the resource has no `disposition`")
+  if (other.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: the resource has ${other.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_resource_fields" })
+  if (resource.disposition === undefined) refuse("Pass `disposition` with `details`: the resource has no `disposition`", { code: "task_update_archived_no_disposition" })
   const raw = await fs.readFile(file, "utf8")
   const front = FRONT.exec(raw)?.[0] ?? ""
   const identity = canonicalIdentity(resource.identity)
-  if (!(readResources(raw.slice(front.length)).rows ?? []).some((row) => canonicalIdentity(row.identity) === identity)) refuse(`Pass an identity that is a row of the Resources table: ${JSON.stringify(resource.identity)} is not a row of its Resources table`)
+  if (!(readResources(raw.slice(front.length)).rows ?? []).some((row) => canonicalIdentity(row.identity) === identity)) refuse(`Pass an identity that is a row of the Resources table: ${JSON.stringify(resource.identity)} is not a row of its Resources table`, { code: "task_update_archived_unknown_identity" })
   const written = applyResource(raw.slice(front.length), resource, "task_update", `${track}/${slug}`)
   // Judged before the write, so a card another session left changed is never adopted.
   const stage = helpers.stagingAllowed(file, spawnGit)

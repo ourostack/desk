@@ -34,11 +34,11 @@ export const focusedHint = ({ track, slug }) => `If you are the session's main a
 const sameTask = (a, b) => a.track === b.track && a.slug === b.slug
 
 function folderName(field, value) {
-  if (typeof value !== "string") throw new Error(`task_focus: Pass \`${field}\` as a string: \`${field}\` must be a string; ${ACCEPTED}`)
+  if (typeof value !== "string") throw Object.assign(new Error(`task_focus: Pass \`${field}\` as a string: \`${field}\` must be a string; ${ACCEPTED}`), { code: "task_focus_must_be_a_string" })
   try {
     validateWriteSegment(value)
   } catch {
-    throw new Error(`task_focus: Pass \`${field}\` as a task folder name: \`${field}\` is not a valid task folder name; ${ACCEPTED}`)
+    throw Object.assign(new Error(`task_focus: Pass \`${field}\` as a task folder name: \`${field}\` is not a valid task folder name; ${ACCEPTED}`), { code: "task_focus_is_not_a_valid_task" })
   }
   return value
 }
@@ -95,19 +95,19 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   const values = input ?? {}
   const { track, slug, clear, display_label: displayLabel } = values
   const named = track !== undefined || slug !== undefined
-  if (clear !== undefined && clear !== true) throw new Error(`task_focus: \`clear\` can only be true; ${ACCEPTED}`)
-  if (clear === true && named) throw new Error(`task_focus: \`clear\` cannot be combined with \`track\` or \`slug\`; ${ACCEPTED}`)
-  if (clear === true && displayLabel !== undefined) throw new Error(`task_focus: \`clear\` cannot be combined with \`display_label\`; ${ACCEPTED}`)
+  if (clear !== undefined && clear !== true) throw Object.assign(new Error(`task_focus: \`clear\` can only be true; ${ACCEPTED}`), { code: "task_focus_clear_can_only_be_true" })
+  if (clear === true && named) throw Object.assign(new Error(`task_focus: \`clear\` cannot be combined with \`track\` or \`slug\`; ${ACCEPTED}`), { code: "task_focus_clear_cannot_be_combined_with_2" })
+  if (clear === true && displayLabel !== undefined) throw Object.assign(new Error(`task_focus: \`clear\` cannot be combined with \`display_label\`; ${ACCEPTED}`), { code: "task_focus_clear_cannot_be_combined_with" })
   if (clear === true) {
     statusContext.focus?.set(null)
     return { status: "cleared" }
   }
-  if (track === undefined || slug === undefined) throw new Error(`task_focus: Pass \`track\` and \`slug\`: \`track\` and \`slug\` are both required; ${ACCEPTED}`)
+  if (track === undefined || slug === undefined) throw Object.assign(new Error(`task_focus: Pass \`track\` and \`slug\`: \`track\` and \`slug\` are both required; ${ACCEPTED}`), { code: "task_focus_track_and_slug_are_both" })
   folderName("track", track)
   folderName("slug", slug)
 
   const found = await findCard({ deskRoot, person, track, slug })
-  if (found === null) throw new Error(`Check the track and slug, then try again: card not found: ${track}/${slug}`)
+  if (found === null) throw Object.assign(new Error(`Check the track and slug, then try again: card not found: ${track}/${slug}`), { code: "task_focus_check_the_track_and_slug" })
   const card = await readMarkdown(found.file)
   statusContext.focus?.set({ track, slug })
   const result = {

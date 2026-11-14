@@ -26,11 +26,11 @@ const DATE = /\b\d{4}-\d{2}-\d{2}\b/u
 function repoRoot({ deskRoot, repo, spawnGit }) {
   if (repo === undefined || repo === null) {
     if (crewWorkspace(deskRoot).crew) return deskRoot
-    throw new Error("lesson_add: Pass `repo`, the path of your local clone of the team's repository: a team lesson needs `repo`, the path of your local clone of the team's repository (this desk is not a shared workspace)")
+    throw Object.assign(new Error("lesson_add: Pass `repo`, the path of your local clone of the team's repository: a team lesson needs `repo`, the path of your local clone of the team's repository (this desk is not a shared workspace)"), { code: "lesson_add_a_team_lesson_needs_repo" })
   }
   const dir = resolveLocalPath(oneLine(repo, "repo"), { deskRoot })
   const top = runGit(["rev-parse", "--show-toplevel"], { cwd: dir, spawnGit })
-  if (!top.ok) throw new Error(`lesson_add: Pass \`repo\` as a Git clone: \`repo\` is not a Git clone: ${dir}`)
+  if (!top.ok) throw Object.assign(new Error(`lesson_add: Pass \`repo\` as a Git clone: \`repo\` is not a Git clone: ${dir}`), { code: "lesson_add_repo_is_not_a_git" })
   return path.resolve(top.stdout)
 }
 
@@ -58,7 +58,7 @@ function authorOf(person, top, spawnGit) {
   if (typeof person === "string" && person.trim() !== "") return person.trim()
   const name = runGit(["config", "--get", "user.name"], { cwd: top, spawnGit })
   if (name.ok && name.stdout !== "") return name.stdout
-  throw new Error("lesson_add: Set the clone's Git user name, or start a session that has a person: a team lesson is attributed to its person, and this session has no person and the clone has no Git user name")
+  throw Object.assign(new Error("lesson_add: Set the clone's Git user name, or start a session that has a person: a team lesson is attributed to its person, and this session has no person and the clone has no Git user name"), { code: "lesson_add_a_team_lesson_is_attributed" })
 }
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; it reads AGENTS.md only when CLAUDE.md imports it (`@AGENTS.md`) or is a
@@ -96,10 +96,10 @@ const authorOfLine = (line) => /\(([^,()]+), \d{4}-\d{2}-\d{2}; /u.exec(line)?.[
 export async function addTeamLesson({ deskRoot, person, topic, body, repo, source, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = pause }) {
   const top = repoRoot({ deskRoot, repo, spawnGit })
   const crew = path.resolve(top) === path.resolve(deskRoot) && crewWorkspace(deskRoot).crew
-  if (crew && (typeof person !== "string" || person === "")) throw new Error("lesson_add: Call desk_status to see why this session has no person: a team lesson in a shared workspace is attributed to its person, and this session has no person")
+  if (crew && (typeof person !== "string" || person === "")) throw Object.assign(new Error("lesson_add: Call desk_status to see why this session has no person: a team lesson in a shared workspace is attributed to its person, and this session has no person"), { code: "lesson_add_a_team_lesson_in_a" })
   const cited = oneLine(source, "source")
   const origin = githubStore(top, spawnGit)
-  if (origin === null) throw new Error("lesson_add: Use a repository whose origin is on GitHub: a team lesson is written through a GitHub pull request, and this repository's origin is not on GitHub")
+  if (origin === null) throw Object.assign(new Error("lesson_add: Use a repository whose origin is on GitHub: a team lesson is written through a GitHub pull request, and this repository's origin is not on GitHub"), { code: "lesson_add_a_team_lesson_is_written" })
   const author = authorOf(person, top, spawnGit)
   const result = { scope: "team", repo: origin, path: "AGENTS.md", section: SECTION, in_effect: false }
   // Whether Claude Code loads the lesson, read from the checkout each build was made on.
