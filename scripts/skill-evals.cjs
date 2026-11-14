@@ -64,24 +64,29 @@ function escapes(root, target) {
   return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 }
 
-function sourceFile(repoRoot, source) {
+// A symlink source is fingerprinted by its link text and never followed, so a scenario world can hold a link to somewhere outside the repository.
+function sourceHash(repoRoot, source) {
   if (!hasText(source) || path.isAbsolute(source)) fail(`source path must be repo-relative: ${source}`);
   const root = fs.realpathSync(repoRoot);
   const candidate = path.resolve(root, source);
   if (escapes(root, candidate)) fail(`source path escapes repo root: ${source}`);
+  if (isSymlink(candidate)) return crypto.createHash("sha256").update(`symlink ${fs.readlinkSync(candidate)}`).digest("hex");
   if (!fs.existsSync(candidate)) fail(`missing source: ${source}`);
   const resolved = fs.realpathSync(candidate);
   if (escapes(root, resolved)) fail(`source path resolves outside repo root: ${source}`);
   if (!fs.statSync(resolved).isFile()) fail(`missing source: ${source}`);
-  return resolved;
+  return crypto.createHash("sha256").update(normalizeSource(fs.readFileSync(resolved, "utf8"))).digest("hex");
+}
+
+function isSymlink(file) {
+  return fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink() === true;
 }
 
 function sourceFingerprint(sources, repoRoot = process.cwd()) {
   if (!Array.isArray(sources) || sources.length === 0) fail("sources must be a non-empty array");
   unique(sources, "source path");
   const entries = sources.slice().sort().map((source) => {
-    const file = sourceFile(repoRoot, source);
-    const hash = crypto.createHash("sha256").update(normalizeSource(fs.readFileSync(file, "utf8"))).digest("hex");
+    const hash = sourceHash(repoRoot, source);
     return `${source.replaceAll(path.sep, "/")}\n${hash}\n`;
   });
   return crypto.createHash("sha256").update(entries.join("")).digest("hex");
@@ -388,6 +393,48 @@ function loadSuites(repoRoot) {
   return files.map((file) => ({ file: path.join(directory, file), suite: readJson(path.join(directory, file)) }));
 }
 
+// A case's scenario world: the folders the runner lays over the scratch desk and repository copy, or lands on the case's origin.
+const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person"];
+const branchName = /^[a-z0-9][a-z0-9-]*$/u;
+const personLine = /^[a-z0-9-]+\n?$/u;
+
+function worldFiles(directory, prefix = "") {
+  return fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1)).flatMap((entry) => {
+    const relative = `${prefix}${entry.name}`;
+    return entry.isDirectory() ? worldFiles(path.join(directory, entry.name), `${relative}/`) : [relative];
+  });
+}
+
+function validateWorld(suite, testCase, repoRoot, label) {
+  const expected = `evals/worlds/${suite.id}/${testCase.id}`;
+  const world = testCase.world;
+  if (world !== expected) fail(`${label}: case ${testCase.id} world must be the string ${expected}, not ${JSON.stringify(world)}`);
+  const directory = path.join(repoRoot, world);
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) fail(`${label}: case ${testCase.id} world folder does not exist: ${world}`);
+  const entries = fs.readdirSync(directory);
+  const unknown = entries.filter((name) => !worldFolders.includes(name));
+  if (unknown.length > 0) fail(`${label}: world ${world} has unknown folder(s) ${unknown.join(", ")}; expected ${worldFolders.join(", ")}`);
+  if (entries.includes("person") && !(fs.statSync(path.join(directory, "person")).isFile() && personLine.test(fs.readFileSync(path.join(directory, "person"), "utf8")))) {
+    fail(`${label}: world ${world} person must be a file holding one roster alias of lowercase letters, digits and hyphens`);
+  }
+  if (entries.includes("repo") && !suite.sources.some((source) => /^evals\/fixtures\/[^/]+\//u.test(source))) {
+    fail(`${label}: world ${world} has repo/ but suite ${suite.id} has no evals/fixtures/<name> source to copy it over`);
+  }
+  if (fs.existsSync(path.join(directory, "desk-origin-branches"))) {
+    for (const name of fs.readdirSync(path.join(directory, "desk-origin-branches"))) {
+      if (!branchName.test(name) || !fs.statSync(path.join(directory, "desk-origin-branches", name)).isDirectory()) {
+        fail(`${label}: world ${world} desk-origin-branches/${name} must be a folder named with a lowercase branch name`);
+      }
+    }
+  }
+  const files = worldFiles(directory);
+  if (files.length === 0) fail(`${label}: world ${world} has no files; give it a desk/ folder, a repo/ folder or an origin overlay`);
+  if (!suite.sources.some((source) => source.startsWith(`${world}/`))) fail(`${label}: world ${world} is not covered by the suite's sources`);
+  const sourced = new Set(suite.sources);
+  const unlisted = files.map((file) => `${world}/${file}`).find((file) => !sourced.has(file));
+  if (unlisted !== undefined) fail(`${label}: world file ${unlisted} is not in sources; list every world file, as for a fixture`);
+}
+
 function validateSuite(suite, repoRoot, label) {
   if (!isObject(suite)) fail(`${label}: suite must be an object`);
   if (suite.schemaVersion !== schemaVersion) fail(`${label}: schemaVersion must be ${schemaVersion}`);
@@ -457,6 +504,9 @@ function validateSuite(suite, repoRoot, label) {
 
   const fingerprint = sourceFingerprint(suite.sources, repoRoot);
   if (fingerprint !== suite.reviewedSourceFingerprint) fail(`${label}: reviewedSourceFingerprint does not match current sources`);
+  for (const testCase of suite.cases) {
+    if (testCase.world !== undefined) validateWorld(suite, testCase, repoRoot, label);
+  }
   return {
     requirements: requirements.size,
     cases: caseIds.size,
