@@ -23,7 +23,15 @@ process.stdin.on("end", async () => {
       process.stdout.write("{}\n");
       return;
     }
-    const { sessionId, cwd } = JSON.parse(input);
+    const payload = JSON.parse(input);
+    const { sessionId, cwd } = payload;
+    // A subagent's brief is its instruction: it gets one short line, once, and no boot of its own.
+    const child = require("./lib/child-agent.cjs");
+    if (child.isChildAgentInput(payload)) {
+      const { markBootDirected: claimChild } = await import("../mcp/src/runtime/copilot-session.js");
+      process.stdout.write(claimChild({ sessionId, env: process.env }) ? `${JSON.stringify({ additionalContext: child.CHILD_AGENT_LINE })}\n` : "{}\n");
+      return;
+    }
     const boot = await import("../mcp/src/runtime/startup-boot.js");
     const { copilotBootRoot } = await import("../mcp/src/util/startup-direction.js");
     const { markBootDirected } = await import("../mcp/src/runtime/copilot-session.js");

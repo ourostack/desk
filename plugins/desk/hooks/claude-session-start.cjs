@@ -39,6 +39,11 @@ async function startupDirection() {
   }
 }
 
+// The pointer to the on-demand Plain Language skill, with its blank line; a copy of the hook without the library adds nothing.
+function plainLanguagePointer() {
+  try { return `${require("./lib/child-agent.cjs").PLAIN_LANGUAGE_POINTER}\n\n`; } catch { return ""; }
+}
+
 function emit(additionalContext) {
   // A host that closes its end of the pipe early would raise an uncaught EPIPE and fail the hook; the hook has nothing left to do then.
   process.stdout.on("error", () => {});
@@ -107,7 +112,7 @@ async function bootSection() {
     const sep = pluginRoot.includes("\\") ? "\\" : "/";
     const rfc = `Desk RFC: ${pluginRoot}${sep}docs${sep}agentic-engineering-v2-rfc.md`;
     // The startup line goes first, then the head of the boot: they have to sit inside the 2 KB preview, so the foundation and the RFC line come after them.
-    emit(`${direction}\n\n${bootText ? `${bootText}\n\n` : ""}${foundation}\n\n${rfc}\n`);
+    emit(`${direction}\n\n${bootText ? `${bootText}\n\n` : ""}${foundation}\n\n${plainLanguagePointer()}${rfc}\n`);
   } catch {
     // Nothing may fail a session start.
   } finally {

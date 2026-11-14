@@ -336,6 +336,24 @@ test("the Copilot first-prompt hook runs the boot itself and hands the agent its
   assert.deepEqual(run("copilot-boot-prompt.cjs", { cwd: desk }), {}, "no session id, no key")
 })
 
+test("a subagent's first prompt gets one short child line and no boot, and the main session start points at Plain Language", () => {
+  const { desk, env } = deskFixture("copilot-child")
+  const run = (script, input) => {
+    const result = spawnSync(process.execPath, [path.join(plugin, "hooks", script)], { input: JSON.stringify(input), env, encoding: "utf8", timeout: 60_000 })
+    assert.equal(result.status, 0, result.stderr)
+    return JSON.parse(result.stdout)
+  }
+  const child = { sessionId: "child-1", agentId: "child-1", parentAgentId: "parent-1", cwd: desk, prompt: "do the brief" }
+  const first = run("copilot-boot-prompt.cjs", child)
+  assert.match(first.additionalContext, /child agent, so follow your brief and skip Desk's startup/u)
+  assert.match(first.additionalContext, /load the `plain-language` skill/u)
+  assert.ok(Buffer.byteLength(first.additionalContext) < 400, "the child line stays a pointer")
+  assert.doesNotMatch(first.additionalContext, /Desk boot/u, "a child agent gets no boot")
+  assert.deepEqual(run("copilot-boot-prompt.cjs", { ...child, prompt: "next message" }), {}, "once per child")
+  const session = run("copilot-session-start.cjs", { sessionId: "main-1", cwd: desk, source: "new" })
+  assert.match(session.additionalContext, /load the `plain-language` skill and follow it/u)
+})
+
 test("the Claude hook starts the boot and carries its head after the startup line, leaving the rest for the first Desk tool reply", async () => {
   const { desk, env } = deskFixture("claude-hook")
   const long = Object.assign({}, env, { CLAUDE_PROJECT_DIR: desk, CLAUDE_PLUGIN_ROOT: plugin })
