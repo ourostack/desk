@@ -77,7 +77,7 @@
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/desk/desks/alex/posts-site/track.md",
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/person"
   ],
-  "reviewedSourceFingerprint": "cfd44b626dc73f0931f285099bdbe3eb87eab97cc9b27e5d5cf025a38abcb307",
+  "reviewedSourceFingerprint": "7b4e99cc70f5d56acf62c68bc8d5b828dcdf5ff6c9ea6c3c3917d4ff77dd1a9d",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/852", "case": "voice-and-deletion-gates", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/971", "case": "investigation-is-not-purchase-or-edit", "observed": "2026-11-14"},
