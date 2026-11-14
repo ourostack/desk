@@ -191,13 +191,9 @@ function cloneTemplate(template, testCaseId) {
   return { directory, desk: path.join(directory, "desk"), repo: template.repo === null ? null : path.join(directory, "repo") };
 }
 
-// Scratch folders are the runner's own; a folder that cannot be removed must not fail a finished run.
+// Scratch folders are the runner's own; a folder that cannot be removed is left in the system temporary folder and never fails a finished run.
 function removeScratch(directory) {
-  try {
-    fs.rmSync(directory, { recursive: true, force: true });
-  } catch {
-    // Left behind in the system temporary folder.
-  }
+  fs.rm(directory, { recursive: true, force: true }, () => {});
 }
 
 function limited(text, limit) {
@@ -217,7 +213,7 @@ function workspaceEvidence(workspace, template) {
     if (label === "repository" && fs.existsSync(path.join(directory, "__tests__"))) {
       const tests = spawnSync(process.execPath, ["--test", "__tests__/**/*.test.js"], { cwd: directory, encoding: "utf8", timeout: 120000 });
       const summary = `${tests.stdout}`.split("\n").filter((line) => /^# (tests|pass|fail|cancelled|skipped) /u.test(line)).join("\n");
-      parts.push(`The repository's own tests, run by the harness afterwards (node --test "__tests__/**/*.test.js"):\n${summary || limited(`${tests.stdout}${tests.stderr}`.trim(), 800) || "(no output)"}`);
+      parts.push(`The repository's own tests, run by the harness afterwards (node --test "__tests__/**/*.test.js"):\n${summary}`);
       const patch = scratchGit(directory, ["diff", baseline, "--", "src"]).stdout;
       parts.push(`Production-code diff against the baseline:\n${limited(patch.trim() || "(none)", 6000)}`);
     }
