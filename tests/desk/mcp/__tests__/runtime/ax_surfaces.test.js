@@ -17,6 +17,7 @@ const baselinePath = path.join(here, "ax-surfaces-baseline.json")
 // Strings the extractor reads as errors that are not: they stay in the manifest as texts, which are still checked for
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
 const NOT_ERRORS = {
+  "plugins/desk/mcp/src/tools/task-archived-resource.js#task-update-pass-only-resource": "carrier: each call site passes its own code",
   // Tool replies that report an outcome, with their stable status beside them, not failures.
   "plugins/desk/mcp/src/tools/lesson-team.js#in-effect-merged-in-from": "a status reply, not a failure",
   "plugins/desk/mcp/src/tools/lesson-team.js#wait-for-the-pull-request": "a status reply, not a failure",

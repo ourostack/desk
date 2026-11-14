@@ -17,7 +17,7 @@ const FRONT = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u
  * `helpers` are task.js's own `{ relPath, stagingAllowed, stageAndCommitCard, schedulePush }`.
  */
 export async function recordArchivedDisposition({ deskRoot, file, track, slug, values, resource, search, env, spawnGit, helpers }) {
-  const refuse = (why, { code = "task_update_archived_card_refused" } = {}) => { throw Object.assign(new Error(`task_update: Pass only \`resource: {identity, disposition, details}\` for an archived card: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`), { code }) }
+  const refuse = (why, { code }) => { throw Object.assign(new Error(`task_update: Pass only \`resource: {identity, disposition, details}\` for an archived card: ${track}/${slug} is archived, so a call can only record a disposition on one of its existing resource rows (\`resource: {identity, disposition, details}\` and nothing else); ${why}; nothing was changed.`), { code }) }
   const extra = Object.keys(values).filter((key) => !["track", "slug", "resource"].includes(key))
   if (extra.length > 0) refuse(`Pass only \`resource: {identity, disposition, details}\`: this call also has ${extra.map((key) => `\`${key}\``).join(", ")}`, { code: "task_update_archived_extra_fields" })
   const other = Object.keys(resource).filter((key) => !ALLOWED.includes(key))
