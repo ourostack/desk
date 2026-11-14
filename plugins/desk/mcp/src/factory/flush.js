@@ -109,7 +109,9 @@
 //   check whatever its route. A truncated tree listing proves no file absent.
 //   Online anyway, the flush also deletes an away session's file it has no
 //   record of when the store holds exactly the blob this Desk would publish
-//   for it. A delete
+//   for it. A proof-marked session's copy with no delivery record is checked
+//   the same way, once: its store file is deleted only when it holds exactly
+//   the blob this Desk would publish, and any other file there is refused. A delete
 //   the store refuses returns the session to delivered and is not retried
 //   while it stays away.
 
@@ -172,6 +174,10 @@ import {
   pendingFiles,
   pendingLabels,
   proofSessionSet,
+  listProofMarkers,
+  proofHeldCopies,
+  settledProofChecks,
+  settleProofChecks,
   appendProofAudit,
   proofSessionHash,
   quarantine,
@@ -659,8 +665,8 @@ const withdrawnPlace = (place) => place === "away" || place === "suppressed"
 
 // The withdrawal of a proof-marked session's record, audited by the session's hash in `proof-audit.json` with reason `proof`: `pushed` once its delete
 // is in a pull request, `withdrawn` once the store no longer holds it (its tombstone).
-async function auditWithdrawal(env, session, stateBefore, outcome) {
-  await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: stateBefore, action: "withdraw", outcome, reason: "proof", at: new Date().toISOString() })
+async function auditWithdrawal(env, session, stateBefore, outcome, reason = "proof") {
+  await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: stateBefore, action: "withdraw", outcome, reason, at: new Date().toISOString() })
 }
 
 // ---------------------------------------------------------------------------
@@ -950,6 +956,10 @@ async function deliver(env, context) {
   // A proof-marked session's copies leave the outbox (`proof-held/`) before anything is listed; the listings below never read them.
   await removeQueuedProofCopies(env, store)
   const proofs = await proofSessionSet(env)
+  // A proof-marked session's copy the store may hold without a delivery record is checked against the store once (`proof-checks.json`): until
+  // that check settles, a flush goes online for it. Recorded copies are the retraction path's, not this check's.
+  const settledChecks = await settledProofChecks(env, store)
+  const unrecordedProof = (await proofHeldCopies(env, store)).filter(({ name }) => proofs.has(sessionOfName(name)) && !settledChecks.has(name) && !Object.hasOwn(delivered.blobs, name) && !Object.hasOwn(delivered.retracting, name) && !Object.hasOwn(delivered.retracted, name))
   let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed, proofs })
   let labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed, proofs })
   progress.newerFormat = newer.size
@@ -970,7 +980,7 @@ async function deliver(env, context) {
     }
   }
   const contextJobs = await contextSafely([], () => listTaskContextJobs(env, store))
-  if (!capture.work && contextJobs.length === 0 && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
+  if (!capture.work && contextJobs.length === 0 && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0 && unrecordedProof.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
   // route to another store, or a finished retraction's tombstone), `stalled` (a retraction open with no positive route), `unknown` (an
@@ -1065,7 +1075,7 @@ async function deliver(env, context) {
   const parse = ({ localBytes }) => JSON.parse(localBytes.toString("utf8"))
   const parsed = candidates.filter(({ name }) => here(name)).map((item) => ({ name: item.name, held: item.quarantine, local: parse(item) }))
   const parsedLabels = labelCandidates.filter(({ name }) => here(name)).map((item) => ({ key: item.name, local: parse(item) }))
-  const desks = await deskRepositories(markers, { deadline, now, receipts })
+  const desks = await deskRepositories([...markers, ...(await listProofMarkers(env))], { deadline, now, receipts })
   // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
   const reposOf = ({ name, local }) => [
     ...referencedRepos(local),
@@ -1125,8 +1135,8 @@ async function deliver(env, context) {
   // Where this Desk would publish the outbox files `names` of away sessions now, as `{ path, sha }` by name: used only to find this machine's
   // files in the store, never sent and never quarantined.
   const republish = async (names) => {
-    const facts = [...candidates, ...keptCandidates].filter(({ name, quarantine: held }) => names.has(name) && held === null && !name.startsWith("labels/")).map((item) => ({ name: item.name, local: parse(item) }))
-    const labels = [...labelCandidates, ...keptCandidates].filter(({ name }) => names.has(name) && name.startsWith("labels/")).map((item) => ({ key: item.name, local: parse(item) }))
+    const facts = [...candidates, ...keptCandidates, ...unrecordedProof].filter(({ name, quarantine: held }) => names.has(name) && held === null && !name.startsWith("labels/")).map((item) => ({ name: item.name, local: parse(item) }))
+    const labels = [...labelCandidates, ...keptCandidates, ...unrecordedProof].filter(({ name }) => names.has(name) && name.startsWith("labels/")).map((item) => ({ key: item.name, local: parse(item) }))
     for (const [repo, visibility] of await resolveVisibility(env, client, account, [...facts.flatMap(reposOf), ...labels.flatMap(labelsReposOf)], nowIso)) if (!distrusted.has(repo)) known.set(repo, visibility)
     const found = new Map()
     for (const { name, local } of facts) {
@@ -1228,7 +1238,7 @@ async function deliver(env, context) {
     if (where !== undefined) away.push({ name, path: where, blob: delivered.blobs[name], labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "delivered", unbound: unbound.has(name) })
   }
   for (const [name, item] of Object.entries(delivered.retracting)) {
-    if (withdrawnPlace(placeOf(name))) away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting" })
+    if (withdrawnPlace(placeOf(name))) away.push({ name, path: item.path, blob: item.blob, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "retracting", proofUnrecorded: item.proof_unrecorded === true })
   }
   // A retracting or retracted session that positively routes back is retracting no more: its delete leaves the intake branch below, then its
   // record or tombstone goes, and its local files publish as any undelivered file does. A retracting record with no positive route is stalled:
@@ -1242,7 +1252,7 @@ async function deliver(env, context) {
   progress.refused = away.filter((item) => item.from === "delivered" && priorRefused.has(item.name)).map((item) => item.name)
   let retract = away.filter((item) => !heldSessions.has(item.session) && !priorRefused.has(item.name))
   // Frozen and refused names never send the flush online; only work that changes the store, or a batch that may still be open, does.
-  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work && !contextPlan.work) return { result: "nothing_pending" }
+  if (pending.length === 0 && retract.length === 0 && back.length === 0 && !mayBeOpen && !capture.work && !contextPlan.work && unrecordedProof.length === 0) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -1294,6 +1304,11 @@ async function deliver(env, context) {
   const recorded = new Set([...Object.keys(delivered.blobs), ...Object.keys(delivered.retracting)])
   const orphans = new Set([...candidates, ...labelCandidates, ...keptCandidates].map(({ name }) => name).filter((name) => placeOf(name) === "away" && !recorded.has(name) && !heldSessions.has(sessionOfName(name))))
   for (const [name, found] of await republish(orphans)) retract.push({ name, path: found.path, blob: found.sha, labels: LABELS_KEY.test(name), session: sessionOfName(name), from: "orphan" })
+  // A proof copy with no delivery record: the store's file at its expected path is withdrawn only when it is exactly this owner's bytes, which the
+  // blob this Desk would publish for the session is. Checked below, against the default branch.
+  const unrecordedNames = new Set(unrecordedProof.map(({ name }) => name))
+  const unrecordedExpected = await republish(unrecordedNames)
+  const unrecordedItems = [...unrecordedExpected].map(([name, found]) => ({ name, path: found.path, sha: found.sha, labels: LABELS_KEY.test(name), session: sessionOfName(name) }))
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
@@ -1305,7 +1320,22 @@ async function deliver(env, context) {
   else if (capture.work) captureItem = await prepareCaptureContext(env, {
     client, store, ref: base.sha, record: capture.record, fresh: capture.due, nowMs: now(),
   })
-  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...(captureItem === null ? [] : [captureItem])])
+  const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...unrecordedItems, ...(captureItem === null ? [] : [captureItem])])
+  // Each proof copy with no delivery record. Its store file is withdrawn (an orphan delete, which is deleted only where the default branch holds
+  // exactly `sha`) when it is this owner's bytes; a file at that path that is not is refused and audited, never deleted. An absent file, or one
+  // already checked, settles the copy: nothing to do, and no later flush goes online for it.
+  const checkedNames = []
+  for (const item of unrecordedItems) {
+    const current = onMain(item)
+    if (current === item.sha) {
+      retract.push({ name: item.name, path: item.path, blob: item.sha, labels: item.labels, session: item.session, from: "orphan", proofUnrecorded: true })
+      places.set(item.session, "suppressed")
+    } else if (current !== UNKNOWN) {
+      checkedNames.push(item.name)
+      if (current !== undefined) await appendProofAudit(env, { session: await proofSessionHash(env, item.session), state_before: "unrecorded", action: "refuse", outcome: "refused", reason: "proof, unrecorded", at: now() })
+    }
+  }
+  await settleProofChecks(env, store, [...checkedNames, ...[...unrecordedNames].filter((name) => !unrecordedExpected.has(name))])
   if (captureItem !== null) {
     // The earlier record is "pending" only while its pull request is still open.
     const hasOpen = capture.carry && (await findOpenPr(client, store, head)) !== undefined
@@ -1365,7 +1395,7 @@ async function deliver(env, context) {
   }
   // A tombstone keeps the session away from this store once the delete is done, so losing `status.json` never publishes it again.
   await finishRetracting(env, store, ended.filter((item) => !item.unbound))
-  for (const item of ended) if (proofs.has(item.session)) await auditWithdrawal(env, item.session, "retracting", "withdrawn")
+  for (const item of ended) if (proofs.has(item.session)) await auditWithdrawal(env, item.session, "retracting", "withdrawn", item.proofUnrecorded ? "proof, unrecorded" : "proof")
   await keepRetractedCopies(env, store, ended.filter((item) => !item.unbound).map((item) => item.session))
   // A withdrawn label's session is still here: only that label is held back, and its session's other files stay where they are.
   await withdrawLabels(env, store, ended.filter((item) => item.unbound).map((item) => item.name))
@@ -1404,15 +1434,23 @@ async function deliver(env, context) {
     progress.intakePrs = leftOpen
     return settle({ result: "nothing_pending" })
   }
-  await pushBatch(client, { target, branch, base, batch })
-  progress.intakePushed = true
-  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + extras.length + contextBatch.filter((item) => !item.retract).length, retracted: takenDeletes.length + contextBatch.filter((item) => item.retract).length })
+  let pr
+  try {
+    await pushBatch(client, { target, branch, base, batch })
+    progress.intakePushed = true
+    pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + extras.length + contextBatch.filter((item) => !item.retract).length, retracted: takenDeletes.length + contextBatch.filter((item) => item.retract).length })
+  } catch (error) {
+    // The push may have landed before the call failed, so the outcome is uncertain. Nothing is recorded as withdrawn; the next flush reads the
+    // store's default branch before it decides anything again.
+    for (const item of takenDeletes) if (item.proofUnrecorded === true) await auditWithdrawal(env, item.session, "unrecorded", "uncertain", "proof, unrecorded")
+    throw error
+  }
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
   if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
   if (contextBatch.length > 0) await contextSafely(null, () => saveContextSent(env, store, contextBatch, pr.number))
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting" && !item.unbound))
-  for (const item of takenDeletes) if (proofs.has(item.session) && item.from !== "retracting") await auditWithdrawal(env, item.session, "published", "pushed")
+  for (const item of takenDeletes) if (proofs.has(item.session) && item.from !== "retracting") await auditWithdrawal(env, item.session, item.proofUnrecorded ? "unrecorded" : "published", "pushed", item.proofUnrecorded ? "proof, unrecorded" : "proof")
   await keepRetractedCopies(env, store, takenDeletes.filter((item) => !item.unbound).map((item) => item.session))
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return settle({ result: "intake_stale_retried", pr, stale_retries: rejections.stale })

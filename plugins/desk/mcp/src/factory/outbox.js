@@ -748,6 +748,43 @@ export async function removeQueuedProofCopies(env, store, { platform = process.p
 }
 
 
+/**
+ * `proofHeldCopies(env, store) -> Array<{ name, localBytes, quarantine: null }>`: the copies `removeQueuedProofCopies` moved into `proof-held/` for
+ * `store`, read so a flush can find the store's published record for each. Only the local bytes are read; nothing is listed or published from them.
+ */
+export async function proofHeldCopies(env, store, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const dir = path.join(root, "proof-held", storeSlug(store))
+  const copies = (await listRegularFiles(dir, OUTBOX_NAME_PATTERN)).map((name) => ({ name, file: path.join(dir, name) }))
+  for (const job of (await listDirSafe(path.join(dir, "labels"))).filter((entry) => PATTERNS.jobId.test(entry))) {
+    for (const file of await listRegularFiles(path.join(dir, "labels", job), LABELS_NAME_PATTERN)) {
+      copies.push({ name: `labels/${job}/${file}`, file: path.join(dir, "labels", job, file) })
+    }
+  }
+  return Promise.all(copies.map(async ({ name, file }) => ({ name, localBytes: await fsp.readFile(file), quarantine: null })))
+}
+
+const proofChecksFile = (root) => path.join(root, "proof-checks.json")
+
+/** `settledProofChecks(env, store) -> Set<name>`: the proof copies whose store check is settled (no file on the store, a file that is not this owner's, or a withdrawal that is recorded). */
+export async function settledProofChecks(env, store, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const file = await readJsonFileSafe(proofChecksFile(root), {}, platform)
+  const names = isPlainObject(file.settled) ? file.settled[storeSlug(store)] : undefined
+  return new Set(Array.isArray(names) ? names : [])
+}
+
+/** `settleProofChecks(env, store, names)`: records that these proof copies need no further store check, so no flush goes online for them again. */
+export async function settleProofChecks(env, store, names, { platform = process.platform, runner = undefined } = {}) {
+  if (names.length === 0) return
+  const root = await factoryStateRoot(env, { platform, runner })
+  const slug = storeSlug(store)
+  await updateJsonLocked(root, proofChecksFile(root), { schema_version: 1, settled: {} }, (current) => ({
+    schema_version: 1,
+    settled: { ...current.settled, [slug]: [...new Set([...(Array.isArray(current.settled[slug]) ? current.settled[slug] : []), ...names])] },
+  }), { platform, env, runner }, (value) => isPlainObject(value) && isPlainObject(value.settled))
+}
+
 /** Serialize the source read, facts replacement and receipt for one session. */
 export async function withDerivationLock(env, name, body, { deskRoot = null } = {}) {
   requirePattern(name, OUTBOX_NAME_PATTERN, "name")
@@ -1028,7 +1065,7 @@ export async function markRetracting(env, store, items, { platform = process.pla
   const root = await factoryStateRoot(env, { platform, runner })
   const own = items.filter((item) => ownNames([item.name]).length === 1)
   if (own.length === 0) return
-  const added = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob }]))
+  const added = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, ...(item.proofUnrecorded === true ? { proof_unrecorded: true } : {}) }]))
   await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...added }), { platform, env, runner })
   const names = own.map((item) => item.name)
   await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, removeNames(names), { platform, env, runner })
@@ -1047,7 +1084,7 @@ export async function finishRetracting(env, store, items, { now = defaultNow, pl
   const own = items.filter((item) => ownNames([item.name]).length === 1)
   if (own.length === 0) return
   const at = now()
-  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, done: true, at }]))
+  const done = Object.fromEntries(own.map((item) => [item.name, { path: item.path, blob: item.blob, ...(item.proofUnrecorded === true ? { proof_unrecorded: true } : {}), done: true, at }]))
   await updateJsonLocked(root, retractingFile(root, slug), {}, (current) => ({ ...current, ...done }), { platform, env, runner })
   await undeliver(env, store, own.map((item) => item.name), { platform, runner })
 }

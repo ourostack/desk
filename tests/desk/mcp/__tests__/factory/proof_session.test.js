@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
 
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { markProofSession } from "../../../../../plugins/desk/mcp/src/factory/proof-session.js"
-import { factoryStateRoot, markSessionProof, pendingFiles, pendingLabels, setConsent, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, markSessionProof, pendingFiles, pendingLabels, setConsent, settledProofChecks, settleProofChecks, writeLocalFacts, writeLocalLabels, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { main } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, recent, scratch } from "./_session_helpers.js"
@@ -272,4 +272,15 @@ test("markSessionProof writes the mark once, reports an existing mark, and refus
   await fs.writeFile(path.join(await stateRoot(ctx), "markers", nameOf(1)), "{}")
   await assert.rejects(markSessionProof(ctx.env, target))
   assert.deepEqual(await mark(ctx, 1), { result: "refused", reason: "unknown" })
+}))
+
+test("the settled proof checks are remembered per store, each name once, and an empty settle writes nothing", () => scratch(async (ctx) => {
+  const other = "someone/else"
+  assert.deepEqual([...await settledProofChecks(ctx.env, STORE)], [])
+  await settleProofChecks(ctx.env, STORE, [])
+  await settleProofChecks(ctx.env, STORE, ["facts-a.json"])
+  await settleProofChecks(ctx.env, STORE, ["facts-a.json", "facts-b.json"])
+  await settleProofChecks(ctx.env, other, ["facts-c.json"])
+  assert.deepEqual([...await settledProofChecks(ctx.env, STORE)], ["facts-a.json", "facts-b.json"])
+  assert.deepEqual([...await settledProofChecks(ctx.env, other)], ["facts-c.json"])
 }))
