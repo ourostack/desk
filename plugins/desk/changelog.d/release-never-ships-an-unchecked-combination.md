@@ -1,0 +1,1 @@
+The Desk release now holds a merge when main moved while its pull request's checks ran, because two green pull requests can combine into a broken main. It releases at once when the pull request was tested against the main it landed on, and otherwise starts as soon as main's own run passes on that commit, so it never waits on a run and never ships a combination no run has checked.

@@ -429,18 +429,20 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["main-ci", "build", "push", "announce", "report"])
-  // The release does not wait for main's CI: a pull request already ran every check, so it only refuses to build while a "main is red" issue is open, and it releases exactly the commit it checked.
+  // The release never waits for a run. main-ci decides from the pull request's checks, main's finished runs and the "main is red" issues, and a held release starts again when main's run finishes.
   const mainCi = workflow.jobs["main-ci"]
-  assert.deepEqual(mainCi.permissions, { contents: "read", issues: "read" })
+  assert.deepEqual(mainCi.permissions, { actions: "read", contents: "read", issues: "read", "pull-requests": "read" })
   assert.equal(mainCi.env.SELF_PUSH, workflow.jobs.build.env.SELF_PUSH)
-  const gate = stepNamed(mainCi, "Check that main is not red").run
-  assert.match(gate, /gh issue list --repo "\$GITHUB_REPOSITORY" --state open --label red-main/u)
-  assert.doesNotMatch(gate, /sleep|poll|wait/iu, "the release never waits for main's CI")
+  const gate = stepNamed(mainCi, "Decide whether main may be released now").run
+  assert.match(gate, /node \.github\/scripts\/release-gate\.mjs --repo "\$GITHUB_REPOSITORY" --head "\$judged"/u)
+  assert.doesNotMatch(gate, /sleep|poll/iu, "the release never waits for main's CI")
+  assert.deepEqual(workflow.on.workflow_run, { workflows: ["desk MCP tests", "desk MCP tests on Windows"], types: ["completed"], branches: ["main"] })
   assert.equal(workflow.jobs.build.needs, "main-ci")
+  assert.equal(workflow.jobs.build.if, "needs.main-ci.outputs.release == 'true'", "a held release builds nothing")
   assert.match(stepNamed(workflow.jobs.build, "Release the commit main-ci checked").run, /git checkout --quiet -B main "\$CHECKED"/u)
   // The release's own push builds and pushes nothing, but still marks and reports, so a marking failure in the pushing run is retried.
   const buildJob = workflow.jobs.build
-  assert.equal(buildJob.if, undefined, "the build job always runs, so the marking and the report that need it run too")
+  assert.equal(buildJob.if, "needs.main-ci.outputs.release == 'true'", "the build job runs for the release's own push too (main-ci releases it), so the marking and the report that need it run")
   assert.equal(buildJob.env.SELF_PUSH, "${{ github.event_name == 'push' && github.event.head_commit.author.email == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message, 'Release Desk ') }}")
   for (const step of buildJob.steps) {
     if (step.name === "Skip the release's own push") assert.equal(step.if, "env.SELF_PUSH == 'true'")
