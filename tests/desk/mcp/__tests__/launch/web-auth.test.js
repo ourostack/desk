@@ -1809,6 +1809,79 @@ test("text and elements the page does not show are not read, while hidden contro
   }
 })
 
+// A page the browser never rendered: its root element has no layout row, so no node in it has a mode or a box.
+function unrenderedPage() {
+  const packet = nativeSnapshot()
+  const s = (text) => { packet.strings.push(text); return packet.strings.length - 1 }
+  const document = packet.documents[0]
+  document.nodes = {
+    parentIndex: [-1, 0, 1, 2, 3, 2], nodeType: [9, 1, 1, 1, 3, 1],
+    nodeName: ["#document", "HTML", "BODY", "P", "#text", "INPUT"].map(s),
+    nodeValue: [-1, -1, -1, -1, s("Visible paragraph words"), -1], backendNodeId: [101, 102, 103, 104, 105, 106],
+    attributes: [[], [], [], [], [], [s("type"), s("password")]],
+    inputValue: { index: [5], value: [s(PASSWORD)] }, textValue: { index: [], value: [] }, shadowRootType: { index: [], value: [] },
+    contentDocumentIndex: { index: [], value: [] }, inputChecked: { index: [] }, optionSelected: { index: [] }, isClickable: { index: [] },
+  }
+  document.layout = { nodeIndex: [0], styles: [[]], bounds: [[0, 0, 0, 0]], text: [-1], stackingContexts: { index: [] } }
+  return packet
+}
+
+function prepareOf(packet) {
+  let next = 0
+  return auth.prepare(packet, auth.inspect(inspectedDOM(packet).root), "main", () => ++next)
+}
+
+test("a page that has not rendered reads as not rendered, not as a tree of redacted nodes", () => {
+  const page = prepareOf(unrenderedPage())
+  assert.deepEqual(page.tree, { role: "document", visible: false, children: [{ role: "text", text: "[not rendered]" }] })
+  assert.equal(page.unrendered, true)
+  assert.deepEqual(page.targets, [])
+  assert.deepEqual(page.masks.map((mask) => mask.id), [102], "the root element still masks the page")
+  const text = JSON.stringify(page.tree)
+  assert.equal(text.includes(PASSWORD), false, "a typed value under the page stays scrubbed")
+  assert.equal(text.includes("Visible paragraph"), false, "text that is not rendered is not read")
+  assert.equal(text.includes("[redacted]"), false)
+})
+
+test("a frame whose page has not rendered shows not rendered in the frame, while the top page reads normally", () => {
+  const packet = framedSnapshot()
+  packet.documents[1].layout = { nodeIndex: [0], styles: [[]], bounds: [[0, 0, 0, 0]], text: [-1], stackingContexts: { index: [] } }
+  const page = prepareOf(packet)
+  assert.equal(page.unrendered, false)
+  assert.equal(page.frames, 0, "a frame that was read is not counted as left out")
+  const frame = all(page.tree).find((node) => node.role === "frame")
+  assert.deepEqual(frame.children, [{ role: "document", visible: false, children: [{ role: "text", text: "[not rendered]" }] }])
+  const text = JSON.stringify(page.tree)
+  noPassword(text)
+  assert.ok(text.includes("Main product title"))
+  for (const hidden of [FRAME_TEXT, FALLBACK_TEXT, FRAME_TYPED, FRAME_EDITED]) assert.equal(text.includes(hidden), false)
+})
+
+test("a root element that is display: contents is not taken for an unrendered page", () => {
+  const packet = unrenderedPage()
+  const css = ["block", "visible", "read-only"].map((value) => { packet.strings.push(value); return packet.strings.length - 1 })
+  packet.documents[0].layout = { nodeIndex: [0, 2, 3, 4], styles: [[], css, css, css], bounds: [[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 1, 1]], text: [-1, -1, -1, -1], stackingContexts: { index: [] } }
+  const page = prepareOf(packet)
+  assert.equal(page.unrendered, false)
+  const text = JSON.stringify(page.tree)
+  noPassword(text)
+  assert.equal(text.includes("[not rendered]"), false)
+})
+
+test("a snapshot of a page that has not rendered says so in its hint, and find keeps that hint", async () => {
+  const root = await mkTempRoot("auth-not-rendered-")
+  const adapter = adapterFor(fakeDriver({ packet: unrenderedPage() }), root)
+  try {
+    const snapshot = await adapter.call(["snapshot"])
+    assert.match(snapshot.hint, /^This page has not rendered anything yet \(its root element has no layout\)/u)
+    assert.match(snapshot.hint, /\["wait","2"\], then \["snapshot"\] again\.$/u)
+    assert.match(snapshot.text, /\[not rendered\]/u)
+    const found = await adapter.call(["find", "Visible"])
+    assert.equal(found.hint, snapshot.hint)
+  } finally { await adapter.close() }
+})
+
+
 test("wait pauses for seconds or milliseconds, or until text shows or goes, and returns a fresh snapshot", async () => {
   const root = await mkTempRoot("auth-native-wait-")
   const native = fakeDriver()

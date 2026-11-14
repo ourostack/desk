@@ -347,6 +347,15 @@ function editingMode(styled, css, attrs, parentMode) {
   return editable === "false" ? "read-only" : editable !== undefined ? "read-write" : parentMode || "unknown";
 }
 
+// A document whose root element has no layout has not rendered: nothing in it is on screen, and each node takes no mode
+// of its own, so each would read as redacted. Only a root that lays out its children (display: contents keeps their
+// boxes) can have a laid-out descendant, so one anywhere means the page did render.
+function unrenderedDocument(document) {
+  var root = document.children.find(function (child) { return child.type === 1; });
+  return Boolean(root) && root.css.length !== 3 && !laidOut(root);
+}
+function laidOut(row) { return row.css.length === 3 || row.children.some(laidOut); }
+
 // Whether a native control value could have been typed, and so must be scrubbed wherever it appears.
 function typedValue(value, attrs) {
   var type = (attrs.get("type") || "").toLowerCase();
@@ -427,6 +436,7 @@ function prepare(packet, scope, frameId, nextRef, outside) {
     // "Oops, unknown error!" template in its DOM that would read as a failure).
     if (row.type === 3) return shown(row) || listed(row) ? { role: "text", text: row.opaque ? "[redacted]" : scrub(row.value) } : null;
     if (row.type !== 1 && row.type !== 9) return null;
+    if (row.type === 9 && unrenderedDocument(row)) return { role: "document", visible: false, children: [{ role: "text", text: "[not rendered]" }] };
     var node = { role: ROLES[row.name] || (row.type === 9 ? "document" : "generic"), children: [] };
     var visible = shown(row);
     node.visible = visible;
@@ -484,7 +494,7 @@ function prepare(packet, scope, frameId, nextRef, outside) {
     var title = packet.strings[top.title];
     var place = packet.strings[top.documentURL];
     return {
-      tree: tree, targets: targets, frames: frames, masks: masks, place: place,
+      tree: tree, targets: targets, frames: frames, masks: masks, place: place, unrendered: unrenderedDocument(main.rows[0]),
       page: { url: pageAddress(place), title: typeof title === "string" ? scrub(title).replace(/\s+/gu, " ").trim().slice(0, TITLE_CHARS) : "" }
     };
   } finally {
@@ -835,13 +845,17 @@ function LEFT_OUT(count) {
     "what contains them, [\"snapshot\",\"--interactive\"] for refs and named controls only, or [\"snapshot\",\"--save\"] for the whole page in a file.";
 }
 
+var NOT_RENDERED = "This page has not rendered anything yet (its root element has no layout), so there is nothing on it to read: run [\"wait\",\"2\"], then [\"snapshot\"] again.";
+
 // The same snapshot, read through a narrower view.
 function narrow(result, view) {
   var rendered = renderText(result.snapshot, view);
   result.text = rendered.text;
+  var notRendered = result.hint === NOT_RENDERED;
   delete result.hint;
   if (view.find !== undefined) result.matches = rendered.matches;
   if (rendered.left) result.hint = LEFT_OUT(rendered.left);
+  else if (notRendered) result.hint = NOT_RENDERED;
   return result;
 }
 
@@ -1323,6 +1337,7 @@ function create(context, outputDir, timeoutMs, runtimePolicy, options) {
       if (rendered.full <= ERROR_PAGE_CHARS && ERROR_PAGE.test(result.text)) {
         result.hint = "This page reads as an error, which is often transient: run [\"reload\"], then [\"wait\",\"<text you expect>\"].";
       }
+      if (prepared.unrendered) result.hint = NOT_RENDERED;
       if (applied) result.actionMayHaveApplied = true;
       var final;
       if (save) {
