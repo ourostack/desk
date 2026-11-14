@@ -112,8 +112,9 @@ const statusErrorSummary = (error) => `Desk is ready, but its runtime status fai
 const NO_DETAIL_SUMMARY = "Desk is ready, but this answer carries no runtime detail (the runtime is not loaded, or Desk is in refuse mode), so the empty root, search and sync fields below are not a missing desk. Call desk_doctor to see why."
 
 // What the compact answer shows of the full answer's `runtime`: who is serving, not the runtime's own diagnostics.
-const identityOf = ({ plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, newest_release }) => (
-  { plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, ...(newest_release === undefined ? {} : { newest_release }) })
+const identityOf = ({ plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, newest_release, refresh, swapped_at, from }) => (
+  { plugin, plugin_root, source_mirror_path, source_mirror_hash, loaded, ...(newest_release === undefined ? {} : { newest_release }),
+    ...(refresh === undefined ? {} : { refresh }), ...(swapped_at === undefined ? {} : { swapped_at, from }) })
 // The fields of the compact answer that stay empty while the runtime's status is pending.
 const COMPACT_PENDING = ["activation", "write_scope", "sync"]
 

@@ -15,7 +15,7 @@
 // A boot that cannot start or finish never blocks the agent; the text says so and `desk_status` reports the desk's state.
 
 import { createHash } from "node:crypto"
-import { spawn as nodeSpawn } from "node:child_process"
+import { execFile, spawn as nodeSpawn } from "node:child_process"
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -262,6 +262,7 @@ export function withStartupBoot({
   start = startBoot,
   taskBoot = defaultTaskBoot,
   pause = sleep,
+  servingRoot = () => null,
 }) {
   const key = autoBootEnabled(env, { allowInTest }) ? serverBootKey(env) : null
   if (key === null) return callTool
@@ -274,10 +275,12 @@ export function withStartupBoot({
     try {
       const first = !waited
       waited = true
+      // The boot's text is the runtime's: when the server swapped to a newer release, that release's own boot script writes it, not the copy the host cached.
+      const served = bootScriptOf(servingRoot())
       const pluginRoot = hasText(env.DESK_PLUGIN_ROOT) ? env.DESK_PLUGIN_ROOT : null
       const paths = bootPaths({ stateDir, key })
       if (first && !existsSync(paths.start)) {
-        start({ key, folder: env.CLAUDE_PROJECT_DIR, sessionId: env.COPILOT_AGENT_SESSION_ID, env, stateDir, script: pluginRoot === null ? BOOT_SCRIPT : path.join(pluginRoot, "mcp", "scripts", "session-boot.js") })
+        start({ key, folder: env.CLAUDE_PROJECT_DIR, sessionId: env.COPILOT_AGENT_SESSION_ID, env, stateDir, script: served ?? (pluginRoot === null ? BOOT_SCRIPT : path.join(pluginRoot, "mcp", "scripts", "session-boot.js")) })
       }
       if (!wasDelivered(paths)) {
         const { boot } = await awaitBoot({ paths, waitMs: first ? waitMs : 0, pause })
@@ -293,7 +296,7 @@ export function withStartupBoot({
         const id = `${track}/${slug}`
         if (hasText(track) && hasText(slug) && call.input.clear !== true && !routed.has(id)) {
           routed.add(id)
-          const text = await taskBoot({ env, track, slug })
+          const text = await taskBoot({ env, track, slug, script: served })
           if (hasText(text)) result = append(result, text)
         }
       }
@@ -304,9 +307,26 @@ export function withStartupBoot({
   }
 }
 
+// The boot script of a plugin folder, when it has one.
+function bootScriptOf(root) {
+  if (!hasText(root)) return null
+  const script = path.join(root, "mcp", "scripts", "session-boot.js")
+  return existsSync(script) ? script : null
+}
+
 // The boot for one named task, as text: what `session-boot.js --task <track/slug> --task-only` printed. Loaded when needed, so the
-// server's start never loads the boot's modules.
-export async function defaultTaskBoot({ env, track, slug, waitMs = 10_000, bootFn }) {
+// server's start never loads the boot's modules. With `script`, a newer release's own boot script prints it, as its own process.
+export async function defaultTaskBoot({ env, track, slug, waitMs = 10_000, bootFn, script = null, exec = execFile }) {
+  if (script !== null && script !== BOOT_SCRIPT) {
+    const printed = await new Promise((resolve) => {
+      try {
+        exec(process.execPath, [script, "--task", `${track}/${slug}`, "--task-only"], { env, timeout: waitMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)))
+      } catch {
+        resolve(null)
+      }
+    })
+    if (hasText(printed)) return printed
+  }
   try {
     const run = bootFn ?? (await import("./boot.js")).bootOnce
     const { formatBootText } = await import("./boot-text.js")
