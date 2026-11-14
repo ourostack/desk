@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.137 — 2026-11-14
+
+The remaining errors in Desk's utilities, activation, hooks, search, indexer, artifacts and browser tool now open with what to do, then say what went wrong, and keep their meaning. Every error in `util/`, `desk/`, `activation/`, `hooks/`, `search/`, `indexer/` and `artifacts/` also carries a stable `code` such as `capture_record_missing` or `resources_pass_identity_as_worktree`. The four capture-record results and the four session-retention results gain a `code` beside their `error`. Errors whose code is an exported constant callers compare with keep it, and log lines and status notes keep their wording.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.136 — 2026-11-14
 
 A proof session's published Factory record that no flush had recorded is now withdrawn through the owner-checked retraction, once the store holds exactly the bytes this machine would publish for it. Any other file at that path is refused, audited and left on the store, and a missing file needs nothing. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the rule.
