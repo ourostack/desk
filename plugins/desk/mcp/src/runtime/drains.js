@@ -17,6 +17,7 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 export const DRAIN_STATUS_MARKER = "<!-- ouro-drain-status -->"
 /** The drain moves an issue through labels in this namespace (`drain: triaged`, `drain: in progress`); changing them is not news. */
 const DRAIN_LABEL_PREFIX = "drain:"
+const CROSS_REFERENCE_SLACK_MS = 120_000
 /** A closed issue's record is kept this long, so one that comes back unchanged is not mistaken for a new issue. */
 const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
@@ -61,6 +62,21 @@ export function installLauncher({ env = process.env, homeDir = os.homedir(), sou
     renameSync(temporary, target)
   }
   return { path: target, sha256, changed: current !== sha256 }
+}
+
+/**
+ * The Desk a `drains.js` command runs from: its version (the plugin.json two folders above the script), the release commit the
+ * launcher fetched it at (`DESK_DRAINS_RELEASE`, set only for the launcher's own copy) and the script, as one status line.
+ */
+export function deskInUse({ script, env = process.env }) {
+  let version = "unknown"
+  try {
+    version = JSON.parse(readFileSync(path.join(path.dirname(script), "..", "..", "plugin.json"), "utf8")).version ?? version
+  } catch {
+    // A script run outside a plugin folder has no version to show.
+  }
+  const release = env.DESK_DRAINS_RELEASE || null
+  return { version, release, script, line: `desk ${version} (${release ? `ourostack/desk@release ${release.slice(0, 8)}, the launcher's own copy` : script})` }
 }
 
 function problem(code, thing, probably, look, fix) {
@@ -247,7 +263,36 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, ignore
   const comment = comments.find((entry) => !ownStatus(entry, api.login) && !ignoredComment(entry, ignoredComments))
   if (comment) return `comment ${comment.id} by ${comment.user?.login ?? "nobody"}`
   const events = (await api.issueEvents(repo, issue.number)).filter((event) => event.created_at > since)
-  return events.map((event) => newsEvent(event, ignoredLabels)).find(Boolean) ?? null
+  return events.map((event) => newsEvent(event, ignoredLabels)).find(Boolean) ?? (await crossReference(api, repo, issue, since))
+}
+
+const DRAIN_BRANCH_PREFIX = "drain-"
+const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+
+/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` branch, or the drain's marked comment on that issue that names this one around then. */
+async function selfCaused(api, repo, issue, event) {
+  const source = event.source?.issue ?? {}
+  if ((source.body ?? "").includes(DRAIN_STATUS_MARKER)) return true
+  const where = source.repository_url?.replace(/^.*\/repos\//u, "") ?? repo
+  if (source.pull_request) {
+    const pull = await api.pull(where, source.number).catch(() => null)
+    if (String(pull?.head?.ref ?? "").startsWith(DRAIN_BRANCH_PREFIX)) return true
+  }
+  const names = new RegExp(`#${issue.number}(?!\\d)|/${escapePattern(repo)}/issues/${issue.number}(?!\\d)`, "u")
+  const at = Date.parse(event.created_at)
+  const comments = await api.comments(where, source.number, "1970-01-01T00:00:00Z").catch(() => [])
+  return comments.some((comment) => ownStatus(comment, api.login) && names.test(comment.body) && [comment.created_at, comment.updated_at].some((time) => Math.abs(at - Date.parse(time)) <= CROSS_REFERENCE_SLACK_MS))
+}
+
+/** An issue whose `updated_at` moved with nothing else news: a cross-reference that is not the drain's own work is, and says where from. */
+async function crossReference(api, repo, issue, since) {
+  const events = (await api.timeline(repo, issue.number)).filter((event) => event.event === "cross-referenced" && event.created_at > since)
+  for (const event of events) {
+    if (await selfCaused(api, repo, issue, event)) continue
+    const source = event.source?.issue ?? {}
+    return `cross-reference from ${source.repository_url?.replace(/^.*\/repos\//u, "") ?? repo}#${source.number ?? "unknown"}`
+  }
+  return null
 }
 
 /** Poll one drain's repository and record what changed. A failure is recorded in its state and leaves every marker where it was. */
@@ -390,5 +435,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),
     comments: (repo, issue, since) => all(`/repos/${repo}/issues/${issue}/comments?since=${encodeURIComponent(since)}`),
     issueEvents: (repo, issue) => all(`/repos/${repo}/issues/${issue}/events`),
+    timeline: (repo, issue) => all(`/repos/${repo}/issues/${issue}/timeline`),
+    pull: async (repo, number) => (await get(`/repos/${repo}/pulls/${number}`)).body,
   }
 }

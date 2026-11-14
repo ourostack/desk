@@ -1,7 +1,7 @@
 // The `drains` command line: `poll`, `ack` and `status`. Output is one JSON value on stdout; a usage error is one line on stderr
 // (exit 2) and a failure is a Desk failure line on stderr (exit 1).
 import * as path from "node:path"
-import { ackWake, connectGithub, drainPaths, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, withDrainLock } from "./drains.js"
+import { ackWake, connectGithub, drainPaths, deskInUse, drainStatusLines, installLauncher, pollDrains, readDrainConfig, readDrainStates, withDrainLock } from "./drains.js"
 
 const USAGE = [
   "Usage: drains.js poll [--config <file>] [--state <file>]",
@@ -63,7 +63,10 @@ export async function runDrainsCli({ argv, script, env = process.env, io = proce
     } else {
       result = { status: drainStatusLines(readDrainConfig(paths.config), readDrainStates(paths.state), now()) }
     }
-    if (command !== "ack") result = { ...result, launcher: refreshLauncher(env) }
+    if (command !== "ack") {
+      const { line, ...desk } = deskInUse({ script, env })
+      result = { ...result, desk, status: [line, ...result.status], launcher: refreshLauncher(env) }
+    }
     io.stdout.write(`${JSON.stringify(result, null, 1)}\n`)
     return 0
   } catch (error) {
