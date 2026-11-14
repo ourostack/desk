@@ -33,11 +33,7 @@ Put evidence in Delivered; carry on. Record the answer later with task_signoff, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner; an explicit instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state").
-
-## Waste judgment
-
-Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work, fast-follow, batch, side quests in their own lanes; redesign failures. "No waste" never means dropping proof. Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's.
+Authority follows the human's verb and the surface's owner; an explicit instruction not to write overrides every capture habit (`interaction-style` "Authorization is scope"). Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Each step adds necessary, non-duplicative value, by the smallest sufficient change at the nearest layer you own, and never drops proof (`work-orchestration`). Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's. Deploy, sign in and merge yourself (`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state").
 
 ## Cite every factual claim
 
@@ -45,7 +41,7 @@ Every factual claim to a human or an agent carries an inline link to its primary
 
 ## Own the stack
 
-If tooling gets in your way, keep your task's authority and work around it with ordinary tools, never past a safeguard or permission denial. Start no unrequested repair work; `desk-problem` has the procedure.
+If tooling or instructions get in your way, keep your task's authority and work around them with ordinary tools, never past a safeguard or permission denial. Start no unrequested repair work; `desk-problem` has the procedure. When instructions are confusing, redundant or in conflict, say so and record the friction; an agent must not be silently confused. Each rule has one owner.
 
 ## Engineering work
 
@@ -57,12 +53,8 @@ Before the first write, verify the checkout matches the task's recorded source. 
 
 ## Durable context and attribution
 
-Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). You own the desk's organization: tidy it and say so in one line (`interaction-style` §2). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
-
-## Instruction coherence
-
-When instructions are confusing, redundant or in conflict, say so and record the friction; an agent must not be silently confused. Each rule has one owner.
+Durable state lives on `main` in the desk, never in a host's memory or folders (`interaction-style` "Host commands that duplicate the desk"). Disable host memory (`store_memory`/`vote_memory`) in the host's settings. Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`). One outcome is one task, declared with task_focus (`task-lifecycle`). Never add AI attribution like `Co-Authored-By` trailers (`git-hygiene`).
 
 ## Child agents
 
-Children are not assumed to rerun startup hooks, so the brief carries everything they need (`work-orchestration`). A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony; so does any session the operator or a coordinating parent told not to boot. desk_status and desk-web need no boot. A child agent never calls task_focus.
+Children are not assumed to rerun startup hooks, so the brief carries everything they need (`work-orchestration`). A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony; so does any session told not to boot. desk_status and desk-web need no boot. A child agent never calls task_focus.

@@ -316,17 +316,15 @@ function main() {
     "Alignment, then ownership",
     "Delivery and sign-off",
     "Authority",
-    "Waste judgment",
     "Cite every factual claim",
     "Own the stack",
     "Engineering work",
     "Source and channels",
     "Durable context and attribution",
-    "Instruction coherence",
     "Child agents",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the twelve foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the ten foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
@@ -373,8 +371,10 @@ function main() {
   ]);
   assert.match(section(skill, "Authority"), /Deploy, sign in and merge yourself \(`interaction-style` "Fix the tooling", `work-orchestration` "Merging and the terminal state"\)/u);
   assert.match(owned("interaction-style"), /Deploy and run sign-in flows yourself; never type a password or paste a secret[^\n]+only a password, MFA or consent screen you hit is the human's\./u);
-  assert.match(section(skill, "Waste judgment"), /side quests in their own lanes;/u);
-  assert.match(section(skill, "Waste judgment"), /Agent storage has retention, run unasked; verify reclaimed space, not exit; never propose deleting the human's\./u);
+  // The waste rules moved to work-orchestration (the surface that plans lanes); Authority keeps the one-sentence trigger.
+  assert.match(section(skill, "Authority"), /Each step adds necessary, non-duplicative value, by the smallest sufficient change at the nearest layer you own, and never drops proof \(`work-orchestration`\)/u);
+  assert.match(owned("work-orchestration"), /side quests in their own lanes;/u);
+  assert.match(owned("work-orchestration"), /Agent storage has retention, run unasked[^\n]*; verify reclaimed space, not exit; never propose deleting the human's\./u);
 
   // The Alignment section keeps its protocol and gates; the how-to-ask rules it used to repeat live in interaction-style §6
   // (pressure-tested 2026-11-12).
@@ -441,7 +441,7 @@ function main() {
   assert.ok(owned("preflight-actions").includes("the agent never edits its own permissions"), "preflight-actions must own the permission-widening rule");
   assert.ok(owned("work-orchestration").includes("If a repository will let you merge, merge when confident") && owned("work-orchestration").includes("never report completion while the PR remains open"), "work-orchestration must own merging and the open-PR rule");
 
-  assertSectionConcepts(section(skill, "Waste judgment"), [
+  assertSectionConcepts(section(owned("work-orchestration"), "Waste judgment"), [
     /Before and during work, check that each step adds justifiable, necessary, non-duplicative value/u,
     /human never needs to know the vocabulary/iu,
     /smallest sufficient change at the nearest layer you own/iu,
@@ -482,7 +482,6 @@ function main() {
     "Disable host memory (`store_memory`/`vote_memory`)",
     "Secrets, credentials, raw private transcripts and customer data stay outside Git (`session-resumption`)",
     "One outcome is one task, declared with task_focus (`task-lifecycle`)",
-    "You own the desk's organization: tidy it and say so in one line (`interaction-style` §2)",
     "Never add AI attribution",
     "`Co-Authored-By` trailers",
   ]);
@@ -509,7 +508,7 @@ function main() {
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
     "keep your task's authority",
-    "work around it with ordinary tools",
+    "work around them with ordinary tools",
     "never past a safeguard or permission denial",
     "Start no unrequested repair work",
     "`desk-problem`",
@@ -569,7 +568,7 @@ function main() {
     assert.ok(owned("work-orchestration").includes(phrase), `work-orchestration must carry the child-brief rule: ${phrase}`);
   }
 
-  assertSectionPhrases(section(skill, "Instruction coherence"), "using-desk Instruction coherence", [
+  assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack instruction coherence", [
     "confusing, redundant or in conflict",
     "record the friction",
     "must not be silently confused",
