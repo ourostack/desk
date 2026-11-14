@@ -1422,6 +1422,39 @@ test("close kills nothing when the CLI's close already ended the browser, and co
   assert.deepEqual(fakesRunning(root), [])
 })
 
+test("a process table that is unreadable on the first read is read again, so the daemon and browser are still recorded", { timeout: 180000, skip: sourceOnly }, async (t) => {
+  const { options, tmp, root } = await setup({ mode: "daemon-leak" })
+  stopFakes(t, root)
+  let reads = 0
+  const controller = web.createController({ ...options, exitWaitMs: 500, processTable: () => (reads++ === 0 ? null : web.readProcessTable(process.platform, process.env)) })
+  const id = json(await controller.call("browser_context", { action: "open" })).contextId
+  assert.ok(reads >= 2, "the table was read again")
+  const { daemon, browser } = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${id}`, "daemon.json"), "utf8"))
+  const pids = recorded(tmp, id).map((entry) => entry.pid)
+  assert.ok(pids.includes(daemon) && pids.includes(browser), JSON.stringify(pids))
+  assert.equal(JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${id}`, "owner.json"), "utf8")).processesUnknown, undefined)
+
+  assert.deepEqual(json(await controller.call("browser_context", { action: "close", contextId: id })), { contextId: id, closed: true })
+  assert.deepEqual([running(daemon), running(browser)], [false, false])
+  assert.deepEqual(fakesRunning(root), [])
+})
+
+test("a context whose process table never lists its daemon is marked processesUnknown, and close says so", { timeout: 180000, skip: sourceOnly }, async (t) => {
+  const { options, tmp, root } = await setup({ mode: "daemon" })
+  stopFakes(t, root)
+  const controller = web.createController({ ...options, exitWaitMs: 500, processTable: () => null })
+  const id = json(await controller.call("browser_context", { action: "open" })).contextId
+  const owner = JSON.parse(fs.readFileSync(path.join(tmp, `desk-browser-${id}`, "owner.json"), "utf8"))
+  assert.equal(owner.processesUnknown, true)
+  assert.deepEqual(recorded(tmp, id), [])
+
+  const closed = json(await controller.call("browser_context", { action: "close", contextId: id }))
+  assert.deepEqual(Object.keys(closed).sort(), ["closed", "contextId", "hint", "processesUnknown"])
+  assert.equal(closed.processesUnknown, true)
+  assert.match(closed.hint, /did not list them, so a browser it opened may still be running/u)
+  assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${id}`)), false)
+})
+
 test("a daemon that failed to start is ended, and a PID that is already gone records nothing", { timeout: 180000, skip: sourceOnly }, async (t) => {
   const failed = await setup({ mode: "daemon-open-fail" })
   stopFakes(t, failed.root)

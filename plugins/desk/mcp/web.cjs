@@ -571,17 +571,29 @@ function readOwner(dir) {
 }
 
 // The CLI prints the daemon's PID when it opens ("opened with pid N") and when the daemon fails to start ("Daemon pid=N:").
+// A cold PowerShell start can outlast its read, so an unreadable table or one without the daemon is read again; if every read
+// fails, owner.json says the processes are unknown, so close can say so.
+var PROCESS_READS = 3;
+var PROCESS_READ_PAUSE_MS = 500;
 function recordProcesses(s, dir, text) {
   var match = /(?:opened with pid |Daemon pid=)(\d+)/.exec(text);
   if (!match) return Promise.resolve();
   var daemon = Number(match[1]);
-  return Promise.resolve(s.processTable()).then(function (table) {
-    var row = (table || []).filter(function (entry) { return entry.pid === daemon; })[0];
-    if (!row) return;
-    var owner = readOwner(dir);
-    owner.processes = liveTree(table, [row]);
-    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(owner) + "\n");
-  });
+  function read(attempt) {
+    return Promise.resolve(s.processTable()).then(function (table) {
+      var row = (table || []).filter(function (entry) { return entry.pid === daemon; })[0];
+      var owner = readOwner(dir);
+      if (row) {
+        owner.processes = liveTree(table, [row]);
+      } else if (attempt < PROCESS_READS) {
+        return pause(PROCESS_READ_PAUSE_MS).then(function () { return read(attempt + 1); });
+      } else {
+        owner.processesUnknown = true;
+      }
+      fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(owner) + "\n");
+    });
+  }
+  return read(1);
 }
 
 function pause(ms) {
@@ -635,13 +647,14 @@ function close(s, id) {
   if (owner.browser === "mine" || owner.transport === "auth-api" || owner.profilePolicy === AUTH_PROFILE_POLICY) {
     throw plain("AUTH_CONTEXT_REFUSED: No current owned native handle exists for this authenticated context.");
   }
-  var recorded = readOwner(dir).processes;
+  var recorded = owner.processes;
   var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
   return stop.then(function () {
     return endProcesses(s, recorded);
   }).then(function () {
     removeDir(dir);
     delete s.contexts[id];
+    if (owner.processesUnknown) return { contextId: id, closed: true, processesUnknown: true, hint: "Desk could not record the processes this context started, because three reads of the process table did not list them, so a browser it opened may still be running." };
     return { contextId: id, closed: true };
   });
 }
