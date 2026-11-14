@@ -12,7 +12,7 @@ import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const MINUTE_MS = 60_000
 
-export function schedulePaths(options = {}) {
+export function schedulePaths(options) {
   const home = drainsHome(options)
   return { config: path.join(home, "schedules.json"), state: path.join(home, "schedules-state.json"), lock: path.join(home, "schedule.lock") }
 }
