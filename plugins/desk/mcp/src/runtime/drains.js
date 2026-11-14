@@ -230,23 +230,24 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 /** A comment a drain's `ignoreComments` rule skips: written by the rule's author (case-insensitive) and, when the rule has a `match`, a body that matches it. */
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
-/** A reopen, or a change to a label that is neither in the drain's namespace nor on its ignored list. Closes, assignments and mentions are not news. */
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace and ignored list. Closes, assignments and mentions are not news. */
 function newsEvent(event, ignoredLabels) {
-  if (event.event === "reopened") return true
-  if (event.event !== "labeled" && event.event !== "unlabeled") return false
+  if (event.event === "reopened") return "reopened"
+  if (event.event !== "labeled" && event.event !== "unlabeled") return null
   const name = (event.label?.name ?? "").toLowerCase()
-  return !name.startsWith(DRAIN_LABEL_PREFIX) && !ignoredLabels.includes(name)
+  return name.startsWith(DRAIN_LABEL_PREFIX) || ignoredLabels.includes(name) ? null : `${event.event} ${name}`
 }
 
-/** Whether anyone but the drain changed the issue since `before`: a new issue, an edit, another comment, a reopen or a label outside the drain's own. */
+/** What someone but the drain changed since `before` (a new issue, an edit, another comment, a reopen or a label outside the drain's own), or null. The reason travels with the event. */
 async function changedByOthers(api, repo, issue, before, digest, ignored, ignoredLabels, ignoredComments) {
-  if (!before) return true
-  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return true
+  if (!before) return "new issue"
+  if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return "title or body edited"
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
-  if (comments.some((comment) => !ownStatus(comment, api.login) && !ignoredComment(comment, ignoredComments))) return true
+  const comment = comments.find((entry) => !ownStatus(entry, api.login) && !ignoredComment(entry, ignoredComments))
+  if (comment) return `comment ${comment.id} by ${comment.user?.login ?? "nobody"}`
   const events = (await api.issueEvents(repo, issue.number)).filter((event) => event.created_at > since)
-  return events.some((event) => newsEvent(event, ignoredLabels))
+  return events.map((event) => newsEvent(event, ignoredLabels)).find(Boolean) ?? null
 }
 
 /** Poll one drain's repository and record what changed. A failure is recorded in its state and leaves every marker where it was. */
@@ -267,7 +268,8 @@ export async function pollDrain(drain, states, { connect, now }) {
       const digest = digestOf(issue, trailers)
       seen[key] = { updatedAt: issue.updated_at, digest, ...(ignored ? { ignored } : {}) }
       if (!state.seeded || before?.updatedAt === issue.updated_at) continue
-      if (await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString() })
+      const why = await changedByOthers(api, drain.repo, issue, before, digest, ignored, labels, quiet)
+      if (why) recorded.push({ number: issue.number, title: issue.title, updatedAt: issue.updated_at, seenAt: new Date(now).toISOString(), why })
     }
     for (const [key, entry] of Object.entries(state.seen)) {
       const gone = seenIssue(entry)

@@ -238,6 +238,43 @@ test("a cross-reference from the drain's own marked status comment on another is
   assert.deepEqual(w.state().pending, [])
 })
 
+test("a cross-reference from a pull request, the drain's own branch or not, wakes nobody; the PR's merge and close do not either, and a reopen still does", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0))])
+  await w.poll()
+  const pull = (head, number) => ({ type: "issue", issue: { number, pull_request: { url: `https://api.github.com/repos/acme/widgets/pulls/${number}` }, head: { ref: head }, body: "For acme/widgets#1." } })
+  const events = (n) => [
+    { id: 1, event: "cross-referenced", created_at: T(5), actor: { login: "maintainer" }, source: pull(`drain-${n}-default-command`, 39) },
+    { id: 2, event: "cross-referenced", created_at: T(5), actor: { login: "maintainer" }, source: pull("someone-elses-branch", 40) },
+    { id: 3, event: "referenced", created_at: T(6), actor: { login: "maintainer" }, commit_id: "abc" },
+    { id: 4, event: "closed", created_at: T(7), actor: { login: "maintainer" }, commit_id: "abc" },
+  ]
+  w.issues[0] = issue(1, T(7))
+  w.issues[1] = issue(2, T(7))
+  w.comments = async () => []
+  w.events = async (_repo, n) => events(n)
+  await w.poll()
+  assert.deepEqual(w.sent, [])
+  // The issue is reopened after the PR's close: someone's decision, so it is news.
+  w.issues[0] = issue(1, T(9))
+  w.events = async (_repo, n) => (n === 1 ? [...events(n), { id: 5, event: "reopened", created_at: T(9), actor: { login: "someone" } }] : events(n))
+  await w.poll()
+  assert.equal(w.sent.length, 1)
+  assert.equal(w.sent[0][1], "New or changed issues in acme/widgets: #1 Issue 1. Drain them.")
+})
+
+test("each recorded event says why it was news", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0)), issue(3, T(0)), issue(4, T(0)), issue(5, T(0)), issue(6, T(0)), issue(7, T(0))])
+  await w.poll()
+  w.issues.push(issue(8, T(5)))
+  w.issues[1] = issue(2, T(5), "Issue 2", "edited")
+  for (const n of [3, 4, 5, 6, 7]) w.issues[n - 1] = issue(n, T(5))
+  w.comments = async (_repo, n) => (n === 3 ? [{ id: 77, body: "me too", updated_at: T(5), user: { login: "someone" } }] : n === 4 ? [{ id: 78, body: "hi", updated_at: T(5) }] : [])
+  w.events = async (_repo, n) => ({ 5: [labelEvent(T(5), "Bug")], 6: [labelEvent(T(5), "bug", "unlabeled")], 7: [{ id: 9, event: "reopened", created_at: T(5) }] })[n] ?? []
+  const out = await w.poll()
+  const why = Object.fromEntries(out.wakes[0].events.map((event) => [event.number, event.why]))
+  assert.deepEqual(why, { 2: "title or body edited", 3: "comment 77 by someone", 4: "comment 78 by nobody", 5: "labeled bug", 6: "unlabeled bug", 7: "reopened", 8: "new issue" })
+})
+
 test("a poll records when it last read GitHub without an error, and a failed poll keeps that time", async () => {
   const w = await world([issue(1, T(0))])
   await w.poll()
@@ -496,7 +533,7 @@ test("keeps recorded events when the wake is refused, then sends them with the n
   w.refuse = "the app did not answer in time"
   await w.poll()
   matches(w.state(), { lastError: "the wake was not delivered: the app did not answer in time" })
-  assert.deepEqual(w.state().pending, [{ number: 1, title: "Issue 1", updatedAt: "2026-11-13T02:00:00Z", seenAt: new Date(NOW).toISOString() }])
+  assert.deepEqual(w.state().pending, [{ number: 1, title: "Issue 1", updatedAt: "2026-11-13T02:00:00Z", seenAt: new Date(NOW).toISOString(), why: "title or body edited" }])
   w.issues[0] = issue(1, "2026-11-13T03:00:00Z", "Issue 1", "v3")
   w.issues.push(issue(2, "2026-11-13T03:00:00Z"))
   await w.poll()
