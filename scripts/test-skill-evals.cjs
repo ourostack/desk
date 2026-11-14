@@ -200,33 +200,24 @@ try {
   }
 
   {
-    // A case's world lives at evals/worlds/<suite>/<case>; every file in it is a source, as a fixture's files are, and a symlink source is fingerprinted by its link.
+    // A case's world lives at evals/worlds/<suite>/<case>; every file in it is a source, as a fixture's files are.
     const world = "evals/worlds/fixture/case-1";
     const seeded = `${world}/desk/seeded.md`;
-    const withWorld = (worldPath, files, { sources, link = null } = {}) => {
+    const withWorld = (worldPath, files, { sources } = {}) => {
       const { dir, suite } = makeFixture();
       for (const [name, text] of Object.entries(files)) {
         fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
         fs.writeFileSync(path.join(dir, name), text);
       }
-      if (link !== null) fs.symlinkSync(link.target, path.join(dir, link.file));
       suite.cases[0].world = worldPath;
-      suite.sources = sources ?? ["source.txt", ...Object.keys(files), ...(link === null ? [] : [link.file])];
+      suite.sources = sources ?? ["source.txt", ...Object.keys(files)];
       suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, dir);
       fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
       return dir;
     };
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" })));
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/person`]: "alex\n" })), "a person file holding one alias is valid");
-    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" }, { link: { file: `${world}/desk/outside.md`, target: "../../../../skill-eval-outside/notes.md" } })), "a dangling symlink source is fingerprinted by its link");
-    {
-      // git stores a link as its target text, so a checkout without symlink support fingerprints the same as the link.
-      const linkTarget = "../../../../skill-eval-outside/notes.md";
-      const sources = ["source.txt", seeded, `${world}/desk/outside.md`];
-      const linked = withWorld(world, { [seeded]: "seeded\n" }, { link: { file: `${world}/desk/outside.md`, target: linkTarget } });
-      const copied = withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md`]: linkTarget });
-      assert.equal(sourceFingerprint(sources, linked), sourceFingerprint(sources, copied));
-    }
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md.symlink`]: "../../../../skill-eval-outside/notes.md\n" })), "a link is a .symlink file in the world");
     for (const [worldPath, files, options, message] of [
       ["evals/worlds/fixture/other", { [seeded]: "x\n" }, {}, /world must be the string evals\/worlds\/fixture\/case-1, not "evals\/worlds\/fixture\/other"/u],
       [5, {}, {}, /world must be the string evals\/worlds\/fixture\/case-1, not 5/u],
@@ -936,7 +927,8 @@ try {
       'const prompt = value("-p");',
       'const cwd = process.cwd();',
       'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
+      'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
       'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
       'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
@@ -1185,6 +1177,23 @@ try {
       const judge = calls()[1].prompt;
       assert.match(judge, /Branches and remote-tracking refs:\n[\s\S]*main [0-9a-f]+ Scenario world/u);
       assert.match(judge, /Linked worktree on refs\/heads\/fix:\nUncommitted or untracked changes:\n\?\? worktree-note\.md\nCommits made after the baseline:\n[0-9a-f]+ Subject change/u);
+    }
+
+    {
+      // A world's `<name>.symlink` file becomes the link `<name>` in the subject's desk, and the desk commits the link itself.
+      const { run, calls } = runFixture((suite, root) => {
+        const world = path.join(root, "evals", "worlds", "fixture", "case-1", "desk");
+        fs.mkdirSync(world, { recursive: true });
+        fs.writeFileSync(path.join(world, "seeded.md"), "seeded\n");
+        fs.writeFileSync(path.join(world, "linked.md.symlink"), "../outside.md\n");
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/desk/seeded.md", "evals/worlds/fixture/case-1/desk/linked.md.symlink"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      const [subjectCall] = calls();
+      assert.equal(subjectCall.linkTo, "../outside.md", "the subject finds a symlink to the stated target");
+      assert.ok(subjectCall.tracked.includes("linked.md") && !subjectCall.tracked.includes("linked.md.symlink"), "git tracks the link, not its marker");
     }
 
     {

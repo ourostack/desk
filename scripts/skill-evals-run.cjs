@@ -196,6 +196,21 @@ function cloneTemplate(template, testCaseId) {
 // origin, and its repo folder over the repository copy. Each touched tree is committed, and that commit is the baseline the judge's
 // evidence diffs against. `desk-origin-ahead` lands one more commit on the origin's main, and each `desk-origin-branches/<name>`
 // lands a branch from the seeded commit, so the subject has to fetch what another writer pushed.
+// A world keeps a link as `<name>.symlink` holding its target, because a tracked symlink to a missing target breaks the repository's
+// scans of tracked files. The copy the runner lays down gets the link `<name>` instead.
+function materializeLinks(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) materializeLinks(file);
+    else if (entry.name.endsWith(".symlink")) {
+      const target = fs.readFileSync(file, "utf8").trim();
+      fs.rmSync(file);
+      fs.symlinkSync(target, file.slice(0, -".symlink".length));
+    }
+  }
+}
+
 // A case's `person` file names the Desk person its subject acts as (a roster alias), so Desk's writes resolve to that row.
 function worldPerson(root, world) {
   const file = path.join(root, world, "person");
@@ -208,12 +223,14 @@ function seedWorld(workspace, world, root, template) {
   const desk = path.join(source, "desk");
   if (fs.existsSync(desk)) {
     fs.cpSync(desk, workspace.desk, { recursive: true, verbatimSymlinks: true });
+    materializeLinks(workspace.desk);
     baselines.desk = commitWorld(workspace.desk, "Scenario world");
     gitChecked(workspace.desk, ["push", "-q", "origin", "HEAD:main"], world);
   }
   const repo = path.join(source, "repo");
   if (fs.existsSync(repo)) {
     fs.cpSync(repo, workspace.repo, { recursive: true, verbatimSymlinks: true });
+    materializeLinks(workspace.repo);
     baselines.repo = commitWorld(workspace.repo, "Scenario world");
   }
   const branches = path.join(source, "desk-origin-branches");
@@ -243,6 +260,7 @@ function landOnOrigin(workspace, { overlay, branch, base, message, world }) {
   gitChecked(workspace.directory, ["clone", "-q", path.join(workspace.directory, "origin.git"), clone], world);
   gitChecked(clone, ["checkout", "-q", "-B", branch, base], world);
   fs.cpSync(overlay, clone, { recursive: true, verbatimSymlinks: true });
+  materializeLinks(clone);
   commitWorld(clone, message);
   gitChecked(clone, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`], world);
   fs.rmSync(clone, { recursive: true, force: true });

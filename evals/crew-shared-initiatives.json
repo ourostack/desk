@@ -44,12 +44,12 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/README.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_meta/desks.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_shared/tracks/reliability/README.md",
-    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_shared/tracks/reliability/evidence-link.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_shared/tracks/reliability/evidence-link.md.symlink",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/retry-budget/task.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "c1b9b358ceb0d048c8a79901ee2619722f87d415d42e6ba20a8c2126cd1baec9",
+  "reviewedSourceFingerprint": "ec3e89913e6a7ada484f3ed6b49766bb314e318c681669da901679008f80c96e",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},

@@ -86,8 +86,7 @@ function listTrackedMarkdownFiles() {
 }
 
 function findCanonicalRfcCopies() {
-  // A symlink in an eval world can point outside the repository, so it is not a file this scan reads.
-  return listTrackedMarkdownFiles().filter((file) => fs.lstatSync(path.join(repoRoot, file)).isFile() && /^# Agentic Engineering Epoch 2\s*$/mu.test(read(file)));
+  return listTrackedMarkdownFiles().filter((file) => /^# Agentic Engineering Epoch 2\s*$/mu.test(read(file)));
 }
 
 function main() {

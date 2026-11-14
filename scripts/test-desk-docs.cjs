@@ -366,8 +366,6 @@ function findCanonicalRfcCopies({
 } = {}) {
   return markdownFiles.filter((file) => {
     if (/(^|\/)(?:_?archive)(?:\/|$)/iu.test(file)) return false;
-    // A symlink in an eval world can point outside the repository; the scan does not follow it.
-    if (fs.lstatSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isSymbolicLink()) return false;
     const body = readFile(file);
     return body.includes(CANONICAL_RFC_MARKER) || declaresCanonicalRfc(body);
   });

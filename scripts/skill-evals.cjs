@@ -64,30 +64,24 @@ function escapes(root, target) {
   return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 }
 
-// A symlink source is fingerprinted by the bytes git stores for it, its link text, and never followed, so a scenario world can hold a
-// link to somewhere outside the repository. A checkout without symlink support writes that same text as a file, so it hashes alike.
-function sourceHash(repoRoot, source) {
+function sourceFile(repoRoot, source) {
   if (!hasText(source) || path.isAbsolute(source)) fail(`source path must be repo-relative: ${source}`);
   const root = fs.realpathSync(repoRoot);
   const candidate = path.resolve(root, source);
   if (escapes(root, candidate)) fail(`source path escapes repo root: ${source}`);
-  if (isSymlink(candidate)) return crypto.createHash("sha256").update(fs.readlinkSync(candidate)).digest("hex");
   if (!fs.existsSync(candidate)) fail(`missing source: ${source}`);
   const resolved = fs.realpathSync(candidate);
   if (escapes(root, resolved)) fail(`source path resolves outside repo root: ${source}`);
   if (!fs.statSync(resolved).isFile()) fail(`missing source: ${source}`);
-  return crypto.createHash("sha256").update(normalizeSource(fs.readFileSync(resolved, "utf8"))).digest("hex");
-}
-
-function isSymlink(file) {
-  return fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink() === true;
+  return resolved;
 }
 
 function sourceFingerprint(sources, repoRoot = process.cwd()) {
   if (!Array.isArray(sources) || sources.length === 0) fail("sources must be a non-empty array");
   unique(sources, "source path");
   const entries = sources.slice().sort().map((source) => {
-    const hash = sourceHash(repoRoot, source);
+    const file = sourceFile(repoRoot, source);
+    const hash = crypto.createHash("sha256").update(normalizeSource(fs.readFileSync(file, "utf8"))).digest("hex");
     return `${source.replaceAll(path.sep, "/")}\n${hash}\n`;
   });
   return crypto.createHash("sha256").update(entries.join("")).digest("hex");
