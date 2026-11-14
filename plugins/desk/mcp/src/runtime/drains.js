@@ -18,6 +18,8 @@ export const DRAIN_STATUS_MARKER = "<!-- ouro-drain-status -->"
 /** The drain moves an issue through labels in this namespace (`drain: triaged`, `drain: in progress`); changing them is not news. */
 const DRAIN_LABEL_PREFIX = "drain:"
 const CROSS_REFERENCE_SLACK_MS = 120_000
+const CLAIM_SLACK_MS = 60_000
+const HISTORY = 200
 /** A closed issue's record is kept this long, so one that comes back unchanged is not mistaken for a new issue. */
 const GONE_MS = 30 * 24 * 3_600_000
 const LOCK_STALE_MS = 15 * 60_000
@@ -62,6 +64,20 @@ export function installLauncher({ env = process.env, homeDir = os.homedir(), sou
     renameSync(temporary, target)
   }
   return { path: target, sha256, changed: current !== sha256 }
+}
+
+/** Why wakes were made for one issue: its recorded events, newest first, the marker the poll keeps for it and whether a wake is still waiting. */
+export function whyOf(states, repo, number) {
+  const state = states[repo]
+  const wakes = (state?.history ?? []).filter((event) => event.number === number).reverse().slice(0, 10)
+  return {
+    repo,
+    number,
+    wakes,
+    waiting: Boolean(state?.pending.some((event) => event.number === number)),
+    seen: state?.seen[String(number)] ?? null,
+    ...(wakes.length ? {} : { note: `no wake is recorded for ${repo}#${number}; each drain keeps its last ${HISTORY} events` }),
+  }
 }
 
 /**
@@ -221,7 +237,7 @@ const oneLine = (text) => {
 }
 
 export function wakeMessage(repo, events) {
-  const shown = events.slice(0, MAX_TITLES).map((event) => `#${event.number} ${oneLine(event.title)}`)
+  const shown = events.slice(0, MAX_TITLES).map((event) => `#${event.number} ${oneLine(event.title)}${event.why ? ` (${event.why})` : ""}`)
   const more = events.length > MAX_TITLES ? `, and ${events.length - MAX_TITLES} more` : ""
   return `New or changed issues in ${repo}: ${shown.join(", ")}${more}. Drain them.`
 }
@@ -246,9 +262,14 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 /** A comment a drain's `ignoreComments` rule skips: written by the rule's author (case-insensitive) and, when the rule has a `match`, a body that matches it. */
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
-/** What made a reopen or a label change news, or null: a label outside the drain's namespace and ignored list. Closes, assignments and mentions are not news. */
-function newsEvent(event, ignoredLabels) {
-  if (event.event === "reopened") return "reopened"
+const isDrainLabel = (event) => (event.event === "labeled" || event.event === "unlabeled") && (event.label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)
+
+/** What made a reopen or a label change news, or null: a label outside the drain's namespace and ignored list, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). Closes, assignments and mentions are not news. */
+function newsEvent(event, ignoredLabels, claims, login) {
+  if (event.event === "reopened") {
+    const own = event.actor?.login?.toLowerCase() === login.toLowerCase() && claims.some((claim) => claim.actor?.login?.toLowerCase() === login.toLowerCase() && Math.abs(Date.parse(claim.created_at) - Date.parse(event.created_at)) <= CLAIM_SLACK_MS)
+    return own ? null : "reopened"
+  }
   if (event.event !== "labeled" && event.event !== "unlabeled") return null
   const name = (event.label?.name ?? "").toLowerCase()
   return name.startsWith(DRAIN_LABEL_PREFIX) || ignoredLabels.includes(name) ? null : `${event.event} ${name}`
@@ -265,21 +286,23 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, ignore
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
   const comment = comments.find((entry) => !ownStatus(entry, api.login) && !ignoredComment(entry, ignoredComments))
   if (comment) return `comment ${comment.id} by ${comment.user?.login ?? "nobody"}`
-  const events = (await api.issueEvents(repo, issue.number)).filter((event) => event.created_at > since)
-  return events.map((event) => newsEvent(event, ignoredLabels)).find(Boolean) ?? (await crossReference(api, repo, issue, since))
+  const feed = await api.issueEvents(repo, issue.number)
+  const claims = feed.filter(isDrainLabel)
+  const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, ignoredLabels, claims, api.login)).find(Boolean)
+  return news ?? (await crossReference(api, repo, issue, since))
 }
 
-const DRAIN_BRANCH_PREFIX = "drain-"
+const DRAIN_BRANCH_PREFIXES = ["drain-", "drain/"]
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
-/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` branch, or the drain's marked comment on that issue that names this one around then. */
+/** Whether a cross-reference's source is the drain's own work: a marked body, a pull request on a `drain-` or `drain/` branch, or the drain's marked comment on that issue that names this one around then. */
 async function selfCaused(api, repo, issue, event) {
   const source = event.source?.issue ?? {}
   if ((source.body ?? "").includes(DRAIN_STATUS_MARKER)) return true
   const where = source.repository_url?.replace(/^.*\/repos\//u, "") ?? repo
   if (source.pull_request) {
     const pull = await api.pull(where, source.number).catch(() => null)
-    if (String(pull?.head?.ref ?? "").startsWith(DRAIN_BRANCH_PREFIX)) return true
+    if (DRAIN_BRANCH_PREFIXES.some((prefix) => String(pull?.head?.ref ?? "").startsWith(prefix))) return true
   }
   const names = new RegExp(`#${issue.number}(?!\\d)|/${escapePattern(repo)}/issues/${issue.number}(?!\\d)`, "u")
   const at = Date.parse(event.created_at)
@@ -299,7 +322,7 @@ async function crossReference(api, repo, issue, since) {
 }
 
 /** Poll one drain's repository and record what changed. A failure is recorded in its state and leaves every marker where it was. */
-export async function pollDrain(drain, states, { connect, now }) {
+export async function pollDrain(drain, states, { connect, now, desk }) {
   const state = states[drain.repo] ?? (states[drain.repo] = blank())
   try {
     const api = await connect(drain.account)
@@ -327,6 +350,7 @@ export async function pollDrain(drain, states, { connect, now }) {
     const open = new Set(issues.map((issue) => issue.number))
     const numbers = new Set(recorded.map((event) => event.number))
     state.pending = [...state.pending.filter((event) => open.has(event.number) && !numbers.has(event.number)), ...recorded]
+    state.history = [...(state.history ?? []), ...recorded.map((event) => (desk ? { ...event, desk } : event))].slice(-HISTORY)
     state.seen = seen
     state.seeded = true
     state.openCount = issues.length
@@ -371,11 +395,11 @@ export function drainStatusLines(drains, states, now) {
  * stays pending and comes back with the next poll. Repositories dropped from the config lose their state.
  * Each wake carries `done`, the command that reports its delivery: the runner appends `--error <text>` when delivery failed.
  */
-export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [] }) {
+export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [], desk }) {
   const drains = readDrainConfig(paths.config)
   const stored = readDrainStates(paths.state)
   const states = Object.fromEntries(drains.map((drain) => [drain.repo, stored[drain.repo] ?? blank()]))
-  for (const drain of drains) await pollDrain(drain, states, { connect, now })
+  for (const drain of drains) await pollDrain(drain, states, { connect, now, desk })
   writeDrainStates(paths.state, states)
   const wakes = drains.filter((drain) => states[drain.repo].pending.length > 0).map((drain) => {
     const events = states[drain.repo].pending
@@ -432,7 +456,8 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
     }
     return items
   }
-  const login = account ?? String((await get("/user")).body.login ?? "")
+  // Who the token really is decides which comments are the drain's own, so each drain's account is resolved from the token that polls its repository.
+  const login = (await get("/user").then(({ body }) => String(body.login ?? ""), () => "")) || account || ""
   return {
     login,
     openIssues: async (repo) => (await all(`/repos/${repo}/issues?state=open&sort=updated&direction=desc`)).filter((issue) => !issue.pull_request),

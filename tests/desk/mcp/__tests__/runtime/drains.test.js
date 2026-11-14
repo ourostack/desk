@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import {
   ackWake, connectGithub, DRAIN_STATUS_MARKER, drainPaths, drainsHome, deskInUse, drainStatusLines, installLauncher, parseDrainConfig, pollDrain, pollDrains,
-  readDrainConfig, readDrainStates, wakeId, wakeMessage, withDrainLock,
+  readDrainConfig, readDrainStates, wakeId, wakeMessage, whyOf, withDrainLock,
 } from "../../../../../plugins/desk/mcp/src/runtime/drains.js"
 import { parseDrainsArgs, runDrainsCli } from "../../../../../plugins/desk/mcp/src/runtime/drains-cli.js"
 
@@ -78,7 +78,7 @@ test("wakes once per new or changed issue revision and never again for the same 
   await w.poll()
   w.issues.push(issue(2, "2026-11-13T03:00:00Z", "New thing"))
   await w.poll()
-  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 New thing. Drain them."]])
+  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 New thing (new issue). Drain them."]])
   await w.poll()
   assert.equal(w.sent.length, 1)
   w.issues[0] = issue(1, "2026-11-13T04:00:00Z", "Issue 1", "edited")
@@ -93,7 +93,7 @@ test("batches every change from one poll into a single message, and keeps a clos
   await w.poll()
   w.issues.splice(0, 2, issue(1, "2026-11-13T05:00:00Z", "One\nwith\nlines"), issue(3, "2026-11-13T05:01:00Z"), issue(4, "2026-11-13T05:02:00Z"))
   await w.poll()
-  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #1 One with lines, #3 Issue 3, #4 Issue 4. Drain them."]])
+  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #1 One with lines (title or body edited), #3 Issue 3 (new issue), #4 Issue 4 (new issue). Drain them."]])
   assert.deepEqual(Object.keys(w.state().seen), ["1", "3", "4", "9"])
   matches(w.state().seen["9"], { updatedAt: "2026-11-13T01:00:00Z", goneAt: NOW })
 })
@@ -199,7 +199,7 @@ test("never wakes for a closed issue the drain handled, and drops its waiting ev
   assert.deepEqual(w.state().pending.map((event) => event.number), [1, 2])
   w.issues.splice(0, 1)
   await w.poll()
-  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2. Drain them."])
+  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2 (title or body edited). Drain them."])
   w.issues.length = 0
   await w.poll()
   await w.poll()
@@ -290,12 +290,166 @@ test("an issue the drain filed or already triaged is seen on arrival: a drain: l
   }
 })
 
+const S = (second, minute = 5) => `2026-11-13T01:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}Z`
+const lifecycle = (event, created_at, actor = "maintainer", extra = {}) => ({ id: 1, event, created_at, ...(actor ? { actor: { login: actor } } : {}), ...extra })
+const claimLabel = (created_at, actor = "maintainer") => lifecycle("labeled", created_at, actor, { label: { name: "drain: in progress" } })
+
+test("a reopen that is the drain claiming the issue (its own drain: label change within a minute) wakes nobody; any other reopen does", async () => {
+  const cases = [
+    ["the claim label, then the reopen two seconds later", [claimLabel(S(22)), lifecycle("reopened", S(24))], false],
+    ["the reopen, then the claim label", [lifecycle("reopened", S(22)), claimLabel(S(24))], false],
+    ["a drain: label removal beside the reopen", [lifecycle("unlabeled", S(22), "maintainer", { label: { name: "drain: triaged" } }), lifecycle("reopened", S(24))], false],
+    ["a reopen by someone else beside the drain's label", [claimLabel(S(22)), lifecycle("reopened", S(24), "someone")], true],
+    ["a reopen by the drain beside someone else's drain: label", [claimLabel(S(22), "someone"), lifecycle("reopened", S(24))], true],
+    ["a drain: label from two minutes earlier", [claimLabel(S(22, 3)), lifecycle("reopened", S(24))], true],
+    ["a reopen with no actor", [claimLabel(S(22)), lifecycle("reopened", S(24), null)], true],
+    ["a claim label with no actor", [claimLabel(S(22), null), lifecycle("reopened", S(24))], true],
+    ["a reopen with no claim at all", [lifecycle("reopened", S(24))], true],
+  ]
+  for (const [name, events, wakes] of cases) {
+    const w = await world([issue(1, T(0))])
+    await w.poll()
+    w.issues[0] = issue(1, S(24))
+    w.events = async () => events
+    const out = await w.poll()
+    assert.equal(out.wakes.length, wakes ? 1 : 0, name)
+    if (wakes) assert.equal(out.wakes[0].events[0].why, "reopened", name)
+    matches(w.state().seen["1"], seenAt(S(24)))
+  }
+  // A poll that fell between the claim label and the reopen still sees the label.
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  w.issues[0] = issue(1, S(23))
+  w.events = async () => [claimLabel(S(22))]
+  assert.deepEqual((await w.poll()).wakes, [])
+  w.issues[0] = issue(1, S(24))
+  w.events = async () => [claimLabel(S(22)), lifecycle("reopened", S(24))]
+  assert.deepEqual((await w.poll()).wakes, [])
+})
+
+test("a commit that references the issue from a drain branch, and an edit to the drain's own marked comment, wake nobody, and the marker advances", async () => {
+  const w = await world([issue(1, T(3))])
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  // The comment was created before the last marker; only its updated_at moved.
+  const edited = { id: 6869127858, body: `Status.\n${DRAIN_STATUS_MARKER}`, created_at: T(1), updated_at: T(5), user: { login: "maintainer" } }
+  w.comments = async (_repo, _n, since) => [edited].filter((comment) => comment.updated_at > since)
+  w.events = async () => [lifecycle("referenced", T(4), "maintainer", { commit_id: "6a0688fd", commit_url: "https://api.github.com/repos/acme/widgets/commits/6a0688fd" })]
+  const out = await w.poll()
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(w.state().pending, [])
+  matches(w.state().seen["1"], seenAt(T(5)))
+  // The same commit reference alone moves updated_at without waking either.
+  w.issues[0] = issue(1, T(8))
+  w.comments = async () => []
+  w.events = async () => [lifecycle("referenced", T(7), "maintainer", { commit_id: "b8d47b8e" })]
+  assert.deepEqual((await w.poll()).wakes, [])
+})
+
+test("the wake message says why each issue is news, and `why` reads the recorded reasons back, newest first, capped per drain", async () => {
+  const w = await world([issue(1, T(0))])
+  await w.poll()
+  w.issues[0] = issue(1, T(5), "Issue 1", "edited")
+  w.issues.push(issue(2, T(5)))
+  await w.poll()
+  assert.equal(w.sent[0][1], "New or changed issues in acme/widgets: #1 Issue 1 (title or body edited), #2 Issue 2 (new issue). Drain them.")
+  w.issues[0] = issue(1, T(9), "Issue 1", "edited again")
+  await w.poll()
+  const reasons = whyOf(readDrainStates(w.paths.state), DRAIN.repo, 1)
+  assert.deepEqual(reasons.wakes.map((event) => event.why), ["title or body edited", "title or body edited"])
+  assert.equal(reasons.waiting, false)
+  matches(reasons.seen, seenAt(T(9)))
+  assert.equal(reasons.note, undefined)
+  // Nothing recorded for an issue that never woke, nor for a drain that does not exist.
+  assert.match(whyOf(readDrainStates(w.paths.state), DRAIN.repo, 99).note, /no wake is recorded for acme\/widgets#99; each drain keeps its last 200 events/u)
+  assert.deepEqual(whyOf({}, "x/y", 1), { repo: "x/y", number: 1, wakes: [], waiting: false, seen: null, note: "no wake is recorded for x/y#1; each drain keeps its last 200 events" })
+  // The history keeps the newest 200 events, and an unacknowledged one shows as waiting.
+  const many = await world([issue(1, T(0))])
+  await many.poll()
+  many.issues.push(...Array.from({ length: 205 }, (_unused, index) => issue(1000 + index, T(5))))
+  many.refuse = "no answer"
+  await many.poll()
+  const states = readDrainStates(many.paths.state)
+  assert.equal(states[DRAIN.repo].history.length, 200)
+  assert.equal(whyOf(states, DRAIN.repo, 1000).wakes.length, 0)
+  const last = whyOf(states, DRAIN.repo, 1204)
+  assert.equal(last.waiting, true)
+  assert.equal(last.wakes[0].why, "new issue")
+})
+
+test("`drains why owner/name#n` prints the recorded reasons", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const config = path.join(dir, "config.json")
+  const state = path.join(dir, "state.json")
+  writeFileSync(config, JSON.stringify({ drains: [DRAIN] }))
+  let updated = "2026-11-13T01:00:00Z"
+  const connect = async () => ({ login: "x", openIssues: async () => [issue(1, updated, "T", updated)], comments: async () => [], issueEvents: async () => [] })
+  await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW })
+  updated = "2026-11-13T02:00:00Z"
+  await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW })
+  updated = "2026-11-13T03:00:00Z"
+  await cli(["poll", "--config", config, "--state", state], { connect, now: () => NOW, env: { ...process.env, DESK_DRAINS_RELEASE: "0123456789abcdef0123456789abcdef01234567" } })
+  const asked = await cli(["why", "acme/widgets#1", "--state", state])
+  assert.equal(asked.code, 0, asked.err)
+  const printed = JSON.parse(asked.out)
+  assert.equal(printed.wakes[0].why, "title or body edited")
+  assert.match(printed.wakes[0].desk, /^\d+\.\d+\.\d+ 01234567$/u, "the launcher's own copy is named by its release commit")
+  assert.match(printed.wakes[1].desk, /^\d+\.\d+\.\d+$/u, "the history says which Desk polled")
+  assert.equal(printed.waiting, true)
+  assert.equal(JSON.parse((await cli(["why", "acme/widgets#7", "--state", state])).out).wakes.length, 0)
+  const bad = await cli(["why", "nonsense"])
+  assert.equal(bad.code, 2)
+  assert.match(bad.err, /why needs an issue such as owner\/name#123/u)
+})
+
+test("self is resolved per repository from the account that polls it: a personal and a work drain in one poll", async () => {
+  const dir = await mkTempRoot("desk-drains-")
+  const paths = { config: path.join(dir, "config.json"), state: path.join(dir, "state.json"), lock: path.join(dir, "poll.lock") }
+  const drains = [
+    { repo: "acme/widgets", session: "58fbd57e-e371-4169-b013-2f413ab4a046", account: "personal" },
+    { repo: "corp/tools", session: "48a0f0ab-56ad-406d-8831-5352815be337", account: "work-account" },
+  ]
+  writeFileSync(paths.config, JSON.stringify({ drains }))
+  const logins = { personal: "ari", "work-account": "ari_corp" }
+  const issues = { "acme/widgets": [issue(1, T(0))], "corp/tools": [issue(1, T(0))] }
+  const comments = { "acme/widgets": [], "corp/tools": [] }
+  const events = { "acme/widgets": [], "corp/tools": [] }
+  const connect = async (account) => ({
+    login: logins[account],
+    openIssues: async (repo) => issues[repo],
+    comments: async (repo) => comments[repo],
+    issueEvents: async (repo) => events[repo],
+    timeline: async () => [],
+    pull: async () => ({}),
+  })
+  const poll = (at = NOW) => pollDrains({ paths, connect, now: at, ackCommand: ["node", "drains.js"] })
+  await poll()
+  // Each repo's drain writes its own marked comment and label, as its own account: neither wakes.
+  const own = (id, login, at = T(5)) => ({ id, body: `Triaged.\n${DRAIN_STATUS_MARKER}`, created_at: at, updated_at: at, user: { login } })
+  issues["acme/widgets"] = [issue(1, T(5))]
+  issues["corp/tools"] = [issue(1, T(5))]
+  comments["acme/widgets"] = [own(10, "ari")]
+  comments["corp/tools"] = [own(11, "ari_corp")]
+  for (const repo of Object.keys(events)) events[repo] = [labelEvent(T(5), "drain: triaged")]
+  const quietRound = await poll(NOW + 1)
+  assert.deepEqual(quietRound.wakes, [])
+  assert.deepEqual(quietRound.errors, [])
+  // The same comments under the other repository's account are someone else's: each wakes.
+  issues["acme/widgets"] = [issue(1, T(9))]
+  issues["corp/tools"] = [issue(1, T(9))]
+  comments["acme/widgets"] = [own(12, "ari_corp", T(9))]
+  comments["corp/tools"] = [own(13, "ari", T(9))]
+  const loudRound = await poll(NOW + 2)
+  assert.deepEqual(loudRound.wakes.map((wake) => [wake.repo, wake.events[0].why]), [["acme/widgets", "comment 12 by ari_corp"], ["corp/tools", "comment 13 by ari"]])
+})
+
 test("a cross-reference from the drain's own marked comment, marked body or drain branch wakes nobody, and the marker still advances", async () => {
   const marked = (id, created_at, body = `Filed #1 as a follow-up.\n${DRAIN_STATUS_MARKER}`) => ({ id, body, created_at, updated_at: created_at, user: { login: "maintainer" } })
   const cases = [
     ["its marked comment on another issue, which names this one", crossReference(T(5), sourceIssue(9)), { comments: async (_repo, n) => (n === 9 ? [marked(50, T(5))] : []) }],
     ["its marked comment, edited to name this one a minute later", crossReference(T(6), sourceIssue(9)), { comments: async (_repo, n) => (n === 9 ? [{ ...marked(50, T(1)), updated_at: T(6) }] : []) }],
-    ["a pull request on a drain branch", crossReference(T(5), sourceIssue(39, { pull_request: {} })), { pull: async () => ({ head: { ref: "drain-1-default-command" } }) }],
+    ["a pull request on a drain- branch", crossReference(T(5), sourceIssue(39, { pull_request: {} })), { pull: async () => ({ head: { ref: "drain-1-default-command" } }) }],
+    ["a pull request on a drain/ branch", crossReference(T(5), sourceIssue(39, { pull_request: {} })), { pull: async () => ({ head: { ref: "drain/876-ask-for-go" } }) }],
     ["an issue or pull request whose body carries the marker", crossReference(T(5), sourceIssue(9, { body: `Tracking.\n${DRAIN_STATUS_MARKER}` })), {}],
   ]
   for (const [name, event, extra] of cases) {
@@ -312,6 +466,7 @@ test("a real cross-reference still wakes the drain, from another issue, a pull r
   const cases = [
     ["an issue by someone else", crossReference(T(5), sourceIssue(7)), {}, "acme/widgets#7"],
     ["a pull request that is not a drain branch", crossReference(T(5), sourceIssue(40, { pull_request: {} })), {}, "acme/widgets#40"],
+    ["a pull request on a branch that only resembles a drain's", crossReference(T(5), sourceIssue(40, { pull_request: {} })), { pull: async () => ({ head: { ref: "drainage/x" } }) }, "acme/widgets#40"],
     ["a pull request that cannot be read", crossReference(T(5), sourceIssue(40, { pull_request: {} })), { pull: async () => { throw new Error("HTTP 404") } }, "acme/widgets#40"],
     ["a pull request with no head", crossReference(T(5), sourceIssue(40, { pull_request: {} })), { pull: async () => ({}) }, "acme/widgets#40"],
     ["another repository", crossReference(T(5), { number: 3, repository_url: "https://api.github.com/repos/other/thing" }), {}, "other/thing#3"],
@@ -367,7 +522,7 @@ test("a closed issue whose only later changes are the drain's own label edits ne
   w.issues.splice(1, 1)
   w.events = async () => [{ id: 1, event: "closed", created_at: T(6) }, labelEvent(T(40), "drain: in progress", "unlabeled")]
   await w.poll(NOW + 1000)
-  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #1 Issue 1. Drain them."])
+  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #1 Issue 1 (title or body edited). Drain them."])
   await w.poll(NOW + 2000)
   await w.poll(NOW + 3000)
   assert.equal(w.sent.length, 2)
@@ -386,7 +541,7 @@ test("treats a closed issue that returns unchanged as seen, and one that is reop
   assert.equal("goneAt" in w.state().seen["1"], false)
   w.issues.push(issue(2, T(10), two.title))
   await w.poll()
-  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2. Drain them."]])
+  assert.deepEqual(w.sent, [[DRAIN.session, "New or changed issues in acme/widgets: #2 Issue 2 (reopened). Drain them."]])
 })
 
 test("forgets a closed issue's marker after a month", async () => {
@@ -607,7 +762,7 @@ test("keeps recorded events when the wake is refused, then sends them with the n
   w.issues[0] = issue(1, "2026-11-13T03:00:00Z", "Issue 1", "v3")
   w.issues.push(issue(2, "2026-11-13T03:00:00Z"))
   await w.poll()
-  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #1 Issue 1, #2 Issue 2. Drain them."])
+  assert.deepEqual(w.sent.at(-1), [DRAIN.session, "New or changed issues in acme/widgets: #1 Issue 1 (title or body edited), #2 Issue 2 (new issue). Drain them."])
   matches(w.state(), { lastWakeCount: 2 })
   assert.deepEqual(w.state().pending, [])
 })
@@ -783,6 +938,7 @@ test("lists open issues without pull requests across pages and reads comments si
   const spawned = []
   const spawn = (...args) => { spawned.push(args); return { status: 0, stdout: "tok\n" } }
   const answers = [
+    response({ login: "Maintainer-Real" }),
     response([issue(1, "u1"), { ...issue(2, "u2"), pull_request: {} }], { link: '<next>; rel="next"' }),
     response([issue(3, "u3")]),
     response([{ body: "c", updated_at: "u" }]),
@@ -796,19 +952,20 @@ test("lists open issues without pull requests across pages and reads comments si
   const api = await connectGithub("maintainer", { spawn, fetchImpl, env: { PATH: "/bin", GH_TOKEN: "ambient", GITHUB_TOKEN: "ambient", GH_HOST: "x" } })
   assert.deepEqual(spawned[0].slice(0, 2), ["gh", ["auth", "token", "--hostname", "github.com", "--user", "maintainer"]])
   assert.deepEqual(Object.keys(spawned[0][2].env).filter((name) => /TOKEN|HOST/u.test(name)), [])
-  assert.equal(api.login, "maintainer")
+  assert.equal(api.login, "Maintainer-Real", "the token decides who the drain is, not the configured name")
   assert.deepEqual((await api.openIssues("o/r")).map((item) => item.number), [1, 3])
-  assert.equal(urls[0], "https://api.github.com/repos/o/r/issues?state=open&sort=updated&direction=desc&per_page=100&page=1")
-  assert.ok(urls[1].endsWith("&page=2"))
-  assert.equal(headers[0].Authorization, "Bearer tok")
+  assert.equal(urls[0], "https://api.github.com/user")
+  assert.equal(urls[1], "https://api.github.com/repos/o/r/issues?state=open&sort=updated&direction=desc&per_page=100&page=1")
+  assert.ok(urls[2].endsWith("&page=2"))
+  assert.equal(headers[1].Authorization, "Bearer tok")
   assert.deepEqual(await api.comments("o/r", 5, "2026-11-13T01:00:00Z"), [{ body: "c", updated_at: "u" }])
-  assert.equal(urls[2], "https://api.github.com/repos/o/r/issues/5/comments?since=2026-11-13T01%3A00%3A00Z&per_page=100&page=1")
+  assert.equal(urls[3], "https://api.github.com/repos/o/r/issues/5/comments?since=2026-11-13T01%3A00%3A00Z&per_page=100&page=1")
   assert.deepEqual(await api.issueEvents("o/r", 5), [{ id: 1, event: "reopened", created_at: "u" }])
-  assert.equal(urls[3], "https://api.github.com/repos/o/r/issues/5/events?per_page=100&page=1")
+  assert.equal(urls[4], "https://api.github.com/repos/o/r/issues/5/events?per_page=100&page=1")
   assert.deepEqual(await api.timeline("o/r", 5), [{ id: 2, event: "cross-referenced", created_at: "u" }])
-  assert.equal(urls[4], "https://api.github.com/repos/o/r/issues/5/timeline?per_page=100&page=1")
+  assert.equal(urls[5], "https://api.github.com/repos/o/r/issues/5/timeline?per_page=100&page=1")
   assert.deepEqual(await api.pull("o/r", 7), { head: { ref: "drain-5-x" } })
-  assert.equal(urls[5], "https://api.github.com/repos/o/r/pulls/7")
+  assert.equal(urls[6], "https://api.github.com/repos/o/r/pulls/7")
 })
 
 test("asks GitHub who the active account is when none is configured", async () => {
@@ -819,6 +976,10 @@ test("asks GitHub who the active account is when none is configured", async () =
   assert.equal((await connectGithub(undefined, { spawn, fetchImpl })).login, "ari")
   assert.deepEqual(spawned[0][1], ["auth", "token", "--hostname", "github.com"])
   assert.equal((await connectGithub(undefined, { spawn, fetchImpl })).login, "")
+  // When GitHub will not say, the configured account stands in; with neither the login is empty.
+  const refused = async () => response({}, { status: 401 })
+  assert.equal((await connectGithub("work_microsoft", { spawn, fetchImpl: refused })).login, "work_microsoft")
+  assert.equal((await connectGithub(undefined, { spawn, fetchImpl: refused })).login, "")
 })
 
 test("fails with a fix when the CLI has no token, and names the HTTP status without the query when GitHub refuses", async () => {
@@ -863,6 +1024,9 @@ test("the command line parses its commands and refuses what it does not know", (
   assert.match(parseDrainsArgs(["poll", "--state"]).error, /--state needs a value/u)
   assert.match(parseDrainsArgs(["poll", "--state", "--config"]).error, /--state needs a value/u)
   assert.match(parseDrainsArgs(["ack", "--repo", "a/b"]).error, /ack needs --repo and --wake/u)
+  assert.deepEqual(parseDrainsArgs(["why", "a/b#12", "--state", "s.json"]), { command: "why", flags: { state: "s.json" }, repo: "a/b", number: 12 })
+  for (const bad of [["why"], ["why", "a/b"], ["why", "a#1"], ["why", "a/b#x"], ["why", "--state", "s.json"]]) assert.match(parseDrainsArgs(bad).error, /why needs an issue such as owner\/name#123/u, bad.join(" "))
+  assert.match(parseDrainsArgs(["why", "a/b#1", "--config", "c"]).error, /does not take "--config"/u)
 })
 
 function cli(argv, extra = {}) {
@@ -886,7 +1050,7 @@ test("poll, ack and status run end to end through the command line, with the sta
   updated = "2026-11-13T02:00:00Z"
   const second = JSON.parse((await cli(["poll", ...flags], { connect, now: () => NOW })).out)
   assert.equal(second.wakes.length, 1)
-  assert.equal(second.wakes[0].message, "New or changed issues in acme/widgets: #1 T. Drain them.")
+  assert.equal(second.wakes[0].message, "New or changed issues in acme/widgets: #1 T (title or body edited). Drain them.")
   assert.deepEqual(second.wakes[0].done.slice(0, 2), [process.execPath, SCRIPT])
   assert.deepEqual(second.wakes[0].done.slice(-2), ["--state", state])
   const unflagged = JSON.parse((await cli(["poll", "--config", config], { connect, now: () => NOW })).out)
@@ -911,7 +1075,7 @@ test("the command line says what is wrong: usage, a busy lock and a bad config",
   assert.match((await cli(["--help"])).out, /^Usage: drains\.js poll/u)
   const usage = await cli(["poll", "--bogus", "x"])
   assert.equal(usage.code, 2)
-  assert.match(usage.err, /^drains: poll does not take "--bogus"/u)
+  assert.match(usage.err, /^desk: poll does not take "--bogus": .*Fix: drop --bogus or use --config or --state\./u)
   writeFileSync(config, "{")
   const bad = await cli(["poll", "--config", config, "--state", state])
   assert.equal(bad.code, 1)

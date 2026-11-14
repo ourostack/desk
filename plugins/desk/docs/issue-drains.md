@@ -6,6 +6,7 @@ A drain is an agent session that works one repository's issues. Desk owns the pa
 node <desk>/plugins/desk/mcp/scripts/drains.js poll      # record changes, print wakes
 node <desk>/plugins/desk/mcp/scripts/drains.js ack ...   # report a wake's delivery (each wake carries the exact command)
 node <desk>/plugins/desk/mcp/scripts/drains.js status    # one health line per drain, no poll
+node <desk>/plugins/desk/mcp/scripts/drains.js why owner/name#123   # why each wake for that issue was made
 ```
 
 ## A runner that needs no checkout
@@ -35,15 +36,17 @@ Only `repo` and `session` are required. `session` is opaque to Desk: the runner 
 An issue is news when something other than the drain changed it since the revision last recorded: a new issue, a title or body edit, a comment, a reopen, or a label change. These are not news:
 
 - a new issue the drain filed or already triaged: a label in its `drain:` namespace, or the `<!-- ouro-drain-status -->` marker in its body, is there before the poll first sees it, so the issue is recorded as seen and only later changes by others count;
-- the drain's own status comment, matched by the `<!-- ouro-drain-status -->` marker and the polling account, including its edits;
+- the drain's own status comment, matched by the `<!-- ouro-drain-status -->` marker and the polling account, including its edits. The polling account is whoever the drain's token is (`GET /user` on its own `account`'s token), resolved per repository, so a drain on a work account and one on a personal account each recognise only their own comments;
 - labels starting with `drain:`, and any label in the drain's `ignoredLabels`;
 - body lines that start with a key in `ignoredBodyTrailers` (`Active-at: …`), so a lane's scheduled beat does not wake the drain;
 - comments that fit an `ignoreComments` rule: written by its `author` (case-insensitive) and, when the rule has a `match`, a body that matches the regular expression. A rule without `match` skips every comment by that author; the same bot's other comments still wake the drain;
-- closes and assignments, and cross-references: a cross-reference the drain made itself. When an issue's `updated_at` moved and nothing above was news, the poll reads its timeline, and a `cross-referenced` event after the last marker wakes the drain unless its source is the drain's own work: a body with the `<!-- ouro-drain-status -->` marker, a pull request on a `drain-…` branch, or the drain's marked comment on that issue that names this one around then. Any other cross-reference is news, and its event says where it came from. A pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
+- a reopen that is the drain claiming the issue: the polling account reopens it within a minute of its own `drain:` label change;
+- commit references (`referenced` events) and edits to the drain's own marked comment, which the rules above already skip;
+- closes and assignments, and cross-references: a cross-reference the drain made itself. When an issue's `updated_at` moved and nothing above was news, the poll reads its timeline, and a `cross-referenced` event after the last marker wakes the drain unless its source is the drain's own work: a body with the `<!-- ouro-drain-status -->` marker, a pull request on a `drain-…` or `drain/…` branch, or the drain's marked comment on that issue that names this one around then. Any other cross-reference is news, and its event says where it came from. A pull request's merge or close is not news: the drain learns a fix landed from its own PR. A closed issue is not polled at all.
 
 ## Seeing a gap
 
-`status` (and the `status` lines `poll` prints) start with the Desk in use (`desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)`; the JSON also has `desk.version` and `desk.release`) and then show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal.
+`status` (and the `status` lines `poll` prints) start with the Desk in use (`desk <version> (ourostack/desk@release 1a2b3c4d, the launcher's own copy)`; the JSON also has `desk.version` and `desk.release`) and then show, per drain, the last poll that read GitHub without an error and its lag (`last ok poll … (lag 2m)`), the last attempt, and how long the oldest waiting event has waited (`2 waiting (oldest 5h)`). A poll that keeps failing shows a growing lag and its last error; a wake that is made but never delivered shows a growing wait. Each recorded event carries `seenAt`, the time the poll first saw it, and `why`, the one change that made it news (`new issue`, `title or body edited`, `comment <id> by <login>`, `labeled <name>`, `unlabeled <name>`, `reopened`), so a wake nobody expected can be traced to a signal. The wake message names the reason after each issue (`#876 Title (cross-reference from owner/name#9)`), and each drain keeps its last 200 events in its state (with the Desk version, and the release commit for the launcher's own copy, that polled them), so `drains.js why owner/name#123` prints the reasons recorded for that issue (newest first), the marker the poll keeps for it and whether a wake is still waiting.
 
 ## Delivering a wake
 
