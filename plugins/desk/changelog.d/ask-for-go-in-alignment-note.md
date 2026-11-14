@@ -1,0 +1,1 @@
+The alignment note for new work now ends with one plain question asking for go on the outcome and definition of done, then stops without editing product, test or docs files. It replaces the earlier wording that only said to stop. Approved work with an explicit go is unchanged.
