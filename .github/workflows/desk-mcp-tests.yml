@@ -13,7 +13,8 @@ name: desk MCP tests
 # Windows legs of the browser, Crew member-binding and black-box checks, the runtime packs, native Windows and the auto, rc and stable
 # release dry runs. The Windows suite runs beside it in desk-windows-suite.yml. A pull request that changes only the docs no test reads
 # (the --outside list in Quick checks) skips all of that and still gets a green CI gate. The Desk release trusts these required
-# checks and does not wait for main's run; a red run on main opens a "main is red" issue and holds the next release.
+# checks when the pull request was tested against the main it landed on; otherwise main's own run starts the release when it passes (release-gate.mjs).
+# A red run on main opens a "main is red" issue that holds every release.
 
 on:
   pull_request:

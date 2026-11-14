@@ -8,11 +8,12 @@ name: Desk release
 #
 # Separate jobs, because steps in one job share a runner and anything a step leaves behind (a git hook, a background
 # process, git configuration) runs in the later steps:
-# - main-ci stops the release while main is red, unless no fragment or requested stage makes a release. It does not wait for main's CI:
-#   a pull request runs every check main runs, the Windows suite included, and main requires them before the merge (AGENTS.md, "CI tiers"),
-#   so a release ships a commit whose checks already passed on its pull request. Main's own run after the merge is the tripwire for a
-#   merge that interacts badly with another: it opens a "main is red" issue, and that open issue is what this job looks for.
-#   It holds a read-only token and runs one command.
+# - main-ci decides, without waiting for any run, whether the tip of main may be released now (.github/scripts/release-gate.mjs). A pull
+#   request runs every check main runs, the Windows suite included, and main requires them before the merge (AGENTS.md, "CI tiers"), so a
+#   merge whose pull request was tested against the main it landed on is released at once. If main moved while the pull request's checks
+#   ran, two green pull requests could combine into a broken main: the release is held, and main's own run passing on that commit starts it
+#   (the workflow_run trigger), so nothing waits and nothing releases a combination no run has checked. A "main is red" issue
+#   (report-main-health.sh opens and closes it) holds every release. It holds a read-only token and runs one script.
 # - build holds only a read token. It installs dependencies, builds the release commit and checks that exact commit,
 #   because a push made with the workflow token starts no CI on main. It skips the release test step the pull request's release
 #   dry run already ran on the same script (desk-mcp-tests.yml), and runs every other check.
@@ -45,6 +46,12 @@ on:
         options: [auto, rc, stable]
         default: auto
         required: true
+  # A merge whose pull request was tested against a main that then moved is held until main's own run passes on it (release-gate.mjs); that
+  # run finishing starts the release here. A run for a commit that is no longer main's tip releases nothing: a newer run follows it.
+  workflow_run:
+    workflows: ["desk MCP tests", "desk MCP tests on Windows"]
+    types: [completed]
+    branches: [main]
   # A failed release leaves its fragments pending on main. The daily run releases whatever is still pending, so a fix
   # merged without a fragment, or a transient failure, does not strand them until the next fragment merge.
   schedule:
@@ -65,16 +72,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       head: ${{ steps.gate.outputs.head }}
+      release: ${{ steps.gate.outputs.release || steps.self.outputs.release }}
     env:
       SELF_PUSH: ${{ github.event_name == 'push' && github.event.head_commit.author.email == '41898282+github-actions[bot]@users.noreply.github.com' && startsWith(github.event.head_commit.message, 'Release Desk ') }}
     steps:
       - name: Skip the release's own push
+        id: self
         if: env.SELF_PUSH == 'true'
-        run: echo "This run was started by the release commit itself, so it releases nothing and has no red main to check." >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "This run was started by the release commit itself, so it releases nothing and has no red main to check." >> "$GITHUB_STEP_SUMMARY"
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
       - name: Check out main
         if: env.SELF_PUSH != 'true'
@@ -84,33 +97,42 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Fails while a "main is red" issue is open (report-main-health.sh opens it when a check fails on main and closes it when the check
-      # passes there again). The build below releases exactly this commit, so a merge that lands meanwhile goes out in the next run.
-      - name: Check that main is not red
+      # Fails while a "main is red" issue is open. Otherwise says whether the tip of main may be released now: at once when its pull request was
+      # tested against the main it landed on, and only after main's own runs passed on it when main moved meanwhile. The build below releases
+      # exactly this commit, so a merge that lands meanwhile goes out in the next run.
+      - name: Decide whether main may be released now
         id: gate
         if: env.SELF_PUSH != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
+          EVENT: ${{ github.event_name }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
           head="$(git rev-parse HEAD)"
-          # Without a pending fragment or a requested stage, scripts/release-desk.cjs releases nothing, so there is nothing to check.
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          # Without a pending fragment or a requested stage, scripts/release-desk.cjs releases nothing, so there is nothing to decide.
           if [ "$RELEASE_STAGE" = auto ] && [ -z "$(find plugins/desk/changelog.d -maxdepth 1 -name '*.md' ! -name README.md 2>/dev/null)" ]; then
             echo "No changelog fragment is pending on $head, so there is nothing to release." >> "$GITHUB_STEP_SUMMARY"
-          else
-            red="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label red-main --json number,title --jq '.[] | "#\(.number) \(.title)"')"
-            if [ -n "$red" ]; then
-              echo "::error::main is red, so nothing is released until these issues close:"
-              printf '%s\n' "$red"
-              exit 1
-            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "head=$head" >> "$GITHUB_OUTPUT"
+          # A release commit starts no CI, so the commit to judge is the newest one under the release commits on top of main.
+          judged="$head"
+          while [ "$(git log -1 --format=%an "$judged")" = "github-actions[bot]" ] && git log -1 --format=%s "$judged" | grep -q '^Release Desk '; do
+            judged="$(git rev-parse "$judged^")"
+          done
+          result="$(node .github/scripts/release-gate.mjs --repo "$GITHUB_REPOSITORY" --head "$judged" --event "$EVENT" --trigger-sha "$TRIGGER_SHA" --trigger-conclusion "$TRIGGER_CONCLUSION" 2> "$RUNNER_TEMP/gate-reason.txt")" || { cat "$RUNNER_TEMP/gate-reason.txt"; exit 1; }
+          cat "$RUNNER_TEMP/gate-reason.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "$result" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and check the Desk release
     needs: main-ci
+    # A held release builds nothing; main's run finishing starts it.
+    if: needs.main-ci.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

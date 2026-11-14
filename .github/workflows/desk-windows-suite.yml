@@ -6,8 +6,8 @@ name: desk MCP tests on Windows
 # below is a required check of main (.github/rulesets/main-requires-ci.json), so it reports on every pull request: a pull request that changes only
 # the docs no test reads (the same list Quick checks in desk-mcp-tests.yml lets a pull request skip) starts no shard and passes.
 # The tests read plugins/, scripts/, evals/ and the workflows, so no short list of paths is a safe stand-in for "can change a Windows result".
-# Because the pull request ran the suite, the Desk release does not wait for main's run; a red result on main opens a "main is red" issue
-# and holds the next release.
+# Because the pull request ran the suite, the Desk release does not wait for main's run unless main moved while the pull request's checks ran
+# (release-gate.mjs); a red result on main opens a "main is red" issue and holds every release.
 # A manual dispatch can add the elevated (administrator) mode with `elevated: true`. That mode is a diagnostic and is not gated: Desk refuses to
 # reuse a path owned by the Administrators group, which is what an elevated user's own existing files are.
 
