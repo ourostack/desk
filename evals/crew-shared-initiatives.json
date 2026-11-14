@@ -10,7 +10,12 @@
     "plugins/crew/skills/join-crew/SKILL.md",
     "plugins/desk/skills/session-start/details.md"
   ],
-  "reviewedSourceFingerprint": "559423993a2cd0c8b7c76de2fed7f3c806be5d432a912dd9460bf696f1f66099",
+  "reviewedSourceFingerprint": "0219cc0cffd29d91cf0c48c8df036aa68c34db37a50e9640a3f9894f4c3a986e",
+  "knownFailure": [
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "adopt-existing-doc-into-shared-tracks", "observed": "2026-11-14"}
+  ],
   "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },

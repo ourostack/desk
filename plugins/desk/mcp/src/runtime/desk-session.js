@@ -49,7 +49,7 @@ const rootRank = (root) => ROOT_SOURCE_PRIORITY.indexOf(root.hint === true ? "la
 // reads is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks this against the tool's
 // declared schema in tool-schemas.js.
-export const DESK_DOCTOR_FIELDS = ["format", "repair"]
+export const DESK_DOCTOR_FIELDS = ["format", "repair", "factory_consent", "factory_told"]
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
@@ -177,6 +177,7 @@ export function createDeskSession(deps) {
     env = process.env,
     headIO = headFileSystem,
     runtimeRefresher = null,
+    answerFactoryConsent = async (request) => (await import("../factory/consent-answer.js")).answerFactoryConsent(request),
   } = deps
   const context = { pendingRepairs: [], exceptions: [], launcher, phase: null, search: null }
   const focus = createFocusHolder()
@@ -1079,6 +1080,13 @@ export function createDeskSession(deps) {
     }
     if (input.repair !== undefined && !DOCTOR_REPAIRS.includes(input.repair)) {
       return { content: [{ type: "text", text: `unsupported repair; use one of: ${DOCTOR_REPAIRS.join(", ")}` }], isError: true }
+    }
+    if (input.factory_consent !== undefined || input.factory_told !== undefined) {
+      if (input.factory_told !== undefined && input.factory_told !== true) return { content: [{ type: "text", text: "Pass factory_told as true: factory_told records that the operator was told." }], isError: true }
+      // The answer touches no desk file, so the next call need not wait for it; asking GitHub for the account can take a while.
+      release?.()
+      const result = await answerFactoryConsent({ env, deskRoot: context.root?.root ?? null, answer: input.factory_consent, told: input.factory_told === true })
+      return jsonResult(result, result.status === "refused")
     }
     if (format === "preview") {
       return jsonResult(previewRuntimeSnapshot(admission.snapshot().state === "ready" ? "ready" : "diagnostic"))

@@ -2,7 +2,7 @@
 //
 // The contribution question is asked once at setup (RFC section 4). The boot gives an interactive session the one sentence to say while
 // the store's decision is undecided, and "say it once" was only prose: every later session got the same instruction and said it again.
-// The agent that says the sentence now records it here (`factory.js consent --store <store> --mentioned yes`), and the boot of a later
+// The agent that says the sentence now records it here (`desk_doctor` with `factory_told: true`, or `factory.js consent --store <store> --mentioned yes` from a shell), and the boot of a later
 // session tells its agent not to raise it. The record is made by the agent, not by the boot that gave the instruction, because a boot
 // cannot know the sentence was said: a session that ends before its work is done never reaches it.
 //
