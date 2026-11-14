@@ -29,8 +29,8 @@
         "tests/**/*.{js,cjs,mjs}"
       ],
       "project": ["scripts/**", ".github/scripts/**", "evals/**", "tests/**"],
-      // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures and cases are inputs the tests feed to the code under test, not Desk code.
-      "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"],
+      // evals/offline/vendor is a TypeScript package copied in from upstream, and the fixtures, cases and scenario worlds are inputs the tests and the eval runner feed to the code under test, not Desk code.
+      "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**", "evals/worlds/**"],
       "ignoreDependencies": [
         // Tests under tests/desk import the MCP server's packages. tests/desk/link-dependencies.mjs links them from plugins/desk/mcp/node_modules, so they resolve at run time but are declared only in that package.
         "better-sqlite3", "sqlite-vec", "@modelcontextprotocol/sdk", "gray-matter",
