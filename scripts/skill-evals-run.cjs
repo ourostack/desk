@@ -211,7 +211,10 @@ function workspaceEvidence(workspace, template) {
     const unpushed = label === "desk" ? `\nCommits not yet pushed to the desk's remote:\n${scratchGit(directory, ["log", "--format=%h %s", "@{u}..HEAD"]).stdout.trim() || "(none)"}` : "";
     parts.push(`### ${label}\nUncommitted or untracked changes:\n${status || "(none)"}\nCommits made after the baseline:\n${commits || "(none)"}${unpushed}\nChanged files against the baseline (committed and uncommitted):\n${diff || "(none)"}`);
     if (label === "repository" && fs.existsSync(path.join(directory, "__tests__"))) {
-      const tests = spawnSync(process.execPath, ["--test", "__tests__/**/*.test.js"], { cwd: directory, encoding: "utf8", timeout: 120000 });
+      // Inside a test runner process, NODE_TEST_CONTEXT would make this run report to its parent instead of printing a summary.
+      const env = { ...process.env };
+      delete env.NODE_TEST_CONTEXT;
+      const tests = spawnSync(process.execPath, ["--test", "__tests__/**/*.test.js"], { cwd: directory, encoding: "utf8", timeout: 120000, env });
       const summary = `${tests.stdout}`.split("\n").filter((line) => /^# (tests|pass|fail|cancelled|skipped) /u.test(line)).join("\n");
       parts.push(`The repository's own tests, run by the harness afterwards (node --test "__tests__/**/*.test.js"):\n${summary}`);
       const patch = scratchGit(directory, ["diff", baseline, "--", "src"]).stdout;
