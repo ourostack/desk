@@ -50,11 +50,7 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
   "reviewedSourceFingerprint": "ec3e89913e6a7ada484f3ed6b49766bb314e318c681669da901679008f80c96e",
-  "knownFailure": [
-    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "adopt-existing-doc-into-shared-tracks", "observed": "2026-11-14"}
-  ],  "requirements": [
+  "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
     { "id": "attribution", "description": "Shared deliberation preserves author and uncertainty without inventing consensus." },
@@ -85,7 +81,7 @@
       "world": "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer",
       "prompt": "The neutral workspace already links _shared/tracks/reliability/track.md. Another writer's latest-main update adds an attributed view that conflicts with your pending proposal. Find the existing initiative, re-read the changed card and contribute without renaming it, adding a README duplicate, replacing the other view or treating it as consensus. Verify only the intended shared paths changed. Exercise actual Git conflict/reconciliation in a local fixture; report GitHub publication separately.",
       "checks": [
-        { "id": "legacy-reused", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "preserve-work"], "description": "The existing track.md remains the sole coordination entry and personal tasks are unchanged." },
+        { "id": "legacy-reused", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "preserve-work"], "description": "The existing track.md remains the sole coordination entry; no personal task is created, renamed or turned into a second coordination entry, and only the operator's own task may change, by a backlink to the shared card or a progress note." },
         { "id": "landed-view-preserved", "polarity": "must", "evidenceType": "git", "covers": ["concurrent-contribution", "attribution"], "description": "The contribution is rebuilt on updated main and both attributed views survive, with their disagreement open." },
         { "id": "no-replacement-or-consensus", "polarity": "must_not", "evidenceType": "file", "covers": ["single-home", "concurrent-contribution", "attribution"], "description": "The update does not add a competing README, overwrite the landed view or promote either proposal to a team decision." }
       ]
