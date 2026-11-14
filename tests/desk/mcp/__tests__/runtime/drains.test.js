@@ -327,23 +327,59 @@ test("a reopen that is the drain claiming the issue (its own drain: label change
   assert.deepEqual((await w.poll()).wakes, [])
 })
 
-test("a commit that references the issue from a drain branch, and an edit to the drain's own marked comment, wake nobody, and the marker advances", async () => {
+test("a commit that references the issue from a drain branch (a referenced event) wakes nobody, and the marker advances", async () => {
   const w = await world([issue(1, T(3))])
   await w.poll()
   w.issues[0] = issue(1, T(5))
-  // The comment was created before the last marker; only its updated_at moved.
-  const edited = { id: 6869127858, body: `Status.\n${DRAIN_STATUS_MARKER}`, created_at: T(1), updated_at: T(5), user: { login: "maintainer" } }
-  w.comments = async (_repo, _n, since) => [edited].filter((comment) => comment.updated_at > since)
   w.events = async () => [lifecycle("referenced", T(4), "maintainer", { commit_id: "6a0688fd", commit_url: "https://api.github.com/repos/acme/widgets/commits/6a0688fd" })]
   const out = await w.poll()
   assert.deepEqual(out.wakes, [])
   assert.deepEqual(w.state().pending, [])
   matches(w.state().seen["1"], seenAt(T(5)))
-  // The same commit reference alone moves updated_at without waking either.
+  // Another commit reference, later, wakes nobody either.
   w.issues[0] = issue(1, T(8))
-  w.comments = async () => []
   w.events = async () => [lifecycle("referenced", T(7), "maintainer", { commit_id: "b8d47b8e" })]
   assert.deepEqual((await w.poll()).wakes, [])
+  matches(w.state().seen["1"], seenAt(T(8)))
+})
+
+test("an edit to the drain's own marked comment, whose created_at did not change, wakes nobody, and the marker advances", async () => {
+  const w = await world([issue(1, T(3))])
+  await w.poll()
+  w.issues[0] = issue(1, T(5))
+  const edited = { id: 6869127858, body: `Status.\n${DRAIN_STATUS_MARKER}`, created_at: T(1), updated_at: T(5), user: { login: "maintainer" } }
+  w.comments = async (_repo, _n, since) => [edited].filter((comment) => comment.updated_at > since)
+  const out = await w.poll()
+  assert.deepEqual(out.wakes, [])
+  assert.deepEqual(w.state().pending, [])
+  matches(w.state().seen["1"], seenAt(T(5)))
+  // Edited again later: still the drain's own.
+  w.issues[0] = issue(1, T(9))
+  edited.updated_at = T(9)
+  assert.deepEqual((await w.poll()).wakes, [])
+  matches(w.state().seen["1"], seenAt(T(9)))
+})
+
+test("state written by an earlier release is read as it is: a closed issue the drain unlabeled, and an open one it only commented on, stay quiet after the release", async () => {
+  const w = await world([issue(1, T(0)), issue(2, T(0))])
+  await w.poll()
+  w.issues.splice(1, 1)
+  await w.poll(NOW + 1000)
+  // Rewrite the state the way an earlier release left it: no lastOkAt, no history, no seenAt on events.
+  const states = JSON.parse(readFileSync(w.paths.state, "utf8"))
+  delete states[DRAIN.repo].lastOkAt
+  delete states[DRAIN.repo].history
+  writeFileSync(w.paths.state, JSON.stringify(states))
+  assert.equal(typeof states[DRAIN.repo].seen["2"].goneAt, "number")
+  // After the release: the drain removed its label from the closed issue 2 and edited its marked comment; on the open issue 1 it commented and removed its label.
+  w.issues[0] = issue(1, T(9))
+  w.comments = async () => [statusComment(10, T(9))]
+  w.events = async (_repo, n) => [{ id: 1, event: "closed", created_at: T(6) }, labelEvent(T(9), "drain: in progress", "unlabeled")].filter(() => n === 1 || n === 2)
+  for (const step of [2, 3, 4]) assert.deepEqual((await w.poll(NOW + step * 1000)).wakes, [])
+  assert.deepEqual(w.state().pending, [])
+  assert.equal(typeof w.state().seen["2"].goneAt, "number", "the closed issue is still tracked as gone")
+  matches(w.state().seen["1"], seenAt(T(9)))
+  assert.equal(w.state().lastOkAt, new Date(NOW + 4000).toISOString())
 })
 
 test("the wake message says why each issue is news, and `why` reads the recorded reasons back, newest first, capped per drain", async () => {
