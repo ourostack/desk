@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.146 — 2026-11-14
+
+A subagent's first prompt now gets one short line (about 190 bytes) instead of the whole Desk boot (about 4 KB, with its instructions for the operator's session), and no boot of its own. The line says the agent is a child agent that follows its brief, names the `desk-<name>` tool prefix and points at the `plain-language` skill. Copilot's prompt hook names the agent running the prompt (`agentId` and `parentAgentId`), which is how the hook tells a subagent from a main session.
+
+Plain Language has loaded on demand since 0.2.11, but in a probe of eight fresh sessions with the newest plugins, none loaded it before writing a message to a person. Both Copilot's and Claude Code's session start now carry one sentence pointing at the skill, and six of eight probe sessions then loaded it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.145 — 2026-11-14
 
 When Desk cannot read the process table as a browser context opens, it reads again before giving up, and if it still cannot find the browser's processes, `browser_context` close now says so with a `processesUnknown` field and a hint, so a browser left running is no longer silent.
