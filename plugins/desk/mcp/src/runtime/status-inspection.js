@@ -89,13 +89,13 @@ export function createStatusInspection(deskRoot, {
   signal?.addEventListener("abort", abort, { once: true })
   child.once("error", stop)
   child.on("message", (message) => {
-    if (!pending) return stop(new Error("Call desk_status again: status inspection child sent an unexpected reply"))
+    if (!pending) return stop(Object.assign(new Error("Call desk_status again: status inspection child sent an unexpected reply"), { code: "status_inspection_call_desk_status_again_status_4" }))
     const reply = pending
     pending = null
     if (message?.ok === true) reply.resolve(message.value)
     else if (message?.ok === false) reply.reject(reviveError(message.error))
     else {
-      const error = new Error("Call desk_status again: status inspection child sent an invalid reply")
+      const error = Object.assign(new Error("Call desk_status again: status inspection child sent an invalid reply"), { code: "status_inspection_call_desk_status_again_status_3" })
       reply.reject(error)
       stop(error)
     }
@@ -109,8 +109,8 @@ export function createStatusInspection(deskRoot, {
     signal?.removeEventListener("abort", abort)
     if (signal) ownedInspections.delete(signal)
     failure ??= closing && (code === 0 || resource.signals.includes(exitSignal)) ? null :
-      new Error(`Call desk_status again: status inspection child exited before completing (code ${code})`)
-    if (pending && failure === null) failure = new Error("Call desk_status again: status inspection child exited before completing its request")
+      Object.assign(new Error(`Call desk_status again: status inspection child exited before completing (code ${code})`), { code: "status_inspection_call_desk_status_again_status_2" })
+    if (pending && failure === null) failure = Object.assign(new Error("Call desk_status again: status inspection child exited before completing its request"), { code: "status_inspection_call_desk_status_again_status" })
     pending?.reject(failure)
     pending = null
     resolveClosed({ error: null })
@@ -121,8 +121,8 @@ export function createStatusInspection(deskRoot, {
     resource,
     inspect(phase, rootContext) {
       signal?.throwIfAborted()
-      if (ended) return Promise.reject(failure ?? new Error("Open a new status inspection: status inspection already closed"))
-      if (pending) return Promise.reject(new Error("Wait for the running inspection to finish: status inspection already running"))
+      if (ended) return Promise.reject(failure ?? Object.assign(new Error("Open a new status inspection: status inspection already closed"), { code: "status_inspection_open_a_new_status_inspection" }))
+      if (pending) return Promise.reject(Object.assign(new Error("Wait for the running inspection to finish: status inspection already running"), { code: "status_inspection_wait_for_the_running_inspection" }))
       return new Promise((resolve, reject) => {
         pending = { resolve, reject }
         child.send({ deskRoot, phase, rootContext }, (error) => { if (error) stop(error) })

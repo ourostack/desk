@@ -525,12 +525,12 @@ export function agencyMigrationRoots({ home, engine = "copilot" }) {
 
 function parseRunArgs(argv) {
   const [command, id, ...rest] = argv
-  if (command !== "run" || typeof id !== "string" || id === "") throw new Error("usage: Run it as migrations.js run <id>: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]")
+  if (command !== "run" || typeof id !== "string" || id === "") throw Object.assign(new Error("usage: Run it as migrations.js run <id>: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]"), { code: "usage_migrations_js_run_id_tools" })
   const args = { id, toolsRoot: "", toolsPerson: "" }
   for (let index = 0; index < rest.length; index += 2) {
     const flag = rest[index]
     const value = rest[index + 1]
-    if (!["--tools-root", "--tools-person"].includes(flag) || typeof value !== "string") throw new Error(`migrations.js: Pass a complete, known argument: unknown or incomplete argument ${JSON.stringify(flag)}`)
+    if (!["--tools-root", "--tools-person"].includes(flag) || typeof value !== "string") throw Object.assign(new Error(`migrations.js: Pass a complete, known argument: unknown or incomplete argument ${JSON.stringify(flag)}`), { code: "pending_migrations_migrations_js_pass_a_complete" })
     args[flag === "--tools-root" ? "toolsRoot" : "toolsPerson"] = value
   }
   return args

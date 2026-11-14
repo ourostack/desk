@@ -101,19 +101,19 @@ export function parseRetentionArgs(argv, { env = process.env, homeDir = os.homed
     if (flag === "--help" || flag === "-h") return { help: true }
     if (BOOLEAN_FLAGS[flag]) { options[BOOLEAN_FLAGS[flag]] = true; continue }
     const value = argv[++i]
-    if (value === undefined) return { error: `Pass a value: ${flag} needs a value` }
+    if (value === undefined) return { code: "retention_flag_needs_value", error: `Pass a value: ${flag} needs a value` }
     if (PATH_FLAGS[flag]) options[PATH_FLAGS[flag]] = path.resolve(value)
     else if (LIST_FLAGS[flag]) options[LIST_FLAGS[flag]] = value.split(path.delimiter).filter(Boolean).map((p) => path.resolve(p))
     else if (NUMBER_FLAGS[flag]) {
       const n = Number(value)
-      if (value.trim() === "" || !Number.isFinite(n) || n < 0) return { error: `Pass a number of zero or more: ${flag} needs a number of zero or more, not ${value}` }
+      if (value.trim() === "" || !Number.isFinite(n) || n < 0) return { code: "retention_flag_needs_number", error: `Pass a number of zero or more: ${flag} needs a number of zero or more, not ${value}` }
       options[NUMBER_FLAGS[flag]] = n
     } else if (flag === "--skip") {
       const parts = value.split(",").filter(Boolean)
       const unknown = parts.filter((p) => !SKIPPABLE.has(p))
-      if (unknown.length) return { error: `Pass only the listed names to --skip: --skip takes ${[...SKIPPABLE].join(", ")}, not ${unknown.join(", ")}` }
+      if (unknown.length) return { code: "retention_skip_unknown_name", error: `Pass only the listed names to --skip: --skip takes ${[...SKIPPABLE].join(", ")}, not ${unknown.join(", ")}` }
       options.skip = new Set(parts)
-    } else return { error: `Remove the unknown option: unknown option ${flag}` }
+    } else return { code: "retention_unknown_option", error: `Remove the unknown option: unknown option ${flag}` }
   }
   return { options }
 }
@@ -225,7 +225,7 @@ export async function runRetention(options, overrides = {}) {
       const read = (sql) => new Set(db.all(sql).map((row) => row.v))
       return Object.fromEntries(Object.entries(QUERIES).map(([key, sql]) => [key, read(sql)]))
     } catch (error) {
-      throw new Error(`Check the app database path: cannot read the app database at ${o.appDb} (${error.message}); sessions and worktrees left untouched`)
+      throw Object.assign(new Error(`Check the app database path: cannot read the app database at ${o.appDb} (${error.message}); sessions and worktrees left untouched`), { code: "session_retention_check_the_app_database_path" })
     } finally {
       db?.close()
     }

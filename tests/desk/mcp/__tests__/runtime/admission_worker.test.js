@@ -347,7 +347,7 @@ test("attachAdmissionWorker answers one job on its port, and does nothing outsid
   attachAdmissionWorker(other.port1, { deskAdmissionWorker: true })
   const failure = new Promise((resolve) => other.port2.once("message", resolve))
   other.port2.postMessage({ kind: "nope" })
-  assert.deepEqual(await failure, { ok: false, error: { name: "TypeError", message: "Use a known admission job kind: unknown admission job: nope" } })
+  assert.deepEqual(await failure, { ok: false, error: { name: "TypeError", code: "admission_worker_use_a_known_admission_job", message: "Use a known admission job kind: unknown admission job: nope" } })
   for (const port of [channel.port1, channel.port2, other.port1, other.port2]) port.close()
 })
 

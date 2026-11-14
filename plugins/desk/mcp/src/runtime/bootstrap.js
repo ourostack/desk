@@ -126,7 +126,7 @@ export function prepareRuntime({
   onPhase = () => {},
 } = {}) {
   if (!hasText(mcpRoot)) {
-    throw new Error("desk-mcp: Pass mcpRoot to the bootstrap: mcpRoot is required for runtime dependency bootstrap")
+    throw Object.assign(new Error("desk-mcp: Pass mcpRoot to the bootstrap: mcpRoot is required for runtime dependency bootstrap"), { code: "bootstrap_desk_mcp_pass_mcproot_to" })
   }
   const resolvedMcpRoot = path.resolve(mcpRoot)
   const packageJson = readJson(path.join(resolvedMcpRoot, "package.json"))
@@ -487,7 +487,7 @@ export function publishDirectoryAtomically({
         rename(backupDir, destinationDir)
         hadDestination = false
       }
-      throw new Error(`Run the bootstrap again: atomic publication produced an incomplete directory: ${destinationDir}`)
+      throw Object.assign(new Error(`Run the bootstrap again: atomic publication produced an incomplete directory: ${destinationDir}`), { code: "bootstrap_run_the_bootstrap_again_atomic_3" })
     }
     rmSync(backupDir, { recursive: true, force: true })
     return {
@@ -510,11 +510,11 @@ export function publishDirectoryAtomically({
 
 function assertStagingComplete({ stagingDir, validateDestination }) {
   if (!existsSync(stagingDir)) {
-    throw new Error(`Run the bootstrap again: atomic publication staging directory is missing: ${stagingDir}`)
+    throw Object.assign(new Error(`Run the bootstrap again: atomic publication staging directory is missing: ${stagingDir}`), { code: "bootstrap_run_the_bootstrap_again_atomic_2" })
   }
   if (!directoryIsValid(validateDestination, stagingDir)) {
     rmSync(stagingDir, { recursive: true, force: true })
-    throw new Error(`Run the bootstrap again: atomic publication staging directory is incomplete: ${stagingDir}`)
+    throw Object.assign(new Error(`Run the bootstrap again: atomic publication staging directory is incomplete: ${stagingDir}`), { code: "bootstrap_run_the_bootstrap_again_atomic" })
   }
 }
 
@@ -1047,7 +1047,7 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
         const stat = lstatSync(absolute)
         const relative = normalizePath(path.relative(mirrorPath, absolute))
         if (stat.isSymbolicLink()) {
-          throw new Error("Remove the symbolic links from the source mirror: source mirror must not contain symbolic links")
+          throw Object.assign(new Error("Remove the symbolic links from the source mirror: source mirror must not contain symbolic links"), { code: "bootstrap_remove_the_symbolic_links_from" })
         }
         if (stat.isDirectory()) {
           directories.push(relative)
@@ -1055,7 +1055,7 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
         } else if (stat.isFile()) {
           files.push(relative)
         } else {
-          throw new Error("Keep only regular files and directories in the source mirror: source mirror must contain only regular files and directories")
+          throw Object.assign(new Error("Keep only regular files and directories in the source mirror: source mirror must contain only regular files and directories"), { code: "bootstrap_keep_only_regular_files_and" })
         }
       }
     }
@@ -1076,9 +1076,8 @@ export function syncSourceMirror({
 }) {
   const sourceHash = hashCurrentSource(mcpRoot)
   if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
-    throw new Error(
-      `Update Desk so its source matches its recorded identity: Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
-    )
+    throw Object.assign(new Error(
+      `Update Desk so its source matches its recorded identity: Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`), { code: "bootstrap_update_desk_so_its_source" })
   }
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
   if (sourceMirrorIsCurrent({ mirrorPath, sourceHash })) {
@@ -1335,7 +1334,7 @@ function safeArchivePath(name) {
     normalized.startsWith("/") ||
     normalized.split("/").includes("..")
   ) {
-    throw new Error(`desk-mcp: Remove that path from the runtime dependency pack: runtime dependency pack contains unsafe path ${name}`)
+    throw Object.assign(new Error(`desk-mcp: Remove that path from the runtime dependency pack: runtime dependency pack contains unsafe path ${name}`), { code: "bootstrap_desk_mcp_remove_that_path" })
   }
   return normalized
 }

@@ -522,7 +522,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST"]) delete cleaned[name]
   const result = spawn("gh", tokenArgs, { encoding: "utf8", timeout: 10_000, env: cleaned, windowsHide: true })
   const token = result.status === 0 ? String(result.stdout ?? "").trim() : ""
-  if (!token) throw new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`)
+  if (!token) throw Object.assign(new Error(`Sign in the GitHub CLI: the GitHub CLI has no token for ${account ?? "its active account"} (run \`gh auth login --hostname github.com\`)`), { code: "drains_sign_in_the_github_cli" })
   // What this connection spent and what GitHub says is left in the account's window; a 304 answer costs nothing against it.
   const meter = { total: 0, notModified: 0, quota: null }
   const get = async (route, { etag } = {}) => {
@@ -537,7 +537,7 @@ export async function connectGithub(account, { spawn = spawnSync, fetchImpl = fe
       meter.notModified += 1
       return { notModified: true }
     }
-    if (!response.ok) throw new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`)
+    if (!response.ok) throw Object.assign(new Error(`Check gh auth status, then try again: GitHub answered HTTP ${response.status} for ${route.split("?")[0]}`), { code: "drains_check_gh_auth_status_then" })
     return { body: await response.json(), next: /rel="next"/u.test(response.headers.get("link") ?? ""), etag: response.headers.get("etag") }
   }
   const all = async (route) => {

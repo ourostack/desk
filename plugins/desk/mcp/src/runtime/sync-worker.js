@@ -710,7 +710,7 @@ function parseSyncPushArgs(argv) {
   const options = new Map()
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw new Error(`sync-push.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`)
+    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`sync-push.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "sync_worker_sync_push_js_remove_the" })
     options.set(key.slice(2), argv[index + 1])
   }
   return options
@@ -727,7 +727,7 @@ function parseSyncPushArgs(argv) {
 export async function runSyncPushCli({ argv = process.argv.slice(2), env = process.env, runWorker = runPushWorker } = {}) {
   const options = parseSyncPushArgs(argv)
   const root = options.get("root")
-  if (typeof root !== "string" || root === "") throw new Error("sync-push.js: Pass --root <path>: --root <path> is required")
+  if (typeof root !== "string" || root === "") throw Object.assign(new Error("sync-push.js: Pass --root <path>: --root <path> is required"), { code: "sync_worker_sync_push_js_pass_root" })
   const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
   const outcome = await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
   if (outcome?.result === "blocked") {

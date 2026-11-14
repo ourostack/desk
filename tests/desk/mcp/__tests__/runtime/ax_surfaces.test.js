@@ -17,6 +17,20 @@ const baselinePath = path.join(here, "ax-surfaces-baseline.json")
 // Strings the extractor reads as errors that are not: they stay in the manifest as texts, which are still checked for
 // scripts, but are not held to "lead with the fix". A carrier wraps a message whose call sites are checked themselves.
 const NOT_ERRORS = {
+  "plugins/desk/mcp/src/runtime/agency-desk-channel.js#usage-run-it-with-detect": "a command-line usage line: the exit status is its code",
+  "plugins/desk/mcp/src/runtime/pending-migrations.js#migrations-js-install-bash-first": "a command-line usage line: the exit status is its code",
+  "plugins/desk/mcp/src/runtime/pending-migrations.js#migrations-js-name-a-migration": "a command-line usage line: the exit status is its code",
+  "plugins/desk/mcp/src/runtime/session-sync.js#session-sync-js-pass-root": "a command-line usage line: the exit status is its code",
+  "plugins/desk/mcp/src/runtime/deliver.js#fix-desk-publication-json-through": "a result whose `reason` is its stable code",
+  "plugins/desk/mcp/src/runtime/state-branch.js#run-it-again-head-moved": "a result whose `reason` is its stable code",
+  "plugins/desk/mcp/src/runtime/deliver.js#check-the-replay-worktree-s": "an internal result the caller records as the replay_failed reason",
+  "plugins/desk/mcp/src/runtime/desk-session.js#start-the-session-from-the": "its code is the exported DESK_ROOT_UNAVAILABLE constant callers compare with; renaming it would change behavior",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#then-call-desk-status-desk": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#start-a-new-session-once": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#run-desk-first-run-bootstrap": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#run-now-the-active-overlay": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#check-write-permissions-and-free": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/runtime/diagnostics.js#refresh-or-reinstall-desk-from": "remediation text on a diagnostic record whose `code` names it",
   "plugins/desk/mcp/src/tools/task-archived-resource.js#task-update-pass-only-resource": "carrier: each call site passes its own code",
   // Tool replies that report an outcome, with their stable status beside them, not failures.
   "plugins/desk/mcp/src/tools/lesson-team.js#in-effect-merged-in-from": "a status reply, not a failure",

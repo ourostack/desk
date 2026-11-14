@@ -112,7 +112,7 @@ export function spawnGitAsync(command, args, { timeout, env, spawnImpl = spawn }
     child.on("close", (status, signal) => {
       clearTimeout(timer)
       const result = { status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }
-      resolve(timedOut ? { ...result, error: Object.assign(new Error("Run it again: git timed out"), { code: "ETIMEDOUT" }) } : result)
+      resolve(timedOut ? { ...result, error: Object.assign(Object.assign(new Error("Run it again: git timed out"), { code: "session_sync_run_it_again_git_timed" }), { code: "ETIMEDOUT" }) } : result)
     })
   })
 }
@@ -570,7 +570,7 @@ function parseSessionSyncArgs(argv) {
   const options = new Map()
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw new Error(`session-sync.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`)
+    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`session-sync.js: Remove the unexpected argument: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "session_sync_session_sync_js_remove_the" })
     options.set(key.slice(2), argv[index + 1])
   }
   return options

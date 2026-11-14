@@ -7,12 +7,12 @@ const REPORT_FORMAT = "workspace-tidy-compact-v1"
 
 function requireReportCapacity(bytes) {
   if (Buffer.byteLength(bytes) > TIDY_REPORT_MAX_BYTES) {
-    throw new Error("Check the retained resources and acknowledge them before cleanup: workspace-tidy evidence capacity exhausted; acknowledge retained resources before cleanup")
+    throw Object.assign(new Error("Check the retained resources and acknowledge them before cleanup: workspace-tidy evidence capacity exhausted; acknowledge retained resources before cleanup"), { code: "workspace_evidence_check_the_retained_resources_and" })
   }
 }
 
 function requireReportShape(report) {
-  if (!Array.isArray(report.resources) || !Array.isArray(report.issues)) throw new Error("Run the tidy again to rebuild the compact report: invalid compact workspace-tidy report")
+  if (!Array.isArray(report.resources) || !Array.isArray(report.issues)) throw Object.assign(new Error("Run the tidy again to rebuild the compact report: invalid compact workspace-tidy report"), { code: "workspace_evidence_run_the_tidy_again_to" })
 }
 
 export function encodeTidyReport(report) {
@@ -88,9 +88,9 @@ export function mergeTidyEvidence(previous = {}, current = {}, update = null) {
 }
 
 export function acknowledgeTidyEvidence(previous, { id, digest, canonicalEvidence }) {
-  if (typeof canonicalEvidence !== "string" || !canonicalEvidence.trim()) throw new Error("Pass the canonical accounting evidence: canonical accounting evidence is required")
+  if (typeof canonicalEvidence !== "string" || !canonicalEvidence.trim()) throw Object.assign(new Error("Pass the canonical accounting evidence: canonical accounting evidence is required"), { code: "workspace_evidence_pass_the_canonical_accounting_evidence" })
   const resource = previous.resources?.find((entry) => entry.id === id)
-  if (!resource || resource.digest !== digest) throw new Error("Run it again: resource evidence changed or is missing; acknowledgement refused")
+  if (!resource || resource.digest !== digest) throw Object.assign(new Error("Run it again: resource evidence changed or is missing; acknowledgement refused"), { code: "workspace_evidence_run_it_again_resource_evidence" })
   const acknowledgements = [...(previous.acknowledgements ?? []), { id, digest, canonicalEvidence }]
   return mergeTidyEvidence({ ...previous, resources: previous.resources.filter((entry) => entry.id !== id), acknowledgements })
 }

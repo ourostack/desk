@@ -44,7 +44,7 @@ export function consentMentioned(stateDir, store) {
 
 /** Records that the operator was told about `store`, keeping the first time, and returns the record. Throws when it cannot be written. */
 export function noteConsentMentioned(stateDir, store, { now = () => new Date().toISOString() } = {}) {
-  if (!isStore(store)) throw new TypeError("Pass store as <owner/repo>: store must be <owner/repo>")
+  if (!isStore(store)) throw Object.assign(new TypeError("Pass store as <owner/repo>: store must be <owner/repo>"), { code: "consent_mentioned_pass_store_as_owner_repo" })
   assertNotRealStateUnderTest(stateDir)
   const existing = readRecord(stateDir, store)
   if (existing !== null) return existing

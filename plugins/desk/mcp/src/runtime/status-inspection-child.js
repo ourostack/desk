@@ -3,7 +3,7 @@ import { rootStatus } from "./status-root.js"
 
 export function inspectStatusInputs({ deskRoot, phase = "root", rootContext }) {
   if (phase === "root") return rootStatus(deskRoot, rootContext)
-  throw new TypeError(`Use a known status inspection phase: unknown status inspection phase: ${phase}`)
+  throw Object.assign(new TypeError(`Use a known status inspection phase: unknown status inspection phase: ${phase}`), { code: "status_inspection_child_use_a_known_status_inspection" })
 }
 
 export function attachStatusInspectionChild(port) {

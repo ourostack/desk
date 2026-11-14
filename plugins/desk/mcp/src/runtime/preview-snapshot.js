@@ -3,7 +3,7 @@ import { deskVersion } from "../package-metadata.js"
 export function diagnosticFormat(input) {
   const format = input?.format
   if (format !== undefined && format !== "full" && format !== "preview") {
-    throw new TypeError("Pass full or preview: unsupported diagnostic format; use full or preview")
+    throw Object.assign(new TypeError("Pass full or preview: unsupported diagnostic format; use full or preview"), { code: "preview_snapshot_pass_full_or_preview_unsupported" })
   }
   return format ?? "full"
 }
