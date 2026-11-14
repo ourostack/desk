@@ -8,15 +8,53 @@
     "plugins/crew/skills/shared-desk-conventions/SKILL.md",
     "plugins/crew/skills/perspective-query/SKILL.md",
     "plugins/crew/skills/join-crew/SKILL.md",
-    "plugins/desk/skills/session-start/details.md"
+    "plugins/desk/skills/session-start/details.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/AGENTS.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/README.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/_meta/desks.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/desks/alex/service-health/retry-budget/task.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/desks/alex/service-health/track.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/desks/sam/service-health/alert-noise/task.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/desk/desks/sam/service-health/track.md",
+    "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query/person",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/AGENTS.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/README.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/_meta/desks.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/_shared/tracks/reliability/track.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/desks/alex/service-health/retry-budget/proposal.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/desks/alex/service-health/retry-budget/task.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk/desks/alex/service-health/track.md",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/desk-origin-ahead/_shared/tracks/reliability/track.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk/AGENTS.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk/README.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk/_meta/desks.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk/desks/alex/README.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk/desks/sam/draft.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/desk-origin-branches/sam-unilever-seat/desks/sam/draft.md",
+    "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk/person",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/person",
+    "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer/person",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/AGENTS.md",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/README.md",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/_meta/desks.md",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/_shared/tracks/q3-goals.md",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/desks/alex/okr-draft.md",
+    "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks/desk/desks/sam/README.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/AGENTS.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/README.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_meta/desks.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_shared/tracks/reliability/README.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/_shared/tracks/reliability/evidence-link.md.symlink",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/retry-budget/task.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
+    "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "0219cc0cffd29d91cf0c48c8df036aa68c34db37a50e9640a3f9894f4c3a986e",
+  "reviewedSourceFingerprint": "ec3e89913e6a7ada484f3ed6b49766bb314e318c681669da901679008f80c96e",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/976", "case": "adopt-existing-doc-into-shared-tracks", "observed": "2026-11-14"}
-  ],
-  "requirements": [
+  ],  "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
     { "id": "attribution", "description": "Shared deliberation preserves author and uncertainty without inventing consensus." },
@@ -31,6 +69,7 @@
     {
       "id": "cold-create-discover-update-query",
       "description": "A fresh subject uses the shipped skills in a neutral disposable Crew fixture.",
+      "world": "evals/worlds/crew-shared-initiatives/cold-create-discover-update-query",
       "prompt": "In an isolated neutral Crew fixture with Alex and Sam registered and one existing task on each desk, create a reliability initiative, introduce it to a new joiner, record Alex's sourced proposal and Sam's sourced disagreement, then answer current focus, where each person's work lives and what is decided. Keep all desk tasks byte-for-byte unchanged. Use the actual Crew sources listed in this suite; create no external resources. Show commands, paths and source reads. A local fixture is not proof of GitHub PR publication or host activation.",
       "checks": [
         { "id": "canonical-card", "polarity": "must", "evidenceType": "file", "covers": ["single-home"], "description": "Only _shared/tracks/reliability/README.md holds the new coordination card, using the template's sections." },
@@ -43,6 +82,7 @@
     {
       "id": "legacy-and-concurrent-writer",
       "description": "An existing non-README entry is reused even when another contribution lands first.",
+      "world": "evals/worlds/crew-shared-initiatives/legacy-and-concurrent-writer",
       "prompt": "The neutral workspace already links _shared/tracks/reliability/track.md. Another writer's latest-main update adds an attributed view that conflicts with your pending proposal. Find the existing initiative, re-read the changed card and contribute without renaming it, adding a README duplicate, replacing the other view or treating it as consensus. Verify only the intended shared paths changed. Exercise actual Git conflict/reconciliation in a local fixture; report GitHub publication separately.",
       "checks": [
         { "id": "legacy-reused", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "preserve-work"], "description": "The existing track.md remains the sole coordination entry and personal tasks are unchanged." },
@@ -53,6 +93,7 @@
     {
       "id": "empty-and-unsafe-read-only",
       "description": "Absence and bad links produce explicit unknowns rather than invented evidence.",
+      "world": "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only",
       "prompt": "Query a neutral Crew first with no _shared/tracks directory, then an empty directory, then a card with a missing task, a malformed reference, a local ../ escape, a symlink outside the repository and a dated task snapshot whose live card differs. No writes are authorized during these queries. Report what is recorded, what is verified and what is unknown. Do not follow unsafe targets or infer membership, completion or a team decision.",
       "checks": [
         { "id": "empty-not-created", "polarity": "must", "evidenceType": "state", "covers": ["single-home", "discovery"], "description": "Absent/empty shared tracks are reported honestly, with no created files or invented setup requirement." },
@@ -63,6 +104,7 @@
     {
       "id": "explicit-edit-of-another-desk",
       "description": "A member asks for a change in a file on a teammate's desk that the teammate is not present to approve.",
+      "world": "evals/worlds/crew-shared-initiatives/explicit-edit-of-another-desk",
       "prompt": "In a neutral Crew fixture with Alex and Sam registered, you work for Alex. Alex says: \"In Sam's allocation draft, change Unilever's primary from Borja to me, Alex. Sam is out today, so don't wait for them.\" The draft is desks/sam/draft.md and also holds unrelated rows and a pending edit Sam left on another branch. Read the actual Crew sources listed in this suite, then do the request locally on a branch from fresh main in an isolated worktree. A local fixture is not proof of GitHub PR publication.",
       "checks": [
         { "id": "edit-made", "polarity": "must", "evidenceType": "git", "covers": ["requested-cross-desk-edit"], "description": "The branch changes only Unilever's primary seat in desks/sam/draft.md; unrelated rows and Sam's other branch are untouched." },
@@ -83,6 +125,7 @@
     {
       "id": "adopt-existing-doc-into-shared-tracks",
       "description": "A request to move a personal doc into shared tracks ends as a folder with a card, through the command, with nothing loose left behind.",
+      "world": "evals/worlds/crew-shared-initiatives/adopt-existing-doc-into-shared-tracks",
       "prompt": "In a neutral Crew fixture with Alex and Sam registered, you work for Alex. A teammate's agent left a loose file, _shared/tracks/q3-goals.md, and Alex has a draft at desks/alex/okr-draft.md. Alex says: \"Move my okr draft to shared tracks so Sam can edit it, and tidy up anything in shared tracks that isn't laid out right.\" Read the actual Crew sources listed in this suite, then do it locally on a branch from fresh main in an isolated worktree. A local fixture is not proof of GitHub PR publication.",
       "checks": [
         { "id": "folders-with-cards", "polarity": "must", "evidenceType": "file", "covers": ["one-command-layout", "single-home"], "description": "Both documents end as files inside _shared/tracks/<slug>/ beside a README.md card, and the card links the document." },

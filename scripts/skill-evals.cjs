@@ -388,6 +388,47 @@ function loadSuites(repoRoot) {
   return files.map((file) => ({ file: path.join(directory, file), suite: readJson(path.join(directory, file)) }));
 }
 
+// A case's scenario world: the folders the runner lays over the scratch desk and repository copy, or lands on the case's origin.
+const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person"];
+const branchName = /^[a-z0-9][a-z0-9-]*$/u;
+const personLine = /^[a-z0-9-]+\n?$/u;
+
+function worldFiles(directory, prefix = "") {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const relative = `${prefix}${entry.name}`;
+    return entry.isDirectory() ? worldFiles(path.join(directory, entry.name), `${relative}/`) : [relative];
+  });
+}
+
+function validateWorld(suite, testCase, repoRoot, label) {
+  const expected = `evals/worlds/${suite.id}/${testCase.id}`;
+  const world = testCase.world;
+  if (world !== expected) fail(`${label}: case ${testCase.id} world must be the string ${expected}, not ${JSON.stringify(world)}`);
+  const directory = path.join(repoRoot, world);
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) fail(`${label}: case ${testCase.id} world folder does not exist: ${world}`);
+  const entries = fs.readdirSync(directory);
+  const unknown = entries.filter((name) => !worldFolders.includes(name));
+  if (unknown.length > 0) fail(`${label}: world ${world} has unknown folder(s) ${unknown.join(", ")}; expected ${worldFolders.join(", ")}`);
+  if (entries.includes("person") && !(fs.statSync(path.join(directory, "person")).isFile() && personLine.test(fs.readFileSync(path.join(directory, "person"), "utf8")))) {
+    fail(`${label}: world ${world} person must be a file holding one roster alias of lowercase letters, digits and hyphens`);
+  }
+  if (entries.includes("repo") && !suite.sources.some((source) => /^evals\/fixtures\/[^/]+\//u.test(source))) {
+    fail(`${label}: world ${world} has repo/ but suite ${suite.id} has no evals/fixtures/<name> source to copy it over`);
+  }
+  if (fs.existsSync(path.join(directory, "desk-origin-branches"))) {
+    for (const name of fs.readdirSync(path.join(directory, "desk-origin-branches"))) {
+      if (!branchName.test(name) || !fs.statSync(path.join(directory, "desk-origin-branches", name)).isDirectory()) {
+        fail(`${label}: world ${world} desk-origin-branches/${name} must be a folder named with a lowercase branch name`);
+      }
+    }
+  }
+  const files = worldFiles(directory);
+  if (!suite.sources.some((source) => source.startsWith(`${world}/`))) fail(`${label}: world ${world} is not covered by the suite's sources`);
+  const sourced = new Set(suite.sources);
+  const unlisted = files.map((file) => `${world}/${file}`).find((file) => !sourced.has(file));
+  if (unlisted !== undefined) fail(`${label}: world file ${unlisted} is not in sources; list every world file, as for a fixture`);
+}
+
 function validateSuite(suite, repoRoot, label) {
   if (!isObject(suite)) fail(`${label}: suite must be an object`);
   if (suite.schemaVersion !== schemaVersion) fail(`${label}: schemaVersion must be ${schemaVersion}`);
@@ -457,6 +498,9 @@ function validateSuite(suite, repoRoot, label) {
 
   const fingerprint = sourceFingerprint(suite.sources, repoRoot);
   if (fingerprint !== suite.reviewedSourceFingerprint) fail(`${label}: reviewedSourceFingerprint does not match current sources`);
+  for (const testCase of suite.cases) {
+    if (testCase.world !== undefined) validateWorld(suite, testCase, repoRoot, label);
+  }
   return {
     requirements: requirements.size,
     cases: caseIds.size,
