@@ -47,7 +47,7 @@ test("task_update rejects a non-object frontmatter and leaves the card byte-iden
   for (const frontmatter of ["status: done", "[1,2]", "\"done\"", "42", ["a"], 42, true]) {
     await assert.rejects(
       task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", frontmatter } }),
-      /task_update: `frontmatter` must be an object/,
+      /task_update: Pass `frontmatter` as a JSON object: `frontmatter` must be an object/,
     )
   }
   assert.equal(await fs.readFile(filePath, "utf8"), before, "nothing written")
@@ -78,7 +78,7 @@ test("track_update rejects a non-object frontmatter and leaves the card byte-ide
   for (const frontmatter of ["{not json", "[]", 7]) {
     await assert.rejects(
       track_update({ deskRoot: root, input: { slug: "desk-plugin", frontmatter } }),
-      /track_update: `frontmatter` must be an object/,
+      /track_update: Pass `frontmatter` as a JSON object: `frontmatter` must be an object/,
     )
   }
   assert.equal(await fs.readFile(filePath, "utf8"), before)
@@ -93,7 +93,7 @@ test("objectInput accepts objects, parses JSON-string objects and rejects the re
   assert.deepEqual(objectInput(" {\"a\":1} ", where), { a: 1 })
   const bare = Object.create(null)
   assert.equal(objectInput(bare, where), bare)
-  assert.throws(() => objectInput("{", where), /t: `f` must be an object.*a string that is not valid JSON/)
+  assert.throws(() => objectInput("{", where), /t: Pass `f` as a JSON object: `f` must be an object.*a string that is not valid JSON/)
   assert.throws(() => objectInput("null", where), /got JSON null/)
   assert.throws(() => objectInput("[1]", where), /got a JSON array/)
   assert.throws(() => objectInput([], where), /got an array/)
@@ -112,7 +112,7 @@ test("desk_search parses a JSON-string filters object and refuses a non-object",
   await assert.rejects(
     desk_search({ deskRoot: "/r", input: { query: "q", filters: "track=t" }, queryRouter }),
     (error) => {
-      assert.match(error.message, /desk_search: `filters` must be an object/)
+      assert.match(error.message, /desk_search: Pass `filters` as a JSON object: `filters` must be an object/)
       assert.match(error.message, /nothing was searched\. Pass it as a JSON object, for example \{"track": "desk-plugin"/)
       assert.doesNotMatch(error.message, /written|implementing"\}/, "a read's error never talks about a write")
       return true
