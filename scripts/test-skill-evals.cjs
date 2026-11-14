@@ -170,10 +170,12 @@ try {
     const passing = path.join(dir, "result.json");
     fs.writeFileSync(passing, JSON.stringify(receipt(suite)));
     assert.throws(() => verifyReceipt("result.json", dir), /clear it when the eval passes/u);
-    for (const bad of [{ ...known, issue: undefined }, { ...known, issue: "see the tracker" }, { ...known, case: "missing" }, { ...known, observed: "2026-02-31" }]) {
+    for (const bad of [{ ...known, issue: undefined }, { ...known, issue: "see the tracker" }, { ...known, case: "missing" }, { ...known, observed: "2026-02-31" }, [known, known], [known, null]]) {
       write(dir, suite, bad);
       assert.throws(() => validateRepo(dir), /knownFailure/u);
     }
+    write(dir, suite, [known]);
+    assert.equal(validateRepo(dir).suites, 1, "one entry may stand in a list");
   }
 
   {
@@ -885,8 +887,11 @@ try {
       'const judging = args.includes("-s");',
       'const log = process.env.FAKE_LOG;',
       'const earlier = log && fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\\n").filter((line) => line.includes(\'"role":"judge"\')).length : 0;',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args }) + "\\n");',
       'const prompt = value("-p");',
+      'const cwd = process.cwd();',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, prompt }) + "\\n");',
+      'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
+      'if (!judging && mode === "bigdiff") fs.writeFileSync(cwd + "/src/code.js", "x".repeat(7000) + "\\n");',
       'if (mode === "hang-" + (judging ? "judge" : "subject")) setTimeout(() => {}, 60000);',
       'else if (mode === "exit-" + (judging ? "judge" : "subject")) { console.error("fake failure\\n"); process.exit(3); }',
       'else if (!judging) {',
@@ -931,12 +936,21 @@ try {
       assert.equal(receipt.run.judgeModel, "jud");
       assert.equal(receipt.run.runtimeRevision, "Fake Harness 9.9.9");
       assert.match(receipt.run.actor, /custom harness: one fresh subject process per case, then one separate judge process$/u);
-      assert.deepEqual(receipt.run.harness, { command: "fake-harness.cjs", pluginDirs: [], deniedTools: ["shell", "write"] });
+      assert.deepEqual(receipt.run.harness, { command: "fake-harness.cjs", pluginDirs: [], agent: null, workspace: "scratch desk bound through $DESK", isolation: ["GitHub, npm and Git credential files and Desk state replaced with empty scratch ones", "built-in GitHub tools off"] });
       assert.deepEqual(receipt.run.counts, { cases: { total: 1, passed: 1 }, checks: { total: 2, passed: 2 } });
       assert.equal(receipt.cases[0].checks[0].evidence, "Fake evidence for check-must");
       assert.deepEqual(calls().map((call) => [call.role, call.model]), [["subject", "sub"], ["judge", "jud"]]);
       assert.notEqual(calls()[0].pid, calls()[1].pid, "subject and judge are separate processes");
-      assert.ok(calls()[0].args.includes("--deny-tool"), "the subject runs without shell or write");
+      const [subjectCall, judgeCall] = calls();
+      assert.ok(subjectCall.args.includes("--allow-all-tools") && !subjectCall.args.includes("--deny-tool"), "the subject can use shell and write tools");
+      assert.ok(subjectCall.args.includes("--disable-builtin-mcps"), "the subject cannot reach GitHub through the built-in tools");
+      assert.equal(subjectCall.bound, true, "the subject starts in a scratch desk");
+      assert.equal(subjectCall.deskIsCwd, true, "Desk binds that scratch desk");
+      assert.equal(subjectCall.cwd.startsWith(dir), false, "the scratch desk is outside the checkout");
+      assert.match(subjectCall.gh, /config[\\/]gh$/u, "GitHub credentials are replaced with an empty folder");
+      assert.match(subjectCall.prompt, /scenario below is true[\s\S]*\n\nEvaluate the fixture\.$/u);
+      assert.equal(fs.existsSync(subjectCall.cwd), false, "the scratch workspace is removed after the case");
+      assert.match(judgeCall.prompt, /## Workspace state after the run[\s\S]*### desk\nUncommitted or untracked changes:\n\(none\)[\s\S]*not yet pushed to the desk's remote:\n\(none\)/u);
       assert.equal(requireEvidence(dir).suites, 1);
       const verified = spawnSync(process.execPath, [cli, "verify", "evals/receipts/fixture.json", dir], { encoding: "utf8" });
       assert.match(verified.stdout, /Verified fixture/u);
@@ -1038,20 +1052,66 @@ try {
     }
 
     {
+      // A suite that sources a repository fixture gets a scratch copy as the working folder, and the judge sees what the subject changed.
+      const withRepo = (files) => (suite, root) => {
+        const repo = path.join(root, "evals", "fixtures", "repo");
+        fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+        for (const [name, text] of Object.entries(files)) {
+          fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+          fs.writeFileSync(path.join(repo, name), text);
+        }
+        suite.sources = ["source.txt", ...Object.keys(files).map((name) => `evals/fixtures/repo/${name}`)];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      };
+      const lock = JSON.stringify({ name: "repo", lockfileVersion: 3, requires: true, packages: { "": { name: "repo" } } });
+      const files = { "src/code.js": "original\n", "package.json": '{"name":"repo","private":true}', "package-lock.json": lock, "__tests__/ok.test.js": 'require("node:test")("ok", () => {});\n' };
+      const { run, calls, dir } = runFixture(withRepo(files));
+      const result = run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "write" });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /installing the repo fixture's frozen dependencies/u);
+      const [subjectCall, judgeCall] = calls();
+      assert.equal(path.basename(subjectCall.cwd), "repo");
+      assert.equal(subjectCall.deskIsCwd, false, "the desk stays separate from the repository");
+      assert.match(judgeCall.prompt, /### repository\nUncommitted or untracked changes:\n\?\? written\.txt/u);
+      assert.match(judgeCall.prompt, /node --test[^\n]*\n# tests 1\n# pass 1\n# fail 0/u, "the judge sees the repository's own test results");
+      assert.match(judgeCall.prompt, /Production-code diff against the baseline:\n\(none\)/u);
+      assert.equal(fs.existsSync(path.join(dir, "evals", "fixtures", "repo", "written.txt")), false, "the fixture itself is never written");
+
+      const big = runFixture(withRepo(files));
+      assert.equal(big.run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "bigdiff" }).status, 0);
+      assert.match(big.calls()[1].prompt, /Production-code diff against the baseline:\n[\s\S]*\[truncated\]/u);
+
+      const unlocked = runFixture(withRepo({ "src/code.js": "original\n" }));
+      const noInstall = unlocked.run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(noInstall.status, 0, noInstall.stderr);
+      assert.doesNotMatch(noInstall.stdout, /frozen dependencies/u, "a fixture with no lockfile installs nothing");
+
+      const broken = runFixture(withRepo({ ...files, "package-lock.json": "not json" }));
+      const failed = broken.run(["fixture", ...fake]);
+      assert.equal(failed.status, 1);
+      assert.match(failed.stderr, /npm ci failed for the repo fixture/u);
+    }
+
+    {
       // The subject loads the plugins that own the suite's sources.
       const { run, calls, receipt: written, dir } = runFixture((suite, root) => {
-        for (const name of ["alpha", "beta"]) fs.mkdirSync(path.join(root, "plugins", name), { recursive: true });
+        for (const name of ["alpha", "beta", "broken", "default"]) fs.mkdirSync(path.join(root, "plugins", name), { recursive: true });
         fs.writeFileSync(path.join(root, "plugins", "alpha", "plugin.json"), "{}");
+        fs.writeFileSync(path.join(root, "plugins", "broken", "plugin.json"), "not json");
+        fs.writeFileSync(path.join(root, "plugins", "default", "plugin.json"), JSON.stringify({ activation: { copilot: { targets: { "default:helper": { default: false }, "default:main": { default: true } } } } }));
+        for (const name of ["broken", "default"]) fs.writeFileSync(path.join(root, "plugins", name, "SKILL.md"), `${name}\n`);
         fs.writeFileSync(path.join(root, "plugins", "alpha", "SKILL.md"), "alpha\n");
         fs.writeFileSync(path.join(root, "plugins", "beta", "SKILL.md"), "beta\n");
-        suite.sources = ["plugins/beta/SKILL.md", "plugins/alpha/SKILL.md", "source.txt"];
+        suite.sources = ["plugins/beta/SKILL.md", "plugins/alpha/SKILL.md", "plugins/broken/SKILL.md", "plugins/default/SKILL.md", "source.txt"];
         suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
       });
       const result = run(["fixture", ...fake, "--concurrency", "1"]);
       assert.equal(result.status, 0, result.stderr);
       const args = calls()[0].args;
-      assert.deepEqual(args.filter((arg, index) => args[index - 1] === "--plugin-dir"), [path.join(dir, "plugins", "alpha")]);
-      assert.deepEqual(written().run.harness.pluginDirs, ["plugins/alpha"]);
+      assert.deepEqual(args.filter((arg, index) => args[index - 1] === "--plugin-dir"), ["alpha", "broken", "default"].map((name) => path.join(dir, "plugins", name)));
+      assert.deepEqual(written().run.harness.pluginDirs, ["plugins/alpha", "plugins/broken", "plugins/default"]);
+      assert.equal(args[args.indexOf("--agent") + 1], "default:main", "the subject runs as the plugin's default agent");
+      assert.equal(written().run.harness.agent, "default:main");
     }
 
     {
@@ -1067,6 +1127,14 @@ try {
       const other = run(["fixture", ...fake], { FAKE_FAIL: "c2-must" });
       assert.equal(other.status, 1, "a failure outside the known case still fails the run");
       assert.equal(fs.existsSync(receiptFile), false);
+      const known = value => ({ issue: "https://github.com/ourostack/desk/issues/1", case: value, observed: "2026-11-13" });
+      suite.knownFailure = [known("case-1"), known("case-2")];
+      fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
+      const several = run(["fixture", ...fake], { FAKE_FAIL: "check-must,c2-must" });
+      assert.equal(several.status, 0, "a list lets several cases keep failing");
+      assert.match(several.stdout, /KNOWN FAILURE fixture\/case-1 still reproduces[\s\S]*KNOWN FAILURE fixture\/case-2 still reproduces/u);
+      suite.knownFailure = suite.knownFailure[0];
+      fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
       const passes = run(["fixture", ...fake]);
       assert.equal(passes.status, 0, passes.stderr);
       assert.match(passes.stdout, /delete its knownFailure from evals\/fixture\.json/u);
