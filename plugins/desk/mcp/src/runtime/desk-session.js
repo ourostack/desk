@@ -204,7 +204,7 @@ export function createDeskSession(deps) {
 
   function invalidateStatus() {
     contextGeneration += 1
-    retireStatusRun(new Error("Call desk_status again: runtime status context ended"))
+    retireStatusRun(Object.assign(new Error("Call desk_status again: runtime status context ended"), { code: "desk_session_call_desk_status_again_runtime_2" }))
     statusRun = null
     lastStatusDetail = null
   }
@@ -600,7 +600,7 @@ export function createDeskSession(deps) {
     return null
   }
 
-  const headUncertainOutcome = () => exceptionOutcome(new Error("Run the Git inspection again: HEAD freshness is unverified; authoritative Git inspection must settle a current observation"))
+  const headUncertainOutcome = () => exceptionOutcome(Object.assign(new Error("Run the Git inspection again: HEAD freshness is unverified; authoritative Git inspection must settle a current observation"), { code: "desk_session_run_the_git_inspection_again" }))
   const currentHead = binding => !disposed && headBinding === binding && binding.generation === headGeneration
   // Stats are read as BigInts (EXACT): a Windows file id can exceed 2^53, where Numbers cannot tell a file from its replacement.
   const statIdentity = stat => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(":")
@@ -1017,7 +1017,7 @@ export function createDeskSession(deps) {
 
   // Starts a runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed. An abandoned computation that finishes late never replaces a detail from a newer one.
   function startStatusRun(input, signal) {
-    retireStatusRun(new Error("Call desk_status again: runtime status run exceeded its lifetime"))
+    retireStatusRun(Object.assign(new Error("Call desk_status again: runtime status run exceeded its lifetime"), { code: "desk_session_call_desk_status_again_runtime" }))
     const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1), generation: contextGeneration,
       controller: new AbortController(), runtimeServer: context.runtimeServer }
     run.signal = signal ? AbortSignal.any([signal, run.controller.signal]) : run.controller.signal

@@ -252,7 +252,7 @@ export function loadRuntimeSupportMatrix({
 } = {}) {
   const matrixPath = deriveRuntimeSupportMatrixPath({ mcpRoot, packageJson })
   if (!existsSync(matrixPath)) {
-    throw new Error(`Add the runtime support matrix back: runtime support matrix is missing: ${matrixPath}`)
+    throw Object.assign(new Error(`Add the runtime support matrix back: runtime support matrix is missing: ${matrixPath}`), { code: "runtime_deps_add_the_runtime_support_matrix" })
   }
   const matrix = readJson(matrixPath)
   const errors = validateRuntimeSupportMatrix({
@@ -302,7 +302,7 @@ export function collectProductionDependencyClosure({
     }
     const entry = packageLock.packages?.[lockPath]
     if (entry === undefined) {
-      throw new Error(`lock entry must exist for ${lockPath}`)
+      throw Object.assign(new Error(`lock entry must exist for ${lockPath}`), { code: "runtime_deps_lock_entry_must_exist_for" })
     }
     if (entry.dev || !supportsTarget(entry, { platform, arch })) {
       continue
@@ -784,7 +784,7 @@ function collectAllSupportedProductionDependencies({ packageJson, packageLock })
 function packageNameFromLockPath(lockPath) {
   const match = lockPath.match(/(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)$/u)
   if (match === null) {
-    throw new Error(`lock path must end in a package node_modules segment: ${lockPath}`)
+    throw Object.assign(new Error(`lock path must end in a package node_modules segment: ${lockPath}`), { code: "runtime_deps_lock_path_must_end_in" })
   }
   return match[1]
 }
@@ -920,7 +920,7 @@ function runtimeFilesForDependency(dependency, { mcpRoot }) {
   // The explicit addon is required; optional compiler outputs and test extensions are not runtime dependencies.
   const runtimeFiles = unique([...explicitFiles, ...inferredFiles])
   if (runtimeFiles.length === 0) {
-    throw new Error(`Add a non-marker runtime file for the dependency: runtime dependency archive must require a non-marker runtime file for ${dependency.name}`)
+    throw Object.assign(new Error(`Add a non-marker runtime file for the dependency: runtime dependency archive must require a non-marker runtime file for ${dependency.name}`), { code: "runtime_deps_add_a_non_marker_runtime" })
   }
   return runtimeFiles
 }
@@ -1025,7 +1025,7 @@ function splitTarPath(name) {
       return { headerName, prefix }
     }
   }
-  throw new Error(`Use a shorter dependency path: runtime dependency archive path is too long for tar header: ${name}`)
+  throw Object.assign(new Error(`Use a shorter dependency path: runtime dependency archive path is too long for tar header: ${name}`), { code: "runtime_deps_use_a_shorter_dependency_path" })
 }
 
 function extractTarGzContents(archivePath) {

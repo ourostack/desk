@@ -99,10 +99,9 @@ export function assertNotRealStateUnderTest(dir, { env = process.env, platform =
   if (!looksLikeNodeTestRunner(env)) return
   if (hasText(env[DESK_ALLOW_REAL_STATE_IN_TEST])) return
   if (isUnderOsTmpdir(path.resolve(dir), { platform })) return
-  const error = new Error(
+  const error = Object.assign(new Error(
     `Resolve state under the OS temp directory in tests, or set ${DESK_ALLOW_REAL_STATE_IN_TEST}=1 to override. ` +
-      `Test isolation refused the real Desk state folder (${dir}) from what looks like a node:test run.`,
-  )
+      `Test isolation refused the real Desk state folder (${dir}) from what looks like a node:test run.`), { code: "test_state_guard_resolve_state_under_the_os" })
   error.code = DESK_TEST_REAL_STATE
   throw error
 }
