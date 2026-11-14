@@ -152,7 +152,7 @@ function prepareTemplate(suite, root, log) {
     fs.cpSync(path.join(root, "evals", "fixtures", name), repo, { recursive: true, filter: (source) => path.basename(source) !== "node_modules" });
     if (fs.existsSync(path.join(repo, "package-lock.json"))) {
       log(`  installing the ${name} fixture's frozen dependencies`);
-      const install = spawnSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repo, encoding: "utf8", shell: process.platform === "win32" });
+      const install = spawnSync("npm ci --ignore-scripts --no-audit --no-fund", { cwd: repo, encoding: "utf8", shell: true });
       if (install.status !== 0) throw new Error(`npm ci failed for the ${name} fixture: ${`${install.stderr}`.trim().slice(-400)}`);
     }
     template.repo = repo;
