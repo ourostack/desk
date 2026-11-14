@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.151 — 2026-11-14
+
+A coordinator's periodic prompt can now come from an always-on runtime instead of an app session automation. The app queues every run it misses while a session is busy and replays them back to back, one full model turn each. `drains.js schedule poll` prints a prompt only when its interval has passed and counts the next run from the delivery that landed, so three missed intervals send one prompt; a prompt the runner cannot deliver stays one wake, not a pile. `schedule status` shows each schedule's last sent time and next run. To move a watchdog over, add its session, prompt and `everyMinutes` to `schedules.json`. See [schedules](docs/schedules.md).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.150 — 2026-11-14
 
 When an agent makes a change that a member asked for on another member's desk, the commit and pull request now name who asked for the change as well as whose desk it touched, so the owner can see who asked. The change itself, the attribution-free rules and the protected-write limits are unchanged. See [shared-desk-conventions](../../crew/skills/shared-desk-conventions/SKILL.md).
