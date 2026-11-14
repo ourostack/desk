@@ -2116,7 +2116,7 @@ test("source mirror stages a complete tree before replacing a stale mirror", { t
 
 test("omitted bootstrap options fail before any runtime path is resolved", { timeout: 60_000 }, async () => {
   const { importRuntimeServer, prepareRuntime } = await loadBootstrap()
-  const message = "desk-mcp: Pass mcpRoot to the bootstrap: mcpRoot is required for runtime dependency bootstrap"
+  const message = "desk-mcp: mcpRoot is required for runtime dependency bootstrap"
   assert.throws(() => prepareRuntime(), { message })
   await assert.rejects(() => importRuntimeServer(), { message })
 })
