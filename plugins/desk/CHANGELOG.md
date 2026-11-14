@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.131 — 2026-11-14
+
+The errors in Desk's runtime (runtime dependencies, pull-request publication, delivery, status inspection, drains, session retention and sync, pending migrations, workspace claims and workspace tidy) now open with what to do, then say what went wrong, and keep their meaning. Labels, log lines and messages that mirror another program's wording keep theirs.
+
+The Ouro AX baseline drops again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.130 — 2026-11-14
 
 The Desk release now holds a merge when main moved while its pull request's checks ran, because two green pull requests can combine into a broken main. It releases at once when the pull request was tested against the main it landed on, and otherwise starts as soon as main's own run passes on that commit, so it never waits on a run and never ships a combination no run has checked.
