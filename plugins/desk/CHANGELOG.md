@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.129 — 2026-11-14
+
+A drain wake's message now says why each issue is news, e.g. `#876 Title (cross-reference from owner/name#9)`, and `drains.js why owner/name#123` prints the reasons recorded for that issue (each drain keeps its last 200 events), so a wake is never a mystery. A pull request on a `drain/…` branch (as well as `drain-…`) is the drain's own work, so its cross-reference wakes nobody; a reopen within a minute of the drain's own `drain:` label change is the drain claiming the issue, not news. Tests pin that commit references and edits to the drain's marked comment wake nobody. See [issue drains](docs/issue-drains.md). Who the drain is (whose comments are its own) is now resolved per repository from the token that polls it, not from the configured account name, and each recorded event notes the Desk version that polled it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.128 — 2026-11-14
 
 A proof session whose published Factory record the flush has recorded is now withdrawn through the existing retraction path, whatever its route says, and a tombstone records the withdrawal once the store no longer holds it. A withdrawn session is never published again. Each push and tombstone is recorded in the local audit file with the reason `proof`. A published file that no flush had recorded when its session was marked is not withdrawn by this change, and it stays on the store. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the rule.
