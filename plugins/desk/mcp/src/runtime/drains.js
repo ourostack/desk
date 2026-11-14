@@ -496,7 +496,7 @@ function ago(iso, now) {
 const lastOk = (state) => state.lastOkAt ?? (state.lastError ? null : state.lastPollAt)
 
 /** The newest quota reading among the drains that poll with `account`: the account's quota is shared by all of them. */
-export function freshestQuota(drains, states, account) {
+function freshestQuota(drains, states, account) {
   return drains
     .filter((drain) => drain.account === account)
     .map((drain) => states[drain.repo]?.quota)
