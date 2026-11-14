@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.130 — 2026-11-14
+
+The Desk release now holds a merge when main moved while its pull request's checks ran, because two green pull requests can combine into a broken main. It releases at once when the pull request was tested against the main it landed on, and otherwise starts as soon as main's own run passes on that commit, so it never waits on a run and never ships a combination no run has checked.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.129 — 2026-11-14
 
 A drain wake's message now says why each issue is news, e.g. `#876 Title (cross-reference from owner/name#9)`, and `drains.js why owner/name#123` prints the reasons recorded for that issue (each drain keeps its last 200 events), so a wake is never a mystery. A pull request on a `drain/…` branch (as well as `drain-…`) is the drain's own work, so its cross-reference wakes nobody; a reopen within a minute of the drain's own `drain:` label change is the drain claiming the issue, not news. Tests pin that commit references and edits to the drain's marked comment wake nobody. See [issue drains](docs/issue-drains.md). Who the drain is (whose comments are its own) is now resolved per repository from the token that polls it, not from the configured account name, and each recorded event notes the Desk version that polled it.
