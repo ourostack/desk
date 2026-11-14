@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.143 — 2026-11-14
+
+Desk's fixed context is smaller. Desk's tool descriptions and input schemas drop what each reply already says (the reply fields, the refusal reasons and the nested shape of `content_home`, `resource.migrate` and `content_home.sections`), so the 24 Desk tools advertise about 4 KB less, and the two desk-web tools advertise about 1.6 KB less: the command list stays in `browser_command`'s `args`, and the replies and `AUTH_COMMAND_UNKNOWN` carry the rest. Every tool still says when to use it, and the tools validate their input as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.142 — 2026-11-14
 
 One command now runs a skill eval and records its receipt: `node scripts/skill-evals.cjs run <suite>` for one suite, or `node scripts/skill-evals.cjs run --changed` for every suite whose contract or reviewed sources differ from main. It runs each case through the headless Copilot CLI and has a separate judge model rule on the checks. The receipt records the harness, models, judge, and case and check counts, and marks a self-judged run as such. The CI message that asks for an eval receipt now names this command, so changing a skill's fingerprint no longer means piping a hand-run harness into `record`.
