@@ -59,6 +59,15 @@ test("a yes with no account that can deliver records nothing and says why", () =
   assert.equal(factoryStatus({ env, deskRoot: desk, signoff: false }).consent, "undecided")
 }))
 
+test("a yes with gh missing records nothing", () => scratch(async ({ desk, env }) => {
+  await declared(desk)
+  const result = await answerFactoryConsent({ env, deskRoot: desk, answer: "yes", runner: async () => ({ code: 127, spawnError: "ENOENT", stdout: "", stderr: "" }) })
+  assert.deepEqual([result.status, result.result, result.accounts], ["not_recorded", "gh_missing", undefined])
+  assert.equal(factoryStatus({ env, deskRoot: desk, signoff: false }).consent, "undecided")
+  const real = await answerFactoryConsent({ env: { ...env, PATH: path.join(desk, "no-such-bin"), Path: path.join(desk, "no-such-bin") }, deskRoot: desk, answer: "yes" })
+  assert.equal(real.result, "gh_missing", "with no runner, Desk asks the real gh")
+}))
+
 test("factory_told records that the operator was told, and nothing else", () => scratch(async ({ desk, env }) => {
   await declared(desk)
   assert.deepEqual(await answerFactoryConsent({ env, deskRoot: desk, told: true }), { status: "recorded", store: STORE, told: true })
@@ -73,5 +82,6 @@ test("a recorded decision is never overwritten, and no store means nothing to an
   assert.deepEqual([refused.status, refused.code, refused.consent], ["refused", "factory_already_decided", "no"])
   assert.equal((await answerFactoryConsent({ env, deskRoot: null, answer: "no" })).code, "factory_no_store")
   assert.equal((await answerFactoryConsent({ env, deskRoot: desk, answer: "maybe" })).code, "factory_consent_not_yes_or_no")
+  assert.equal((await answerFactoryConsent({ env, deskRoot: desk })).code, "factory_consent_not_yes_or_no", "no answer and no told is not a yes")
   assert.equal((await answerFactoryConsent({ env, deskRoot: desk, answer: "no", told: true })).code, "factory_consent_one_answer_per_call")
 }))

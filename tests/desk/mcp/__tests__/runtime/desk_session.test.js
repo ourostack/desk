@@ -2637,4 +2637,15 @@ test("desk_doctor records the factory answer through the session's own call and 
   assert.equal(asked[1].told, true)
   assert.equal((await session.callTool({ name: "desk_doctor", input: { factory_told: false } })).isError, true)
   assert.equal(asked.length, 2, "a factory_told other than true is refused before anything is recorded")
+  await session.start()
+  assert.equal(session.admission.snapshot().state, "ready")
+  assert.deepEqual(payload(await session.callTool({ name: "desk_doctor", input: { factory_consent: "yes" } })), answers.yes, "an admitted session answers through the operation queue")
+  assert.equal(asked.at(-1).deskRoot, session.context.root.root)
+})
+
+test("desk_doctor's factory answer reaches Desk's own recorder by default, and an unbound session has no store to answer", async (t) => {
+  const { session } = await makeSession(t)
+  const refused = await session.callTool({ name: "desk_doctor", input: { factory_consent: "no" } })
+  assert.equal(refused.isError, true)
+  assert.equal(payload(refused).code, "factory_no_store")
 })

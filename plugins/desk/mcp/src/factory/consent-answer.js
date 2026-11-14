@@ -22,8 +22,8 @@ const NO_ACCOUNT_FIX = (store) => `Do not record it. Tell the operator in one li
  *
  * `answer` is "yes" or "no"; `told` records that the operator was told about the store and is a separate call. `runner` asks gh, for tests.
  */
-export async function answerFactoryConsent({ env, deskRoot = null, answer, told = false, runner = undefined }) {
-  if (answer !== undefined && !FACTORY_CONSENT_ANSWERS.includes(answer)) return { status: "refused", code: "factory_consent_not_yes_or_no", fix: "Pass factory_consent as yes or no." }
+export async function answerFactoryConsent({ env, deskRoot, answer, told = false, runner = undefined }) {
+  if (!told && !FACTORY_CONSENT_ANSWERS.includes(answer)) return { status: "refused", code: "factory_consent_not_yes_or_no", fix: "Pass factory_consent as yes or no." }
   if (answer !== undefined && told) return { status: "refused", code: "factory_consent_one_answer_per_call", fix: "Pass factory_consent or factory_told, not both." }
   const { store, consent } = factoryStatus({ env, deskRoot, signoff: false })
   if (store === null) return { status: "refused", code: "factory_no_store", fix: "This session resolves no factory store, so there is nothing to answer. Do not ask the operator." }

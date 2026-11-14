@@ -39,7 +39,7 @@ async function card(root, slug, frontmatter) {
   await fs.writeFile(path.join(dir, "task.md"), `---\n${frontmatter}\n---\n\nBody.\n`)
 }
 const boot = (root, extra = {}) => bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, syncFn: async () => ({ state: "synced" }), factoryStatusFn: UNDECIDED, ...extra })
-const isConsent = (line) => /Factory consent is undecided|consent --store|account_found/u.test(line)
+const isConsent = (line) => /Factory consent is undecided|factory_consent/u.test(line)
 
 test("withConsentLast puts the consent block after every other line, whatever the body holds", () => {
   assert.deepEqual(withConsentLast(["a", "b"], ["c1", "c2"]), ["a", "b", "c1", "c2"])
@@ -128,7 +128,7 @@ test("unsigned deliveries and open improvement cards reach the operator's sessio
 test("the sentence about contributing is handed out until an agent records having said it; after that the boot says not to raise it", async () => {
   const root = await desk()
   const stateDir = resolveDeskStateDir({ env: { DESK: root }, homeDir: root })
-  const record = /In the same turn, just before the reply that includes it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never runs the command\./u
+  const record = /In the same turn, just before the reply that includes it, call desk_doctor with \{"factory_told": true\}, so that no later session says it again; if the call fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never makes the call\./u
   const first = await boot(root)
   assert.match(first.instructions.find(isConsent), record)
   assert.match(first.text_instructions.at(-1), record)
@@ -139,7 +139,7 @@ test("the sentence about contributing is handed out until an agent records havin
   const later = await boot(root, { env: { DESK: root, CLAUDE_CODE_SESSION_ID: "another-session" } })
   for (const list of [later.instructions, later.text_instructions]) {
     assert.equal(list.filter(isConsent).length, 1)
-    assert.match(list.at(-1), /^Factory consent is undecided for ourostack\/factory-intake, and the operator was already told that Desk can contribute to it: do not raise it again\. Only if they say 'factory details' \(or ask what Desk sends\), follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+    assert.match(list.at(-1), /^Factory consent is undecided for ourostack\/factory-intake, and the operator was already told that Desk can contribute to it: do not raise it again\. Only if they say 'factory details' \(or ask what Desk sends\), follow "Factory consent" in .*skills.session-start.details\.md.$/u)
     assert.doesNotMatch(list.join("\n"), /"Desk can contribute|want the details|--mentioned|--contribute/u)
   }
   assert.match(formatBootText(later).trimEnd().split("\n").at(-1), /do not raise it again/u)
