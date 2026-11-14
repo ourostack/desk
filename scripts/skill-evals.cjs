@@ -654,7 +654,7 @@ async function main(args) {
   }
   if (command === "verify" && first && !extra) {
     const result = verifyReceipt(first, second);
-    console.log(`Verified ${result.suiteId}: ${result.cases} case(s), ${result.checks} check(s); receipt is complete/current and evidence was not judged here.${result.judge === "self-judged" ? " The run was SELF-JUDGED: its subject and judge were the same model." : ""}`);
+    console.log(`Verified ${result.suiteId}: ${result.cases} case(s), ${result.checks} check(s); receipt is complete/current and evidence was not judged.${result.judge === "self-judged" ? " The run was SELF-JUDGED: its subject and judge were the same model." : ""}`);
     return;
   }
   fail(usage());
