@@ -207,7 +207,7 @@ const SIZE_EDGES = [[0, "none"], [20, "xs"], [200, "s"], [1000, "m"], [5000, "l"
 
 /** The size class of a character count: `none` 0, `xs` 1 to 20, `s` 21 to 200, `m` 201 to 1,000, `l` 1,001 to 5,000, `xl` above. */
 export function sizeClass(chars) {
-  if (!Number.isSafeInteger(chars) || chars < 0) throw new TypeError("Pass chars as a non-negative integer")
+  if (!Number.isSafeInteger(chars) || chars < 0) throw Object.assign(new TypeError("Pass chars as a non-negative integer"), { code: "derive_common_pass_chars_as_a_non_3" })
   for (const [edge, name] of SIZE_EDGES) if (chars <= edge) return name
   return "xl"
 }
@@ -216,7 +216,7 @@ const isCount = (value) => Number.isSafeInteger(value) && value >= 0
 
 function momentMs(at) {
   const ms = typeof at === "string" ? Date.parse(at) : Number.NaN
-  if (Number.isNaN(ms)) throw new TypeError("Pass at as an ISO timestamp string")
+  if (Number.isNaN(ms)) throw Object.assign(new TypeError("Pass at as an ISO timestamp string"), { code: "derive_common_pass_at_as_an_iso" })
   return ms
 }
 
@@ -232,14 +232,14 @@ export function createHumanTurns({ limit = LIMITS.humanTurns } = {}) {
   let skewed = false
   return {
     addReply(chars) {
-      if (!isCount(chars)) throw new TypeError("Pass chars as a non-negative integer")
+      if (!isCount(chars)) throw Object.assign(new TypeError("Pass chars as a non-negative integer"), { code: "derive_common_pass_chars_as_a_non_2" })
       replyChars = Math.min(replyChars + chars, Number.MAX_SAFE_INTEGER)
     },
     agentStopped(at) {
       stoppedMs = momentMs(at)
     },
     prompt(at, chars) {
-      if (!isCount(chars)) throw new TypeError("Pass chars as a non-negative integer")
+      if (!isCount(chars)) throw Object.assign(new TypeError("Pass chars as a non-negative integer"), { code: "derive_common_pass_chars_as_a_non" })
       const ms = momentMs(at)
       let basis = "first"
       let since = null

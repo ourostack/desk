@@ -24,7 +24,7 @@ function compareText(left, right) {
 
 function requireDirectory(directory, label) {
   const stat = lstatSync(directory)
-  if (!stat.isDirectory()) throw new Error(`factory build: Use a real directory for ${label}`)
+  if (!stat.isDirectory()) throw Object.assign(new Error(`factory build: Use a real directory for ${label}`), { code: "build_factory_build_use_a_real_2" })
 }
 
 function existingEntry(filePath) {
@@ -36,7 +36,7 @@ function existingEntry(filePath) {
 function replaceDirectory(source, destination, rename) {
   const stat = existingEntry(destination)
   if (stat !== null) {
-    if (stat.isSymbolicLink()) throw new Error("factory build: Use a real directory, not a symlink, as outDir")
+    if (stat.isSymbolicLink()) throw Object.assign(new Error("factory build: Use a real directory, not a symlink, as outDir"), { code: "build_factory_build_use_a_real" })
     removeWithRetry(destination, { recursive: true })
   }
   rename(source, destination)
@@ -81,7 +81,7 @@ function outputTimeline(timeline, additions, walk, detailFiles) {
 export const DETAIL_FILE_BUDGET_BYTES = 4 * 1024 * 1024
 
 function buildError(code, message) {
-  const error = new Error(`factory build: ${code}: ${message}`)
+  const error = Object.assign(new Error(`factory build: ${code}: ${message}`), { code: "build_factory_build" })
   error.code = code
   return error
 }
@@ -224,7 +224,7 @@ function walkStore({ labels, reports, records }) {
  * and andon compare these.
  */
 export function storeRecords(storeDir) {
-  if (typeof storeDir !== "string") throw new TypeError("storeRecords: Pass storeDir as a path")
+  if (typeof storeDir !== "string") throw Object.assign(new TypeError("storeRecords: Pass storeDir as a path"), { code: "build_storerecords_pass_storedir_as_a" })
   const store = path.resolve(storeDir)
   requireDirectory(store, "store")
   return readStore(store).records
@@ -238,7 +238,7 @@ export function storeRecords(storeDir) {
  * that rule. Older facts, which named every plugin, add nothing.
  */
 export function storePublicPlugins(storeDir) {
-  if (typeof storeDir !== "string") throw new TypeError("storePublicPlugins: Pass storeDir as a path")
+  if (typeof storeDir !== "string") throw Object.assign(new TypeError("storePublicPlugins: Pass storeDir as a path"), { code: "build_storepublicplugins_pass_storedir_as_a" })
   const store = path.resolve(storeDir)
   requireDirectory(store, "store")
   const names = new Set()
@@ -250,12 +250,12 @@ export function storePublicPlugins(storeDir) {
 }
 
 export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET_BYTES, rename = renameWithRetry }) {
-  if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: Pass storeDir and outDir as paths")
+  if (typeof storeDir !== "string" || typeof outDir !== "string") throw Object.assign(new TypeError("build: Pass storeDir and outDir as paths"), { code: "build_pass_storedir_and_outdir_as" })
   const store = path.resolve(storeDir)
   const out = path.resolve(outDir)
   const storeFromOut = path.relative(out, store)
   if (store === out || (storeFromOut !== "" && !storeFromOut.startsWith(`..${path.sep}`) && storeFromOut !== ".." && !path.isAbsolute(storeFromOut))) {
-    throw new Error("factory build: Use an outDir that is neither the store nor its ancestor: it must not replace either")
+    throw Object.assign(new Error("factory build: Use an outDir that is neither the store nor its ancestor: it must not replace either"), { code: "build_factory_build_use_an_outdir" })
   }
   requireDirectory(store, "store")
 
@@ -293,7 +293,7 @@ export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET
 
 /** The report page of `job`, an ID as the store publishes it. A task card links only a desk known private, whose store job is its plain ID (`local-status.js` `publishedJobId`). */
 export function jobReportUrl({ store, job }) {
-  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) throw new TypeError("jobReportUrl: Pass store as owner/repo")
-  if (typeof job !== "string" || !/^[0-9a-f]{32}$/u.test(job)) throw new TypeError("jobReportUrl: Pass job as 32 lowercase hex")
+  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) throw Object.assign(new TypeError("jobReportUrl: Pass store as owner/repo"), { code: "build_jobreporturl_pass_store_as_owner" })
+  if (typeof job !== "string" || !/^[0-9a-f]{32}$/u.test(job)) throw Object.assign(new TypeError("jobReportUrl: Pass job as 32 lowercase hex"), { code: "build_jobreporturl_pass_job_as_32" })
   return `https://github.com/${store}/blob/reports/jobs/${job}.md`
 }

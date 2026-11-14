@@ -152,7 +152,7 @@ export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose = "l
     task_context: "Generate evidence-supported public task context using desk:factory-task-context, generation phase",
     context_privacy: "Independently review public task context using desk:factory-task-context, privacy phase",
   }
-  if (!Object.hasOwn(prompts, purpose)) throw new TypeError("HEADLESS_ARGV: Pass a valid purpose")
+  if (!Object.hasOwn(prompts, purpose)) throw Object.assign(new TypeError("HEADLESS_ARGV: Pass a valid purpose"), { code: "headless_headless_argv_pass_a_valid" })
   const prompt = `${prompts[purpose]}: ${briefPaths.join(" ")}.`
   const dirs = [evaluationDir, ...new Set(logDirs)]
   return [

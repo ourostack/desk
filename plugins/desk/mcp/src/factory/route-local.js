@@ -120,9 +120,9 @@ export async function runRouteLocalStep(env, {
   writeCardCommitted = writeCardCommittedDefault, labelsCheck = labelsBootCheck, labelsReadable = labelsFoldersReadable, observe = observeConditions,
   readStatusImpl = readStatus, updateStatusImpl = updateStatus,
 }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "route_local_pass_deskroot_as_an_absolute" })
   const nowMs = new Date(now).getTime()
-  if (Number.isNaN(nowMs)) throw new TypeError("Pass now as a valid time")
+  if (Number.isNaN(nowMs)) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "route_local_pass_now_as_a_valid" })
   const opened = []
   const counts = {}
   const count = (code, n = 1) => { counts[code] = (counts[code] ?? 0) + n }

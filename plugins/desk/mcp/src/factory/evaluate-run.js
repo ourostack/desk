@@ -284,7 +284,7 @@ function briefBasis(brief) {
  * has passed. A `caught` the evaluator wrote is never kept.
  */
 export function acceptEvaluation(brief, bytes, stamping = null) {
-  if (!Buffer.isBuffer(bytes) && typeof bytes !== "string") throw new TypeError("acceptEvaluation: Pass bytes as a Buffer or a string")
+  if (!Buffer.isBuffer(bytes) && typeof bytes !== "string") throw Object.assign(new TypeError("acceptEvaluation: Pass bytes as a Buffer or a string"), { code: "evaluate_run_acceptevaluation_pass_bytes_as_a" })
   if (Buffer.byteLength(bytes) > LIMITS.maxBytes) return rejected([{ code: "too_large", path: "" }])
   let value
   try {
@@ -397,7 +397,7 @@ async function consentedStores(env) {
  * briefs those are (`unlabeled_briefs`).
  */
 export async function prepareEvaluation(env, { job, pluginVersion }) {
-  if (typeof job !== "string" || !PATTERNS.jobId.test(job)) throw new TypeError("prepareEvaluation: Pass job as a job ID")
+  if (typeof job !== "string" || !PATTERNS.jobId.test(job)) throw Object.assign(new TypeError("prepareEvaluation: Pass job as a job ID"), { code: "evaluate_run_prepareevaluation_pass_job_as_a" })
   const stores = await consentedStores(env)
   if (stores.length === 0) return { result: "not_opted_in", job, briefs: [] }
   const root = await factoryStateRoot(env)
@@ -621,8 +621,8 @@ function laterObservation(current, { observed }) {
  * itself never make the step due again. Each session's facts are read once, however many jobs it binds.
  */
 export async function requestFinishedJobs(env, { deskRoot = null, now = null } = {}) {
-  if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("requestFinishedJobs: Pass deskRoot as absolute or null")
-  if (now !== null && !Number.isFinite(now)) throw new TypeError("requestFinishedJobs: Pass now as milliseconds or null")
+  if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("requestFinishedJobs: Pass deskRoot as absolute or null"), { code: "evaluate_run_requestfinishedjobs_pass_deskroot_as_absolute" })
+  if (now !== null && !Number.isFinite(now)) throw Object.assign(new TypeError("requestFinishedJobs: Pass now as milliseconds or null"), { code: "evaluate_run_requestfinishedjobs_pass_now_as_milliseconds" })
   const stores = await consentedStores(env)
   if (stores.length === 0) return { requested: [] }
   const root = await factoryStateRoot(env)

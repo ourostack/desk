@@ -137,11 +137,11 @@ export async function runTaskContextStep(env, options = {}) {
 export async function runRequestedTaskContext(env, options = {}) {
   const { store, job } = options
   if (typeof store !== "string" || !PATTERNS.prRepo.test(store) || typeof job !== "string" || !PATTERNS.jobId.test(job))
-    throw new TypeError("runRequestedTaskContext: Pass a valid store and job")
+    throw Object.assign(new TypeError("runRequestedTaskContext: Pass a valid store and job"), { code: "context_run_runrequestedtaskcontext_pass_a_valid_store" })
   if (isHeadlessFactorySession(env)) return idle("headless_session", false)
   const clock = options.clock ?? Date.now
   const deadline = options.deadline ?? clock() + 2 * HEADLESS_TIMEOUT_MS + 120000
-  if (!Number.isFinite(new Date(deadline).getTime())) throw new TypeError("runRequestedTaskContext: Pass a valid deadline")
+  if (!Number.isFinite(new Date(deadline).getTime())) throw Object.assign(new TypeError("runRequestedTaskContext: Pass a valid deadline"), { code: "context_run_runrequestedtaskcontext_pass_a_valid_deadline" })
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return idle("no_factory_state", false)
   const lock = await takeLock(root, { name: EVALUATOR_LOCK_NAME, record: { children: [], requested: { store, job } } })
@@ -212,7 +212,7 @@ async function runContextStep(env, options, requestPolicy) {
   if (env.DESK_FACTORY_HEADLESS_EVALUATOR !== undefined && !ON.has(env.DESK_FACTORY_HEADLESS_EVALUATOR.trim().toLowerCase())) return idle("disabled")
   const now = options.now === undefined ? impl.clock() : new Date(options.now).getTime()
   const deadline = new Date(options.deadline).getTime()
-  if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: Pass a valid now and deadline")
+  if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw Object.assign(new TypeError("runTaskContextStep: Pass a valid now and deadline"), { code: "context_run_runtaskcontextstep_pass_a_valid_now" })
   const status = await readStatus(env)
   const waiting = (await runnableContextWork(env, status, now, requestPolicy !== null)).filter(work => requestPolicy === null ||
     work.store.toLowerCase() === requestPolicy.store.toLowerCase() && work.job === requestPolicy.job)

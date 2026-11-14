@@ -226,7 +226,7 @@ const sortedUnique = (values) => [...new Set(values)].sort(compareText)
  */
 export function figure(state, value, reasons, numberClass = "inferred") {
   const named = sortedUnique(reasons)
-  if (state !== "measured" && named.length === 0) throw new Error(`Add a reason to the ${state} figure: it has none`)
+  if (state !== "measured" && named.length === 0) throw Object.assign(new Error(`Add a reason to the ${state} figure: it has none`), { code: "walk_add_a_reason_to_the" })
   return state === "unavailable" ? { class: "unavailable", state, reasons: named } : { class: numberClass, state, value, reasons: state === "measured" ? [] : named }
 }
 

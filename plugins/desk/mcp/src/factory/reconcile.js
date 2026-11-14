@@ -270,7 +270,7 @@ export function reconcile(options) {
   try {
     return run(options)
   } catch {
-    return { ok: false, error: "reconcile: Run it again: it failed unexpectedly" }
+    return { ok: false, code: "reconcile_failed_unexpectedly", error: "reconcile: Run it again: it failed unexpectedly" }
   }
 }
 
@@ -284,7 +284,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     root = realpathSync(deskRoot)
     alias = checkPersonPrefix(personPrefix, "reconcile")
   } catch {
-    return { ok: false, error: "reconcile: Check that the desk folder can be read, then run it again: reading it raised an exception" }
+    return { ok: false, code: "reconcile_desk_unreadable", error: "reconcile: Check that the desk folder can be read, then run it again: reading it raised an exception" }
   }
   const sinceMs = Date.parse(since)
   const untilMs = Date.parse(until)

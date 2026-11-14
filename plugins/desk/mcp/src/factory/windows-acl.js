@@ -282,7 +282,7 @@ const MAX_STDERR_CHARS = 4096
 // Ends the provider processes this process started. A test that ends its own fixture calls it, so the provider does not hold the
 // fixture for its idle timeout.
 export function closeWindowsAclSessions() {
-  for (const session of [...sessions.values()]) session.retire(new Error("Run the command again: the Windows ACL provider closed"))
+  for (const session of [...sessions.values()]) session.retire(Object.assign(new Error("Run the command again: the Windows ACL provider closed"), { code: "windows_acl_provider_closed" }))
 }
 
 function createSession(executable, args, idleMs) {
@@ -325,7 +325,7 @@ function createSession(executable, args, idleMs) {
     waiting.outputBytes += Buffer.byteLength(chunk, "utf8")
     waiting.stdout += chunk
     if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
-      return retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`))
+      return retire(Object.assign(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`), { code: "windows_acl_stdout_too_large" }))
     }
     const newline = waiting.stdout.indexOf("\n")
     if (newline === -1) return
@@ -333,7 +333,7 @@ function createSession(executable, args, idleMs) {
     // One line is one answer. Anything after it means the framing is broken, so the answer is not trusted either.
     if (waiting.stdout.slice(newline + 1).trim() !== "") {
       session.pending = waiting
-      return retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider returned unreadable output`))
+      return retire(Object.assign(new Error(`${waiting.label}: Retry the request: the Windows ACL provider returned unreadable output`), { code: "windows_acl_output_unreadable" }))
     }
     waiting.settle(null, { code: 0, stdout: waiting.stdout.slice(0, newline), stderr: session.stderr })
   })
@@ -343,7 +343,7 @@ function createSession(executable, args, idleMs) {
     if (!waiting) return
     waiting.stderrBytes += Buffer.byteLength(chunk, "utf8")
     if (waiting.outputBytes + waiting.stderrBytes > waiting.maxOutputBytes) {
-      retire(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`))
+      retire(Object.assign(new Error(`${waiting.label}: Retry the request: the Windows ACL provider produced too much output`), { code: "windows_acl_stderr_too_large" }))
     }
   })
   const streamError = error => { session.closeError = true; retire(error) }
@@ -352,7 +352,7 @@ function createSession(executable, args, idleMs) {
   child.on("close", (code) => {
     const diagnostic = session.stderr.trim().slice(0, 500) || "no diagnostic output"
     const label = session.pending?.label ?? DEFAULT_LABEL
-    retire(new Error(`${label}: Retry the request: the Windows ACL provider exited with code ${code}: ${diagnostic}`))
+    retire(Object.assign(new Error(`${label}: Retry the request: the Windows ACL provider exited with code ${code}: ${diagnostic}`), { code: "windows_acl_provider_exited" }))
   })
   return session
 }
@@ -366,7 +366,7 @@ const sessionKey = (executable, args) => `${executable}\0${args.join("\0")}`
 function timedOutError(label, timeoutMs, session, request) {
   const now = performance.now()
   const queued = request.askedAt === null
-  const error = new Error(`${label}: Retry the request: the Windows ACL provider timed out after ${timeoutMs}ms`)
+  const error = Object.assign(new Error(`${label}: Retry the request: the Windows ACL provider timed out after ${timeoutMs}ms`), { code: "windows_acl_provider_timed_out" })
   Object.defineProperty(error, "details", { value: Object.freeze({
     phase: queued ? "queued_expired" :
       !session.spawned ? "awaiting_spawn" :

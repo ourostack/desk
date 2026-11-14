@@ -136,7 +136,7 @@ function checkTimeoutDetails(error, expected) {
   assert.deepEqual(Object.getOwnPropertyDescriptor(error, "details"), {
     value: error.details, writable: false, enumerable: false, configurable: false,
   })
-  assert.equal(JSON.stringify(error), "{}")
+  assert.equal(JSON.stringify(error), JSON.stringify({ code: "windows_acl_provider_timed_out" }))
   assert.equal(Object.hasOwn(error, "cause"), false)
   for (const [key, value] of Object.entries(expected)) assert.equal(error.details[key], value, key)
   assert.ok(Number.isSafeInteger(error.details.queueWaitMs) && error.details.queueWaitMs >= 0)

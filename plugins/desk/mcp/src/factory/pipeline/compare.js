@@ -41,7 +41,7 @@ export const CONFIDENCE = 0.95
  * `confidence`, the least n with 2 * 0.5^n <= 1 - confidence.
  */
 export function minGroupsFor(confidence) {
-  if (!(typeof confidence === "number" && confidence > 0 && confidence < 1)) throw new RangeError("minGroupsFor: Pass confidence strictly between 0 and 1")
+  if (!(typeof confidence === "number" && confidence > 0 && confidence < 1)) throw Object.assign(new RangeError("minGroupsFor: Pass confidence strictly between 0 and 1"), { code: "compare_mingroupsfor_pass_confidence_strictly_between" })
   let groups = 1
   while (2 * 0.5 ** groups > 1 - confidence) groups += 1
   return groups
@@ -114,7 +114,7 @@ function resampledMedian(groups, next) {
 
 function requireGroups(groups) {
   if (!Array.isArray(groups) || !groups.every((group) => Array.isArray(group) && group.length > 0 && group.every((value) => Number.isFinite(value)))) {
-    throw new TypeError("compareMedians: Pass each side as a list of non-empty groups of finite numbers")
+    throw Object.assign(new TypeError("compareMedians: Pass each side as a list of non-empty groups of finite numbers"), { code: "compare_comparemedians_pass_each_side_as" })
   }
 }
 
@@ -133,7 +133,7 @@ function side(groups) {
  * whole interval lies in (`down`, `up` or `null`). See the header.
  */
 export function compareMedians(before, after, { seed } = {}) {
-  if (!Number.isSafeInteger(seed)) throw new TypeError("compareMedians: Pass seed as an integer")
+  if (!Number.isSafeInteger(seed)) throw Object.assign(new TypeError("compareMedians: Pass seed as an integer"), { code: "compare_comparemedians_pass_seed_as_an" })
   requireGroups(before)
   requireGroups(after)
   const result = { before: side(before), after: side(after), change: null, interval: null, direction: null }

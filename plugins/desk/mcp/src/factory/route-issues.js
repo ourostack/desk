@@ -60,9 +60,9 @@ export async function runRouteIssuesStep(env, {
   writeCardCommitted = writeCardCommittedDefault, openImprovementImpl = openImprovement, observeImpl = observeConditions,
   updateStatusImpl = updateStatus, readConsentImpl = readConsent, readStatusImpl = readStatus,
 }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "route_issues_pass_deskroot_as_an_absolute" })
   const nowMs = new Date(now).getTime()
-  if (Number.isNaN(nowMs)) throw new TypeError("Pass now as a valid time")
+  if (Number.isNaN(nowMs)) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "route_issues_pass_now_as_a_valid" })
   const opened = []
   const counts = {}
   const count = (code) => { counts[code] = (counts[code] ?? 0) + 1 }

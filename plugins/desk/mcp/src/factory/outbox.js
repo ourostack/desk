@@ -252,7 +252,7 @@ async function assertOutsideBoundDesk(target, deskRoot) {
   const desk = await realpathExistingPrefix(deskRoot)
   const relative = path.relative(path.join(desk.real, ...desk.remainder), path.join(factory.real, ...factory.remainder))
   if (relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))) {
-    throw new Error("desk_factory: Move the private factory state outside the bound desk: it cannot be inside it")
+    throw Object.assign(new Error("desk_factory: Move the private factory state outside the bound desk: it cannot be inside it"), { code: "desk_factory_it_cannot_be_inside_it" })
   }
 }
 
@@ -277,7 +277,7 @@ async function assertDeskRootTempConsistency(stateHome, deskRoot) {
   if (deskRoot === null) return
   if (!(await isUnderRoot(deskRoot, os.tmpdir()))) return
   if (await isUnderRoot(stateHome, os.tmpdir())) return
-  throw new Error("desk_factory: Set the factory state home inside the OS temp directory, or use a desk root outside it: a temp-directory desk root paired with a factory state home outside the OS temp directory is refused")
+  throw Object.assign(new Error("desk_factory: Set the factory state home inside the OS temp directory, or use a desk root outside it: a temp-directory desk root paired with a factory state home outside the OS temp directory is refused"), { code: "desk_factory_a_temp_directory_desk_root" })
 }
 
 /**

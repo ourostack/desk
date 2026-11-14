@@ -45,7 +45,7 @@ const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const PR_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/([1-9]\d{0,8})$/u
 
 function failure(code) {
-  const error = new Error(`release version: ${code}`)
+  const error = Object.assign(new Error(`release version: ${code}`), { code: "release_version_release_version" })
   error.code = code
   return error
 }
@@ -60,8 +60,8 @@ export function parsePrUrl(url) {
 
 /** See the header. */
 export function githubReader({ runner, token, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (typeof runner !== "function") throw new TypeError("githubReader: Pass runner as a function")
-  if (typeof token !== "string" || token === "") throw new TypeError("githubReader: Pass token as a non-empty string")
+  if (typeof runner !== "function") throw Object.assign(new TypeError("githubReader: Pass runner as a function"), { code: "release_version_githubreader_pass_runner_as_a" })
+  if (typeof token !== "string" || token === "") throw Object.assign(new TypeError("githubReader: Pass token as a non-empty string"), { code: "release_version_githubreader_pass_token_as_a" })
   return {
     async get(route) {
       const args = ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]
