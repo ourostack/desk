@@ -1332,7 +1332,7 @@ async function deliver(env, context) {
       places.set(item.session, "suppressed")
     } else if (current !== UNKNOWN) {
       checkedNames.push(item.name)
-      if (current !== undefined) await appendProofAudit(env, { session: await proofSessionHash(env, item.session), state_before: "unrecorded", action: "refuse", outcome: "refused", reason: "proof, unrecorded", at: now() })
+      if (current !== undefined) await appendProofAudit(env, { session: await proofSessionHash(env, item.session), state_before: "unrecorded", action: "refuse", outcome: "refused", reason: "proof, unrecorded", at: nowIso() })
     }
   }
   await settleProofChecks(env, store, [...checkedNames, ...[...unrecordedNames].filter((name) => !unrecordedExpected.has(name))])

@@ -160,6 +160,8 @@ test("a file at the expected path that another owner wrote is refused and audite
   assert.equal(theirs.pullCount(), 0, "nothing is deleted or pushed for a file that is not ours")
   assert.ok(theirs.mainFiles().has(`facts/${nameOf(6)}`))
   assert.deepEqual(await unrecordedAudit(ctx), [["refuse", "unrecorded", "refused"]], "a refusal is audited once, not on every flush")
+  const [refusal] = (await auditEntries(ctx)).filter(({ action }) => action === "refuse")
+  assert.match(refusal.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/, "the refusal is timed like every other proof audit entry")
 }))
 
 test("a proof copy with no file on the store settles without a pull request, and later flushes do not go online for it", () => scratch(async (ctx) => {
