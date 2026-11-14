@@ -429,13 +429,15 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.deepEqual(workflow.permissions, {})
   assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["main-ci", "build", "push", "announce", "report"])
-  // The release builds only after main's CI passed on the commit it ships, and releases exactly that commit.
+  // The release does not wait for main's CI: a pull request already ran every check, so it only refuses to build while a "main is red" issue is open, and it releases exactly the commit it checked.
   const mainCi = workflow.jobs["main-ci"]
-  assert.deepEqual(mainCi.permissions, { actions: "read", contents: "read" })
+  assert.deepEqual(mainCi.permissions, { contents: "read", issues: "read" })
   assert.equal(mainCi.env.SELF_PUSH, workflow.jobs.build.env.SELF_PUSH)
-  assert.match(stepNamed(mainCi, "Wait for main's CI on the commit to release").run, /node \.github\/scripts\/main-ci-gate\.mjs --repo "\$GITHUB_REPOSITORY" --head "\$head" --workflows desk-mcp-tests\.yml,desk-windows-suite\.yml/u)
+  const gate = stepNamed(mainCi, "Check that main is not red").run
+  assert.match(gate, /gh issue list --repo "\$GITHUB_REPOSITORY" --state open --label red-main/u)
+  assert.doesNotMatch(gate, /sleep|poll|wait/iu, "the release never waits for main's CI")
   assert.equal(workflow.jobs.build.needs, "main-ci")
-  assert.match(stepNamed(workflow.jobs.build, "Release the commit main's CI passed").run, /git checkout --quiet -B main "\$CHECKED"/u)
+  assert.match(stepNamed(workflow.jobs.build, "Release the commit main-ci checked").run, /git checkout --quiet -B main "\$CHECKED"/u)
   // The release's own push builds and pushes nothing, but still marks and reports, so a marking failure in the pushing run is retried.
   const buildJob = workflow.jobs.build
   assert.equal(buildJob.if, undefined, "the build job always runs, so the marking and the report that need it run too")
@@ -450,7 +452,7 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   assert.match(workflow.jobs.announce.if, /^always\(\) && needs\.build\.result == 'success' && \(needs\.push\.result == 'success' \|\| needs\.push\.result == 'skipped'\)/u, "marking runs when the build was skipped")
   assert.doesNotMatch(workflow.jobs.report.if, /needs\.build\.result != 'skipped'/u, "the report runs on the release's own push")
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
-  assert.match(build, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
+  assert.match(build, /scripts\/build-and-check-release\.sh --skip-release-tests --stage "\$RELEASE_STAGE"$/mu, "the release test step already ran in the pull request's dry run")
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
   assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
@@ -475,13 +477,13 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.doesNotMatch(JSON.stringify(build), /github\.token|secrets\./u, "the build job never receives a write credential")
   for (const job of [build, push]) assert.equal(stepNamed(job, "Check out main").with["persist-credentials"], false)
   // The release and the pull request dry run run the same script, so the checks below are the checks of both.
-  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
+  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh --skip-release-tests --stage "\$RELEASE_STAGE"$/mu)
   const checks = sharedScript()
   for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
     assert.match(checks, new RegExp(check, "u"), check)
   }
   for (const folder of ["release", "activation", "artifacts", "docs", "scripts", "launch"]) {
-    assert.match(checks, new RegExp(`^patterns=\\(.*\\b${folder}\\b.*\\)$`, "mu"), folder)
+    assert.match(checks, new RegExp(`^\\s*patterns=\\(.*\\b${folder}\\b.*\\)$`, "mu"), folder)
   }
   assert.match(stepNamed(build, "Build and check the release").run, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
   assert.match(checks, /output "released=true" "summary=\$summary" "sha=\$sha" "base=\$base"/u)
@@ -658,14 +660,11 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("CI dry-runs auto on pull requests and auto, RC and stable on main through the full shared helper, and the CI gate waits for them", () => {
+test("CI dry-runs auto, RC and stable on every pull request and on main through the full shared helper, and the CI gate waits for them", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  // A pull request runs the auto stage, which checks the changelog fragments it adds; rc and stable are the heavy tier (main and dispatches).
-  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: {
-    stage: ["auto", "rc", "stable"],
-    exclude: "${{ fromJSON(github.event_name == 'pull_request' && '[{\"stage\":\"rc\"},{\"stage\":\"stable\"}]' || '[]') }}",
-  } })
+  // Every stage runs on every pull request, so the release can trust the pull request's dry runs.
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc", "stable"] } })
   assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
   assert.equal(job["timeout-minutes"], 15)
   assert.deepEqual(job.permissions, { contents: "read" })
@@ -684,13 +683,14 @@ test("CI dry-runs auto on pull requests and auto, RC and stable on main through 
   assert.deepEqual(tests.jobs["ci-gate"].needs, [
     "quick-checks", "blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards",
     "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
-    "desk-native-windows", "unused-code",
+    "desk-native-windows", "native-macos-protection", "unused-code",
   ])
   assert.equal(tests.jobs["ci-gate"].name, "CI gate")
   assert.equal(tests.jobs["ci-gate"].if, "${{ always() }}")
   const release = stepNamed(releaseWorkflow().workflow.jobs.build, "Build and check the release").run
-  assert.match(release, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
+  assert.match(release, /scripts\/build-and-check-release\.sh --skip-release-tests --stage "\$RELEASE_STAGE"$/mu)
   assert.doesNotMatch(release, /--dry-run/u)
+  assert.doesNotMatch(step.run, /--skip-release-tests/u, "the pull request's dry run runs the release test step the release then skips")
 })
 
 test("the shared release script fails a test step that matches no file or runs no test", () => {

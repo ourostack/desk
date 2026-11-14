@@ -1,6 +1,6 @@
-// Main's ruleset (.github/rulesets/main-requires-ci.json, a copy of the live ruleset) requires three checks. A required check that never reports blocks a
+// Main's ruleset (.github/rulesets/main-requires-ci.json, a copy of the live ruleset) requires four checks. A required check that never reports blocks a
 // pull request forever, so each one must come from a workflow that runs on every pull request, and the "CI gate" job must wait
-// for every other job in its workflow. The heavy tier (the Windows suite and the rest) runs on main, not on pull requests, so it is not required there.
+// for every other job in its workflow. A pull request runs every check main runs, the Windows suite included, so main's own run only confirms a merge.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -20,7 +20,7 @@ const required = ruleset.rules.find((rule) => rule.type === "required_status_che
 test("every required check is a plain job name in a workflow that runs on every pull request", () => {
   const names = new Map()
   const requiredNames = new Set(required.map((check) => check.context))
-  for (const file of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
+  for (const file of ["desk-mcp-tests.yml", "validate-skills.yml", "desk-windows-suite.yml"]) {
     const { on, jobs } = workflow(file)
     assert.ok("pull_request" in on, `${file} runs on pull requests`)
     // Any of these can leave a pull request without the check, which would then block it for good.
@@ -42,7 +42,7 @@ test("every required check is a plain job name in a workflow that runs on every 
       }
     }
   }
-  assert.deepEqual(required.map((check) => check.context).sort(), ["CI gate", "Claude Code plugin load", "Validate skills"])
+  assert.deepEqual(required.map((check) => check.context).sort(), ["CI gate", "Claude Code plugin load", "Validate skills", "Windows suite"])
   for (const { context, integration_id: source } of required) {
     assert.ok(names.has(context), `${context} is a job name`)
     assert.equal(source, 15368, `${context} must come from GitHub Actions`)
@@ -63,38 +63,37 @@ test("the CI gate job waits for every other job in its workflow, except the main
 // Runs the gate's own shell step against a made-up `needs` result, the way its Linux runner would. Windows has no reliable bash on PATH
 // (it may be the WSL launcher), and the gate never runs there, so these two tests skip on Windows.
 const hasJq = process.platform !== "win32" && spawnSync("jq", ["--version"]).status === 0
-const jobIds = ["blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards", "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs", "desk-native-windows", "unused-code"]
-function gateVerdict({ heavy, code, evals, quick = "success", results = {} }) {
+const jobIds = ["blackbox", "browser", "crew-member-binding", "desk-mcp-coverage-shards", "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs", "desk-native-windows", "native-macos-protection", "unused-code"]
+function gateVerdict({ code, evals, quick = "success", results = {} }) {
   const needs = { "quick-checks": { result: quick, outputs: quick === "success" ? { code: String(code), evals: String(evals) } : {} } }
   for (const id of jobIds) needs[id] = { result: results[id] ?? "success", outputs: {} }
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-ci-gate-"))
   try {
     const script = path.join(dir, "gate.sh")
     writeFileSync(script, workflow("desk-mcp-tests.yml").jobs["ci-gate"].steps[0].run)
-    return spawnSync("bash", [script], { encoding: "utf8", env: { ...process.env, RESULTS: JSON.stringify(needs), HEAVY: String(heavy) } }).status
+    return spawnSync("bash", [script], { encoding: "utf8", env: { ...process.env, RESULTS: JSON.stringify(needs) } }).status
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 }
 const skipped = (...ids) => Object.fromEntries(ids.map((id) => [id, "skipped"]))
-const heavyJobs = ["desk-runtime-packs", "desk-native-windows"]
 
-test("the CI gate lets a pull request skip only the heavy tier, the offline evals it cannot affect, and everything for a docs-only change", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests") }), 0)
-  assert.equal(gateVerdict({ heavy: false, code: false, evals: false, results: skipped(...jobIds) }), 0, "docs only")
-  assert.equal(gateVerdict({ heavy: true, code: false, evals: false, results: skipped(...jobIds.filter((id) => id !== "desk-runtime-packs")) }), 0, "a docs-only dispatch still builds the packs")
-  assert.equal(gateVerdict({ heavy: true, code: false, evals: false, results: skipped(...jobIds) }), 1, "the packs never skip on main")
-  assert.equal(gateVerdict({ heavy: true, code: true, evals: true }), 0, "main runs everything")
+test("the CI gate lets a pull request skip only the offline evals it cannot affect, and everything but the packs for a docs-only change", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
+  assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests") }), 0)
+  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds.filter((id) => id !== "desk-runtime-packs")) }), 0, "docs only")
+  assert.equal(gateVerdict({ code: false, evals: false, results: skipped(...jobIds) }), 1, "the packs never skip")
+  assert.equal(gateVerdict({ code: true, evals: true }), 0, "everything ran")
 })
 
 test("the CI gate fails for a job that had to run but was skipped, failed or was cancelled, and for a failed Quick checks", { skip: !hasJq && "needs bash and jq, as on the gate's Linux runner" }, () => {
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests", "desk-mcp-coverage-shards") }), 1)
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: true, results: skipped(...heavyJobs, "offline-eval-tests") }), 1)
-  assert.equal(gateVerdict({ heavy: true, code: true, evals: true, results: skipped("desk-native-windows") }), 1, "main never skips the heavy tier")
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: skipped(...heavyJobs, "offline-eval-tests", "release-dry-run") }), 1, "a pull request checks its changelog fragments")
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: false, results: { ...skipped(...heavyJobs, "offline-eval-tests"), browser: "failure" } }), 1)
-  assert.equal(gateVerdict({ heavy: true, code: true, evals: true, results: { browser: "cancelled" } }), 1)
-  assert.equal(gateVerdict({ heavy: false, code: true, evals: true, quick: "failure", results: skipped(...jobIds) }), 1)
+  assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests", "desk-mcp-coverage-shards") }), 1)
+  assert.equal(gateVerdict({ code: true, evals: true, results: skipped("offline-eval-tests") }), 1)
+  assert.equal(gateVerdict({ code: true, evals: true, results: skipped("desk-native-windows") }), 1, "a pull request runs native Windows")
+  assert.equal(gateVerdict({ code: true, evals: true, results: skipped("native-macos-protection") }), 1, "a pull request runs native macOS protection")
+  assert.equal(gateVerdict({ code: true, evals: false, results: skipped("offline-eval-tests", "release-dry-run") }), 1, "a pull request checks its changelog fragments")
+  assert.equal(gateVerdict({ code: true, evals: false, results: { ...skipped("offline-eval-tests"), browser: "failure" } }), 1)
+  assert.equal(gateVerdict({ code: true, evals: true, results: { browser: "cancelled" } }), 1)
+  assert.equal(gateVerdict({ code: true, evals: true, quick: "failure", results: skipped(...jobIds) }), 1)
 })
 
 test("only a deploy key may push past the ruleset, and a repository admin may bypass it only through a pull request", () => {

@@ -6,14 +6,14 @@ name: desk MCP tests
 # the MCP code, so without this job desk-core changes can merge untested.
 # Every pull request runs it, with no path filter: main requires the "CI gate" job below, and a required check from a
 # workflow that a path filter skipped would never report and would block the pull request forever. Pushes to main skip only
-# the docs no test reads; the Desk release waits for the run that covers the commit it ships (main-ci-gate.mjs).
+# the docs no test reads.
 #
-# Two tiers (AGENTS.md, "CI tiers"). A pull request runs the fast tier on Linux: Quick checks first (every changed file parses and the
-# changed tests pass, in about two minutes), then the coverage shards, the offline eval tests when the change touches them, unused code
-# and the Linux legs of the browser, Crew member-binding and black-box checks. A pull request that changes only the docs no test reads
-# (the --outside list in Quick checks) skips all of that and still gets a green CI gate. A push to main or a dispatch runs everything,
-# with no narrowing: the fast tier plus the heavy tier, the Windows and macOS legs, the runtime packs, the release dry runs and native
-# Windows. A red heavy tier on main opens a "main is red" issue, and the Desk release waits until main is green (main-ci-gate.mjs).
+# One tier (AGENTS.md, "CI tiers"). A pull request runs everything main runs: Quick checks first (every changed file parses and the
+# changed tests pass), then the coverage shards, the offline eval tests when the change touches them, unused code, the Linux, macOS and
+# Windows legs of the browser, Crew member-binding and black-box checks, the runtime packs, native Windows and the auto, rc and stable
+# release dry runs. The Windows suite runs beside it in desk-windows-suite.yml. A pull request that changes only the docs no test reads
+# (the --outside list in Quick checks) skips all of that and still gets a green CI gate. The Desk release trusts these required
+# checks and does not wait for main's run; a red run on main opens a "main is red" issue and holds the next release.
 
 on:
   pull_request:
@@ -100,8 +100,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # The Windows and macOS legs are the heavy tier: main and dispatches only.
-        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"windows-latest"},{"os":"macos-latest"}]' || '[]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -132,10 +130,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each Node matches the runtime pack Desk ships for that platform; the end-to-end test starts the real server. The macOS and
-        # Windows legs are the heavy tier: main and dispatches only. GitHub applies `exclude` before `include`, so an include-only
-        # matrix cannot drop legs with `exclude`; the whole list is chosen by event instead.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"22"}]' || '[{"os":"ubuntu-latest","node":"22"},{"os":"macos-latest","node":"22"},{"os":"windows-latest","node":"24"}]') }}
+        # Each Node matches the runtime pack Desk ships for that platform; the end-to-end test starts the real server.
+        include:
+          - { os: ubuntu-latest, node: "22" }
+          - { os: macos-latest, node: "22" }
+          - { os: windows-latest, node: "24" }
     steps:
       - name: Use CRLF line endings, as Git for Windows does
         if: runner.os == 'Windows'
@@ -181,9 +180,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each Node matches the runtime pack Desk ships for that platform. The Windows leg is the heavy tier: main and dispatches
-        # only (chosen by event, because `exclude` cannot remove `include` entries).
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"22"}]' || '[{"os":"ubuntu-latest","node":"22"},{"os":"windows-latest","node":"24"}]') }}
+        # Each Node matches the runtime pack Desk ships for that platform.
+        include:
+          - { os: ubuntu-latest, node: "22" }
+          - { os: windows-latest, node: "24" }
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -244,10 +244,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Six shards
-        # (2 to 6 minutes each) instead of twelve (1 to 3 each, most of it setup): every job takes one of the organization's
-        # 60 shared concurrent job slots, and a pull request's jobs waited 10 to 20 minutes for one (2026-11-07).
-        shard: [1, 2, 3, 4, 5, 6]
+        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Ten shards (about 3 to 4
+        # minutes each, a minute of it setup): a pull request waits for the slowest shard, and its whole run, release included, has to
+        # fit in 10 minutes. Six shards took 4.5 to 7 minutes (2026-11-13).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -364,8 +364,8 @@ jobs:
   # The release's own build and checks, as a dry run on this pull request merged into main: it folds the pending changelog
   # fragments, commits the result to a throwaway HEAD and runs every check the release workflow runs on that commit
   # (scripts/build-and-check-release.sh, shared with desk-release.yml), then discards it. A pull request the release would
-  # reject, or whose release tests run nothing, fails here instead of in the release. It is the heavy tier: it runs on main after the
-  # merge and on dispatches, and the release waits for main's CI to pass before it builds.
+  # reject, or whose release tests run nothing, fails here instead of in the release. The release does not run them again: it trusts
+  # this check on the pull request.
   release-dry-run:
     name: Release dry run (${{ matrix.stage }})
     needs: quick-checks
@@ -378,8 +378,6 @@ jobs:
       fail-fast: false
       matrix:
         stage: [auto, rc, stable]
-        # A pull request runs the auto leg, which checks the changelog fragments it adds; the rc and stable legs are the heavy tier.
-        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"stage":"rc"},{"stage":"stable"}]' || '[]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -434,6 +432,31 @@ jobs:
       - name: Find unused code
         working-directory: tools/unused-code
         run: npm run knip
+
+  # Real macOS ACL checks and marker-identity guards for the factory. macOS runners are few, but this job takes about a minute.
+  native-macos-protection:
+    name: Native macOS protection
+    needs: quick-checks
+    if: needs.quick-checks.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify native ACL checks and marker identity guards
+        run: >-
+          node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs
+          --test-concurrency=1 --test
+          tests/desk/mcp/__tests__/factory/os_protect.test.js
+          tests/desk/mcp/__tests__/factory/marker_identity.test.js
 
   desk-mcp-tests:
     name: desk MCP test suite
@@ -594,8 +617,7 @@ jobs:
 
   desk-runtime-packs:
     name: desk runtime pack (${{ matrix.target }})
-    # The heavy tier: main and dispatches only. It waits for no job, not even Quick checks (see below).
-    if: github.event_name != 'pull_request'
+    # It waits for no job, not even Quick checks (see below).
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     # A runtime dependency pack embeds its platform's real native binaries, so each target can only be produced
@@ -816,8 +838,7 @@ jobs:
   desk-native-windows:
     name: desk on native Windows
     needs: quick-checks
-    # The heavy tier: main and dispatches only.
-    if: github.event_name != 'pull_request' && needs.quick-checks.outputs.code == 'true'
+    if: needs.quick-checks.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -895,6 +916,7 @@ jobs:
       - desk-mcp-tests
       - desk-runtime-packs
       - desk-native-windows
+      - native-macos-protection
       - unused-code
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -904,17 +926,15 @@ jobs:
       - name: Require every job that had to run to have succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          HEAVY: ${{ github.event_name != 'pull_request' }}
         run: |
           printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          if printf '%s\n' "$RESULTS" | jq -e --arg heavy "$HEAVY" '
+          if printf '%s\n' "$RESULTS" | jq -e '
             (.["quick-checks"].outputs.code == "true") as $code
             | (.["quick-checks"].outputs.evals == "true") as $evals
             | {
                 "quick-checks": true,
                 "offline-eval-tests": $evals,
-                "desk-runtime-packs": ($heavy == "true"),
-                "desk-native-windows": ($code and $heavy == "true")
+                "desk-runtime-packs": true
               } as $special
             | .["quick-checks"].result == "success"
               and all(to_entries[]; .key as $job

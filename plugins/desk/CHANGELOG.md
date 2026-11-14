@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.124 — 2026-11-14
+
+A request to get new work started, permission over a contribution target, or a run where nobody can answer is no longer read as go. On new work the agent now sends its alignment note and stops, editing no product, test or docs files, until the person says go. Approved work with an explicit go is unchanged.
+
+fast-honest-ci now aims for a change to go from "I want to make a change" to live in seconds wherever the pipeline can be designed for it. Single-digit minutes, counting CI, queueing, merge, release and deploy, is the outer limit, not the goal. When a pipeline can't meet it, the agent redesigns the pipeline instead of accepting the wait. It used to aim for CI within 10 minutes of the push. A merge queue is kept only while it makes changes land sooner.
+
+fast-honest-ci now checks the setup part of each job, where time hides unseen: a cache that a run on the default branch never seeded, shallow clones, test files that reload the whole app, and side work on the slowest job. It also tests that change selection fails closed, runs cheap checks in a pre-push hook, and gets every speed-up that costs nothing before paying for faster runners.
+
+An issue the drain filed or already triaged (a label in its `drain:` namespace, or the status marker in its body, present when the poll first sees it) is recorded as seen on arrival instead of waking the drain; later changes by others still do. See [issue drains](docs/issue-drains.md).
+
+A pull request now runs every check Desk has, the Windows suite and the macOS and Windows legs included, and the Desk release no longer waits for main's run after the merge. A change reaches the release in under 10 minutes from the day the pull request opens. The release refuses to build only while a "main is red" issue is open, so a merge that breaks main still holds the next release until it is fixed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.123 — 2026-11-14
 
 The errors in Desk's Crew workspace commands, step and resource writes and tidy command now open with what to do, then say what went wrong, and keep their meaning and any stable code. A refused `crew.js start` or `join` now ends with `Nothing was written.` instead of opening with it, so its first words are the fix. Replies that are not failures (plans, successes, statuses) keep their wording and are recorded as such in the surface check. The baseline of Desk's Ouro AX check drops by 105 findings.

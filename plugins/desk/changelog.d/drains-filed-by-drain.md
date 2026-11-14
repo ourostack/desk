@@ -1,1 +1,0 @@
-An issue the drain filed or already triaged (a label in its `drain:` namespace, or the status marker in its body, present when the poll first sees it) is recorded as seen on arrival instead of waking the drain; later changes by others still do. See [issue drains](docs/issue-drains.md).
