@@ -29,7 +29,7 @@ export function normalizeReadinessPolicy(value = {}, context = {}) {
         {
           path: context.path ?? "desk_runtime",
           code: "activation_policy_invalid",
-          message: "Set desk_runtime to an object: desk_runtime must be an object",
+          message: "Set desk_runtime to an object of readiness settings; it was not an object.",
         },
       ],
     })
@@ -52,7 +52,7 @@ export function normalizeReadinessPolicy(value = {}, context = {}) {
     diagnostics.push({
       path: `${context.path ?? "desk_runtime"}.authority_provider`,
       code: "activation_policy_invalid",
-      message: "Set authority_provider to null or non-empty text: Desk readiness policy authority_provider must be null or non-empty text.",
+      message: "Set authority_provider to null or to non-empty text.",
     })
   }
 
@@ -88,7 +88,7 @@ function validateEnum(value, allowed, path, field, diagnostics) {
     diagnostics.push({
       path,
       code: "activation_policy_invalid",
-      message: `Set the policy field to one of the listed values: Desk readiness policy ${field} must be one of: ${[...allowed].join(", ")}.`,
+      message: `Set ${field} to one of: ${[...allowed].join(", ")}.`,
     })
   }
 }
