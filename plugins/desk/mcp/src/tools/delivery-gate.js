@@ -238,12 +238,12 @@ export async function checkDelivery({ toolName, evidence, env = process.env, fet
   const repo = `${match[1]}/${match[2]}`
   const number = Number(match[3])
   const answer = await prDelivery({ repo, number, env, fetchFn, budgetMs, ghRunner, now })
-  if (answer.status === "not_found") throw new Error(`${toolName}: ${evidence.ref.trim()} does not exist on GitHub, so nothing can carry it. Supply the URL of the pull request that did the work.`)
+  if (answer.status === "not_found") throw new Error(`${toolName}: Supply the URL of the pull request that did the work: ${evidence.ref.trim()} does not exist on GitHub, so nothing can carry it. Supply the URL of the pull request that did the work.`)
   if (answer.status === "undelivered") {
     const need = answer.unmet.map((entry) => entry.need).join(" and ")
-    if (!answer.merged) throw new Error(`${toolName}: ${repo}#${number} is not delivered: the pull request is not merged. Merge it, and wait for the release that carries it, before closing the task.`)
+    if (!answer.merged) throw new Error(`${toolName}: Merge the pull request, and wait for the release that carries it, before closing the task: ${repo}#${number} is not delivered: the pull request is not merged. Merge it, and wait for the release that carries it, before closing the task.`)
     throw new Error(
-      `${toolName}: ${repo}#${number} is not delivered yet: ${repo} ships these changes through more than the merge, so the pull request must ${need}, and it does not. ` +
+      `${toolName}: Leave the task at \`validating\` and check the release run, then repeat this call: ${repo}#${number} is not delivered yet: ${repo} ships these changes through more than the merge, so the pull request must ${need}, and it does not. ` +
         `The release has not carried it yet. ` +
         "Leave the task at `validating`, check the release run (the \"Desk release needs attention\" issue lists a failed one) and repeat this call once that is true.",
     )

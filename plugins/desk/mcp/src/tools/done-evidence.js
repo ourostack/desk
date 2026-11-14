@@ -247,7 +247,7 @@ function checkCommit({ toolName, evidence, repos, deskRoot, spawnGit, homeDir, e
 export function assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit = spawnSync, homeDir = os.homedir(), existingRepos = [], created }) {
   if (repos.length === 0) return
   if (evidence.kind === "non_code" || evidence.kind === "ci_run") {
-    throw new Error(`${toolName}: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`)
+    throw new Error(`${toolName}: Use evidence that names a code repository: \`${evidence.kind}\` evidence cannot complete a task that names code repos. ${codeRepoUsage(toolName, repos)}`)
   }
   if (evidence.kind === "pr") {
     const identities = repoIdentities(repos, { spawnGit, homeDir, deskRoot })

@@ -34,11 +34,11 @@ export const focusedHint = ({ track, slug }) => `If you are the session's main a
 const sameTask = (a, b) => a.track === b.track && a.slug === b.slug
 
 function folderName(field, value) {
-  if (typeof value !== "string") throw new Error(`task_focus: \`${field}\` must be a string; ${ACCEPTED}`)
+  if (typeof value !== "string") throw new Error(`task_focus: Pass \`$${field}\` as a string: \`${field}\` must be a string; ${ACCEPTED}`)
   try {
     validateWriteSegment(value)
   } catch {
-    throw new Error(`task_focus: \`${field}\` is not a valid task folder name; ${ACCEPTED}`)
+    throw new Error(`task_focus: Pass \`$${field}\` as a task folder name: \`${field}\` is not a valid task folder name; ${ACCEPTED}`)
   }
   return value
 }
@@ -102,12 +102,12 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
     statusContext.focus?.set(null)
     return { status: "cleared" }
   }
-  if (track === undefined || slug === undefined) throw new Error(`task_focus: \`track\` and \`slug\` are both required; ${ACCEPTED}`)
+  if (track === undefined || slug === undefined) throw new Error(`task_focus: Pass \`track\` and \`slug\`: \`track\` and \`slug\` are both required; ${ACCEPTED}`)
   folderName("track", track)
   folderName("slug", slug)
 
   const found = await findCard({ deskRoot, person, track, slug })
-  if (found === null) throw new Error(`card not found: ${track}/${slug}`)
+  if (found === null) throw new Error(`Check the track and slug, then try again: card not found: ${track}/${slug}`)
   const card = await readMarkdown(found.file)
   statusContext.focus?.set({ track, slug })
   const result = {

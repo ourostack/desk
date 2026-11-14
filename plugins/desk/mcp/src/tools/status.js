@@ -67,7 +67,7 @@ function callsSettled(calls, ms) {
   if (calls === undefined || calls.size === 0) return Promise.resolve()
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(Object.assign(
-      new Error(`desk_status call did not settle within ${ms} ms of its status run ending`),
+      new Error(`Call desk_status again: desk_status call did not settle within ${ms} ms of its status run ending`),
       { code: "status_call_not_settled" },
     )), ms)
     Promise.allSettled(calls).then(() => {

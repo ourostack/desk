@@ -180,27 +180,27 @@ export async function friction_add({ deskRoot, input, person = null, search, env
   const { track, theme } = values
   const errorCode = values.error_code
   if (errorCode !== undefined && (typeof errorCode !== "string" || !/^[a-z][a-z0-9_]*$/u.test(errorCode))) {
-    throw new Error("friction_add: `error_code` must be the code a Desk failure line gave in its friction_add call, such as desk_push_blocked")
+    throw new Error("friction_add: Pass `error_code` as the code a Desk failure line gave: `error_code` must be the code a Desk failure line gave in its friction_add call, such as desk_push_blocked")
   }
   const reporting = errorCode !== undefined
   if (!reporting && (!values.body || typeof values.body !== "string")) {
-    throw new Error("friction_add: `body` is required (string)")
+    throw new Error("friction_add: Pass `body` as a string: `body` is required (string)")
   }
-  if (reporting && values.body !== undefined && typeof values.body !== "string") throw new Error("friction_add: `body` must be a string")
+  if (reporting && values.body !== undefined && typeof values.body !== "string") throw new Error("friction_add: Pass `body` as a string: `body` must be a string")
   const body = reporting ? [values.body?.trim(), failureEvidence({ code: errorCode, deskRoot, env })].filter(Boolean).join("\n\n") : values.body
   const about = values.about ?? (reporting ? "system" : "setup")
-  if (!ABOUT.has(about)) throw new Error("friction_add: `about` must be \"setup\" or \"system\"")
+  if (!ABOUT.has(about)) throw new Error("friction_add: Pass `about` as \"setup\" or \"system\": `about` must be \"setup\" or \"system\"")
   const fileNow = values.file_card === true
-  if (values.file_card !== undefined && values.file_card !== false && !fileNow) throw new Error("friction_add: `file_card` must be true or false")
-  if (fileNow && about !== "system") throw new Error("friction_add: `file_card` is only for system friction")
+  if (values.file_card !== undefined && values.file_card !== false && !fileNow) throw new Error("friction_add: Pass `file_card` as true or false: `file_card` must be true or false")
+  if (fileNow && about !== "system") throw new Error("friction_add: Drop `file_card`, or set `about` to \"system\": `file_card` is only for system friction")
   let card = null
   if (about === "system") {
     const title = values.title ?? (reporting ? `Desk error ${errorCode}` : undefined)
-    if (typeof title !== "string" || title.trim() === "" || /[\r\n]/u.test(title)) throw new Error("friction_add: `title` is required for system friction, on one line")
+    if (typeof title !== "string" || title.trim() === "" || /[\r\n]/u.test(title)) throw new Error("friction_add: Pass `title`: `title` is required for system friction, on one line")
     const plugin = values.plugin ?? "desk"
-    if (typeof plugin !== "string" || !PATTERNS.pluginName.test(plugin)) throw new Error("friction_add: `plugin` must be a plugin name")
+    if (typeof plugin !== "string" || !PATTERNS.pluginName.test(plugin)) throw new Error("friction_add: Pass `plugin` as a plugin name: `plugin` must be a plugin name")
     const frictionClass = values.friction_class ?? "other"
-    if (!FRICTION_CLASSES.includes(frictionClass)) throw new Error(`friction_add: \`friction_class\` must be one of ${FRICTION_CLASSES.join(", ")}`)
+    if (!FRICTION_CLASSES.includes(frictionClass)) throw new Error(`friction_add: Pass \`friction_class\` as one of the listed values: \`friction_class\` must be one of ${FRICTION_CLASSES.join(", ")}`)
     card = { title: title.trim(), plugin, frictionClass, signal: values.signal ?? null, evidenceJobs: values.evidence_jobs ?? [] }
   }
 

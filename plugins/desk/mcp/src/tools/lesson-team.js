@@ -26,11 +26,11 @@ const DATE = /\b\d{4}-\d{2}-\d{2}\b/u
 function repoRoot({ deskRoot, repo, spawnGit }) {
   if (repo === undefined || repo === null) {
     if (crewWorkspace(deskRoot).crew) return deskRoot
-    throw new Error("lesson_add: a team lesson needs `repo`, the path of your local clone of the team's repository (this desk is not a shared workspace)")
+    throw new Error("lesson_add: Pass `repo`, the path of your local clone of the team's repository: a team lesson needs `repo`, the path of your local clone of the team's repository (this desk is not a shared workspace)")
   }
   const dir = resolveLocalPath(oneLine(repo, "repo"), { deskRoot })
   const top = runGit(["rev-parse", "--show-toplevel"], { cwd: dir, spawnGit })
-  if (!top.ok) throw new Error(`lesson_add: \`repo\` is not a Git clone: ${dir}`)
+  if (!top.ok) throw new Error(`lesson_add: Pass \`repo\` as a Git clone: \`repo\` is not a Git clone: ${dir}`)
   return path.resolve(top.stdout)
 }
 
@@ -58,7 +58,7 @@ function authorOf(person, top, spawnGit) {
   if (typeof person === "string" && person.trim() !== "") return person.trim()
   const name = runGit(["config", "--get", "user.name"], { cwd: top, spawnGit })
   if (name.ok && name.stdout !== "") return name.stdout
-  throw new Error("lesson_add: a team lesson is attributed to its person, and this session has no person and the clone has no Git user name")
+  throw new Error("lesson_add: Set the clone's Git user name, or start a session that has a person: a team lesson is attributed to its person, and this session has no person and the clone has no Git user name")
 }
 
 // Claude Code reads CLAUDE.md, not AGENTS.md; it reads AGENTS.md only when CLAUDE.md imports it (`@AGENTS.md`) or is a
@@ -96,10 +96,10 @@ const authorOfLine = (line) => /\(([^,()]+), \d{4}-\d{2}-\d{2}; /u.exec(line)?.[
 export async function addTeamLesson({ deskRoot, person, topic, body, repo, source, spawnGit = spawnSync, gh = withAmbientToken(ghRunner(), process.env), chooseAccount = chooseAccountDefault, tmpRoot = os.tmpdir(), wait = pause }) {
   const top = repoRoot({ deskRoot, repo, spawnGit })
   const crew = path.resolve(top) === path.resolve(deskRoot) && crewWorkspace(deskRoot).crew
-  if (crew && (typeof person !== "string" || person === "")) throw new Error("lesson_add: a team lesson in a shared workspace is attributed to its person, and this session has no person")
+  if (crew && (typeof person !== "string" || person === "")) throw new Error("lesson_add: Call desk_status to see why this session has no person: a team lesson in a shared workspace is attributed to its person, and this session has no person")
   const cited = oneLine(source, "source")
   const origin = githubStore(top, spawnGit)
-  if (origin === null) throw new Error("lesson_add: a team lesson is written through a GitHub pull request, and this repository's origin is not on GitHub")
+  if (origin === null) throw new Error("lesson_add: Use a repository whose origin is on GitHub: a team lesson is written through a GitHub pull request, and this repository's origin is not on GitHub")
   const author = authorOf(person, top, spawnGit)
   const result = { scope: "team", repo: origin, path: "AGENTS.md", section: SECTION, in_effect: false }
   // Whether Claude Code loads the lesson, read from the checkout each build was made on.
@@ -150,7 +150,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
         tool: "lesson_add",
         arguments: { scope: "team", topic, body, source, repo: top },
       })
-    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.UNPUBLISHED)
+    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Fix what the parentheses name, then call it again: Not in effect: the team write stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.UNPUBLISHED)
   }
   if (outcome.status === "unchanged") {
     const who = loaders()
@@ -158,7 +158,7 @@ export async function addTeamLesson({ deskRoot, person, topic, body, repo, sourc
   }
   if (outcome.status === "pr_open") {
     const why = outcome.reason
-    return withNext({ ...result, status: "pr_open", reason: why, route_around: outcome.route_around, message: `Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }, UNFINISHED.PULL_REQUEST)
+    return withNext({ ...result, status: "pr_open", reason: why, route_around: outcome.route_around, message: `Wait for the pull request to merge, or merge it yourself: Not in effect: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${why === "QUEUED" ? "it is queued to merge" : why}). It takes effect when it merges.` }, UNFINISHED.PULL_REQUEST)
   }
   result.commit = outcome.commit
   const who = loaders()

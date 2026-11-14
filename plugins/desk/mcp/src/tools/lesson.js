@@ -62,7 +62,7 @@ function ownerOf(owner, { env, scan }) {
   if (owner === "brief" || owner === "foundation") return { owner, plugin: "desk", frictionClass: "skill" }
   const tool = /^tool:(.+)$/u.exec(owner)
   if (tool) {
-    if (!TOOL_NAMES.includes(tool[1])) throw new Error(`lesson_add: Desk has no tool named ${tool[1]}`)
+    if (!TOOL_NAMES.includes(tool[1])) throw new Error(`lesson_add: Name a Desk tool: Desk has no tool named ${tool[1]}`)
     return { owner, plugin: "desk", frictionClass: "mcp_tool" }
   }
   const skill = /^skill:([^:]+):(.+)$/u.exec(owner)
@@ -70,9 +70,9 @@ function ownerOf(owner, { env, scan }) {
   const plugins = installedPlugins(env, scan)
   const plugin = plugins.get(skill[1])
   if (plugin === undefined) {
-    throw new Error(`lesson_add: no plugin named ${skill[1]} is installed for any host on this machine (installed: ${[...plugins.keys()].sort().join(", ")}). If ${skill[1]} is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues.`)
+    throw new Error(`lesson_add: Install the plugin for any host and record the lesson again: no plugin named ${skill[1]} is installed for any host on this machine (installed: ${[...plugins.keys()].sort().join(", ")}). If ${skill[1]} is a real plugin, install it here for any host and record the lesson again, or file the lesson in that plugin's own repository, through its pull requests or issues.`)
   }
-  if (!existsSync(path.join(plugin.dir, "skills", skill[2], "SKILL.md"))) throw new Error(`lesson_add: the ${skill[1]} plugin has no skill named ${skill[2]}`)
+  if (!existsSync(path.join(plugin.dir, "skills", skill[2], "SKILL.md"))) throw new Error(`lesson_add: Name a skill the plugin has: the ${skill[1]} plugin has no skill named ${skill[2]}`)
   return { owner, plugin: skill[1], frictionClass: "skill" }
 }
 
@@ -91,7 +91,7 @@ function notLoaded(who, prefix) {
 async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, schedulePush, search, personOf, lockWaitMs }) {
   const alias = typeof person === "string" ? person.trim() : ""
   if (alias === "" && crewWorkspace(deskRoot).crew) {
-    throw new Error("lesson_add: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; call desk_status to see why there is no person, or use scope team")
+    throw new Error("lesson_add: Call desk_status to see why there is no person, or use scope team: this is a shared workspace and this session has no person, so a personal lesson would land in the team's AGENTS.md; call desk_status to see why there is no person, or use scope team")
   }
   const file = await resolveWriteTarget({ deskRoot, person, segments: ["AGENTS.md"] })
   const shelfFile = await resolveWriteTarget({ deskRoot, person, segments: [SHELF_FILE] })
@@ -123,7 +123,7 @@ async function addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, 
     const changed = changes.map(([each]) => deskRelativePath(deskRoot, each))
     return { ...outcome, git, committed: stage && commit === undefined, commit, changed, held: changed, heldNames: names, line, message }
   })
-  if (written.result === "lock_busy") throw new Error(`lesson_add: another session is writing ${where}; nothing was written, try again`)
+  if (written.result === "lock_busy") throw new Error(`lesson_add: Try again after the other session finishes: another session is writing ${where}; nothing was written, try again`)
   const changed = written.changed ?? []
   if (written.committed && changed.length > 0) schedulePush({ root: deskRoot })
   for (const each of changed) search?.noteChange(each)
@@ -243,7 +243,7 @@ async function addDesk({ deskRoot, person, env, now, topic, body, owner, addFric
  */
 export async function lesson_add({ deskRoot, input, person = null, search, env = process.env, now, addFriction = friction_add, spawnGit = spawnSync, schedulePush = schedulePushDefault, personOf = improvementPerson, scan = factoryPluginScan, lockWaitMs, team = addTeamLesson }) {
   const values = input ?? {}
-  if (!SCOPES.has(values.scope)) throw new Error("lesson_add: `scope` is required: personal (this person's preference), desk (how Desk's tools and installed plugins' skills behave) or team (every teammate's agents in a repository the team shares)")
+  if (!SCOPES.has(values.scope)) throw new Error("lesson_add: Pass `scope`: `scope` is required: personal (this person's preference), desk (how Desk's tools and installed plugins' skills behave) or team (every teammate's agents in a repository the team shares)")
   const topic = topicOf(values.topic)
   const body = oneLine(values.body, "body")
   if (values.scope === "personal") return addPersonal({ deskRoot, person, env, now, topic, body, spawnGit, schedulePush, search, personOf, lockWaitMs })

@@ -43,7 +43,7 @@ function pathsInput(value) {
     try {
       parsed = JSON.parse(value)
     } catch {
-      throw new Error("desk_save: `paths` must be a non-empty array of path strings (got a string that is not valid JSON)")
+      throw new Error("desk_save: Pass `paths` as a non-empty array of path strings: `paths` must be a non-empty array of path strings (got a string that is not valid JSON)")
     }
   }
   if (
@@ -51,7 +51,7 @@ function pathsInput(value) {
     parsed.length === 0 ||
     !parsed.every((p) => typeof p === "string" && p.trim() !== "")
   ) {
-    throw new Error("desk_save: `paths` must be a non-empty array of path strings")
+    throw new Error("desk_save: Pass `paths` as a non-empty array of path strings: `paths` must be a non-empty array of path strings")
   }
   return parsed
 }
@@ -109,7 +109,7 @@ async function checkFiles(deskRoot, person, effectiveRoot, files) {
   const seen = new Set()
   const checked = []
   for (const { path: relativePath, content } of files) {
-    const refuse = (why) => new Error(`desk_save: \`files\` cannot write ${relativePath}: ${why}`)
+    const refuse = (why) => new Error(`desk_save: Fix or drop that entry in \`files\`: \`files\` cannot write ${relativePath}: ${why}`)
     if (relativePath.includes("\0")) throw refuse("the path holds a NUL character")
     if (path.isAbsolute(relativePath)) throw refuse("give the path relative to the desk root")
     if (PATHSPEC_SPECIAL.test(relativePath)) throw refuse("the path holds *, ?, [ or a backslash, or starts with :, which Git would read as a pattern")
@@ -209,18 +209,18 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
   const files = values.files === undefined ? [] : filesInput(values.files)
   const { message } = values
   if (!message || typeof message !== "string") {
-    throw new Error("desk_save: `message` is required (string)")
+    throw new Error("desk_save: Pass `message` as a string: `message` is required (string)")
   }
 
   const tidy = values.tidy === true
   if (tidy && files.length > 0) {
-    throw new Error("desk_save: `files` cannot be combined with tidy: true; a tidy commits moves already staged, so pass only `paths`")
+    throw new Error("desk_save: Pass only `paths` with tidy: true: `files` cannot be combined with tidy: true; a tidy commits moves already staged, so pass only `paths`")
   }
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
   for (const relativePath of paths) {
     const absolute = path.resolve(deskRoot, relativePath)
     if (!isPathContained(effectiveRoot, absolute)) {
-      throw new Error(`desk_save: \`paths\` includes a path outside the resolved write prefix: ${relativePath}`)
+      throw new Error(`desk_save: Pass only paths inside the write prefix: \`paths\` includes a path outside the resolved write prefix: ${relativePath}`)
     }
     // Desk's commit path is the one the desk's pre-commit hook trusts, so a card must not be able to ride through it.
     if (!tidy && isLiveCardPath(path.relative(deskRoot, absolute).split(path.sep).join("/"))) {
@@ -244,7 +244,7 @@ async function saveDesk({ deskRoot, input, person = null, spawnGit = spawnSync, 
         let content = Buffer.alloc(0)
         if (entry !== undefined) {
           if (!isPathContained(realpathSync.native(effectiveRoot), realpathSync.native(path.dirname(absolute)))) {
-            throw new Error("desk_save: content_home_unresolved: a path leads outside the write prefix; nothing was written or committed")
+            throw new Error("desk_save: Pass a path inside the write prefix: content_home_unresolved: a path leads outside the write prefix; nothing was written or committed")
           }
           content = entry.isSymbolicLink() ? Buffer.from(readlinkSync(absolute), "utf8") : readFileSync(absolute)
         }
@@ -328,7 +328,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   for (const [i, rel] of rels.entries()) {
     const absolute = path.resolve(deskRoot, rel)
     if (TIDY_DIRECTORY_OR_GLOB.test(rel) || (existsSync(absolute) && statSync(absolute).isDirectory())) {
-      throw new Error(`desk_save: replace ${paths[i]} with the file paths of the tidy (the old and new path of each moved task card, and each file you fixed); tidy: true takes files, never a folder or a pattern`)
+      throw new Error(`desk_save: Use the file paths of the tidy instead of a folder or pattern: replace ${paths[i]} with the file paths of the tidy (the old and new path of each moved task card, and each file you fixed); tidy: true takes files, never a folder or a pattern`)
     }
   }
   // A path Git holds in conflict (an unfinished merge, cherry-pick or revert, the tidy's undo included) is never staged: staging it
@@ -345,7 +345,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   const cards = rels.filter(isCard)
   const others = rels.filter((p) => !isCard(p))
   if (cards.length > 0 && hasUnstagedWork(deskRoot, cards, spawnGit)) {
-    throw new Error("desk_save: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves")
+    throw new Error("desk_save: Run task_update for a card edit, or restore the card and pass only moved cards: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves")
   }
   // Only the paths that hold unstaged work are staged. The old side of a move `git mv` already staged is neither on disk nor in the index, and `git add` refuses the whole call for one such path.
   const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
@@ -373,7 +373,7 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   const entries = indexEntries(deskRoot, rels, spawnGit)
   if (entries === null) return { status: "nothing_to_commit", commit: notCommitted(deskRoot, rels, tidyTrailer(message), "git could not read the index") }
   if (entries.filter((entry) => isCard(entry.path)).some((entry) => entry.mode !== "100644" && entry.mode !== "100755")) {
-    throw new Error("desk_save: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
+    throw new Error("desk_save: Run git restore --staged and git restore on the card, then pass only the moved cards: a task card in `paths` is not a regular file (a link, for example); restore it with git restore --staged and git restore, then pass only the moved cards")
   }
   const committed = commitIndexPaths(deskRoot, rels, entries, tidyTrailer(message), spawnGit)
   if (!committed.ok) return { status: "nothing_to_commit", commit: commitFailure({ root: deskRoot, paths: rels, message: tidyTrailer(message), committed }) }

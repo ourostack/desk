@@ -1306,20 +1306,27 @@ test("a readback that caught another process mid-rewrite is protected and verifi
   try {
     await mkProvider(base, ECHO_PROVIDER)
     const env = { SystemRoot: base }
-    for (const message of ["Check the access rules, because inherited ones still apply: C:\\state\\desk", "Check the access rules, because exactly one was expected and 2 were found: C:\\state\\desk"]) {
-      const runner = sequencedRunner([{ status: "error", message }, OK_DIR])
+    // The retry follows the refusal's code, not its words: any wording retries.
+    for (const code of ["acl_inherited_rules", "acl_rule_count"]) {
+      const message = `reworded ${code} refusal: C:\\state\\desk`
+      const runner = sequencedRunner([{ status: "error", message, code }, OK_DIR])
       const result = await protectWindowsPaths([DIR_ENTRY], { env, runner })
       assert.equal(result[0].path, DIR_ENTRY.path)
       assert.equal(runner.calls.length, 2, "one retry, with the same request")
       assert.equal(runner.calls[0].payload, runner.calls[1].payload)
+      // The program raises that code for the refusal it describes.
+      const program = Buffer.from(runner.calls[0].args.at(-1), "base64").toString("utf16le")
+      assert.match(program, new RegExp(`Fail '${code}' `, "u"))
+      assert.match(program, /code = \$_\.Exception\.Data\['code'\]/u)
 
-      const stuck = sequencedRunner([{ status: "error", message }])
-      await assert.rejects(() => protectWindowsPaths([DIR_ENTRY], { env, runner: stuck }), /inherited ones still apply|exactly one was expected/u)
+      const stuck = sequencedRunner([{ status: "error", message, code }])
+      await assert.rejects(() => protectWindowsPaths([DIR_ENTRY], { env, runner: stuck }), (error) => error.code === code && error.message.includes(message))
       assert.equal(stuck.calls.length, 2, "never a third pass")
     }
     // Every other refusal, and an unverified answer, is not retried.
-    for (const message of ["refusing a path owned by another user (S-1-5-32-544): x", "refusing a reparse point: x", "access rule grants another identity (S-1-1-0): x"]) {
-      const runner = sequencedRunner([{ status: "error", message }, OK_DIR])
+    // Words that used to mean a retry do nothing without the code.
+    for (const [message, code] of [["a path owned by another user (S-1-5-32-544): x", "acl_foreign_owner"], ["a reparse point: x", "acl_reparse_point"], ["access rule grants another identity (S-1-1-0): x", "acl_rule_identity"], ["Check the access rules, because inherited ones still apply: x", undefined]]) {
+      const runner = sequencedRunner([{ status: "error", message, code }, OK_DIR])
       await assert.rejects(() => protectWindowsPaths([DIR_ENTRY], { env, runner }), (error) => error.message.includes(message))
       assert.equal(runner.calls.length, 1, message)
     }
@@ -1445,7 +1452,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", as
     for (let i = 0; i < 300 && fs.readdirSync(shared).filter((name) => name.startsWith("inflight-")).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20))
     const overlapped = fs.readdirSync(shared).filter((name) => name.startsWith("inflight-")).length >= 2
     fs.writeFileSync(shared + "/overlapped-" + process.pid, String(overlapped))
-    answer = overlapped ? { status: "error", message: "Check the access rules, because inherited ones still apply: " + request.paths[0].path } : null
+    answer = overlapped ? { status: "error", message: "Check the access rules, because inherited ones still apply: " + request.paths[0].path, code: "acl_inherited_rules" } : null
   }
   fs.appendFileSync(shared + "/requests-" + process.pid, "x")
   answer ??= { status: "ok", results: request.paths.map((entry) => ({ path: entry.path, kind: entry.kind, owner_sid: "S-1-5-21-" + process.pid, owner_reassigned: false, protected: true, rule_count: 1 })) }
