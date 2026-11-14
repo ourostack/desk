@@ -103,7 +103,8 @@ test("a bad entry is an error naming it, never dropped", () => {
 })
 
 test("schedulePaths keeps its files beside the drains', under the state folder", () => {
-  assert.equal(schedulePaths({ env: { XDG_STATE_HOME: "/state" } }).config, "/state/ouroboros-skills/desk/drains/schedules.json")
+  const state = path.resolve("state")
+  assert.equal(schedulePaths({ env: { XDG_STATE_HOME: state } }).config, path.join(state, "ouroboros-skills", "desk", "drains", "schedules.json"))
 })
 
 function cli(argv, extra = {}) {
