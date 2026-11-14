@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.158 — 2026-11-14
+
+### The vendored Ouro AX kit follows Ouro UI again
+
+Desk's copy of Ouro UI's AX kit (`mcp/src/lib/ouro-ui/`) moves to the Ouro UI commit the upstream check names as current. When a command name is mistyped, the suggestion now prefers the nearest name within two edits and falls back to a unique prefix, so a typo that is also the start of another command suggests the command it was a typo of.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.157 — 2026-11-14
 
 ### Merge-when-green relays judge the newest attempt of each check
