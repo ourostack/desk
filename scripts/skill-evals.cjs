@@ -588,7 +588,7 @@ function requireEvidence(repoRoot = process.cwd()) {
 }
 
 // Stamps the current fingerprints onto a harness result and writes the receipt only if it passes verify.
-function recordResult(suiteFile, readInput, repoRoot = process.cwd(), options = {}) {
+function recordResult(suiteFile, readInput, repoRoot, options = {}) {
   const root = path.resolve(repoRoot);
   const corpus = validateRepo(root);
   const requested = fs.realpathSync(path.resolve(root, suiteFile));

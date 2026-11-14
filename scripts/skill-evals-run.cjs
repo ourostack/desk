@@ -23,7 +23,7 @@ function parseOptions(args, fail) {
   const seen = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (seen.has(arg)) fail(`${arg} was given twice\n${usage}`);
+    if (arg.startsWith("--") && seen.has(arg)) fail(`${arg} was given twice\n${usage}`);
     seen.add(arg);
     if (arg === "--changed") options.changed = true;
     else if (arg === "--self-judge") options.selfJudge = true;
@@ -38,10 +38,10 @@ function parseOptions(args, fail) {
     else fail(`unexpected argument ${arg}\n${usage}`);
   }
   if (options.changed === (options.target !== null)) fail(`give either one suite or --changed\n${usage}`);
-  for (const field of ["concurrency", "timeoutSeconds"]) {
+  for (const [field, flag] of [["concurrency", "--concurrency"], ["timeoutSeconds", "--timeout-seconds"]]) {
     if (options[field] === null) continue;
     const number = Number(options[field]);
-    if (!Number.isInteger(number) || number < 1) fail(`--${field === "timeoutSeconds" ? "timeout-seconds" : field} must be a positive whole number`);
+    if (!Number.isInteger(number) || number < 1) fail(`${flag} must be a positive whole number`);
     options[field] = number;
   }
   if (options.subjectModel === options.judgeModel && !options.selfJudge) {
@@ -147,7 +147,7 @@ function parseVerdict(text, testCase) {
   const expected = testCase.checks.map((check) => check.id);
   const returned = Array.isArray(verdict.checks) ? verdict.checks : [];
   const ids = returned.map((check) => check?.id);
-  if (ids.length !== expected.length || expected.some((id) => !ids.includes(id)) || new Set(ids).size !== ids.length) {
+  if (ids.length !== expected.length || expected.some((id) => !ids.includes(id))) {
     throw new Error(`the judge must return exactly these checks: ${expected.join(", ")}`);
   }
   for (const check of returned) {
@@ -159,12 +159,14 @@ function parseVerdict(text, testCase) {
   });
 }
 
+function describeFailure(run) {
+  return `${run.timedOut ? "timed out" : `exited ${run.code}`}: ${run.stderr.trim().slice(-400)}`;
+}
+
 async function runCase(testCase, context) {
   const { options, command, root, pluginDirs } = context;
   const subjectRun = await runProcess(command, subjectArguments(testCase, options, pluginDirs), { cwd: root, timeoutSeconds: options.timeoutSeconds ?? subjectTimeoutSeconds });
-  if (subjectRun.timedOut || subjectRun.code !== 0) {
-    throw new Error(`case ${testCase.id}: the subject process ${subjectRun.timedOut ? "timed out" : `exited ${subjectRun.code}`}: ${subjectRun.stderr.trim().slice(-400)}`);
-  }
+  if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
   const judgeArgs = ["-p", judgePrompt(testCase, subject), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
@@ -172,7 +174,7 @@ async function runCase(testCase, context) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const judgeRun = await runProcess(command, judgeArgs, { cwd: root, timeoutSeconds: options.timeoutSeconds ?? judgeTimeoutSeconds });
     if (judgeRun.timedOut || judgeRun.code !== 0) {
-      lastError = new Error(`the judge process ${judgeRun.timedOut ? "timed out" : `exited ${judgeRun.code}`}: ${judgeRun.stderr.trim().slice(-400)}`);
+      lastError = new Error(`the judge process ${describeFailure(judgeRun)}`);
       continue;
     }
     try {
@@ -216,16 +218,11 @@ function changedEntries(entries, root, base, contractFingerprint, fail) {
   const refs = base ? [base] : ["origin/main", "main"];
   const ref = refs.find((candidate) => git(root, ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`]) !== null);
   if (!ref) fail(`cannot find ${refs.join(" or ")} to compare against; fetch main or pass --base <ref>`);
-  const mergeBase = git(root, ["merge-base", "HEAD", ref])?.trim() || ref;
+  const mergeBase = git(root, ["merge-base", "HEAD", ref]);
+  if (mergeBase === null) fail(`HEAD and ${ref} share no history to compare against`);
   return entries.filter((entry) => {
-    const relative = path.relative(root, entry.file).replaceAll(path.sep, "/");
-    const before = git(root, ["show", `${mergeBase}:${relative}`]);
-    if (before === null) return true;
-    try {
-      return contractFingerprint(JSON.parse(before)) !== contractFingerprint(entry.suite);
-    } catch {
-      return true;
-    }
+    const before = git(root, ["show", `${mergeBase.trim()}:${path.relative(root, entry.file).replaceAll(path.sep, "/")}`]);
+    return before === null || contractFingerprint(JSON.parse(before)) !== contractFingerprint(entry.suite);
   });
 }
 
@@ -249,7 +246,7 @@ async function runSuite(entry, context, api) {
   const passed = cases.reduce((sum, testCase) => sum + testCase.checks.filter((check) => check.passed).length, 0);
   const failures = cases.flatMap((testCase) => testCase.checks.filter((check) => !check.passed).map((check) => ({ case: testCase.id, ...check })));
   const known = suite.knownFailure;
-  const unexpected = failures.filter((failure) => !known || failure.case !== known.case);
+  const unexpected = failures.filter((failure) => failure.case !== known?.case);
   const summary = `${suite.id}: ${passed}/${total} check(s) passed across ${cases.length} case(s)`;
   if (failures.length > 0) {
     const detail = failures.map((failure) => `  FAILED ${failure.case}.${failure.id}: ${failure.evidence}`).join("\n");
