@@ -237,20 +237,6 @@
     "tool.description-budget:friction_add": 1,
     "tool.description-budget:lesson_add": 1,
     "tool.description-budget:note_leave": 1,
-    "tool.description-budget:task_move": 1,
-    "tool.says-when:browser_context": 1,
-    "tool.says-when:desk_doctor": 1,
-    "tool.says-when:desk_recall": 1,
-    "tool.says-when:desk_reindex": 1,
-    "tool.says-when:desk_skill": 1,
-    "tool.says-when:desk_timeline": 1,
-    "tool.says-when:friction_add": 1,
-    "tool.says-when:improvement_next": 1,
-    "tool.says-when:improvement_update": 1,
-    "tool.says-when:note_ack": 1,
-    "tool.says-when:task_archive": 1,
-    "tool.says-when:task_create": 1,
-    "tool.says-when:task_move": 1,
-    "tool.says-when:track_rename": 1
+    "tool.description-budget:task_move": 1
   }
 }
