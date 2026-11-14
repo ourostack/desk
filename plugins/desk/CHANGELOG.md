@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.152 — 2026-11-14
+
+Seven replies that agents kept getting right in the reasoning and wrong in the message now have one short list at the top of [`interaction-style`](skills/interaction-style/SKILL.md): stepping away, a requirement change, a grant that overrides a skill's stop, a native consent prompt that authority already covers, a step that waits on something only the human can do, why a question form is avoided, and an edit or purchase the findings point at. Each says what the last message must carry, because text between tool calls can fold out of sight.
+
+[`preflight-actions`](skills/preflight-actions/SKILL.md) now loads when an investigation's findings point at an edit or purchase, and its research template asks for the change, its price from the source and the question itself.
+
+[`using-desk`](skills/using-desk/SKILL.md) now opens a status with how the work feels today, says when a measurement that a date waits on will be done, renews an expired token itself before any password or MFA screen reaches the human, and asks for counts-only telemetry shipped with the change.
+
+In the skill evals, four cases leave the `knownFailure` lists after repeated passing runs: `tool-state-not-in-new-dot-folder`, `leaving-with-nothing-needed`, `recorded-authority-outranks-skill-stop` and `status-before-publish`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.151 — 2026-11-14
 
 A coordinator's periodic prompt can now come from an always-on runtime instead of an app session automation. The app queues every run it misses while a session is busy and replays them back to back, one full model turn each. `drains.js schedule poll` prints a prompt only when its interval has passed and counts the next run from the delivery that landed, so three missed intervals send one prompt; a prompt the runner cannot deliver stays one wake, not a pile. `schedule status` shows each schedule's last sent time and next run. To move a watchdog over, add its session, prompt and `everyMinutes` to `schedules.json`. See [schedules](docs/schedules.md).
