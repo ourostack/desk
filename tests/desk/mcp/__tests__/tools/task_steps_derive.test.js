@@ -374,7 +374,7 @@ test("a step the call adds and the refresh derives past pending is not called re
 
 test("a step with no repo cannot take a GitHub PR as evidence, and the refusal names the way back", async () => {
   const { root, file } = await newCard(`| a | — | — | pending | — |\n| s | — | — | in progress | — |`)
-  await assert.rejects(update(root, { step: { id: "a", evidence: url(1) } }), /step "a" has no repo, so a GitHub PR .* cannot be its evidence; to give step "a" a PR as evidence, set it to pending \(with `expect` when it is settled\), then give `repo` and `evidence`.*no step was changed/u)
+  await assert.rejects(update(root, { step: { id: "a", evidence: url(1) } }), /Set step "a" to pending \(with `expect` when it is settled\), then give `repo` \(one of .*\) and `evidence`: step "a" has no repo, so a GitHub PR .* cannot be its evidence.*no step was changed/u)
   await assert.rejects(update(root, { step: { id: "new", depends_on: [], repo: "—", evidence: url(1) } }), /has no repo/u)
   assert.deepEqual(await rows(file), { a: "pending", s: "in progress" })
   const ok = await update(root, { step: { id: "a", repo: "widgets", evidence: url(1) } }, github({ 1: {} }))
@@ -405,7 +405,7 @@ test("a card with no repos accepts a PR on a step with no repo", async () => {
 
 test("a PR must be in the step's repo: a mismatch is refused, a match is accepted, and a repo Desk cannot match accepts any PR", async () => {
   const { root } = await newCard(`| z | — | o/widgets | pending | — |`, { repos: [{ name: "o/widgets" }, { name: "label" }] })
-  await assert.rejects(update(root, { step: { id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" } }), /step "a" is in repo "o\/widgets", but its PR https:\/\/github.com\/o\/gadgets\/pull\/1 is in o\/gadgets; give the PR in o\/widgets, or if the repo is wrong, to give step "a" a PR as evidence, set it to pending/u)
+  await assert.rejects(update(root, { step: { id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" } }), /Give the PR in o\/widgets, or if the repo is wrong, set step "a" to pending.*: step "a" is in repo "o\/widgets", but its PR https:\/\/github.com\/o\/gadgets\/pull\/1 is in o\/gadgets/u)
   await update(root, { step: { id: "b", depends_on: [], repo: "o/widgets", evidence: url(1) } }, github({ 1: {} }))
   const loose = await update(root, { step: { id: "c", depends_on: [], repo: "label", evidence: "https://github.com/o/gadgets/pull/1" } })
   assert.equal(loose.step.repo, "label")
@@ -413,5 +413,5 @@ test("a PR must be in the step's repo: a mismatch is refused, a match is accepte
 
 test("task_create refuses a step whose PR is in another repo", async () => {
   const root = await mkTempDeskRoot()
-  await assert.rejects(task_create({ deskRoot: root, input: { track: "t", slug: "made", title: "T", repos: [{ name: "o/widgets" }], steps: [{ id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" }] } }), /task_create: step "a" is in repo "o\/widgets"/u)
+  await assert.rejects(task_create({ deskRoot: root, input: { track: "t", slug: "made", title: "T", repos: [{ name: "o/widgets" }], steps: [{ id: "a", depends_on: [], repo: "o/widgets", evidence: "https://github.com/o/gadgets/pull/1" }] } }), /task_create: Give the PR in o\/widgets.*step "a" is in repo "o\/widgets"/u)
 })

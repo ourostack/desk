@@ -1411,14 +1411,14 @@ test("an agent's shell resolves the desk from its working folder, so a hold it w
 })
 
 test("--defer needs a reason and --refresh-identity needs a root", () => {
-  assert.deepEqual(cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: --defer needs a one-line reason\n" })
-  assert.deepEqual(cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: --refresh-identity needs --root\n" })
+  assert.deepEqual(cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: Pass a one-line reason after --defer\n" })
+  assert.deepEqual(cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: Pass --root with --refresh-identity\n" })
 })
 
 test("an unknown argument is refused with exit code 2", () => {
   const result = cli(["--tidy-everything"])
   assert.equal(result.code, 2)
-  assert.equal(result.stderr, 'tidy-status: unknown argument "--tidy-everything"\n')
+  assert.equal(result.stderr, 'tidy-status: Remove the unknown argument "--tidy-everything"; it takes --detect, --report, --write-record, --defer <reason>, --refresh-identity, --root, --person and --claim\n')
 })
 
 test("scripts/tidy-status.js runs the command line", () => {

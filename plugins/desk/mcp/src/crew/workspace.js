@@ -532,7 +532,7 @@ const fetchBase = (git, base) => git.must(["fetch", "--quiet", git.remote, `+ref
 // Checks the clone can take a write, signs in (`connect`), and brings the clone up to date with origin. Returns how
 // the change can land.
 async function prepareCheckout(git, connect) {
-  if (git(["status", "--porcelain"]).stdout !== "") return { refused: "has uncommitted changes; commit or stash them first, then run this again" }
+  if (git(["status", "--porcelain"]).stdout !== "") return { refused: "Commit or stash this clone's uncommitted changes, then run this again: this clone has uncommitted changes" }
   const url = git(["config", "--get", "remote.origin.url"])
   const branch = currentBranch(git)
   if (!url.ok) return { mode: "local", branch }
@@ -541,11 +541,11 @@ async function prepareCheckout(git, connect) {
   // A repository with no commits yet has no branch for a pull request to merge into.
   if (empty) return { mode: "first", branch: named, hub }
   const base = named
-  if (branch !== base) return { refused: `is on ${branch ?? "a detached HEAD"}, not the default branch ${base}; switch to ${base} first` }
+  if (branch !== base) return { refused: `Switch this clone to ${base} first: it is on ${branch ?? "a detached HEAD"}, not the default branch ${base}` }
   fetchBase(git, base)
   // A clone with no commit (a first push GitHub took although its answer was lost) simply takes origin's branch.
   const born = git(["rev-parse", "--verify", "--quiet", "HEAD"]).ok
-  if (born && !git(["merge-base", "--is-ancestor", "HEAD", `origin/${base}`]).ok) return { refused: `has commits that are not on origin/${base}; push or drop them first` }
+  if (born && !git(["merge-base", "--is-ancestor", "HEAD", `origin/${base}`]).ok) return { refused: `Push or drop this clone's commits first: it has commits that are not on origin/${base}` }
   git.must(["merge", "--quiet", "--ff-only", `origin/${base}`], "fetch")
   return { mode: "remote", base, hub }
 }
@@ -790,16 +790,16 @@ async function landByPullRequest({ git, base, origin, write, message, body, pref
 function failedResult(result, error, extra = "") {
   if (!(error instanceof Failed)) throw error
   const open = result.pr ? ` The pull request ${result.pr} is open.` : ""
-  return { ...result, state: "failed", stage: error.stage, reason: error.message, message: `Not in effect: the shared write stopped at ${error.stage} (${error.message}).${open}${extra}` }
+  return { ...result, state: "failed", stage: error.stage, reason: error.message, message: `Fix what the parentheses name, then run the same command again. Not in effect: the shared write stopped at ${error.stage} (${error.message}).${open}${extra}` }
 }
 
 // GitHub reports the pull request merged, yet the default branch, read back, does not hold `missing` (`what`, in plain
 // words); `next` is the person's next step.
-const notConfirmed = (result, base, missing, what, next) => ({ ...result, state: "failed", stage: "verify", reason: `${base} does not hold ${missing.join(", ")}`, message: `Not confirmed: GitHub says the pull request ${result.pr} merged, but the team's ${base} branch does not have ${what}. ${next}` })
+const notConfirmed = (result, base, missing, what, next) => ({ ...result, state: "failed", stage: "verify", reason: `${base} does not hold ${missing.join(", ")}`, message: `Check what the team's ${base} branch holds, then run the same command again. Not confirmed: GitHub says the pull request ${result.pr} merged, but that branch does not have ${what}. ${next}` })
 
 // GitHub merged the pull request, and this clone could not fetch the default branch to read it back; Git's own words
 // go in `reason`, not in the message a person reads.
-const unconfirmedResult = (result, landed, state, done, next) => ({ ...result, state, confirmed: false, commit: landed.commit, reason: landed.unfetched, message: `${done}: GitHub merged the pull request ${result.pr}, so the change is in effect. This computer could not download it afterwards to double-check, probably a brief network problem. Next: once the network is back, update this copy of the workspace and check its status. ${next}` })
+const unconfirmedResult = (result, landed, state, done, next) => ({ ...result, state, confirmed: false, commit: landed.commit, reason: landed.unfetched, message: `Update this copy of the workspace and check its status once the network is back. ${done}: GitHub merged the pull request ${result.pr}, so the change is in effect. This computer could not download it afterwards to double-check, probably a brief network problem. ${next}` })
 
 // A pull request left open, with GitHub's reason in plain words and the next step.
 function openResult(result, landed, base, lead) {
@@ -809,7 +809,7 @@ function openResult(result, landed, base, lead) {
   }
   const why = reasons[landed.open] ?? `GitHub reports ${landed.open}`
   const said = landed.refusal ? ` GitHub said: ${landed.refusal.replace(/\.$/u, "")}.` : ""
-  return { ...result, state: "pr_open", reason: landed.open, message: `${lead}the pull request ${result.pr} is open on branch ${result.branch} and has not merged: ${why}.${said} Running the same command again reuses this pull request and tries to merge it again; it never opens a second one.` }
+  return { ...result, state: "pr_open", reason: landed.open, message: `Run the same command again to retry the merge, or merge the pull request ${result.pr} yourself. ${lead}the pull request ${result.pr} is open on branch ${result.branch} and has not merged: ${why}.${said} Running the same command again reuses this pull request and tries to merge it again; it never opens a second one.` }
 }
 
 // ── start ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -838,7 +838,7 @@ async function finishStart({ action, top, git, apply, connect, result, origin })
       // remote-tracking branch, so a rerun asks again.
       git.must(["fetch", "--quiet", git.remote, `refs/heads/${named}`], "fetch", "could not fetch from origin: ", { network: true })
       if (git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"]).ok) return already
-      return { ...result, state: "refused", changes: [], message: `Nothing was pushed: this clone holds a Crew workspace that is not on GitHub, and ${origin}'s ${named} already has commits this clone does not share (GitHub's "Add a README" option makes one). Create the GitHub repository empty and run start again, or clone it and run start in that clone.` }
+      return { ...result, state: "refused", changes: [], message: `Create the GitHub repository empty and run start again, or clone it and run start in that clone. Nothing was pushed: this clone holds a Crew workspace that is not on GitHub, and ${origin}'s ${named} already has commits this clone does not share (GitHub's "Add a README" option makes one).` }
     }
     if (!apply) return { ...result, state: "plan", changes: [], message: `Plan only: nothing was written. This clone already holds a Crew workspace that is not on GitHub yet: its origin has no commits. Run again with --apply to push it to ${named}.` }
     git.must(["push", "--quiet", git.remote, `HEAD:refs/heads/${named}`], "push", "the push was refused: ", { network: true })
@@ -858,7 +858,7 @@ async function finishStart({ action, top, git, apply, connect, result, origin })
  */
 export async function startWorkspace({ repo, apply = false, tooling, founder, team, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
   const action = "start"
-  const refuse = (message) => ({ action, state: "refused", repo, message: `Nothing was written: ${message}.` })
+  const refuse = (message) => ({ action, state: "refused", repo, message: `${message}. Nothing was written.` })
   const top = toplevel(repo, spawnGit)
   if (top === null) return { action, state: "refused", repo, message: notGit(repo) }
   const { git, origin, base } = workspaceFacts(top, spawnGit)
@@ -871,7 +871,7 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   if (founder !== undefined) {
     const problem = aliasProblem(founder.alias)
     if (problem !== null) return refuse(problem)
-    if (!validIdentity(founder.identity)) return refuse(`${JSON.stringify(founder.identity)} is not a valid identity`)
+    if (!validIdentity(founder.identity)) return refuse(`Pass a valid identity: ${JSON.stringify(founder.identity)} is not one`)
   }
 
   // Every file Crew adds, by repository-relative path.
@@ -885,7 +885,7 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     for (const [rel, content] of Object.entries(TEMPLATE_FILES)) files[`${deskOf(founder.alias)}/${rel}`] = render(content, founder)
   }
   const conflicts = [...Object.keys(files), ROSTER].filter((rel) => present(top, rel)).sort()
-  if (conflicts.length > 0) return refuse(`${conflicts.join(", ")} already exists, and starting a crew never overwrites a file`)
+  if (conflicts.length > 0) return refuse(`Move ${conflicts.join(", ")} out of the way and run start again: it already exists, and starting a crew never overwrites a file`)
 
   // Where the team's plugin is: the tooling repository must hold what is declared; a monorepo's plugin must be there.
   let plugin = parsed.tooling
@@ -893,10 +893,10 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     const problem = await toolingRepoProblem(parsed.tooling, gh)
     if (problem !== null) return refuse(problem)
   } else if (plugin !== null) {
-    if (plugin.plugin !== null && !hasManifest(path.join(top, ...plugin.path.split("/")))) return refuse(`${plugin.path}/ in this repository has no plugin.json or .claude-plugin/plugin.json; add the plugin there first, or correct --tooling-path`)
+    if (plugin.plugin !== null && !hasManifest(path.join(top, ...plugin.path.split("/")))) return refuse(`Add the plugin there first, or correct --tooling-path: ${plugin.path}/ in this repository has no plugin.json or .claude-plugin/plugin.json`)
   } else {
     plugin = inRepoPlugin(top, base)
-    if (plugin?.several) return refuse(`this repository has several plugins in plugins/ (${plugin.several.join(", ")}); name the team's with --tooling-path plugins/<name> --tooling-plugin <name>`)
+    if (plugin?.several) return refuse(`Name the team's plugin with --tooling-path plugins/<name> --tooling-plugin <name>: this repository has several plugins in plugins/ (${plugin.several.join(", ")})`)
   }
 
   const agentsAtPlan = rootName(top, "AGENTS.md")
@@ -943,7 +943,7 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
   const message = "Crew: start this Crew workspace"
   try {
     const checkout = await prepareCheckout(git, connect)
-    if (checkout.refused) return refuse(`this clone ${checkout.refused}`)
+    if (checkout.refused) return refuse(checkout.refused)
     if (checkout.mode === "local" || checkout.mode === "first") {
       // No pull request is possible: commit here, and push to an empty repository. A failure takes the commit back.
       const before = git(["rev-parse", "--verify", "--quiet", "HEAD"])
@@ -969,7 +969,7 @@ export async function startWorkspace({ repo, apply = false, tooling, founder, te
     const next = "Teammates join it with crew:join-crew."
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "published", "Started", next)
     const missing = notHeld(landed.ours, `origin/${checkout.base}`)
-    if (missing.length > 0) return notConfirmed(result, checkout.base, missing, "what this start wrote", "Someone may have changed it since. Next: check what the workspace holds now before starting it again.")
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing, "what this start wrote", "Someone may have changed it since.")
     return { ...result, state: "published", commit: landed.commit, message: `Started: this repository is now a ${parsed.setup} Crew workspace. The change merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error)
@@ -1082,10 +1082,10 @@ function adoptionProblem(top, git, desk, identity, expected) {
  * and the roster row waits in an open pull request), "not_crew", "refused" or "failed" (with `stage`).
  */
 export async function joinWorkspace({ repo, identity, alias, adoptExisting, apply = false, spawnGit = spawnSync, gh = personGh(), wait = sleep, now = Date.now }) {
-  const refuse = (message, adoption) => ({ action: "join", state: "refused", repo, identity, alias, ...(adoption === undefined ? {} : { adoption }), message: `Nothing was written: ${message}.` })
+  const refuse = (message, adoption) => ({ action: "join", state: "refused", repo, identity, alias, ...(adoption === undefined ? {} : { adoption }), message: `${message}. Nothing was written.` })
   const status = await crewStatus({ repo, identity, spawnGit })
   if (status.state !== "crew") return { action: "join", ...status }
-  if (!validIdentity(identity)) return refuse("an identity is required: the stable account login this member signs in with, with no | or line break")
+  if (!validIdentity(identity)) return refuse("Pass an identity, the stable account login this member signs in with, with no | or line break: it is required")
   const memberResult = (row, extra = "") => ({ action: "join", state: "member", repo: status.repo, identity, alias: row.alias, desk: deskOf(row.alias), tooling: status.tooling, message: `${identity} is already on the roster as ${row.alias}; nothing to add.${extra} A Desk session started in this clone writes to ${deskOf(row.alias)}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.` })
   if (status.member !== null) return memberResult(status.member)
   const problem = aliasProblem(alias)
@@ -1101,7 +1101,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
   const taken = (row) => `the alias ${alias} belongs to ${row.identity}; choose another alias`
   if (holders().other !== undefined) return refuse(taken(holders().other))
   const template = listFiles(path.join(top, ...TEMPLATE.split("/")))
-  if (template.length === 0) return refuse(`${TEMPLATE} is missing or empty, so there is no desk to copy; the workspace needs a complete template first`)
+  if (template.length === 0) return refuse(`Add the missing files to ${TEMPLATE} first: it is missing or empty, so there is no desk to copy`)
   const desk = deskOf(alias)
   const files = template.map((rel) => `${desk}/${rel}`)
   const adopting = adoptExisting !== undefined
@@ -1122,7 +1122,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
     return failedResult(historyResult, error)
   }
   const revision = adopting ? adoptExisting : git(["rev-parse", "HEAD"]).stdout
-  if (adopting && (typeof revision !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision) || git(["rev-parse", "--verify", `${revision}^{commit}`]).stdout !== revision)) return refuse("adoption needs the full reviewed commit from a fresh join preview")
+  if (adopting && (typeof revision !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision) || git(["rev-parse", "--verify", `${revision}^{commit}`]).stdout !== revision)) return refuse("Run the join preview again and pass the full reviewed commit from it: adoption needs the full reviewed commit from a fresh join preview")
   const roots = [desk, TEMPLATE.replace(/\/$/u, "")]
   const expected = Object.fromEntries(roots.map((root) => [root, git(["rev-parse", "--verify", `${revision}:${root}`]).stdout]))
   const adoption = () => ({ revision, preserved: listFiles(path.join(top, ...desk.split("/"))).map((rel) => `${desk}/${rel}`), missing: files.filter((rel) => !exists(top, rel)) })
@@ -1132,7 +1132,7 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
     return deskClaimProblem(git, desk, identity)
   }
   const resumed = exists(top, desk)
-  if (adopting && !resumed) return refuse(`${desk}/ is absent; preview again before choosing how to join`)
+  if (adopting && !resumed) return refuse(`Run the join preview again before choosing how to join: ${desk}/ is absent`)
   if (resumed && deskProblem() !== null) {
     const blocked = adopting ? null : adoptionProblem(top, git, desk, identity, expected)
     const offer = !adopting && blocked === null ? adoption() : undefined
@@ -1152,8 +1152,8 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
   let deskPushed = false
   try {
     const checkout = await prepareCheckout(git, () => connectTo(git, status.origin, { gh, result, ...(adopting ? { identity } : {}) }))
-    if (checkout.refused) return refuse(`this clone ${checkout.refused}`)
-    if (checkout.mode !== "remote") return refuse("this clone has no origin with a default branch to push the desk to")
+    if (checkout.refused) return refuse(checkout.refused)
+    if (checkout.mode !== "remote") return refuse("Add the team's GitHub repository as origin, with a default branch, then run join again: this clone has no origin with a default branch to push the desk to")
     // The clone is now the default branch as it is: someone may have joined, or taken the alias or the desk, meanwhile.
     const now0 = holders()
     if (now0.mine !== undefined) return memberResult(now0.mine)
@@ -1228,13 +1228,13 @@ export async function joinWorkspace({ repo, identity, alias, adoptExisting, appl
     if (landed.open !== undefined) return openResult(result, landed, checkout.base, `Not joined yet: ${desk}/ is pushed, and `)
     const next = `A Desk session started in this clone writes to ${desk}/ while gh is signed in as ${identity}; Desk checks this before it reports the join as done.${toolingNote}`
     if (landed.unfetched !== undefined) return unconfirmedResult(result, landed, "joined", "Joined", next)
-    if (adopting && (changedAdoption("HEAD") || reservationAt("HEAD") !== null || adoptionOwnershipProblem(git, desk, identity) !== null)) return { ...result, state: "failed", stage: "verify", reason: "the adopted desk, template, registry reservations or pending claims changed during the roster merge", message: "The registry row merged, but the adopted desk, template, registry reservations or pending claims changed during the merge. Keep onboarding open and review the current contents and authority before continuing." }
+    if (adopting && (changedAdoption("HEAD") || reservationAt("HEAD") !== null || adoptionOwnershipProblem(git, desk, identity) !== null)) return { ...result, state: "failed", stage: "verify", reason: "the adopted desk, template, registry reservations or pending claims changed during the roster merge", message: "Keep onboarding open and review the current contents and authority before continuing: the registry row merged, but the adopted desk, template, registry reservations or pending claims changed during the merge." }
     // Read back: the default branch must now hold this identity's row under this alias, and the whole desk.
     const missing = [
       [holders().mine?.alias !== alias, `the roster row for ${identity} as ${alias}`, "roster row"],
       [!files.every((rel) => exists(top, rel)), `${desk}/`, "desk"],
     ].filter(([gone]) => gone)
-    if (missing.length > 0) return notConfirmed(result, checkout.base, missing.map(([, item]) => item), `${identity}'s ${missing.map(([, , plain]) => plain).join(" and ")}`, "Next: run the same join again; it adds only what is missing.")
+    if (missing.length > 0) return notConfirmed(result, checkout.base, missing.map(([, item]) => item), `${identity}'s ${missing.map(([, , plain]) => plain).join(" and ")}`, "The join adds only what is missing.")
     return { ...result, state: "joined", commit: landed.commit, message: `Joined: ${identity} is on the roster as ${alias}, with an own desk at ${desk}/. The roster row merged in ${result.pr}. ${next}` }
   } catch (error) {
     return failedResult(result, error, deskPushed && error.stage !== "alias" ? ` ${desk}/ is pushed; ${adopting ? "review a fresh adoption preview and confirm --adopt-existing again to finish the roster row" : "run join again to add the roster row"}.` : "")

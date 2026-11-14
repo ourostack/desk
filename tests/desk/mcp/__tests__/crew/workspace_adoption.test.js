@@ -114,7 +114,7 @@ test("an unregistered desk is refused with an adoption offer: the reviewed commi
   const refused = await joinWorkspace(join(repo))
   assert.equal(refused.state, "refused")
   assert.match(refused.message, /desks\/newbie\/ already exists and does not match the template/u)
-  assert.match(refused.message, /preview with --adopt-existing [0-9a-f]{40}\.$/u)
+  assert.match(refused.message, /preview with --adopt-existing [0-9a-f]{40}\. Nothing was written\.$/u)
   assert.equal(refused.adoption.revision, git(repo.clone, ["rev-parse", "HEAD"]))
   assert.deepEqual(refused.adoption.preserved, [`${DESK}/AGENTS.md`, `${DESK}/blob.bin`, `${DESK}/notes/deep/idea.md`])
   assert.deepEqual(refused.adoption.missing, [`${DESK}/README.md`, `${DESK}/_meta/friction.md`])
@@ -170,7 +170,7 @@ test("adopting when the desk is absent is refused", async () => {
   const repo = await startWorkspaceFixture()
   const result = await joinWorkspace(join(repo, { adoptExisting: git(repo.clone, ["rev-parse", "HEAD"]) }))
   assert.equal(result.state, "refused")
-  assert.match(result.message, /desks\/newbie\/ is absent; preview again/u)
+  assert.match(result.message, /Run the join preview again before choosing how to join: desks\/newbie\/ is absent/u)
 })
 
 test("a revision from before the desk existed, or one the desk has changed since, is refused as changed", async () => {
@@ -448,7 +448,7 @@ test("a change that lands during the merge itself is reported after it: the row 
     assert.equal(result.state, "failed", name)
     assert.equal(result.stage, "verify", name)
     assert.match(result.reason, /changed during the roster merge/u)
-    assert.match(result.message, /The registry row merged, but the adopted desk, template, registry reservations or pending claims changed/u)
+    assert.match(result.message, /Keep onboarding open and review the current contents and authority before continuing: the registry row merged, but the adopted desk, template, registry reservations or pending claims changed/u)
   }
 })
 

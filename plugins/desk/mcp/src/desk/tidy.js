@@ -790,7 +790,7 @@ function parseArgs(argv) {
     } else if (["--detect", "--report", "--write-record", "--refresh-identity"].includes(arg)) {
       args.mode = arg.slice(2)
     } else {
-      throw new Error(`tidy-status: unknown argument ${JSON.stringify(arg)}`)
+      throw new Error(`tidy-status: Remove the unknown argument ${JSON.stringify(arg)}; it takes --detect, --report, --write-record, --defer <reason>, --refresh-identity, --root, --person and --claim`)
     }
   }
   return args
@@ -832,8 +832,8 @@ export function runTidyStatusCli({
   let args
   try {
     args = parseArgs(argv)
-    if (args.mode === "defer" && !hasText(args.reason)) throw new Error("tidy-status: --defer needs a one-line reason")
-    if (args.mode === "refresh-identity" && !hasText(args.root)) throw new Error("tidy-status: --refresh-identity needs --root")
+    if (args.mode === "defer" && !hasText(args.reason)) throw new Error("tidy-status: Pass a one-line reason after --defer")
+    if (args.mode === "refresh-identity" && !hasText(args.root)) throw new Error("tidy-status: Pass --root with --refresh-identity")
   } catch (error) {
     io.stderr.write(`${error.message}\n`)
     return 2

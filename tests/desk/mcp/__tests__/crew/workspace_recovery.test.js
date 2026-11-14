@@ -42,7 +42,7 @@ test("a local start whose origin GitHub created with a README is not reported as
   for (const apply of [true, true, false]) {
     const rerun = await startWorkspace({ repo: local, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: NOW, apply })
     assert.equal(rerun.state, "refused", rerun.message)
-    assert.match(rerun.message, /^Nothing was pushed: this clone holds a Crew workspace that is not on GitHub, and acme\/team's main already has commits this clone does not share \(GitHub's "Add a README" option makes one\)\. Create the GitHub repository empty and run start again, or clone it and run start in that clone\.$/u)
+    assert.match(rerun.message, /^Create the GitHub repository empty and run start again, or clone it and run start in that clone\. Nothing was pushed: this clone holds a Crew workspace that is not on GitHub, and acme\/team's main already has commits this clone does not share \(GitHub's "Add a README" option makes one\)\.$/u)
   }
   assert.deepEqual(mainFiles(repo.bare), ["README.md"])
   // Once GitHub holds this clone's start, the rerun has nothing to do.
@@ -71,7 +71,7 @@ test("GitHub merged the start but the fetch after it failed: published, with a n
   const first = await startWorkspace({ repo: repo.clone, spawnGit: flaky, gh, wait: noWait, now: NOW, apply: true, tooling: TOOLING })
   assert.equal(first.state, "published", first.message)
   assert.equal(first.confirmed, false)
-  assert.match(first.message, /^Started: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. Next: once the network is back, update this copy of the workspace and check its status\. Teammates join it with crew:join-crew\.$/u)
+  assert.match(first.message, /^Update this copy of the workspace and check its status once the network is back\. Started: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. Teammates join it with crew:join-crew\.$/u)
   assert.equal(first.reason, "fatal: unable to access: Could not resolve host")
   assert.ok(mainFiles(repo.bare).includes("_meta/crew.json"))
   const again = await startWorkspace({ repo: repo.clone, spawnGit: repo.spawnGit, gh: fakeGh(repo.bare).gh, wait: noWait, now: LATER, apply: true, tooling: TOOLING })
@@ -98,7 +98,7 @@ test("GitHub merged the roster row but the fetch after it failed: joined, with a
   const result = await joinWorkspace({ repo: repo.clone, spawnGit: flaky, gh, identity: "fay_example", alias: "fay", wait: noWait, now: NOW, apply: true })
   assert.equal(result.state, "joined", result.message)
   assert.equal(result.confirmed, false)
-  assert.match(result.message, /^Joined: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. Next: once the network is back, update this copy of the workspace and check its status\. A Desk session started in this clone writes to desks\/fay\/ while gh is signed in as fay_example; Desk checks this before it reports the join as done\./u)
+  assert.match(result.message, /^Update this copy of the workspace and check its status once the network is back\. Joined: GitHub merged the pull request https:\/\/github\.com\/acme\/team\/pull\/12, so the change is in effect\. This computer could not download it afterwards to double-check, probably a brief network problem\. A Desk session started in this clone writes to desks\/fay\/ while gh is signed in as fay_example; Desk checks this before it reports the join as done\./u)
   assert.doesNotMatch(result.message, /fatal|git pull/u)
   assert.match(onMain(repo.bare, "_meta/desks.md"), /\| fay \| fay_example \|/u)
 })
