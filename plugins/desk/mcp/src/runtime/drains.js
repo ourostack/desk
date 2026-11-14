@@ -263,10 +263,13 @@ const oneLine = (text) => {
   return flat.length > 120 ? `${flat.slice(0, 119)}…` : flat
 }
 
+/** What every wake for a repository starts with: a runner uses it to take older undelivered wakes back before it sends a newer one. */
+export const wakePrefix = (repo) => `New or changed issues in ${repo}:`
+
 export function wakeMessage(repo, events) {
   const shown = events.slice(0, MAX_TITLES).map((event) => `#${event.number} ${oneLine(event.title)}${event.why ? ` (${event.why})` : ""}`)
   const more = events.length > MAX_TITLES ? `, and ${events.length - MAX_TITLES} more` : ""
-  return `New or changed issues in ${repo}: ${shown.join(", ")}${more}. Drain them.`
+  return `${wakePrefix(repo)} ${shown.join(", ")}${more}. Drain them.`
 }
 
 /** Identifies one batch of waiting events, so an `ack` for an older batch never clears a newer one. */
@@ -546,7 +549,7 @@ export async function pollDrains({ paths, connect, now, ackCommand, ackFlags = [
   const wakes = drains.filter((drain) => states[drain.repo].pending.length > 0).map((drain) => {
     const events = states[drain.repo].pending
     const id = wakeId(drain.repo, events)
-    return { id, repo: drain.repo, session: drain.session, message: wakeMessage(drain.repo, events), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
+    return { id, repo: drain.repo, session: drain.session, message: wakeMessage(drain.repo, events), replaces: wakePrefix(drain.repo), events, done: [...ackCommand, "ack", "--repo", drain.repo, "--wake", id, ...ackFlags] }
   })
   const errors = drains.filter((drain) => states[drain.repo].lastError).map((drain) => ({ repo: drain.repo, error: states[drain.repo].lastError }))
   const calls = drains.reduce((sum, drain) => sum + states[drain.repo].calls.total, 0)

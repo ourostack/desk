@@ -1443,6 +1443,8 @@ test("poll, ack and status run end to end through the command line, with the sta
   const second = JSON.parse((await cli(["poll", ...flags], { connect, now: () => NOW })).out)
   assert.equal(second.wakes.length, 1)
   assert.equal(second.wakes[0].message, "New or changed issues in acme/widgets: #1 T (title or body edited). Drain them.")
+  assert.equal(second.wakes[0].replaces, "New or changed issues in acme/widgets:")
+  assert.ok(second.wakes[0].message.startsWith(second.wakes[0].replaces), "every message starts with the prefix it replaces")
   assert.deepEqual(second.wakes[0].done.slice(0, 2), [process.execPath, SCRIPT])
   assert.deepEqual(second.wakes[0].done.slice(-2), ["--state", state])
   const unflagged = JSON.parse((await cli(["poll", "--config", config], { connect, now: () => NOW })).out)
