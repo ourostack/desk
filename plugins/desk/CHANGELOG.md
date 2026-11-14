@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.144 — 2026-11-14
+
+Plain Language now loads when an agent writes the CSS that lays out rendered text. Its line-width rule never reached that task, because the skill's description named only prose, so an agent styling an article page capped the text at a fixed `max-width` and the `plain-language-corrections` eval's line-width case failed. The description now ends with "or the CSS that lays out rendered text", Plain Language is 0.2.13, and the case passes again with a receipt from the new eval runner. The `human-owned-work` eval, which shares the skill's text, already failed three cases on main; it is recorded as a known failure in [#963](https://github.com/ourostack/desk/issues/963).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.143 — 2026-11-14
 
 Desk's fixed context is smaller. Desk's tool descriptions and input schemas drop what each reply already says (the reply fields, the refusal reasons and the nested shape of `content_home`, `resource.migrate` and `content_home.sections`), so the 24 Desk tools advertise about 4 KB less, and the two desk-web tools advertise about 1.6 KB less: the command list stays in `browser_command`'s `args`, and the replies and `AUTH_COMMAND_UNKNOWN` carry the rest. Every tool still says when to use it, and the tools validate their input as before.
