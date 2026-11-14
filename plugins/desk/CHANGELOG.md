@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.154 — 2026-11-14
+
+`using-desk`, which loads at every session start, is 875 bytes smaller (7,317 to 6,442). Rules that apply in one situation now live where that situation happens: the reply to a requirement change and the reply to "I'm stepping away" are in the list at the top of [`interaction-style`](skills/interaction-style/SKILL.md) (which now also loads when the collaboration slips and carries the reset line), and the contents of a child agent's brief, what a child gains and who answers for an early return are in [`work-orchestration`](skills/work-orchestration/SKILL.md), where a coordinator dispatches. What a child itself must do stays in `using-desk`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.153 — 2026-11-14
 
 The drains runner now runs relays, two small GitHub automations for a repository whose own settings cannot do the job. A `dispatch` relay fires a workflow or a `repository_dispatch` event once when a watched workflow has a new successful run. A `merge-when-green` relay merges a labelled pull request only when every check it names is green on the head and, if asked, the default branch's latest completed run of a workflow is green; it never bypasses the branch rules and keeps one status comment it edits. Both poll with conditional requests and back off on a low quota. `drains.js status` lists each relay with its last fire or merge and what it waits on, and `drains.js why --relay <name>` and `drains.js why owner/name#number` show what a relay decided. See [Relays](docs/relays.md).
