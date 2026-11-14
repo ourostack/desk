@@ -1,1 +1,0 @@
-A cross-reference from an issue or pull request the drain filed itself (a `drain:` label, or the status marker in its body) no longer wakes the drain, the same test that treats an issue the drain filed as already seen. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).

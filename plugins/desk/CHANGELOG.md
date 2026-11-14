@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.141 — 2026-11-14
+
+A cross-reference from an issue or pull request the drain filed itself (a `drain:` label, or the status marker in its body) no longer wakes the drain, the same test that treats an issue the drain filed as already seen. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.140 — 2026-11-14
 
 The issue-drain poller treats a label or state change made by the polling account during the drain's own turn (from a wake's delivery until 90 minutes later) as the drain's own work, so labels such as `waiting:external` no longer wake it, and a per-repository `ignoreLabels` list of regular expressions skips labels by pattern. A cross-reference from a pull request the drain's marked status comment on the issue names is the drain's own, on any branch, and `draining-issues` asks drains to put the marker in their pull request bodies. See [issue drains](docs/issue-drains.md#what-wakes-a-drain).
