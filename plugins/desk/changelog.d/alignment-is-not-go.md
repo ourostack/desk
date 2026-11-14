@@ -1,1 +1,0 @@
-A request to get new work started, permission over a contribution target, or a run where nobody can answer is no longer read as go. On new work the agent now sends its alignment note and stops, editing no product, test or docs files, until the person says go. Approved work with an explicit go is unchanged.
