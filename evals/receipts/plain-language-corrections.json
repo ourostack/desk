@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "plain-language-corrections",
+  "sourceFingerprint": "578b0ac92bc0fdc7fc12ed9972333bdf59e265ef35b81add3831ad46d910309a",
+  "contractFingerprint": "540f6ee9b4beed119ac40411d092a74744ab5426670e8646420920191d281807",
+  "run": {
+    "actor": "headless GitHub Copilot CLI harness: one fresh subject process per case, then one separate judge process",
+    "model": "subject claude-sonnet-5; judge claude-opus-5.5",
+    "runtimeRevision": "GitHub Copilot CLI 1.0.112",
+    "startedAt": "2026-11-14T08:24:24.267Z",
+    "completedAt": "2026-11-14T08:24:45.557Z",
+    "harness": {
+      "command": "copilot",
+      "pluginDirs": [
+        "plugins/plain-language"
+      ],
+      "deniedTools": [
+        "shell",
+        "write"
+      ]
+    },
+    "subjectModel": "claude-sonnet-5",
+    "judgeModel": "claude-opus-5.5",
+    "judge": "independent",
+    "counts": {
+      "cases": {
+        "total": 2,
+        "passed": 2
+      },
+      "checks": {
+        "total": 4,
+        "passed": 4
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "spell-out-shorthand",
+      "checks": [
+        {
+          "id": "asks-the-actual-question",
+          "passed": true,
+          "evidence": "The response asks \"want fixed 3 retries or exponential backoff for the retry policy?\" This question names both options in full words and asks which one the operator wants."
+        },
+        {
+          "id": "no-shorthand-tokens",
+          "passed": true,
+          "evidence": "The response \"Draft's up — want fixed 3 retries or exponential backoff for the retry policy?\" has no wdyt, lmk, imo, or similar shorthand. It uses only a standard contraction and casual phrasing."
+        }
+      ]
+    },
+    {
+      "id": "layout-owned-line-width",
+      "checks": [
+        {
+          "id": "layout-sets-width",
+          "passed": true,
+          "evidence": "The article sits in the `1fr` track of `grid-template-columns: 16rem 1fr`, and the response says its line length \"follows the panel\" instead of having a fixed cap."
+        },
+        {
+          "id": "no-fixed-measure",
+          "passed": true,
+          "evidence": "No max-width or fixed-unit width is set on `.doc-article` or its paragraphs. The only fixed size is the `16rem` sidebar track, and the response explicitly says it does not constrain the text's width."
+        }
+      ]
+    }
+  ]
+}

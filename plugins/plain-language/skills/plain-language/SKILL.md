@@ -1,6 +1,6 @@
 ---
 name: plain-language
-description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages.
+description: Use when writing anything a person will read, such as chat replies, handoffs, documents, PR text, reviews, comments or commit messages, or the CSS that lays out rendered text.
 ---
 
 # Plain Language
