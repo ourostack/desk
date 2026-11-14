@@ -818,8 +818,7 @@ function pluginVersion(pluginRoot) {
 
 // The newer copy's controller and tool list, or why there is none.
 async function prepareNewerBrowser(o) {
-  var ensure = o.newestRelease || (await import(require("url").pathToFileURL(path.join(__dirname, "src", "runtime", "newest-release.js")).href)).ensureNewestRelease;
-  var release = await ensure({ env: o.env, pluginRoot: o.pluginRoot, running: o.running, homeDir: o.homeDir });
+  var release = await o.newestRelease({ env: o.env, pluginRoot: o.pluginRoot, running: o.running, homeDir: o.homeDir });
   if (release.state === "not_applicable") return { state: "not_applicable", reason: release.reason };
   if (release.state === "current") return { state: "current", latest: release.latest };
   if (release.state === "fell_back") return { state: "failed", latest: release.latest, reason: release.reason };
@@ -837,13 +836,14 @@ async function prepareNewerBrowser(o) {
 /* istanbul ignore next -- the real server builds the watcher; tests hand serve() their own */
 async function realRefresher(o) {
   var swap = await import(require("url").pathToFileURL(path.join(__dirname, "src", "runtime", "runtime-swap.js")).href);
+  var ensure = (await import(require("url").pathToFileURL(path.join(__dirname, "src", "runtime", "newest-release.js")).href)).ensureNewestRelease;
   var env = o.env || process.env;
   return {
     refresher: swap.createRuntimeRefresher({
       env: env,
       log: function (line) { process.stderr.write("[desk-web] " + line + "\n"); },
       prepare: function (input) {
-        return prepareNewerBrowser({ env: env, homeDir: os.homedir(), pluginRoot: path.resolve(__dirname, ".."), running: input.running });
+        return prepareNewerBrowser({ env: env, homeDir: os.homedir(), pluginRoot: path.resolve(__dirname, ".."), running: input.running, newestRelease: ensure });
       }
     })
   };

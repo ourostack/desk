@@ -72,9 +72,21 @@ test("a prepared runtime is taken once, a swap is recorded with swapped_at and f
   refresher.poke({ running: "2.0.0" })
   await refresher.idle()
   assert.equal(refresher.describe().refresh.reason, "the check threw (boom)")
+  next = async () => { throw "plain text" }
+  refresher.poke()
+  await refresher.idle()
+  assert.equal(refresher.describe().refresh.reason, "the check threw (plain text)")
   assert.equal(refresher.describe().swapped_at, new Date(clock).toISOString(), "the last swap is still reported")
   refresher.abandoned("the swap failed (x)", "2.0.1")
   assert.deepEqual({ ...plain(refresher.describe().refresh), checked_at: undefined }, { state: "failed", latest: "2.0.1", reason: "the swap failed (x)", checked_at: undefined })
+})
+
+test("the watcher defaults to the process environment, the clock and a silent log", async () => {
+  const refresher = createRuntimeRefresher({ prepare: async () => ({ state: "failed", latest: "1.0.1", reason: "offline" }) })
+  assert.equal(refresher.poke({ running: "1.0.0", soon: true }), true)
+  await refresher.idle()
+  assert.equal(refresher.describe().refresh.state, "failed")
+  assert.match(refresher.describe().refresh.checked_at, /^\d{4}-/u)
 })
 
 test("DESK_RUNTIME_REFRESH=0 turns refreshing off, and the interval can be set in minutes", async () => {
@@ -350,6 +362,9 @@ test("the browser server builds the newer release's controller, serves new brows
     call: async (name, input) => {
       if (input.action !== "open") return reply("newer ran it")
       if (input.browser === "plain") return reply("not JSON at all")
+      if (input.browser === "null") return reply("null")
+      if (input.browser === "number") return reply("7")
+      if (input.browser === "bare") return reply({ contextId: "x" })
       newerContexts["22222222-2222-4222-8222-222222222222"] = {}
       return reply({ contextId: "22222222-2222-4222-8222-222222222222", runtime: { plugin: { name: "desk", version: NEWER }, plugin_root: newerRoot } })
     },
@@ -379,6 +394,9 @@ test("the browser server builds the newer release's controller, serves new brows
   assert.equal(swapped.runtime.refresh.state, "swapped")
   assert.deepEqual((await request("tools/list")).result.tools, newerTools)
   assert.equal((await request("tools/call", { name: "browser_context", arguments: { action: "open", browser: "plain" } })).result.content[0].text, "not JSON at all", "an answer that is not the browser's JSON passes through")
+  for (const [browser, text] of [["null", "null"], ["number", "7"], ["bare", JSON.stringify({ contextId: "x" })]]) {
+    assert.equal((await request("tools/call", { name: "browser_context", arguments: { action: "open", browser } })).result.content[0].text, text, `${browser}: an answer with no runtime to add to passes through`)
+  }
   assert.equal((await request("tools/call", { name: "browser_command", arguments: { contextId: "22222222-2222-4222-8222-222222222222", args: ["snapshot"] } })).result.content[0].text, "newer ran it")
   stdin.end()
   await done

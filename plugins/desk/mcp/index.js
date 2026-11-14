@@ -310,7 +310,7 @@ export async function main({
     serverVersion,
     instructions: hostedInstructionsText,
     serverIcons: hosted && hasText(env.DESK_MCP_ICON_URL) ? [{ src: env.DESK_MCP_ICON_URL }] : undefined,
-    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : withStartupBoot({ callTool: (call) => session.callTool(call), env, stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }), servingRoot: () => session.servingPluginRoot() }),
+    callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : withStartupBoot({ callTool: (call) => session.callTool(call), env, stateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }), servingRoot: session.servingPluginRoot }),
     onHandshake: () => {
       handshakeMs = Math.round(performance.now())
       kick()
@@ -381,8 +381,8 @@ async function loadNewestOrCached(options) {
 
 // A newer runtime, loaded beside the serving one for runtime-swap.js: the newest release's copy, restored and imported as the first load does. `running` is the version serving now. Every outcome other than a loaded runtime leaves the serving one in place and says why.
 async function prepareNewerRuntime({ running, refreshLoad, mcpRoot, homeDir, env, newestRelease }) {
+  // The session checks only once a runtime is serving, so the first load has set these.
   const options = refreshLoad.options
-  if (options === null) return { state: "not_applicable", reason: "the runtime has not loaded yet" }
   if (refreshLoad.pinned) return { state: "not_applicable", reason: "this session pins its runtime source" }
   const ensure = newestRelease ?? (await import("./src/runtime/newest-release.js")).ensureNewestRelease
   const pluginRoot = path.resolve(mcpRoot, "..")
@@ -391,7 +391,7 @@ async function prepareNewerRuntime({ running, refreshLoad, mcpRoot, homeDir, env
   if (release.state === "current") return { state: "current", latest: release.latest }
   if (release.state === "fell_back") return { state: "failed", latest: release.latest, reason: release.reason }
   const newer = await loadRuntime({ ...options, onPhase: () => {}, mcpRoot: release.mcpRoot })
-  if (newer.runtimeServer === undefined) return { state: "failed", latest: release.latest, reason: `the ${release.latest} copy did not load${newer.outcome?.summary ? ` (${String(newer.outcome.summary).slice(0, 120)})` : ""}` }
+  if (newer.runtimeServer === undefined) return { state: "failed", latest: release.latest, reason: `the ${release.latest} copy did not load (${String(newer.outcome.summary).slice(0, 120)})` }
   const newestStatus = { state: "loaded", plugin_copy: deskVersion({ DESK_PLUGIN_ROOT: pluginRoot }), newest: release.latest }
   return { state: "ready", latest: release.latest, loaded: { ...newer, runtimeStatus: { ...newer.runtimeStatus, newest_release: newestStatus } } }
 }
