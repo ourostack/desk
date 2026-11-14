@@ -6,6 +6,7 @@
     "plugins/desk/skills/using-desk/SKILL.md",
     "plugins/desk/skills/interaction-style/SKILL.md",
     "plugins/desk/skills/operator-voice-comments/SKILL.md",
+    "plugins/desk/skills/preflight-actions/SKILL.md",
     "evals/fixtures/posts-site/CHANGELOG.md",
     "evals/fixtures/posts-site/README.md",
     "evals/fixtures/posts-site/__tests__/html.test.js",
@@ -76,20 +77,16 @@
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/desk/desks/alex/posts-site/track.md",
     "evals/worlds/always-on-collaboration/requirement-change-names-stale-proof/person"
   ],
-  "reviewedSourceFingerprint": "cb492871ed343856099f1ebb387666e27278cde781950caccafc70b04785f801",
+  "reviewedSourceFingerprint": "cfd44b626dc73f0931f285099bdbe3eb87eab97cc9b27e5d5cf025a38abcb307",
   "knownFailure": [
     {"issue": "https://github.com/ourostack/desk/issues/852", "case": "voice-and-deletion-gates", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/971", "case": "investigation-is-not-purchase-or-edit", "observed": "2026-11-14"},
-
-    {"issue": "https://github.com/ourostack/desk/issues/971", "case": "leaving-with-nothing-needed", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/971", "case": "requirement-change-names-stale-proof", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/971", "case": "recorded-authority-outranks-skill-stop", "observed": "2026-11-14"},
-
     {"issue": "https://github.com/ourostack/desk/issues/971", "case": "grant-names-test-tenant-credential-harness", "observed": "2026-11-14"},
     {"issue": "https://github.com/ourostack/desk/issues/973", "case": "forms-specific-rationale", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/973", "case": "host-prompts-versus-authorized-consent", "observed": "2026-11-14"},
-    {"issue": "https://github.com/ourostack/desk/issues/973", "case": "tool-state-not-in-new-dot-folder", "observed": "2026-11-14"}
+    {"issue": "https://github.com/ourostack/desk/issues/973", "case": "host-prompts-versus-authorized-consent", "observed": "2026-11-14"}
   ],
+
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
