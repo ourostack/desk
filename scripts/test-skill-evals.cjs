@@ -219,6 +219,7 @@ try {
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/person`]: "alex\n" })), "a person file holding one alias is valid");
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md.symlink`]: "../../../../skill-eval-outside/notes.md\n" })), "a link is a .symlink file in the world");
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/bin/gh`]: "stand-in\n" })), "a stand-in in the world's bin is valid");
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [`${world}/held-out/oracle.test.js`]: "x\n", "evals/fixtures/repo/src.js": "x\n" }, { sources: ["source.txt", "evals/fixtures/repo/src.js", `${world}/held-out/oracle.test.js`] })), "a held-out oracle is valid when a fixture repository runs it");
     for (const [worldPath, files, options, message] of [
       ["evals/worlds/fixture/other", { [seeded]: "x\n" }, {}, /world must be the string evals\/worlds\/fixture\/case-1, not "evals\/worlds\/fixture\/other"/u],
       [5, {}, {}, /world must be the string evals\/worlds\/fixture\/case-1, not 5/u],
@@ -231,6 +232,7 @@ try {
       [world, { [`${world}/repo/src.js`]: "x\n" }, {}, /has repo\/ but suite fixture has no evals\/fixtures\/<name> source/u],
       [world, { [`${world}/desk-origin-branches/Sam Pending/x.md`]: "x\n" }, {}, /desk-origin-branches\/Sam Pending must be a folder named with a lowercase branch name/u],
       [world, { [`${world}/desk-origin-branches/readme.md`]: "x\n" }, {}, /desk-origin-branches\/readme\.md must be a folder named with a lowercase branch name/u],
+      [world, { [`${world}/held-out/oracle.test.js`]: "x\n" }, {}, /has held-out\/ but suite fixture has no evals\/fixtures\/<name> source whose repository copy runs it/u],
       [world, { [seeded]: "x\n", [`${world}/person/x.md`]: "y\n" }, {}, /person must be a file holding one roster alias/u],
     ]) {
       const dir = withWorld(worldPath, files, options);
@@ -896,7 +898,7 @@ try {
 
   {
     // The runner drives a Copilot-compatible harness; this fake answers like one and logs every invocation.
-    const { parseTranscript, parseVerdict } = require("./skill-evals-run.cjs");
+    const { parseTranscript, parseVerdict, heldOutEvidence } = require("./skill-evals-run.cjs");
     const events = [
       { type: "assistant.message", data: { content: "", toolRequests: [{ name: "view", arguments: { path: "a" } }, { name: "glob" }] } },
       { type: "tool.execution_start", data: {} },
@@ -932,7 +934,7 @@ try {
       'const cwd = process.cwd();',
       'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
       'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, heldOut: judging ? null : fs.readdirSync(cwd).filter((name) => name.startsWith("held-out")), deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
       'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
       'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
@@ -1272,6 +1274,56 @@ try {
       assert.equal(path.basename(subjectCall.cwd), "repo", "the subject works in the repository copy");
       assert.deepEqual(subjectCall.commits, ["Scenario world", "Baseline"], "the world is committed in the repository copy");
       assert.deepEqual(subjectCall.status, [""]);
+    }
+
+    {
+      // A case's held-out oracle is copied into the repository copy only after the subject exits: the subject never finds it there, and the judge sees its summary and failing test names.
+      const oracleFixture = (tests) => (suite, root) => {
+        const repo = path.join(root, "evals", "fixtures", "repo", "src");
+        fs.mkdirSync(repo, { recursive: true });
+        fs.writeFileSync(path.join(repo, "code.js"), "original\n");
+        const held = path.join(root, "evals", "worlds", "fixture", "case-1", "held-out");
+        fs.mkdirSync(held, { recursive: true });
+        fs.writeFileSync(path.join(held, "oracle.test.js"), `const test = require("node:test");\n${tests}\n`);
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js", "evals/worlds/fixture/case-1/held-out/oracle.test.js"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      };
+      const { run, calls } = runFixture(oracleFixture('test("held-out passes", () => {});\ntest("the held-out contract", () => { throw new Error("nope"); });'));
+      const result = run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(result.status, 0, result.stderr);
+      const [subjectCall, judgeCall] = calls();
+      assert.deepEqual(subjectCall.heldOut, [], "the subject finds no held-out files in its repository");
+      assert.match(judgeCall.prompt, /### Held-out oracle \(not visible to the subject\)\nRun by the harness after the subject finished[^\n]*\n# tests 2\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\nFailing tests:\n- the held-out contract\n/u, "the judge sees the oracle's summary and its failing test");
+      assert.match(judgeCall.prompt, /### repository\nUncommitted or untracked changes:\n\(none\)\n/u, "the repository's own evidence is gathered without the oracle");
+    }
+
+    {
+      // The held-out run reports its summary and failing test names, and leaves the repository as it found it.
+      const { dir } = makeFixture();
+      const oracle = path.join(dir, "oracle");
+      fs.mkdirSync(oracle);
+      fs.writeFileSync(path.join(oracle, "ok.test.js"), 'const test = require("node:test");\ntest("held-out passes", () => {});\n');
+      fs.writeFileSync(path.join(oracle, "broken.test.js"), 'const test = require("node:test");\ntest("held-out contract", () => { throw new Error("nope"); });\n');
+      const evidence = heldOutEvidence(dir, oracle);
+      assert.match(evidence, /^### Held-out oracle \(not visible to the subject\)\nRun by the harness after the subject finished[^\n]*\n# tests 2\n# pass 1\n# fail 1\n# cancelled 0\n# skipped 0\nFailing tests:\n- held-out contract$/u);
+      assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith("held-out-")), [], "the copied oracle is removed");
+
+      fs.rmSync(path.join(oracle, "broken.test.js"));
+      assert.match(heldOutEvidence(dir, oracle), /# fail 0\n# cancelled 0\n# skipped 0\nFailing tests:\n\(none\)$/u, "an all-passing oracle lists no failing tests");
+    }
+
+    {
+      // A case without a held-out folder has no oracle section in its judge evidence.
+      const { run, calls } = runFixture((suite, root) => {
+        const repo = path.join(root, "evals", "fixtures", "repo", "src");
+        fs.mkdirSync(repo, { recursive: true });
+        fs.writeFileSync(path.join(repo, "code.js"), "original\n");
+        suite.sources = ["source.txt", "evals/fixtures/repo/src/code.js"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      assert.doesNotMatch(calls()[1].prompt, /Held-out oracle/u, "a case without a held-out folder has no oracle section");
     }
 
     {
