@@ -826,7 +826,7 @@ async function prepareNewerBrowser(o) {
   try {
     var newer = require(path.join(release.mcpRoot, "web.cjs"));
     var tools = require(path.join(release.mcpRoot, "web-catalog.json")).tools;
-    if (typeof newer.createController !== "function" || !Array.isArray(tools)) throw new Error("it has no browser server");
+    if (typeof newer.createController !== "function" || !Array.isArray(tools)) return { state: "failed", latest: release.latest, reason: "the " + release.latest + " copy did not load (it has no browser server)" };
     var controller = newer.createController({ env: o.env, homeDir: o.homeDir });
     return { state: "ready", latest: release.latest, loaded: { controller: controller, tools: tools, version: release.latest } };
   } catch (error) {
