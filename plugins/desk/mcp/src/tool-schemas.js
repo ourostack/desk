@@ -51,21 +51,8 @@ const CONTENT_HOME = {
     source_reference: text("Original provenance and restrictions, or unknown."),
     sections: {
       type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          subject: text("What the section covers: a task_update field such as `note` or `body_append`, `files/<index>/content` or `paths/<index>` for desk_save."),
-          start: integer("Inclusive UTF-8 byte offset; omit to cover the whole subject."),
-          end: integer("Exclusive UTF-8 byte offset; omit to cover the whole subject."),
-          purpose: { type: "string" },
-          lifecycle: { type: "string", enum: ["current", "historical"] },
-          product_repository: { type: "string" },
-          source_reference: { type: "string" },
-        },
-        required: ["subject", "purpose", "lifecycle"],
-      },
-      description: "For `mixed`: classify every subject's bytes once, in order, with no gaps or overlaps, with the same four fields as above.",
+      items: { type: "object", additionalProperties: true },
+      description: "For `mixed`: classify every subject's bytes once, in order, with no gaps or overlaps. Each item has `subject` (a task_update field such as `note` or `body_append`, or `files/<index>/content` or `paths/<index>` for desk_save), optional `start` and `end` UTF-8 byte offsets (omit both for the whole subject), and the same `purpose`, `lifecycle`, `product_repository` and `source_reference` as above.",
     },
   },
   required: ["purpose"],
@@ -116,15 +103,7 @@ const RESOURCE = {
     intended: text("What you intend to do with it, in a few words."),
     disposition: { type: "string", enum: ["removed-and-absent", "named transfer", "retained-with-trigger"], description: "Record once the resource is dealt with; needs `details`. Desk removes nothing." },
     details: text("With `disposition`: the readback that it is gone; who took it and acknowledged; or why it stays, who owns it and what triggers its cleanup."),
-    migrate: {
-      type: "object",
-      properties: Object.fromEntries(["identity", "owner", "writers", "intended", "evidence", "terminal"].map((key) => [key,
-        key === "identity" ? { type: "string" } : oneOf([{ type: "string" }, { type: "null" }]),
-      ])),
-      required: ["identity", "owner", "writers", "intended", "evidence", "terminal"],
-      additionalProperties: false,
-      description: "Legacy Resources table recovery, applied with this row write: map each of the six fields to an existing column name (case-insensitive), or null if absent (not for identity); task-card-format has the rules. Live cards only.",
-    },
+    migrate: { type: "object", additionalProperties: true, description: "Legacy Resources table recovery with this row write: map owner, writers, intended, evidence and terminal to existing column names (case-insensitive) or null; task-card-format has the rules. Live cards only." },
   },
   required: ["identity"],
   additionalProperties: false,
@@ -155,7 +134,7 @@ const TASK_DONE_EVIDENCE = {
     ref: text("Not needed for `steps`. A PR URL for pr; a 7-40 character hex commit sha (optionally with repo/branch) or commit URL for commit; the run's https URL for ci_run; an https URL or desk-relative path to the proof for non_code."),
   },
   required: ["kind"],
-  description: "A JSON object, required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with a `## Steps` table finishes only with `{ kind: \"steps\" }`; a card listing `repos` only with `pr` or a pushed `commit` in one of them (task-card-format has the rules). A refusal says what to supply.",
+  description: "Required when this call moves a task into `done` (task_update), or archives one not already `done` or `cancelled` without `outcome: \"cancelled\"` (task_archive). A card with `## Steps` finishes only with `{ kind: \"steps\" }`; one listing `repos` only with `pr` or a pushed `commit` (task-card-format has the rules). A refusal says what to supply.",
 }
 
 const TASK_ARCHIVE_OUTCOME = {
@@ -183,7 +162,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
         completion_checks: text("Concrete completion terms: usable output, usage/documentation and specific behavioral, edge and error verification as applicable."),
       },
       required: ["outcome", "assumptions", "recommended_decisions", "completion_checks"],
-      description: "For a new, unapproved focused drafting outcome: your complete first-reply proposal, supplied before the card exists (start-task has the rules). Stored on the card and returned as alignment_packet; present all four contents together in normal chat, never ask_user or a form, before any confirmation. Omit for approved, resumed or parked work.",
+      description: "For a new, unapproved focused drafting outcome: your complete first-reply proposal, supplied before the card exists (start-task has the rules). Present all four contents together in normal chat, never ask_user or a form, before any confirmation. Omit for approved, resumed or parked work.",
     },
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),
@@ -273,7 +252,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     about: {
       type: "string",
       enum: ["setup", "system"],
-      description: "What the friction is about. \"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself, built by Desk from your `title` and never from your text; `improvement_key` and `improvement_path` in the result name it.",
+      description: "\"setup\" (default): this desk's own setup, kept on the desk. \"system\": Desk itself (its skills, tools or the factory); an improvement card opens by itself, built from your `title` and never from your text.",
     },
     title: text("Required when about is \"system\": the card's title, on one line."),
     plugin: text("For \"system\": the plugin the friction is in; defaults to \"desk\"."),
@@ -292,7 +271,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     scope: {
       type: "string",
       enum: ["personal", "desk", "team"],
-      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, in their AGENTS.md. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner`. \"team\": every teammate's agents in a shared repository; needs `source`. The reply says `tier` and `shelved` for personal, `improvement`, `improvement_key` and `improvement_path` for desk, and `merged`, `pr_open` or `failed` for team; a team line is refused if it would push AGENTS.md past 16 KB.",
+      description: "Whose behaviour the lesson changes. \"personal\": this person's preference, in their AGENTS.md. \"desk\": how Desk's tools or an installed plugin's skills behave; needs `owner`. \"team\": every teammate's agents in a shared repository; needs `source`.",
     },
     topic: text("The rule's short name, on one line; a later lesson with the same topic replaces it."),
     body: text("The rule, on one line."),
@@ -326,7 +305,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
       description: "For a client with no filesystem: files to write, then commit with `paths`. A refused entry (outside the desk or write prefix, in .git, .state/ or .github/workflows/, a task card or link) refuses the call before anything is written. Not with `tidy: true`. Required unless `paths` is given.",
     },
     message: text("The commit message."),
-    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_move, track_rename or git mv, with the old and new path of every move, plus _meta/organization.json. Other staged work stays staged."),
+    tidy: flag("Pass true to commit a desk tidy or its undo: moved or renamed task cards already staged by task_move, track_rename or git mv, plus _meta/organization.json."),
   }, ["message"]),
   desk_search: schema({
     query: text("The search query."),
