@@ -29,7 +29,7 @@ test("isVersion accepts the published semver shape only", () => {
   assert.equal(isVersion("3.1.0-alpha.7"), true)
   assert.equal(isVersion("3.2.0"), true)
   for (const value of ["3.2", "v3.2.0", "3.2.0-", "3.2.0+build", 3, null, "3.1.0-alpha.7 "]) assert.equal(isVersion(value), false, String(value))
-  assert.throws(() => compareVersions("3.2", "3.2.0"), /not a version/u)
+  assert.throws(() => compareVersions("3.2", "3.2.0"), /Pass a version: "3.2" is not one/u)
 })
 
 // Every value its own independent group.
