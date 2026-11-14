@@ -1451,7 +1451,7 @@ test("a context whose process table never lists its daemon is marked processesUn
   const closed = json(await controller.call("browser_context", { action: "close", contextId: id }))
   assert.deepEqual(Object.keys(closed).sort(), ["closed", "contextId", "hint", "processesUnknown"])
   assert.equal(closed.processesUnknown, true)
-  assert.match(closed.hint, /couldn't read which processes this context started, so a browser it opened may still be running/u)
+  assert.match(closed.hint, /did not list them, so a browser it opened may still be running/u)
   assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${id}`)), false)
 })
 

@@ -654,7 +654,7 @@ function close(s, id) {
   }).then(function () {
     removeDir(dir);
     delete s.contexts[id];
-    if (owner.processesUnknown) return { contextId: id, closed: true, processesUnknown: true, hint: "Desk couldn't read which processes this context started, so a browser it opened may still be running." };
+    if (owner.processesUnknown) return { contextId: id, closed: true, processesUnknown: true, hint: "Desk could not record the processes this context started, because three reads of the process table did not list them, so a browser it opened may still be running." };
     return { contextId: id, closed: true };
   });
 }
