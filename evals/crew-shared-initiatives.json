@@ -49,13 +49,12 @@
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/alex/service-health/track.md",
     "evals/worlds/crew-shared-initiatives/empty-and-unsafe-read-only/desk/desks/sam/README.md"
   ],
-  "reviewedSourceFingerprint": "97b1ab43be5d3de1090747c7d2fc07a2ccf9fc8e488a196990476c6d53f7ef7f",
-  "knownFailure": {
-    "issue": "https://github.com/ourostack/desk/issues/976",
-    "case": "legacy-and-concurrent-writer",
-    "observed": "2026-11-14"
-  },
-  "requirements": [
+  "reviewedSourceFingerprint": "1ec1a9a233d28220e0d40c1ff2de366dbf3407136105dd307f06986ec987ea1f",
+  "knownFailure": [
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "legacy-and-concurrent-writer", "observed": "2026-11-14"},
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "explicit-edit-of-another-desk", "observed": "2026-11-14"},
+    {"issue": "https://github.com/ourostack/desk/issues/976", "case": "adopt-existing-doc-into-shared-tracks", "observed": "2026-11-14"}
+  ],  "requirements": [
     { "id": "single-home", "description": "Reuse existing shared tracks; new initiatives use a README in the same home." },
     { "id": "preserve-work", "description": "Keep personal tasks, ownership and state unchanged unless separately authorized." },
     { "id": "attribution", "description": "Shared deliberation preserves author and uncertainty without inventing consensus." },
