@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.134 — 2026-11-14
+
+Every error and failure reply in Desk's runtime code (workspace tidy, pull-request publication, bootstrap, Git inspection, session retention and sync, status inspection, unsaved-work inspection, runtime dependencies, workspace claims and evidence, migrations, drains and the admission worker) now carries a stable `code`, such as `retention_flag_needs_value`, so a caller can branch on it. The messages are unchanged. The four session-retention argument errors gain a `code` beside their `error`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.133 — 2026-11-14
 
 Every error thrown by Desk's tool code (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `track_*`, `note_*`, `lesson_add`, `friction_add` and `desk_save`) now carries a stable `code` on the error, such as `desk_save_path_nul` or `task_update_evidence_is_not_valid`, so a caller can branch on it. The messages are unchanged.
