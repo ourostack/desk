@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.128 — 2026-11-14
+
+A proof session whose published Factory record the flush has recorded is now withdrawn through the existing retraction path, whatever its route says, and a tombstone records the withdrawal once the store no longer holds it. A withdrawn session is never published again. Each push and tombstone is recorded in the local audit file with the reason `proof`. A published file that no flush had recorded when its session was marked is not withdrawn by this change, and it stays on the store. The [factory documentation](docs/factory-local-capture.md#proof-sessions) describes the rule.
+
+The alignment note for new work now ends with a direct request for go, such as "Say go and I'll start on <outcome>.". A final-message request is not a mid-run question; a host that forbids even that must be named plainly. Approved work with an explicit go is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.127 — 2026-11-14
 
 The errors in Desk's tool code (`task_create`, `task_update`, `task_archive`, `task_move`, `task_signoff`, `track_*`, `note_*`, `lesson_add`, `friction_add` and `desk_save`) now open with what to do, then say what went wrong, and keep their meaning. Replies that are successes, statuses or commit messages keep their wording.
