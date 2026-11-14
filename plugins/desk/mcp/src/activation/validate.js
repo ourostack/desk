@@ -31,7 +31,7 @@ const ENTRYPOINT_HOSTS = new Set(["claude", "copilot"])
 export function selectEngineeringMethod(dependencyIds) {
   if (dependencyIds.includes("superpowers")) {
     if (dependencyIds.includes("work-suite")) {
-      throw new Error("activation must select exactly one engineering lifecycle")
+      throw Object.assign(new Error("Select exactly one engineering lifecycle in the activation: activation must select exactly one engineering lifecycle"), { code: "validate_select_exactly_one_engineering_lifecycle" })
     }
     return "superpowers"
   }

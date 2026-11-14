@@ -49,7 +49,7 @@ export function isTombstoned(rows, doc) {
 }
 
 function invalidLedger(diagnostics) {
-  const error = new Error("artifact tombstone ledger is invalid")
+  const error = Object.assign(new Error("Fix the artifact tombstone ledger, then run it again: artifact tombstone ledger is invalid"), { code: "tombstones_fix_the_artifact_tombstone_ledger" })
   error.code = "artifact_tombstone_ledger_invalid"
   error.diagnostics = diagnostics
   return error

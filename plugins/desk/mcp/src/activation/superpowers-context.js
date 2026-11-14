@@ -25,7 +25,7 @@ function missingPathHint(input, name) {
 function requiredPath(input, name) {
   const value = input[name]
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`Superpowers context: ${name} is required: ${missingPathHint(input, name)}`)
+    throw Object.assign(new Error(`Superpowers context: Pass ${name}: ${name} is required: ${missingPathHint(input, name)}`), { code: "superpowers_context_superpowers_context_pass_is_required" })
   }
   return path.resolve(expandHome(value))
 }
@@ -34,7 +34,7 @@ function optionalPath(input, name) {
   const value = input[name]
   if (value === undefined || value === null) return null
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`Superpowers context: ${name} must be a non-empty path when supplied`)
+    throw Object.assign(new Error(`Superpowers context: Pass ${name} as a non-empty path: ${name} must be a non-empty path when supplied`), { code: "superpowers_context_superpowers_context_pass_as_a_2" })
   }
   return path.resolve(expandHome(value))
 }
@@ -53,10 +53,10 @@ async function canonicalFile(deskRoot, person, file, kind, required = true) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error
     if (!required) return null
-    throw new Error(`Superpowers context: canonical ${kind} does not exist: ${target}`)
+    throw Object.assign(new Error(`Superpowers context: Create the canonical file first: canonical ${kind} does not exist: ${target}`), { code: "superpowers_context_superpowers_context_create_the_canonical" })
   }
   if (!info.isFile()) {
-    throw new Error(`Superpowers context: canonical ${kind} must be a regular file: ${target}`)
+    throw Object.assign(new Error(`Superpowers context: Point it at a regular file: canonical ${kind} must be a regular file: ${target}`), { code: "superpowers_context_superpowers_context_point_it_at" })
   }
   return target
 }
@@ -71,7 +71,7 @@ export const VISUAL_PROOF_RULE = "Capture visual proof as you go: whenever the w
 async function assertTaskLocal(taskPath, file, name) {
   const [realTaskPath, realFile] = await Promise.all([realpath(taskPath), realpath(file)])
   if (!isPathContained(realTaskPath, realFile)) {
-    throw new Error(`Superpowers context: ${name} must be within taskPath`)
+    throw Object.assign(new Error(`Superpowers context: Keep ${name} within taskPath: ${name} must be within taskPath`), { code: "superpowers_context_superpowers_context_keep_within_taskpath" })
   }
 }
 
@@ -110,25 +110,25 @@ export async function resolveSuperpowersContext(input) {
   const person = input.person ?? null
   for (const name of ["step", "attempt"]) {
     if (!Number.isInteger(input[name]) || input[name] < 1) {
-      throw new Error(`Superpowers context: ${name} must be a positive integer`)
+      throw Object.assign(new Error(`Superpowers context: Pass ${name} as a positive integer: ${name} must be a positive integer`), { code: "superpowers_context_superpowers_context_pass_as_a" })
     }
   }
   if (!isPathContained(personPrefix(deskRoot, person), taskPath)) {
-    throw new Error("Superpowers context: taskPath must be within the effective Desk scope")
+    throw Object.assign(new Error("Superpowers context: Keep taskPath within the effective Desk scope: taskPath must be within the effective Desk scope"), { code: "superpowers_context_superpowers_context_keep_taskpath_within" })
   }
   if (!isPathContained(taskPath, iterationPath)) {
-    throw new Error("Superpowers context: iterationPath must be within taskPath")
+    throw Object.assign(new Error("Superpowers context: Keep iterationPath within taskPath: iterationPath must be within taskPath"), { code: "superpowers_context_superpowers_context_keep_iterationpath_within" })
   }
   if (planPath !== null && !isPathContained(deskRoot, planPath)) {
-    throw new Error("Superpowers context: planPath must be within Desk")
+    throw Object.assign(new Error("Superpowers context: Keep planPath within Desk: planPath must be within Desk"), { code: "superpowers_context_superpowers_context_keep_planpath_within" })
   }
   // Progress and rulings are written, so they stay inside the effective person prefix even though a plan may be a shared read reference.
   if (requestedProgressPath !== null && !isPathContained(personPrefix(deskRoot, person), requestedProgressPath)) {
-    throw new Error("Superpowers context: progressPath must be within the effective Desk scope")
+    throw Object.assign(new Error("Superpowers context: Keep progressPath within the effective Desk scope: progressPath must be within the effective Desk scope"), { code: "superpowers_context_superpowers_context_keep_progresspath_within_2" })
   }
   // Rulings follow the progress record, so another task's canonical state can never become this task's progress store.
   if (requestedProgressPath !== null && !isPathContained(taskPath, requestedProgressPath)) {
-    throw new Error("Superpowers context: progressPath must be within taskPath")
+    throw Object.assign(new Error("Superpowers context: Keep progressPath within taskPath: progressPath must be within taskPath"), { code: "superpowers_context_superpowers_context_keep_progresspath_within" })
   }
   if (evidenceRoot !== null) {
     const resolvedRoot = await realpathOfExisting(evidenceRoot)
@@ -136,7 +136,7 @@ export async function resolveSuperpowersContext(input) {
     const factoryDir = factoryStateDir(process.env)
     for (const [name, folder] of [["factory", factoryDir], ["work-ledger", path.join(path.dirname(factoryDir), LEGACY_LEDGER_SEGMENTS.at(-1))]]) {
       if (isPathContained(folder, evidenceRoot) || isPathContained(await realpathOfExisting(folder), resolvedRoot)) {
-        throw new Error(`Superpowers context: evidenceRoot must not be inside Desk's private ${name} folder (${folder}); leave it out to keep the files in the task's folder`)
+        throw Object.assign(new Error(`Superpowers context: Leave evidenceRoot out to keep the files in the task's folder: evidenceRoot must not be inside Desk's private ${name} folder (${folder}); leave it out to keep the files in the task's folder`), { code: "superpowers_context_superpowers_context_leave_evidenceroot_out" })
       }
     }
   }
@@ -202,11 +202,11 @@ if (isEntrypoint()) {
     const input = {}
     for (let index = 2; index < process.argv.length; index += 2) {
       const flag = process.argv[index]
-      if (!Object.hasOwn(names, flag)) throw new Error(`Superpowers context: unknown argument ${flag}`)
+      if (!Object.hasOwn(names, flag)) throw Object.assign(new Error(`Superpowers context: Remove the unknown argument: unknown argument ${flag}`), { code: "superpowers_context_superpowers_context_remove_the_unknown" })
       const name = names[flag]
       const value = process.argv[index + 1]
       if (value === undefined || value.startsWith("--")) {
-        throw new Error(`Superpowers context: value required for ${flag}`)
+        throw Object.assign(new Error(`Superpowers context: Pass a value for the flag: value required for ${flag}`), { code: "superpowers_context_superpowers_context_pass_a_value" })
       }
       input[name] = name === "step" || name === "attempt" ? Number(value) : value
     }

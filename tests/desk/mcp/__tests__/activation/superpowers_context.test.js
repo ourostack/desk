@@ -156,7 +156,7 @@ test("an in-task symlink to a neighbouring task's record is refused as progress"
   const resolveContext = await loadResolver()
   for (const [link, destination] of links) {
     await assert.rejects(() => resolveContext({ ...input, progressPath: link }), {
-      message: "Superpowers context: progressPath must be within taskPath",
+      message: "Superpowers context: Keep progressPath within taskPath: progressPath must be within taskPath",
     })
     assert.equal(realpathSync(link), realpathSync(destination), "the fixture link must really resolve into the neighbouring task")
     assert.equal(statSync(link).isFile(), true, "the fixture link must look like a regular file to a follow-the-link stat")
@@ -183,7 +183,7 @@ test("explicit provider progress in another task of the same person is refused",
   const resolveContext = await loadResolver()
   for (const foreign of [path.join(otherIteration, "doing.md"), path.join(otherTask, "task.md")]) {
     await assert.rejects(() => resolveContext({ ...input, progressPath: foreign }), {
-      message: "Superpowers context: progressPath must be within taskPath",
+      message: "Superpowers context: Keep progressPath within taskPath: progressPath must be within taskPath",
     })
   }
   assert.deepEqual(snapshotTree(), before, "refusing a neighbouring task's canonical state must not rewrite it")
@@ -198,7 +198,7 @@ test("explicit provider progress in another person's desk is refused rather than
   const before = snapshotTree()
   const resolveContext = await loadResolver()
   await assert.rejects(() => resolveContext(input), {
-    message: "Superpowers context: progressPath must be within the effective Desk scope",
+    message: "Superpowers context: Keep progressPath within the effective Desk scope: progressPath must be within the effective Desk scope",
   })
   assert.deepEqual(snapshotTree(), before)
 })
@@ -275,11 +275,11 @@ test("an explicit cross-repository Desk plan is preserved rather than rebound by
 })
 
 for (const [label, overrides, message] of [
-  ["invalid step", { step: 0 }, "Superpowers context: step must be a positive integer"],
-  ["invalid attempt", { attempt: 0 }, "Superpowers context: attempt must be a positive integer"],
-  ["task outside Desk", { taskPath: path.join(tmpdir(), "outside-task") }, "Superpowers context: taskPath must be within the effective Desk scope"],
-  ["iteration outside task", { iterationPath: path.join(tmpdir(), "outside-iteration") }, "Superpowers context: iterationPath must be within taskPath"],
-  ["plan outside Desk", { planPath: path.join(tmpdir(), "outside-plan.md") }, "Superpowers context: planPath must be within Desk"],
+  ["invalid step", { step: 0 }, "Superpowers context: Pass step as a positive integer: step must be a positive integer"],
+  ["invalid attempt", { attempt: 0 }, "Superpowers context: Pass attempt as a positive integer: attempt must be a positive integer"],
+  ["task outside Desk", { taskPath: path.join(tmpdir(), "outside-task") }, "Superpowers context: Keep taskPath within the effective Desk scope: taskPath must be within the effective Desk scope"],
+  ["iteration outside task", { iterationPath: path.join(tmpdir(), "outside-iteration") }, "Superpowers context: Keep iterationPath within taskPath: iterationPath must be within taskPath"],
+  ["plan outside Desk", { planPath: path.join(tmpdir(), "outside-plan.md") }, "Superpowers context: Keep planPath within Desk: planPath must be within Desk"],
 ]) {
   test(`context fails closed for ${label}`, async () => {
     const resolveContext = await loadResolver()
@@ -314,7 +314,7 @@ test("still refuses the factory state folder and the retired work-ledger folder"
     for (const folder of ["factory", "work-ledger"]) {
       for (const sub of ["", "inner"]) {
         const input = context({ evidenceRoot: path.join(process.env.XDG_STATE_HOME, "ouroboros-skills", "desk", folder, sub) })
-        await assert.rejects(() => resolveContext(input), /^Error: Superpowers context: evidenceRoot must not be inside Desk's private (factory|work-ledger) folder/u)
+        await assert.rejects(() => resolveContext(input), /^Error: Superpowers context: Leave evidenceRoot out to keep the files in the task's folder: evidenceRoot must not be inside Desk's private (factory|work-ledger) folder/u)
       }
     }
   } finally {
@@ -364,7 +364,7 @@ for (const [label, kind, canonicalPath, makeExplicit] of [
     rmSync(missing)
     const before = snapshotTree()
     const resolveContext = await loadResolver()
-    await assert.rejects(() => resolveContext(input), { message: `Superpowers context: canonical ${kind} does not exist: ${missing}` })
+    await assert.rejects(() => resolveContext(input), { message: `Superpowers context: Create the canonical file first: canonical ${kind} does not exist: ${missing}` })
     assert.deepEqual(snapshotTree(), before)
     assert.equal(existsSync(missing), false)
     assert.equal(existsSync(input.evidenceRoot), false)
@@ -377,7 +377,7 @@ test("an explicit provider progress path that does not exist is refused instead 
   const before = snapshotTree()
   const resolveContext = await loadResolver()
   await assert.rejects(() => resolveContext(input), {
-    message: `Superpowers context: canonical progress does not exist: ${input.progressPath}`,
+    message: `Superpowers context: Create the canonical file first: canonical progress does not exist: ${input.progressPath}`,
   })
   assert.deepEqual(snapshotTree(), before)
   assert.equal(existsSync(input.progressPath), false)
@@ -390,7 +390,7 @@ test("an explicit provider progress directory is refused rather than treated as 
   const before = snapshotTree()
   const resolveContext = await loadResolver()
   await assert.rejects(() => resolveContext(input), {
-    message: `Superpowers context: canonical progress must be a regular file: ${input.progressPath}`,
+    message: `Superpowers context: Point it at a regular file: canonical progress must be a regular file: ${input.progressPath}`,
   })
   assert.deepEqual(snapshotTree(), before)
 })
@@ -402,7 +402,7 @@ test("context refuses a directory in place of a canonical file", async () => {
   mkdirSync(notFile)
   const before = snapshotTree()
   const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), { message: `Superpowers context: canonical progress must be a regular file: ${notFile}` })
+  await assert.rejects(() => resolveContext(input), { message: `Superpowers context: Point it at a regular file: canonical progress must be a regular file: ${notFile}` })
   assert.deepEqual(snapshotTree(), before)
   assert.equal(existsSync(input.evidenceRoot), false)
 })
@@ -412,14 +412,14 @@ test("context refuses a missing person root without provisioning it", async () =
   const personRoot = path.join(input.deskRoot, "desks", "member")
   rmSync(personRoot, { recursive: true })
   const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), { message: "desk-mcp: effective write root does not exist: desks/member" })
+  await assert.rejects(() => resolveContext(input), { message: "desk-mcp: effective write root does not exist: Create the missing effective write root first: desks/member" })
   assert.equal(existsSync(personRoot), false)
 })
 
 test("context rejects a different person's task instead of broadening write authority", async () => {
   const input = context({ person: "other" })
   const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), { message: "Superpowers context: taskPath must be within the effective Desk scope" })
+  await assert.rejects(() => resolveContext(input), { message: "Superpowers context: Keep taskPath within the effective Desk scope: taskPath must be within the effective Desk scope" })
 })
 
 test("person-off context retains the ordinary Desk path authority", async () => {
@@ -489,7 +489,7 @@ test("CLI unknown option fails with its own diagnostic and no partial output or 
   assert.deepEqual(snapshotTree(), before)
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr.trim(), "Superpowers context: unknown argument --unexpected")
+  assert.equal(result.stderr.trim(), "Superpowers context: Remove the unknown argument: unknown argument --unexpected")
 })
 
 test("the CLI prints the same explicit plan and provider progress paths as the resolver", async () => {

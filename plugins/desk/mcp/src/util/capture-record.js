@@ -51,20 +51,20 @@ const isRecord = (record) => record !== null && typeof record === "object" && re
 
 /** The record for `id`: `{ record }`, or `{ error }` saying why Desk cannot use it. */
 export function readCaptureRecord({ stateDir, id }) {
-  if (typeof id !== "string" || !ID.test(id)) return { error: "the capture id is not one Desk issues" }
+  if (typeof id !== "string" || !ID.test(id)) return { code: "capture_id_not_issued", error: "Pass a capture id Desk issued: the capture id is not one Desk issues" }
   let text
   try {
     text = readFileSync(fileOf(stateDir, id), "utf8")
   } catch {
-    return { error: "Desk has no record of this change: it was never written here, or it was removed once the commit landed" }
+    return { code: "capture_record_missing", error: "Pass the id of a change Desk still holds: Desk has no record of this change: it was never written here, or it was removed once the commit landed" }
   }
   let record
   try {
     record = JSON.parse(text)
   } catch {
-    return { error: "Desk's record of this change is unreadable" }
+    return { code: "capture_record_unreadable", error: "Check that Desk's record of this change can be read: Desk's record of this change is unreadable" }
   }
-  return isRecord(record) && record.id === id ? { record } : { error: "Desk's record of this change is malformed" }
+  return isRecord(record) && record.id === id ? { record } : { code: "capture_record_malformed", error: "Remove the malformed record of this change, then run it again: Desk's record of this change is malformed" }
 }
 
 /** Removes the record for `id`, a valid id Desk issued; a missing record is already removed. */

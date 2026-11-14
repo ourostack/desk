@@ -122,7 +122,7 @@ test("resolveWriteTarget rejects a desk root that is not a directory", async () 
       person: null,
       segments: ["track.md"],
     }),
-    /^Error: desk-mcp: the desk root is not a directory$/i,
+    /^Error: desk-mcp: Point the desk root at a directory: the desk root is not a directory$/i,
   )
 })
 
@@ -254,7 +254,7 @@ test("resolveWriteTarget refuses non-missing filesystem errors by relative path"
         person: null,
         segments: ["blocked", "task.md"],
       }),
-      { message: "desk-mcp: cannot read blocked/task.md (EACCES: permission denied)" },
+      { message: "desk-mcp: Check that the file can be read: cannot read blocked/task.md (EACCES: permission denied)" },
     )
   } finally {
     await fs.chmod(blocked, 0o700)
@@ -266,17 +266,17 @@ test("resolveWriteTarget refuses a path that runs under a file, at depth 1 and 2
   await fs.writeFile(path.join(root, "README.md"), "# readme\n")
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "x.md"] }),
-    (error) => !error.code && error.message.includes("runs under a file, not a folder") && error.message.endsWith(": README.md"),
+    (error) => error.message.includes("runs under a file, not a folder") && error.message.endsWith(": README.md"),
   )
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["README.md", "sub", "x.md"] }),
-    (error) => !error.code && error.message.endsWith(": README.md"),
+    (error) => error.message.endsWith(": README.md"),
   )
   await fs.mkdir(path.join(root, "dir"))
   await fs.writeFile(path.join(root, "dir", "file.md"), "x")
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "x.md"] }),
-    (error) => !error.code && error.message.endsWith(": dir/file.md"),
+    (error) => error.message.endsWith(": dir/file.md"),
   )
   await assert.rejects(
     resolveWriteTarget({ deskRoot: root, person: null, segments: ["dir", "file.md", "a", "x.md"] }),

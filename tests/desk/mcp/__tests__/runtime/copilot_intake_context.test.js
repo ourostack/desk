@@ -96,7 +96,7 @@ test("the actual hook reads only its started-session binding and emits the same 
     const refused = execute(raw)
     assert.equal(refused.status, 0)
     assert.deepEqual(JSON.parse(refused.stdout), {})
-    assert.match(refused.stderr, /^Desk intake context unavailable: (SyntaxError|input_too_large)\n$/u)
+    assert.match(refused.stderr, /^Check Desk's intake context, then try again: Desk intake context unavailable: (SyntaxError|input_too_large)\n$/u)
   }
   for (const activation_targets of [[], [{ id: "desk:worker" }], [{ id: "desk:worker", depends_on: ["work-suite"] }]]) {
     const code = `

@@ -40,10 +40,9 @@ const WRITE_EXAMPLE = '{"status": "implementing"}'
 export function objectInput(value, { tool, field, effect = WRITE_EFFECT, example = WRITE_EXAMPLE }) {
   if (value === undefined || value === null) return undefined
   const reject = (got) => {
-    throw new TypeError(
-      `${tool}: \`${field}\` must be an object of key/value pairs (got ${got}); ${effect}. ` +
-        `Pass it as a JSON object, for example ${example}.`,
-    )
+    throw Object.assign(new TypeError(
+      `${tool}: Pass \`${field}\` as a JSON object: \`${field}\` must be an object of key/value pairs (got ${got}); ${effect}. ` +
+        `Pass it as a JSON object, for example ${example}.`), { code: "object_input_pass_as_a_json_object" })
   }
   if (typeof value === "string") {
     let parsed

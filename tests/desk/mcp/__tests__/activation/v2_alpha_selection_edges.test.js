@@ -37,7 +37,7 @@ test("Copilot builder rejects two selected lifecycle owners before producing a b
 test("Copilot validator reports two selected lifecycle owners rather than throwing", () => {
   const input = fixture()
   input.activation.provides.activation_targets[0].depends_on.push("work-suite")
-  assert.deepEqual(validateCopilotPackagingContract(input), ["activation must select exactly one engineering lifecycle"])
+  assert.deepEqual(validateCopilotPackagingContract(input), ["Select exactly one engineering lifecycle in the activation: activation must select exactly one engineering lifecycle"])
 })
 
 for (const [label, mutate, expected] of [

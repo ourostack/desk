@@ -108,7 +108,7 @@ async function location(root) {
   const { TIDY_GIT_TIMEOUT_MS } = await import("../../mcp/src/runtime/workspace-tidy.js");
   // The report location serves the detached repair and the CLI, never the boot check's budget.
   const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { timeoutMs: TIDY_GIT_TIMEOUT_MS });
-  if (!result.ok) throw new Error("bound desk is not an inspectable repository");
+  if (!result.ok) throw Object.assign(new Error("Use a desk that is an inspectable Git repository: bound desk is not an inspectable repository"), { code: "boot_checks.cjs_use_a_desk_that_is" });
   const common = await fs.realpath(result.stdout);
   return { canonical, file: reportPath(canonical, common) };
 }
@@ -116,7 +116,7 @@ async function location(root) {
 async function readReport(file) {
   const { decodeTidyReport, TIDY_REPORT_MAX_BYTES } = await import("../../mcp/src/runtime/workspace-evidence.js");
   const info = await fs.lstat(file);
-  if (!info.isFile() || info.nlink !== 1 || info.size > TIDY_REPORT_MAX_BYTES) throw new Error("unsafe workspace-tidy report");
+  if (!info.isFile() || info.nlink !== 1 || info.size > TIDY_REPORT_MAX_BYTES) throw Object.assign(new Error("Run the workspace tidy again: unsafe workspace-tidy report"), { code: "boot_checks.cjs_run_the_workspace_tidy_again_3" });
   return decodeTidyReport(await fs.readFile(file, "utf8"));
 }
 
@@ -137,9 +137,9 @@ function nodeStatusPath(file) {
 
 async function readNodeStatus(file) {
   const info = await fs.lstat(nodeStatusPath(file));
-  if (!info.isFile() || info.nlink !== 1 || info.size > NODE_STATUS_MAX_BYTES) throw new Error("unsafe workspace-tidy node status");
+  if (!info.isFile() || info.nlink !== 1 || info.size > NODE_STATUS_MAX_BYTES) throw Object.assign(new Error("Run the workspace tidy again: unsafe workspace-tidy node status"), { code: "boot_checks.cjs_run_the_workspace_tidy_again_2" });
   const status = JSON.parse(await fs.readFile(nodeStatusPath(file), "utf8"));
-  if (typeof status?.range !== "string") throw new Error("invalid workspace-tidy node status");
+  if (typeof status?.range !== "string") throw Object.assign(new Error("Run the workspace tidy again: invalid workspace-tidy node status"), { code: "boot_checks.cjs_run_the_workspace_tidy_again" });
   return status;
 }
 
@@ -154,7 +154,7 @@ async function writeNodeStatus(file, status) {
     await fs.rename(temporary, target);
   } catch (error) {
     await fs.rm(temporary, { force: true });
-    throw new Error(`could not record the workspace-tidy Node status at ${target}: ${error.code ?? error.message}`);
+    throw Object.assign(new Error(`Check that the folder is writable, then run it again: could not record the workspace-tidy Node status at ${target}: ${error.code ?? error.message}`), { code: "boot_checks.cjs_check_that_the_folder_is" });
   }
 }
 
@@ -337,7 +337,7 @@ const factoryCheck = {
     } catch {
       // An unreadable plugin set leaves only the desk's own declaration.
     }
-    if (plugins.timedOut) throw Object.assign(new Error("plugin scan past the check's deadline"), { code: "boot_check_budget" });
+    if (plugins.timedOut) throw Object.assign(new Error("Run the check again: plugin scan past the check's deadline"), { code: "boot_check_budget" });
     const who = await sessionPerson(ctx, root);
     const result = factoryBootCheck({
       env: ctx.env, deskRoot: root, personPrefix: factoryPrefix(who), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
@@ -366,7 +366,7 @@ function improvementCards(ctx) {
 }
 
 function withinDeadline(ctx) {
-  if (performance.now() >= ctx.deadline) throw Object.assign(new Error("improvement cards read past the check's deadline"), { code: "boot_check_budget" });
+  if (performance.now() >= ctx.deadline) throw Object.assign(new Error("Run the check again: improvement cards read past the check's deadline"), { code: "boot_check_budget" });
 }
 
 // No line in a session with no operator in it (a headless factory session, an unattended or CI run), and none of these lines starts a repair:
@@ -784,7 +784,7 @@ async function startRepair(root, { env = process.env, resolveNode = compatibleNo
     child.once("error", reject);
     child.once("close", (exit) => resolve(exit));
   });
-  if (code !== 0) throw new Error(`repair in ${node} exited with ${code}`);
+  if (code !== 0) throw Object.assign(new Error(`Run the repair again: repair in ${node} exited with ${code}`), { code: "boot_checks.cjs_run_the_repair_again_repair" });
   return { started: true, node };
 }
 

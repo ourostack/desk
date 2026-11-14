@@ -97,7 +97,7 @@ test("write confinement refuses an escaping platform resolution before filesyste
   syncBuiltinESMExports()
   try {
     await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["leaf"] }), {
-      message: "desk-mcp: write target is outside effective write root: leaf",
+      message: "desk-mcp: Keep the write target inside the effective write root: write target is outside effective write root: leaf",
     })
     assert.equal(stat.mock.calls.length, 0)
   } finally {
@@ -121,7 +121,7 @@ test("target realpath failures other than ENOENT are refused by relative path an
     return originalRealpath(candidate, ...options)
   })
   try {
-    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), { message: "desk-mcp: cannot read task.md (EACCES)" })
+    await assert.rejects(resolveWriteTarget({ deskRoot, segments: ["task.md"] }), { message: "desk-mcp: Check that the file can be read: cannot read task.md (EACCES)" })
     assert.deepEqual(observed, [deskRoot, target])
   } finally {
     t.mock.restoreAll()

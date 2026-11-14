@@ -55,7 +55,7 @@ async function main() {
       }
     }
   } catch (error) {
-    process.stderr.write("Desk intake context unavailable: " + (error.code || error.name) + "\n");
+    process.stderr.write("Check Desk's intake context, then try again: Desk intake context unavailable: " + (error.code || error.name) + "\n");
   }
   process.stdout.write(JSON.stringify(output) + "\n");
 }

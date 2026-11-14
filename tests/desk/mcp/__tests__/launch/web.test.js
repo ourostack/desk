@@ -1339,7 +1339,7 @@ test("an unexpected error is reported as such", async () => {
   const controller = web.createController({ ...options, tmpDir: path.join(root, "missing") })
   const result = await controller.call("browser_context", { action: "open" })
   assert.equal(result.isError, true)
-  assert.match(text(result), /^Desk's browser hit an unexpected problem: /u)
+  assert.match(text(result), /^Call the browser tool again: Desk's browser hit an unexpected problem: /u)
 })
 
 const running = (pid) => {

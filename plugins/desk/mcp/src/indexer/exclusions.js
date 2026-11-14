@@ -50,7 +50,7 @@ export function hasGitignoreNegation(rules) {
 async function collectGitignoreRules(deskRoot, baseDir, out) {
   const gitignore = await readGitignoreAtBase(deskRoot, baseDir)
   if (!gitignore.valid) {
-    const error = new Error("gitignore exclusion rules could not be read")
+    const error = Object.assign(new Error("Check that the .gitignore file can be read, then run it again: gitignore exclusion rules could not be read"), { code: "exclusions_check_that_the_gitignore_file" })
     error.code = "exclusion_rules_unavailable"
     error.reason = "gitignore_unreadable"
     throw error
