@@ -146,8 +146,8 @@ export function resolveSession(stateDir, ref) {
   return { reason: `${JSON.stringify(ref)} matches ${hits.length} sessions: ${hits.map((id) => `${nameOf(stateDir, id) ?? "unnamed"} (${id.slice(0, 8)})`).join(", ")}` }
 }
 
-/** The sessions whose live host process is this one or one of its ancestors. `parentOf(pid)` is the parent process id, or 0. */
-export function selfSessions(stateDir, { pid = process.pid, parentOf, exists = existsSync, list = readdirSync } = {}) {
+/** The sessions whose live host process is `pid` or one of its ancestors. `parentOf(pid)` is the parent process id, or 0; `exists` and `list` read the file system. */
+export function selfSessions(stateDir, { pid, parentOf, exists, list }) {
   let ids = []
   try {
     ids = list(stateDir).filter((entry) => UUID.test(entry))
@@ -162,8 +162,8 @@ export function selfSessions(stateDir, { pid = process.pid, parentOf, exists = e
 }
 
 /** This session: the only candidate, or the one whose recent history holds `hint` (the agent's own command line is in it). */
-export function whoAmI(stateDir, { hint = null, ...options } = {}) {
-  const ids = selfSessions(stateDir, options)
+export function whoAmI(stateDir, hint, self) {
+  const ids = selfSessions(stateDir, self)
   if (ids.length === 1) return { ids, id: ids[0] }
   if (ids.length === 0 || hint === null) return { ids, id: null }
   const hits = ids.filter((id) => (readHistoryTail(stateDir, id, 512 * 1024)?.text ?? "").includes(hint))
@@ -257,7 +257,7 @@ export async function sendThroughApp({ id, prompt, socket, send = exchange, newR
 
 const defaults = (env) => ({
   stateDir: sessionStateDir({ env, home: os.homedir() }),
-  parentOf: parentOfProcess,
+  self: { pid: process.pid, parentOf: parentOfProcess, exists: existsSync, list: readdirSync },
   socket: () => appSocket({ env, home: os.homedir() }),
   send: sendThroughApp,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -289,7 +289,7 @@ async function runSend({ parsed, script, io, deps }) {
   if (!parsed.asUser) {
     // The first words of the command are in the sender's own history, which picks it out of several sessions in one runtime.
     const hint = (/^[A-Za-z0-9 ,.:;_!?-]{8,60}/u.exec(parsed.message) ?? [])[0] ?? null
-    const from = parsed.from === "none" ? null : parsed.from ?? whoAmI(deps.stateDir, { hint, parentOf: deps.parentOf }).id
+    const from = parsed.from === "none" ? null : parsed.from ?? whoAmI(deps.stateDir, hint, deps.self).id
     sender = from
     prompt = envelope({ nonce, from, name: from === null ? null : nameOf(deps.stateDir, from), host: deps.host, text: parsed.message, script })
   }
@@ -322,10 +322,10 @@ export async function runSessionsCli({ argv, script = "sessions.js", env = proce
   }
   const deps = { ...defaults(env), ...overrides }
   if (parsed.command === "whoami") {
-    if (deps.platform === "win32" && overrides.parentOf === undefined) {
+    if (deps.platform === "win32" && overrides.self === undefined) {
       return fail(io, failure("sessions_whoami_platform", "whoami cannot walk process parents here", "this command reads the process tree with ps, which Windows does not have", "read your own session id from the session folder name or the app", "pass --from <your session id> to send instead"))
     }
-    io.stdout.write(`${JSON.stringify(whoAmI(deps.stateDir, { hint: parsed.flags.hint ?? null, parentOf: deps.parentOf }), null, 1)}\n`)
+    io.stdout.write(`${JSON.stringify(whoAmI(deps.stateDir, parsed.flags.hint ?? null, deps.self), null, 1)}\n`)
     return 0
   }
   if (parsed.command === "send") return runSend({ parsed, script, io, deps })

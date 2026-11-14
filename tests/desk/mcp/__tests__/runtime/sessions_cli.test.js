@@ -3,7 +3,7 @@
 import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -60,16 +60,16 @@ test("a session is named by full id, unique id prefix or exact name, and an ambi
 test("whoami finds the session whose live process is an ancestor, and uses the hint among several", async () => {
   const { dir } = await state()
   const parents = { 900: 800, 800: 700, 700: 1 }
-  const parentOf = (pid) => parents[pid] ?? 1
+  const self = (pid) => ({ pid, parentOf: (current) => parents[current] ?? 1, exists: existsSync, list: readdirSync })
   writeFileSync(path.join(dir, A, "inuse.800.lock"), "")
-  assert.deepEqual(selfSessions(dir, { pid: 900, parentOf }), [A])
-  assert.deepEqual(whoAmI(dir, { pid: 900, parentOf }), { ids: [A], id: A })
-  assert.deepEqual(whoAmI(dir, { pid: 5, parentOf }), { ids: [], id: null })
+  assert.deepEqual(selfSessions(dir, self(900)), [A])
+  assert.deepEqual(whoAmI(dir, null, self(900)), { ids: [A], id: A })
+  assert.deepEqual(whoAmI(dir, null, self(5)), { ids: [], id: null })
   writeFileSync(path.join(dir, B, "inuse.800.lock"), "")
   appendFileSync(path.join(dir, B, "events.jsonl"), event("assistant.message", "running sessions.js send lane one hello", "t1"))
-  assert.deepEqual(whoAmI(dir, { pid: 900, parentOf }), { ids: [A, B], id: null }, "two candidates and no hint is not a guess")
-  assert.equal(whoAmI(dir, { pid: 900, parentOf, hint: "send lane one hello" }).id, B)
-  assert.equal(whoAmI(dir, { pid: 900, parentOf, hint: "never said" }).id, null)
+  assert.deepEqual(whoAmI(dir, null, self(900)), { ids: [A, B], id: null }, "two candidates and no hint is not a guess")
+  assert.equal(whoAmI(dir, "send lane one hello", self(900)).id, B)
+  assert.equal(whoAmI(dir, "never said", self(900)).id, null)
 })
 
 test("the envelope names the sender and how to reply, and an anonymous one says there is no address", () => {
@@ -77,6 +77,7 @@ test("the envelope names the sender and how to reply, and an anonymous one says 
   assert.match(text, /^\[Message ab12cd34 from 0dc4f17b-.* \(Baby  sitter \) on mini, sent with sessions\.js send\.\]\n\nhello\n\n\[Reply only if it needs an answer/u)
   assert.match(text, /send_session_message with session_id 0dc4f17b/u)
   assert.match(text, /node "\/d\/sessions\.js" send 0dc4f17b-[0-9a-f-]+ "<your reply>"/u)
+  assert.match(envelope({ nonce: "n", from: A, name: null, host: "mini", text: "hi", script: "s" }), /\(unnamed session\) on mini/u)
   assert.match(envelope({ nonce: "n", from: null, name: null, host: "mini", text: "hi", script: "s" }), /no reply address/u)
 })
 
@@ -108,7 +109,7 @@ test("a missing socket file or a dead owner reads as the app not running", async
 test("the command line parses, and a mistake says the fix and exits 2", async () => {
   assert.deepEqual(parseSessionsArgs(["tail", "abc", "3"]), { command: "tail", ref: "abc", count: 3 })
   assert.deepEqual(parseSessionsArgs(["send", "abc", "hello", "there", "--from", "none", "--as-user", "--wait", "5"]), { command: "send", ref: "abc", message: "hello there", from: "none", asUser: true, waitMs: 5000 })
-  for (const bad of [["nope"], ["tail"], ["tail", "a", "0"], ["send", "a"], ["send", "a", "m", "--wait", "x"], ["whoami", "--from", "x"], ["send", "a", "m", "--from"]]) {
+  for (const bad of [["nope"], ["tail"], ["tail", "a", "0"], ["send", "a"], ["send", "a", "m", "--wait", "x"], ["whoami", "--from", "x"], ["send", "a", "m", "--from"], ["tail", "a", "--x"]]) {
     const parsed = parseSessionsArgs(bad)
     assert.match(parsed.error, /Fix: /u, bad.join(" "))
     assert.match(parsed.error, /friction_add/u)
@@ -145,7 +146,7 @@ function app({ dir, deliver, reply = { accepted: true, reply: "session_message_s
     return reply
   } }
 }
-const sendDeps = (dir, fake, extra = {}) => ({ stateDir: dir, socket: () => ({ port: "1", token: "t" }), send: fake.send, sleep: async () => {}, now: (() => { let t = 0; return () => (t += 1000) })(), host: "mini", nonce: () => "feedbeef", parentOf: () => 1, ...extra })
+const sendDeps = (dir, fake, extra = {}) => ({ stateDir: dir, socket: () => ({ port: "1", token: "t" }), send: fake.send, sleep: async () => {}, now: (() => { let t = 0; return () => (t += 1000) })(), host: "mini", nonce: () => "feedbeef", self: { pid: 5, parentOf: () => 1, exists: existsSync, list: readdirSync }, ...extra })
 
 test("send is delivered only when the nonce shows in the target's history, and says what to do when it does not", async () => {
   const { dir } = await state()
@@ -259,7 +260,7 @@ test("whoami says it cannot walk processes on Windows, and anything else resolve
   assert.equal(await runSessionsCli({ argv: ["whoami"], io: win.io, deps: { stateDir: dir, platform: "win32" } }), 1)
   assert.match(win.out.stderr, /sessions_whoami_platform/u)
   const here = capture()
-  assert.equal(await runSessionsCli({ argv: ["whoami", "--hint", "x"], io: here.io, deps: { stateDir: dir, platform: "linux", parentOf: () => 1 } }), 0)
+  assert.equal(await runSessionsCli({ argv: ["whoami", "--hint", "x"], io: here.io, deps: { stateDir: dir, platform: "linux", self: { pid: 5, parentOf: () => 1, exists: existsSync, list: readdirSync } } }), 0)
   assert.deepEqual(JSON.parse(here.out.stdout), { ids: [], id: null })
 })
 
@@ -267,14 +268,14 @@ test("a missing session-state folder is named, and the sessions.js script runs e
   const { root, dir } = await state()
   const nowhere = path.join(root, "nowhere")
   assert.match(resolveSession(nowhere, "abcdef").reason, /no session-state folder/u)
-  assert.deepEqual(selfSessions(nowhere, { parentOf: () => 1 }), [])
+  assert.deepEqual(selfSessions(nowhere, { pid: 5, parentOf: () => 1, exists: existsSync, list: readdirSync }), [])
   assert.equal(nameOf(nowhere, A), null)
   appendFileSync(path.join(dir, A, "events.jsonl"), event("user.message", "from the script", "t1"))
   const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/sessions.js", import.meta.url))
   const run = (...argv) => spawnSync(process.execPath, [script, ...argv], { encoding: "utf8", env: { ...process.env, COPILOT_HOME: root } })
   assert.match(run("--help").stdout, /^Usage: sessions\.js whoami/u)
   assert.equal(JSON.parse(run("tail", "0dc4f17b-1").stdout).messages[0].text, "from the script")
-  assert.equal(run("whoami", "--hint", "nothing like it").status, 0)
+  assert.equal(run("whoami", "--hint", "nothing like it").status, process.platform === "win32" ? 1 : 0)
   const send = run("send", A, "hello there friend", "--from", "none")
   assert.equal(send.status, 1)
   assert.match(send.stderr, /sessions_app_socket/u)
@@ -282,7 +283,7 @@ test("a missing session-state folder is named, and the sessions.js script runs e
 
 test("the helpers cope with what a real machine leaves lying around", async () => {
   const { root, dir } = await state()
-  assert.ok(parentOfProcess(process.pid) > 1)
+  assert.ok(process.platform === "win32" || parentOfProcess(process.pid) > 1)
   assert.equal(parentOfProcess(1, () => ({ stdout: null })), 0, "a machine without ps says no parent")
   const bare = "22222222-1111-4222-8333-444455556666"
   const empty = "33333333-1111-4222-8333-444455556666"
@@ -299,7 +300,7 @@ test("the helpers cope with what a real machine leaves lying around", async () =
   writeFileSync(path.join(dir, bare, "inuse.800.lock"), "")
   writeFileSync(path.join(dir, A, "inuse.800.lock"), "")
   appendFileSync(path.join(dir, A, "events.jsonl"), event("user.message", "marker text", "t1"))
-  assert.equal(whoAmI(dir, { pid: 800, parentOf: () => 1, hint: "marker text" }).id, A, "a candidate with no history is skipped")
+  assert.equal(whoAmI(dir, "marker text", { pid: 800, parentOf: () => 1, exists: existsSync, list: readdirSync }).id, A, "a candidate with no history is skipped")
   assert.match(appSocket({ env: {}, home: root }).reason, /not running/u)
 })
 
@@ -324,4 +325,16 @@ test("a refusal without a reason from the app, and a target with no history yet,
   assert.equal(JSON.parse(quiet.out.stdout).delivered, false)
   const home = capture()
   assert.equal(await runSessionsCli({ argv: ["tail", "nobody"], env: {}, io: home.io }), 1)
+})
+
+test("without --from the sender is the session this process runs in, and whoami works without a hint", async () => {
+  const { dir } = await state()
+  writeFileSync(path.join(dir, A, "inuse.5.lock"), "")
+  const fake = app({ dir, deliver: true })
+  const run = capture()
+  assert.equal(await runSessionsCli({ argv: ["send", B, "no sender given here"], io: run.io, deps: sendDeps(dir, fake) }), 0)
+  assert.equal(JSON.parse(run.out.stdout).from, A)
+  const who = capture()
+  assert.equal(await runSessionsCli({ argv: ["whoami"], io: who.io, deps: sendDeps(dir, fake, { platform: "linux" }) }), 0)
+  assert.deepEqual(JSON.parse(who.out.stdout), { ids: [A], id: A })
 })
