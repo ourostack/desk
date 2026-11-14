@@ -272,6 +272,30 @@ const ownStatus = (comment, login) => comment.user?.login?.toLowerCase() === log
 /** A comment a drain's `ignoreComments` rule skips: written by the rule's author (case-insensitive) and, when the rule has a `match`, a body that matches it. */
 const ignoredComment = (comment, rules) => rules.some((rule) => comment.user?.login?.toLowerCase() === rule.author && (rule.match === null || rule.match.test(comment.body ?? "")))
 
+const isBot = (comment) => comment.user?.type === "Bot" || (comment.user?.login ?? "").toLowerCase().endsWith("[bot]")
+
+/** A bot comment's text without what changes from run to run: run URLs and IDs, dates, times and durations. */
+function repeatableText(body) {
+  return String(body ?? "")
+    .replace(/https?:\/\/\S*\/actions\/runs\/\d+\S*/giu, "<run>")
+    .replace(/\brun[ _-]?(?:id|number)?[ :#=]*\d+/giu, "run <id>")
+    .replace(/\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/gu, "<time>")
+    .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?/giu, "<time>")
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?: ?[ap]m)?(?: ?(?:utc|gmt|[a-z]{2,4}t))?\b/giu, "<time>")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?)\b/giu, "<duration>")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase()
+}
+
+/** Whether a bot's comment says what the same bot's previous comment on the issue said, apart from dates, times, durations and run links: a repeat is not news, a changed text is. */
+async function repeatsPrevious(api, repo, issue, comment, all) {
+  const everything = (all.list ??= await api.comments(repo, issue.number, "1970-01-01T00:00:00Z"))
+  const author = comment.user?.login?.toLowerCase()
+  const previous = everything.filter((entry) => entry.user?.login?.toLowerCase() === author && entry.id !== comment.id && entry.created_at < comment.created_at).sort((a, b) => a.created_at.localeCompare(b.created_at)).at(-1)
+  return previous !== undefined && repeatableText(previous.body) === repeatableText(comment.body)
+}
+
 const isDrainLabel = (event) => (event.event === "labeled" || event.event === "unlabeled") && (event.label?.name ?? "").toLowerCase().startsWith(DRAIN_LABEL_PREFIX)
 
 /** What made a reopen or a label change news, or null: a label outside the drain's namespace and ignored list, or a reopen that is not the drain claiming the issue (its own `drain:` label change within a minute). Closes, assignments and mentions are not news. */
@@ -294,8 +318,11 @@ async function changedByOthers(api, repo, issue, before, digest, ignored, ignore
   if (before.digest && (before.ignored ?? "") === ignored && before.digest !== digest) return "title or body edited"
   const since = before.updatedAt
   const comments = (await api.comments(repo, issue.number, since)).filter((comment) => comment.updated_at > since)
-  const comment = comments.find((entry) => !ownStatus(entry, api.login) && !ignoredComment(entry, ignoredComments))
-  if (comment) return `comment ${comment.id} by ${comment.user?.login ?? "nobody"}`
+  const all = {}
+  for (const entry of comments) {
+    if (ownStatus(entry, api.login) || ignoredComment(entry, ignoredComments) || (isBot(entry) && (await repeatsPrevious(api, repo, issue, entry, all)))) continue
+    return `comment ${entry.id} by ${entry.user?.login ?? "nobody"}`
+  }
   const feed = await api.issueEvents(repo, issue.number)
   const claims = feed.filter(isDrainLabel)
   const news = feed.filter((event) => event.created_at > since).map((event) => newsEvent(event, ignoredLabels, claims, api.login)).find(Boolean)
