@@ -241,17 +241,34 @@ const pullSummary = (body) => ({
   labels: body.labels.map((label) => label.name),
 })
 
-const checkSummary = (run) => ({ name: run.name, status: run.status, conclusion: run.conclusion ?? null })
+const checkSummary = (run) => ({ id: run.id, name: run.name, status: run.status, conclusion: run.conclusion ?? null, startedAt: run.started_at ?? null })
+
+/** GitHub keeps every attempt of a check on a head, and the newest attempt of each name is the one that counts, as branch rules judge it. */
+function latestCheckRuns(runs) {
+  const newest = new Map()
+  for (const run of runs) {
+    const kept = newest.get(run.name)
+    if (!kept || compareAttempts(run, kept) >= 0) newest.set(run.name, run)
+  }
+  return [...newest.values()]
+}
+
+/** Orders attempts by start time, then by id; an attempt with neither (a plain list) comes later in the list. */
+const compareAttempts = (a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || (a.id ?? 0) - (b.id ?? 0)
 
 /** The head's check runs. More than a page cannot be told apart by the first page's ETag, so that answer is read in full every poll. */
 async function readChecks(ctx, state, repo, sha) {
-  return cached(ctx, state, `/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}`, async (body) => {
+  const route = `/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}`
+  // A cached read from before check runs kept their ids and start times cannot tell the newest attempt, so it is read again.
+  if (state.cache[route]?.value.runs.some((run) => run.id === undefined)) delete state.cache[route]
+  return cached(ctx, state, route, async (body) => {
     const runs = [...body.check_runs]
     for (let page = 2; page <= Math.ceil(body.total_count / CHECKS_PAGE); page++) runs.push(...(await ctx.api.get(`/repos/${repo}/commits/${sha}/check-runs?per_page=${CHECKS_PAGE}&page=${page}`)).body.check_runs)
     return { runs: runs.map(checkSummary), volatile: body.total_count > CHECKS_PAGE }
   })
 }
 
+// Only completed runs are asked for, so a queued or in-progress run of the workflow is never the one judged.
 const readMain = (ctx, state, repo, workflow, branch) =>
   cached(ctx, state, `/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=1&exclude_pull_requests=true`, (body) => {
     const run = body.workflow_runs?.[0]
@@ -263,11 +280,12 @@ const shown = (runs) => `${runs.slice(0, 3).map((run) => `${run.name} ${run.stat
 /** The conclusions a `skippedPasses` relay also accepts. Every other conclusion, and a check still running, keeps the pull request waiting. */
 const SKIPPED_PASSES = new Set(["skipped", "neutral"])
 
-/** What each required check is still missing, as one line per entry that is not fully green. A check counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
+/** What each required check is still missing, as one line per entry that is not fully green. Only the newest attempt of each check counts, and it counts only when it completed with `success`, or with `skipped` or `neutral` when `skippedPasses` is set. */
 export function waitingOnChecks(requiredChecks, runs, skippedPasses = false) {
   const green = (run) => run.status === "completed" && (run.conclusion === "success" || (skippedPasses && SKIPPED_PASSES.has(run.conclusion)))
+  const newest = latestCheckRuns(runs)
   return requiredChecks.flatMap((required) => {
-    const matching = runs.filter((run) => globPattern(required).test(run.name))
+    const matching = newest.filter((run) => globPattern(required).test(run.name))
     if (matching.length === 0) return [`${required}: not started`]
     const notGreen = matching.filter((run) => !green(run))
     return notGreen.length === 0 ? [] : [`${required}: ${notGreen.length === matching.length && matching.length === 1 ? shown(notGreen) : `${notGreen.length} of ${matching.length} not green (${shown(notGreen)})`}`]
@@ -317,7 +335,7 @@ async function writeStatus(ctx, relay, number, record, text, { final }) {
 
 const short = (sha) => String(sha).slice(0, 7)
 const waitingText = (relay, pr, waiting) => `**${relay.label}** has not merged this yet (head \`${short(pr.headSha)}\`). Waiting on:\n${waiting.map((line) => `- ${line}`).join("\n")}\n\nThis comment is edited as that changes.`
-const mergedText = (relay, pr, sha, deleted, mainBranch) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every required check on the head was green${relay.requireMainWorkflowGreen ? ` and ${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
+const mergedText = (relay, pr, sha, deleted, judged) => `**${relay.label}** merged this (${relay.method}, head \`${short(pr.headSha)}\`, now \`${short(sha)}\`). Every required check on the head was green${judged ? ` and ${judged.branch}'s latest completed ${relay.requireMainWorkflowGreen} run ${judged.id} (${judged.url}) was green` : ""}${deleted ? "; the branch is deleted" : ""}.`
 
 async function deleteBranch(ctx, relay, pr) {
   if (!relay.deleteBranch || !pr.headRepo || pr.headRepo.toLowerCase() !== pr.baseRepo.toLowerCase() || pr.headRef === pr.baseRef) return false
@@ -334,6 +352,7 @@ async function handlePull(relay, state, ctx, number) {
   record.headSha = pr.headSha
   let waiting = waitingOnPull(pr)
   let mainBranch
+  let judged
   if (!pr.labels.includes(relay.label)) waiting = [`the ${relay.label} label is gone`]
   if (waiting.length === 0) {
     waiting = waitingOnChecks(relay.requiredChecks, (await readChecks(ctx, state, relay.repo, pr.headSha)).runs, relay.skippedPasses)
@@ -341,7 +360,10 @@ async function handlePull(relay, state, ctx, number) {
       mainBranch = await cached(ctx, state, `/repos/${relay.repo}`, (body) => body.default_branch)
       const main = await readMain(ctx, state, relay.repo, relay.requireMainWorkflowGreen, mainBranch)
       if (!main) waiting.push(`${mainBranch} has no completed ${relay.requireMainWorkflowGreen} run yet`)
-      else if (main.conclusion !== "success") waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run is ${main.conclusion}`)
+      else {
+        judged = { branch: mainBranch, id: main.id, url: main.url }
+        if (main.conclusion !== "success") waiting.push(`${mainBranch}'s latest completed ${relay.requireMainWorkflowGreen} run ${main.id} (${main.url}) is ${main.conclusion}`)
+      }
     }
   }
   if (waiting.length === 0 && record.refused?.sha === pr.headSha && ctx.now - Date.parse(record.refused.at) < REFUSED_MS) waiting = [`GitHub refused the merge (${record.refused.reason}); trying again after ${new Date(Date.parse(record.refused.at) + REFUSED_MS).toISOString()}`]
@@ -365,7 +387,7 @@ async function handlePull(relay, state, ctx, number) {
   prs[number] = { status: "merged", headSha: pr.headSha, sha: response.body.sha, at, commentId: record.commentId, commentAt: record.commentAt }
   note(state, ctx.now, { event: "merged", number, sha: response.body.sha, branchDeleted: deleted })
   ctx.save()
-  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, mainBranch), { final: true })
+  await writeStatus(ctx, relay, number, prs[number], mergedText(relay, pr, response.body.sha, deleted, judged), { final: true })
 }
 
 /** Merges each labelled open pull request whose required checks (and the default branch's workflow, when named) are all green, and keeps its status comment current. */

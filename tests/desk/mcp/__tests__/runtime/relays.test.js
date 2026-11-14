@@ -95,7 +95,8 @@ function mergeWorld(world, { checks = GREEN, main = [{ id: 9, conclusion: "succe
   world.pull(7, pr)
   world.on("GET", /\/commits\/a+\/check-runs/u, () => ({ total_count: checks.length, check_runs: checks }))
   world.on("GET", /\/repos\/o\/pages$/u, () => ({ default_branch: "main" }))
-  world.on("GET", /\/workflows\/ci\.yml\/runs\?branch=main&status=completed/u, () => ({ workflow_runs: main }))
+  // As GitHub does, a runs list asked for with status=completed leaves out queued and in-progress runs.
+  world.on("GET", /\/workflows\/ci\.yml\/runs\?branch=main/u, (route) => ({ workflow_runs: main.map((run) => ({ status: "completed", html_url: `https://github.test/runs/${run.id}`, ...run })).filter((run) => !route.includes("status=completed") || run.status === "completed") }))
   world.on("GET", /\/issues\/7\/comments/u, () => [])
   world.on("PUT", /\/pulls\/7\/merge$/u, () => ({ ok: true, status: 200, body: { merged: true, sha: MERGED_SHA } }))
   world.on("POST", /\/issues\/7\/comments$/u, () => ({ ok: true, status: 201, body: { id: 55 } }))
@@ -272,6 +273,11 @@ test("waitingOnChecks names every required check that is missing, pending or not
   assert.deepEqual(waitingOnChecks(["a.b"], [check("axb")]), ["a.b: not started"], "only * is a wildcard")
 })
 
+test("waitingOnChecks judges the newest attempt of a check, and a plain list with no attempt times takes its later entry", () => {
+  assert.deepEqual(waitingOnChecks(["x"], [check("x", "failure"), check("x")]), [])
+  assert.deepEqual(waitingOnChecks(["x"], [check("x"), check("x", "failure")]), ["x: x failure"])
+})
+
 test("waitingOnChecks with skippedPasses: skipped and neutral pass, while every other conclusion, a pending check and a missing one still hold", () => {
   const verdict = (runs) => waitingOnChecks(["typecheck", "shard-*"], runs, true)
   assert.deepEqual(verdict([check("typecheck", "skipped"), check("shard-1", "neutral"), check("shard-2")]), [])
@@ -311,7 +317,7 @@ test("merge-when-green: with every check green and main green it squash-merges a
   assert.deepEqual(w.world.writes.filter((write) => write.method === "DELETE").map((write) => write.route), ["/repos/o/pages/git/refs/heads/feature/x"])
   assert.equal(comments(w.world).length, 1)
   assert.equal(comments(w.world)[0].method, "POST")
-  assert.match(comments(w.world)[0].body.body, /^<!-- desk-relay-status:pages merge -->\n\*\*merge-when-green\*\* merged this \(squash, head `aaaaaaa`, now `bbbbbbb`\)\. Every required check on the head was green and main's latest completed ci\.yml run was green; the branch is deleted\./u)
+  assert.match(comments(w.world)[0].body.body, /^<!-- desk-relay-status:pages merge -->\n\*\*merge-when-green\*\* merged this \(squash, head `aaaaaaa`, now `bbbbbbb`\)\. Every required check on the head was green and main's latest completed ci\.yml run 9 \(https:\/\/github\.test\/runs\/9\) was green; the branch is deleted\./u)
   assert.equal(w.state("pages merge").lastMerge.number, 7)
   assert.match(relayStatusLines([MERGE], { "pages merge": w.state("pages merge") }, NOW)[0], /last merged #7/u)
   assert.equal(JSON.stringify(w.world.writes).match(/admin|bypass|auto_merge/iu), null, "no bypass of any kind is ever sent")
@@ -355,9 +361,9 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
     assert.deepEqual(prWrites(fresh.world), [])
     return fresh.state("pages merge").prs["7"].waitingOn.join("; ")
   }
-  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }] }), "main's latest completed ci.yml run is failure")
-  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "cancelled" }] }), "main's latest completed ci.yml run is cancelled")
-  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }], pr: { base: { ref: "stack", repo: { full_name: "o/pages" } } } }), "main's latest completed ci.yml run is failure", "a pull request into another branch still waits on the default branch")
+  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }] }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure")
+  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "cancelled" }] }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is cancelled")
+  assert.equal(await why(NOW, { main: [{ id: 9, conclusion: "failure" }], pr: { base: { ref: "stack", repo: { full_name: "o/pages" } } } }), "main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure", "a pull request into another branch still waits on the default branch")
   assert.equal(await why(NOW, { main: [] }), "main has no completed ci.yml run yet")
   assert.equal(await why(NOW, { pr: { draft: true } }), "it is a draft")
   assert.equal(await why(NOW, { pr: { mergeable: false, mergeable_state: "dirty" } }), "it has merge conflicts")
@@ -367,7 +373,50 @@ test("merge-when-green: a red or missing main run, a draft, a conflict and branc
   assert.equal(await why(NOW, { pr: { labels: [] } }), "the merge-when-green label is gone")
 })
 
-test("merge-when-green: a merge GitHub refuses is reported, not repeated for five minutes, and tried again at once for a new head", async () => {
+test("merge-when-green: a queued or in-progress main run is not judged, so the latest completed green one counts and is named", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { main: [{ id: 11, status: "queued", conclusion: null }, { id: 10, status: "in_progress", conclusion: null }, { id: 9, conclusion: "success" }] })
+  assert.deepEqual((await w.poll()).errors, [])
+  assert.deepEqual(prWrites(w.world).map((write) => write.method), ["PUT"])
+  assert.match(comments(w.world)[0].body.body, /main's latest completed ci\.yml run 9 \(https:\/\/github\.test\/runs\/9\) was green/u)
+})
+
+test("merge-when-green: a red latest completed main run holds the merge back and names that run, even with a queued run newer than it", async () => {
+  const w = await setup([MERGE])
+  mergeWorld(w.world, { main: [{ id: 11, status: "queued", conclusion: null }, { id: 9, conclusion: "failure" }] })
+  await w.poll()
+  assert.deepEqual(prWrites(w.world), [])
+  assert.deepEqual(w.state("pages merge").prs["7"].waitingOn, ["main's latest completed ci.yml run 9 (https://github.test/runs/9) is failure"])
+})
+
+test("merge-when-green: a check rerun green counts by its newest attempt, and a newer failed attempt still holds the merge", async () => {
+  const attempt = (id, conclusion, startedAt) => ({ id, name: "visual proof", status: "completed", conclusion, started_at: startedAt })
+  const VISUAL = { ...MERGE, requiredChecks: ["visual proof"] }
+  const rerun = await setup([VISUAL])
+  mergeWorld(rerun.world, { checks: [attempt(3, "success", "2026-11-14T20:48:24Z"), attempt(1, "failure", "2026-11-14T20:42:38Z"), attempt(2, "failure", "2026-11-14T20:47:21Z")] })
+  assert.deepEqual((await rerun.poll()).errors, [])
+  assert.deepEqual(prWrites(rerun.world).map((write) => write.method), ["PUT"])
+
+  const newer = await setup([VISUAL])
+  mergeWorld(newer.world, { checks: [attempt(3, "success", "2026-11-14T20:48:24Z"), attempt(4, "failure", "2026-11-14T20:50:00Z")] })
+  await newer.poll()
+  assert.deepEqual(prWrites(newer.world), [])
+  assert.deepEqual(newer.state("pages merge").prs["7"].waitingOn, ["visual proof: visual proof failure"])
+})
+
+test("merge-when-green: a check read cached before attempts carried ids is read again, not judged from its superseded failure", async () => {
+  const w = await setup([{ ...MERGE, requiredChecks: ["visual proof"], requireMainWorkflowGreen: undefined }])
+  const checks = [{ id: 2, name: "visual proof", status: "completed", conclusion: "success", started_at: "2026-11-14T20:48:24Z" }, { id: 1, name: "visual proof", status: "completed", conclusion: "failure", started_at: "2026-11-14T20:42:38Z" }]
+  mergeWorld(w.world, { checks })
+  const route = `/repos/o/pages/commits/${SHA}/check-runs?per_page=100`
+  const etag = `"${createHash("sha1").update(JSON.stringify({ total_count: checks.length, check_runs: checks })).digest("hex").slice(0, 12)}"`
+  const legacy = { runs: [{ name: "visual proof", status: "completed", conclusion: "failure" }], volatile: false }
+  writeFileSync(w.paths.state, JSON.stringify({ "pages merge": { type: "merge-when-green", cache: { [route]: { etag, value: legacy } }, history: [], prs: {} } }))
+  assert.deepEqual((await w.poll()).errors, [])
+  assert.deepEqual(prWrites(w.world).map((write) => write.method), ["PUT"])
+})
+
+test("merge-when-green: a refused merge is reported, not repeated for five minutes, and tried again at once for a new head", async () => {
   const w = await setup([MERGE])
   mergeWorld(w.world)
   w.world.on("PUT", /\/pulls\/7\/merge$/u, () => ({ ok: false, status: 405, body: { message: "Base branch was modified" } }))
