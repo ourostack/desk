@@ -263,7 +263,7 @@ try {
     fs.writeFileSync(path.join(dir, "source.txt"), "changed\n");
     const moved = { ...suite, reviewedSourceFingerprint: sourceFingerprint(["source.txt"], dir) };
     fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
-    assert.throws(() => requireEvidence(dir), /^Error: evals\/fixture\.json: run `node scripts\/skill-evals\.cjs record evals\/fixture\.json --result <harness-result\.json>`.*knownFailure.*without a matching run receipt/u);
+    assert.throws(() => requireEvidence(dir), /^Error: evals\/fixture\.json: run `node scripts\/skill-evals\.cjs run --changed` \(or `run evals\/fixture\.json`.*knownFailure.*without a matching run receipt/u);
     const refused = spawnSync(process.execPath, [cli, "validate", dir], { encoding: "utf8" });
     assert.equal(refused.status, 1);
 
@@ -851,6 +851,261 @@ try {
     const repeated = spawnSync(process.execPath, [cli, "revision", "--request", requestFile, "--controls", controlsFile, "--result", resultFile, "--result", resultFile], { cwd: root, encoding: "utf8" });
     assert.equal(repeated.status, 0, repeated.stderr);
     assert.equal(JSON.parse(repeated.stdout).results.length, 2);
+  }
+
+  {
+    // The runner drives a Copilot-compatible harness; this fake answers like one and logs every invocation.
+    const { parseTranscript, parseVerdict } = require("./skill-evals-run.cjs");
+    const events = [
+      { type: "assistant.message", data: { content: "", toolRequests: [{ name: "view", arguments: { path: "a" } }, { name: "glob" }] } },
+      { type: "tool.execution_start", data: {} },
+      { type: "assistant.message" },
+      { type: "assistant.message", data: { content: 7 } },
+      { type: "assistant.message", data: { content: "Final answer." } },
+    ];
+    assert.deepEqual(parseTranscript(`not json\n{broken\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`), { response: "Final answer.", tools: ['view {"path":"a"}', "glob {}"] });
+    const verdictCase = { checks: [{ id: "a" }, { id: "b" }] };
+    assert.deepEqual(parseVerdict('Here: {"checks":[{"id":"b","passed":false,"evidence":" x "},{"id":"a","passed":true,"evidence":"y"}]}', verdictCase), [{ id: "a", passed: true, evidence: "y" }, { id: "b", passed: false, evidence: "x" }]);
+    assert.throws(() => parseVerdict("no json", verdictCase), /did not return a JSON object/u);
+    assert.throws(() => parseVerdict("{broken}", verdictCase), /JSON did not parse/u);
+    for (const text of ['{"checks":[{"id":"a","passed":true,"evidence":"y"}]}', '{"checks":[{"id":"a"},{"id":"c"}]}', '{"checks":[null,null]}', '{"checks":"x"}']) {
+      assert.throws(() => parseVerdict(text, verdictCase), /exactly these checks/u, text);
+    }
+    for (const bad of ['"passed":"yes","evidence":"y"', '"passed":true,"evidence":7', '"passed":true,"evidence":"  "']) {
+      assert.throws(() => parseVerdict(`{"checks":[{"id":"a",${bad}},{"id":"b","passed":true,"evidence":"y"}]}`, verdictCase), /boolean passed and non-empty evidence/u, bad);
+    }
+
+    const fakeHarness = [
+      '"use strict";',
+      'const fs = require("node:fs");',
+      "const args = process.argv.slice(2);",
+      'const mode = process.env.FAKE_MODE || "";',
+      'if (args.includes("--version")) { if (mode !== "no-version") console.log(process.env.FAKE_VERSION || "Fake Harness 9.9.9."); process.exit(0); }',
+      'const value = (flag) => args[args.indexOf(flag) + 1];',
+      'const judging = args.includes("-s");',
+      'const log = process.env.FAKE_LOG;',
+      'const earlier = log && fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\\n").filter((line) => line.includes(\'"role":"judge"\')).length : 0;',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args }) + "\\n");',
+      'const prompt = value("-p");',
+      'if (mode === "hang-" + (judging ? "judge" : "subject")) setTimeout(() => {}, 60000);',
+      'else if (mode === "exit-" + (judging ? "judge" : "subject")) { console.error("fake failure\\n"); process.exit(3); }',
+      'else if (!judging) {',
+      '  const content = mode === "empty" ? "" : "Subject answer.";',
+      '  const toolRequests = mode === "tools" ? [{ name: "view", arguments: { path: "SKILL.md" } }] : [];',
+      '  console.log(JSON.stringify({ type: "assistant.message", data: { content, toolRequests } }));',
+      '} else if (mode === "garbage" || (mode === "flaky" && earlier === 0)) {',
+      '  console.log("no verdict here");',
+      '} else {',
+      '  const ids = [...prompt.matchAll(/- id: (\\S+)/gu)].map((match) => match[1]);',
+      '  const failing = (process.env.FAKE_FAIL || "").split(",");',
+      '  console.log("```json\\n" + JSON.stringify({ checks: ids.map((id) => ({ id, passed: !failing.includes(id), evidence: "Fake evidence for " + id })) }) + "\\n```");',
+      "}",
+    ].join("\n");
+    const runFixture = (mutate = () => {}) => {
+      const fixture = makeFixture();
+      mutate(fixture.suite, fixture.dir);
+      fs.writeFileSync(path.join(fixture.dir, "evals", "fixture.json"), `${JSON.stringify(fixture.suite, null, 2)}\n`);
+      const harness = path.join(fixture.dir, "fake-harness.cjs");
+      fs.writeFileSync(harness, fakeHarness);
+      const log = path.join(fixture.dir, "calls.jsonl");
+      const run = (args, env = {}) => spawnSync(process.execPath, [cli, "run", ...args], { cwd: fixture.dir, encoding: "utf8", env: { ...process.env, FAKE_LOG: log, ...env } });
+      const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+      return { ...fixture, harness, run, calls, receiptFile: path.join(fixture.dir, "evals", "receipts", "fixture.json"), receipt: () => JSON.parse(fs.readFileSync(path.join(fixture.dir, "evals", "receipts", "fixture.json"), "utf8")) };
+    };
+    const fake = ["--harness", "fake-harness.cjs"];
+
+    {
+      const { dir, harness, run, calls, receipt: written } = runFixture();
+      const refused = run(["fixture", "--harness", harness, "--subject-model", "m1", "--judge-model", "m1"]);
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /--self-judge/u);
+      assert.equal(calls().length, 0, "a refused self-judged run starts no process");
+
+      const result = run(["evals/fixture.json", "--harness", harness, "--subject-model", "sub", "--judge-model", "jud"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /fixture: 2\/2 check\(s\) passed across 1 case\(s\)/u);
+      assert.match(result.stdout, /Recorded evals\/receipts\/fixture\.json/u);
+      const receipt = written();
+      assert.equal(receipt.run.judge, "independent");
+      assert.equal(receipt.run.subjectModel, "sub");
+      assert.equal(receipt.run.judgeModel, "jud");
+      assert.equal(receipt.run.runtimeRevision, "Fake Harness 9.9.9");
+      assert.match(receipt.run.actor, /custom harness: one fresh subject process per case, then one separate judge process$/u);
+      assert.deepEqual(receipt.run.harness, { command: "fake-harness.cjs", pluginDirs: [], deniedTools: ["shell", "write"] });
+      assert.deepEqual(receipt.run.counts, { cases: { total: 1, passed: 1 }, checks: { total: 2, passed: 2 } });
+      assert.equal(receipt.cases[0].checks[0].evidence, "Fake evidence for check-must");
+      assert.deepEqual(calls().map((call) => [call.role, call.model]), [["subject", "sub"], ["judge", "jud"]]);
+      assert.notEqual(calls()[0].pid, calls()[1].pid, "subject and judge are separate processes");
+      assert.ok(calls()[0].args.includes("--deny-tool"), "the subject runs without shell or write");
+      assert.equal(requireEvidence(dir).suites, 1);
+      const verified = spawnSync(process.execPath, [cli, "verify", "evals/receipts/fixture.json", dir], { encoding: "utf8" });
+      assert.match(verified.stdout, /Verified fixture/u);
+      assert.doesNotMatch(verified.stdout, /SELF-JUDGED/u);
+    }
+
+    {
+      const { dir, run, receipt: written, receiptFile } = runFixture();
+      const verify = () => spawnSync(process.execPath, [cli, "verify", "evals/receipts/fixture.json", dir], { encoding: "utf8" });
+      const result = run(["fixture", ...fake, "--subject-model", "m1", "--judge-model", "m1", "--self-judge"], { FAKE_VERSION: "GitHub Copilot CLI 9.9.9." });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /SELF-JUDGED/u);
+      const receipt = written();
+      assert.equal(receipt.run.judge, "self-judged");
+      assert.match(receipt.run.model, /self-judged/u);
+      assert.match(receipt.run.actor, /^headless GitHub Copilot CLI harness: .*self-judged/u);
+      assert.match(verify().stdout, /SELF-JUDGED/u);
+      for (const [mutate, message] of [
+        [(value) => { value.judge = "independent"; }, /disagrees with its subject and judge models/u],
+        [(value) => { value.judge = "sure"; }, /must be "independent" or "self-judged"/u],
+        [(value) => { delete value.subjectModel; }, /run\.subjectModel must be a non-empty string/u],
+      ]) {
+        const tampered = JSON.parse(JSON.stringify(receipt));
+        mutate(tampered.run);
+        fs.writeFileSync(receiptFile, JSON.stringify(tampered));
+        assert.match(verify().stderr, message);
+      }
+    }
+
+    {
+      const { run, calls, receipt: written, receiptFile } = runFixture();
+      const failed = run(["fixture", ...fake], { FAKE_FAIL: "check-must-not", FAKE_MODE: "tools" });
+      assert.equal(failed.status, 1);
+      assert.match(failed.stdout, /FAILED case-1\.check-must-not: Fake evidence/u);
+      assert.match(failed.stderr, /suite\(s\) failed: fixture/u);
+      assert.match(calls()[1].args[1], /- view \{"path":"SKILL\.md"\}/u, "the judge sees the subject's tool requests");
+      assert.equal(fs.existsSync(receiptFile), false, "a failing run writes no receipt");
+
+      const dry = run(["fixture", ...fake, "--dry-run"]);
+      assert.equal(dry.status, 0, dry.stderr);
+      assert.match(dry.stdout, /Dry run/u);
+      assert.equal(fs.existsSync(receiptFile), false, "a dry run writes no receipt");
+      assert.match(calls().at(-1).args[1], /## The agent's tool requests, in order\n\(none\)/u);
+
+      const unversioned = run(["fixture", ...fake], { FAKE_MODE: "no-version" });
+      assert.equal(unversioned.status, 0, unversioned.stderr);
+      assert.equal(written().run.runtimeRevision, "unknown (fake-harness.cjs did not report a version)");
+    }
+
+    {
+      const { dir, run, receiptFile } = runFixture();
+      for (const [env, message] of [
+        [{ FAKE_MODE: "garbage" }, /case case-1: the judge did not return a JSON object/u],
+        [{ FAKE_MODE: "empty" }, /case case-1: the subject produced no final response/u],
+        [{ FAKE_MODE: "exit-subject" }, /case case-1: the subject process exited 3: fake failure/u],
+        [{ FAKE_MODE: "exit-judge" }, /case case-1: the judge process exited 3: fake failure/u],
+      ]) {
+        const result = run(["fixture", ...fake], env);
+        assert.equal(result.status, 1, JSON.stringify(env));
+        assert.match(result.stderr, message);
+      }
+      for (const mode of ["subject", "judge"]) {
+        const result = run(["fixture", ...fake, "--timeout-seconds", "1"], { FAKE_MODE: `hang-${mode}` });
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, new RegExp(`the ${mode} process timed out`, "u"));
+      }
+      const missing = run(["fixture", "--harness", path.join(dir, "no-such-harness")]);
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr, /the subject process exited null: .*ENOENT/u);
+      const noCopilot = run(["fixture"], { PATH: path.join(dir, "empty-path") });
+      assert.equal(noCopilot.status, 1);
+      assert.match(noCopilot.stderr, /could not run `copilot --version`/u);
+      assert.equal(fs.existsSync(receiptFile), false, "no failed run writes a receipt");
+
+      const flakyLog = path.join(dir, "flaky.jsonl");
+      const flaky = run(["fixture", ...fake], { FAKE_MODE: "flaky", FAKE_LOG: flakyLog });
+      assert.equal(flaky.status, 0, flaky.stderr);
+      assert.equal(fs.readFileSync(flakyLog, "utf8").trim().split("\n").map((line) => JSON.parse(line).role).join(), "subject,judge,judge", "a malformed verdict is judged once more");
+    }
+
+    {
+      for (const [args, message] of [
+        [["fixture", "fixture"], /unexpected argument fixture/u],
+        [["fixture", "--dry-run", "--dry-run"], /--dry-run was given twice/u],
+        [["fixture", "--changed"], /either one suite or --changed/u],
+        [[], /either one suite or --changed/u],
+        [["fixture", "--bogus"], /unknown option --bogus/u],
+        [["fixture", "--judge-model"], /--judge-model needs a value/u],
+        [["fixture", "--judge-model", "--dry-run"], /--judge-model needs a value/u],
+        [["fixture", "--concurrency", "0"], /--concurrency must be a positive whole number/u],
+        [["fixture", "--timeout-seconds", "soon"], /--timeout-seconds must be a positive whole number/u],
+        [["nothing"], /not an eval suite: nothing/u],
+      ]) {
+        const { run } = runFixture();
+        const result = run(args);
+        assert.equal(result.status, 1, args.join(" "));
+        assert.match(result.stderr, message, args.join(" "));
+      }
+    }
+
+    {
+      // The subject loads the plugins that own the suite's sources.
+      const { run, calls, receipt: written, dir } = runFixture((suite, root) => {
+        for (const name of ["alpha", "beta"]) fs.mkdirSync(path.join(root, "plugins", name), { recursive: true });
+        fs.writeFileSync(path.join(root, "plugins", "alpha", "plugin.json"), "{}");
+        fs.writeFileSync(path.join(root, "plugins", "alpha", "SKILL.md"), "alpha\n");
+        fs.writeFileSync(path.join(root, "plugins", "beta", "SKILL.md"), "beta\n");
+        suite.sources = ["plugins/beta/SKILL.md", "plugins/alpha/SKILL.md", "source.txt"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      });
+      const result = run(["fixture", ...fake, "--concurrency", "1"]);
+      assert.equal(result.status, 0, result.stderr);
+      const args = calls()[0].args;
+      assert.deepEqual(args.filter((arg, index) => args[index - 1] === "--plugin-dir"), [path.join(dir, "plugins", "alpha")]);
+      assert.deepEqual(written().run.harness.pluginDirs, ["plugins/alpha"]);
+    }
+
+    {
+      // knownFailure: the named case may keep failing; a pass writes the receipt and asks for the annotation to go.
+      const { dir, suite, run, receiptFile } = runFixture((value) => {
+        value.knownFailure = { issue: "https://github.com/ourostack/desk/issues/1", case: "case-1", observed: "2026-11-13" };
+        value.cases.push({ id: "case-2", description: "Second.", prompt: "Second prompt.", checks: [{ id: "c2-must", polarity: "must", evidenceType: "response", covers: ["r1"], description: "Must." }, { id: "c2-must-not", polarity: "must_not", evidenceType: "response", covers: ["r2"], description: "Must not." }] });
+      });
+      const still = run(["fixture", ...fake], { FAKE_FAIL: "check-must" });
+      assert.equal(still.status, 0, still.stderr);
+      assert.match(still.stdout, /KNOWN FAILURE fixture\/case-1 still reproduces/u);
+      assert.equal(fs.existsSync(receiptFile), false);
+      const other = run(["fixture", ...fake], { FAKE_FAIL: "c2-must" });
+      assert.equal(other.status, 1, "a failure outside the known case still fails the run");
+      assert.equal(fs.existsSync(receiptFile), false);
+      const passes = run(["fixture", ...fake]);
+      assert.equal(passes.status, 0, passes.stderr);
+      assert.match(passes.stdout, /delete its knownFailure from evals\/fixture\.json/u);
+      assert.equal(fs.existsSync(receiptFile), true);
+      delete suite.knownFailure;
+      fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(suite, null, 2)}\n`);
+      assert.doesNotThrow(() => verifyReceipt("evals/receipts/fixture.json", dir), "the receipt stands once the annotation is deleted");
+    }
+
+    {
+      // --changed compares each suite with where the branch left main.
+      const { dir, suite, run, calls } = runFixture();
+      const gitRun = (...args) => {
+        const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: dir, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+      };
+      gitRun("init", "-q", "-b", "main");
+      gitRun("add", "-A");
+      gitRun("commit", "-q", "-m", "base");
+      const unchanged = run(["--changed", ...fake]);
+      assert.equal(unchanged.status, 0, unchanged.stderr);
+      assert.match(unchanged.stdout, /nothing to run/u);
+      assert.equal(calls().length, 0);
+
+      fs.writeFileSync(path.join(dir, "source.txt"), "changed\n");
+      const moved = { ...suite, reviewedSourceFingerprint: sourceFingerprint(["source.txt"], dir) };
+      fs.writeFileSync(path.join(dir, "evals", "fixture.json"), `${JSON.stringify(moved, null, 2)}\n`);
+      const added = { ...JSON.parse(JSON.stringify(moved).replace(/"(r\d|case-1|check-must(?:-not)?)"/gu, '"added-$1"')), id: "added" };
+      fs.writeFileSync(path.join(dir, "evals", "added.json"), `${JSON.stringify(added, null, 2)}\n`);
+      const changed = run(["--changed", ...fake, "--base", "main"]);
+      assert.equal(changed.status, 0, changed.stderr);
+      assert.match(changed.stdout, /Running added:[\s\S]*Recorded evals\/receipts\/added\.json[\s\S]*Running fixture:[\s\S]*Recorded evals\/receipts\/fixture\.json/u, "a moved suite and a new suite both run");
+      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "evals", "receipts", "fixture.json"), "utf8")).contractFingerprint, contractFingerprint(moved));
+      assert.match(run(["--changed", ...fake, "--base", "no-such-ref"]).stderr, /cannot find no-such-ref/u);
+
+      gitRun("checkout", "-q", "--orphan", "unrelated");
+      gitRun("commit", "-q", "-m", "unrelated");
+      assert.match(run(["--changed", ...fake]).stderr, /share no history/u);
+    }
   }
 
   require("./test-core-meeting-capture-model-choice.cjs");

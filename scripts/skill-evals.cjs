@@ -502,16 +502,24 @@ function verifyReceipt(resultFile, repoRoot = process.cwd()) {
   return checkReceipt(receipt, entry);
 }
 
-function checkReceipt(receipt, entry) {
+function checkReceipt(receipt, entry, { ignoreKnownFailure = false } = {}) {
   if (receipt.sourceFingerprint !== entry.fingerprint) fail("result receipt sourceFingerprint does not match current sources");
   if (receipt.contractFingerprint !== contractFingerprint(entry.suite)) fail("result receipt contractFingerprint does not match the current contract");
-  if (entry.suite.knownFailure) fail(`suite ${entry.suite.id} still records a knownFailure; clear it when the eval passes`);
+  if (entry.suite.knownFailure && !ignoreKnownFailure) fail(`suite ${entry.suite.id} still records a knownFailure; clear it when the eval passes`);
   if (!isObject(receipt.run)) fail("result receipt needs a run object");
   for (const field of ["actor", "model", "runtimeRevision"]) {
     if (!hasText(receipt.run[field])) fail(`result receipt run.${field} must be a non-empty string`);
   }
   const timestamps = ["startedAt", "completedAt"].map((field) => utcTimestamp(receipt.run[field], field));
   if (timestamps[1] < timestamps[0]) fail("result receipt run.completedAt must be at or after run.startedAt");
+  // `run` writes these; a hand-made receipt may omit them, but one that names a judge must say honestly whether it was independent.
+  if (receipt.run.judge !== undefined) {
+    if (!["independent", "self-judged"].includes(receipt.run.judge)) fail('result receipt run.judge must be "independent" or "self-judged"');
+    for (const field of ["subjectModel", "judgeModel"]) {
+      if (!hasText(receipt.run[field])) fail(`result receipt run.${field} must be a non-empty string when run.judge is set`);
+    }
+    if ((receipt.run.subjectModel === receipt.run.judgeModel) !== (receipt.run.judge === "self-judged")) fail("result receipt run.judge disagrees with its subject and judge models");
+  }
 
   const expectedCases = new Map(entry.suite.cases.map((testCase) => [testCase.id, testCase]));
   const resultCases = new Set();
@@ -539,7 +547,7 @@ function checkReceipt(receipt, entry) {
   for (const caseId of expectedCases.keys()) {
     if (!resultCases.has(caseId)) fail(`missing result case: ${caseId}`);
   }
-  return { suiteId: entry.suite.id, cases: expectedCases.size, checks: entry.suite.cases.reduce((total, testCase) => total + testCase.checks.length, 0) };
+  return { suiteId: entry.suite.id, cases: expectedCases.size, checks: entry.suite.cases.reduce((total, testCase) => total + testCase.checks.length, 0), judge: receipt.run.judge };
 }
 
 const receiptsDirectory = path.join("evals", "receipts");
@@ -553,7 +561,7 @@ function receiptPath(root, suiteId) {
 }
 
 function evidenceError(label, contract, reason) {
-  return `${label}: run \`node scripts/skill-evals.cjs record ${label} --result <harness-result.json>\` after a real run of this suite, or add "knownFailure" with an issue URL if it fails for an unrelated reason. Its fingerprint moved to ${contract.slice(0, 12)} without a matching run receipt (${reason}).`;
+  return `${label}: run \`node scripts/skill-evals.cjs run --changed\` (or \`run ${label}\` for this suite alone) to run it through the harness and write its receipt, or add "knownFailure" with an issue URL if it fails for an unrelated reason. Its fingerprint moved to ${contract.slice(0, 12)} without a matching run receipt (${reason}).`;
 }
 
 // A suite whose contract fingerprint is not the grandfathered one needs a current passing receipt or a knownFailure.
@@ -579,37 +587,46 @@ function requireEvidence(repoRoot = process.cwd()) {
   return totals;
 }
 
-// Stamps the current fingerprints onto an external harness result and writes the receipt only if it passes verify.
-function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
+// Stamps the current fingerprints onto a harness result and writes the receipt only if it passes verify.
+function recordResult(suiteFile, readInput, repoRoot, options = {}) {
   const root = path.resolve(repoRoot);
   const corpus = validateRepo(root);
   const requested = fs.realpathSync(path.resolve(root, suiteFile));
   const entry = corpus.entries.find(({ file }) => fs.realpathSync(file) === requested);
   if (!entry) fail(`not an eval suite: ${suiteFile}`);
-  const input = resultFile === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : readJson(path.resolve(root, resultFile));
+  const input = typeof readInput === "function" ? readInput() : readInput;
   if (!isObject(input)) fail("harness result must be a JSON object with run and cases");
   const stamped = { suiteId: entry.suite.id, sourceFingerprint: entry.fingerprint, contractFingerprint: contractFingerprint(entry.suite) };
   for (const [key, current] of Object.entries(stamped)) {
     if (input[key] !== undefined && input[key] !== current) fail(`harness result ${key} does not match the current suite; rerun the eval against it`);
   }
   const receipt = { schemaVersion, ...stamped, run: input.run, cases: input.cases };
-  const summary = checkReceipt(receipt, entry);
+  const summary = checkReceipt(receipt, entry, options);
   const location = receiptPath(root, entry.suite.id);
   fs.mkdirSync(path.dirname(location), { recursive: true });
   fs.writeFileSync(location, `${JSON.stringify(receipt, null, 2)}\n`);
   return { ...summary, receipt: path.relative(root, location).replaceAll(path.sep, "/") };
 }
 
+function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
+  const root = path.resolve(repoRoot);
+  return recordResult(suiteFile, () => (resultFile === "-" ? JSON.parse(fs.readFileSync(0, "utf8")) : readJson(path.resolve(root, resultFile))), root);
+}
+
 function usage() {
   return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
 }
 
-function main(args) {
+async function main(args) {
   const [command, first, second, extra] = args;
   if (!command) fail(usage());
   if (command === "revision") {
     console.log(JSON.stringify(revisionCommand(args.slice(1))));
     return;
+  }
+  if (command === "run") {
+    const { runCommand } = require("./skill-evals-run.cjs");
+    return runCommand(args.slice(1), { validateRepo, contractFingerprint, recordResult, readJson, fail });
   }
   if (command === "record") {
     if (!first || second !== "--result" || !extra || args.length !== 4) fail("usage: node scripts/skill-evals.cjs record <suite-file> --result <harness-result.json|->");
@@ -637,7 +654,7 @@ function main(args) {
   }
   if (command === "verify" && first && !extra) {
     const result = verifyReceipt(first, second);
-    console.log(`Verified ${result.suiteId}: ${result.cases} case(s), ${result.checks} check(s); receipt is complete/current and evidence was not judged.`);
+    console.log(`Verified ${result.suiteId}: ${result.cases} case(s), ${result.checks} check(s); receipt is complete/current and evidence was not judged.${result.judge === "self-judged" ? " The run was SELF-JUDGED: its subject and judge were the same model." : ""}`);
     return;
   }
   fail(usage());
@@ -656,13 +673,11 @@ if (require.main === module) {
       process.exitCode = exitCode;
     });
   } else {
-    try {
-      main(process.argv.slice(2));
-    } catch (error) {
+    main(process.argv.slice(2)).catch((error) => {
       console.error(`skill-evals: ${error.message}`);
       process.exitCode = 1;
-    }
+    });
   }
 }
 
-module.exports = { normalizeSource, contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, requireEvidence, recordReceipt, revisionStatus };
+module.exports = { normalizeSource, contractFingerprint, sourceFingerprint, validateRepo, verifyReceipt, requireEvidence, recordReceipt, recordResult, revisionStatus };
