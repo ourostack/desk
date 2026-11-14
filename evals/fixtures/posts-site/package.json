@@ -1,0 +1,13 @@
+{
+  "name": "posts-site",
+  "version": "1.4.0",
+  "description": "Builds a static index page for a folder of posts.",
+  "type": "module",
+  "main": "src/site.js",
+  "files": ["src", "site"],
+  "scripts": {
+    "build": "node src/cli.js",
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

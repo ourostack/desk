@@ -218,11 +218,12 @@ try {
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n" })));
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/person`]: "alex\n" })), "a person file holding one alias is valid");
     assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/desk/outside.md.symlink`]: "../../../../skill-eval-outside/notes.md\n" })), "a link is a .symlink file in the world");
+    assert.doesNotThrow(() => validateRepo(withWorld(world, { [seeded]: "seeded\n", [`${world}/bin/gh`]: "stand-in\n" })), "a stand-in in the world's bin is valid");
     for (const [worldPath, files, options, message] of [
       ["evals/worlds/fixture/other", { [seeded]: "x\n" }, {}, /world must be the string evals\/worlds\/fixture\/case-1, not "evals\/worlds\/fixture\/other"/u],
       [5, {}, {}, /world must be the string evals\/worlds\/fixture\/case-1, not 5/u],
       [world, {}, {}, /world folder does not exist: evals\/worlds\/fixture\/case-1/u],
-      [world, { [`${world}/notes/x.md`]: "x\n" }, {}, /unknown folder\(s\) notes; expected desk, repo, desk-origin-ahead, desk-origin-branches, person/u],
+      [world, { [`${world}/notes/x.md`]: "x\n" }, {}, /unknown folder\(s\) notes; expected desk, repo, desk-origin-ahead, desk-origin-branches, person, bin/u],
       [world, { [seeded]: "x\n", [`${world}/person`]: "Alex Smith\n" }, {}, /person must be a file holding one roster alias/u],
       [world, { [seeded]: "x\n", [`${world}/person`]: "alex\nsam\n" }, {}, /person must be a file holding one roster alias/u],
       [world, { [seeded]: "x\n" }, { sources: ["source.txt"] }, /world evals\/worlds\/fixture\/case-1 is not covered by the suite's sources/u],
@@ -931,12 +932,13 @@ try {
       'const cwd = process.cwd();',
       'const git = (gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" }).stdout.trim().split("\\n");',
       'const linkTarget = (file) => { try { return fs.readlinkSync(file); } catch { return null; } };',
-      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
+      'if (log) fs.appendFileSync(log, JSON.stringify({ role: judging ? "judge" : "subject", model: value("--model"), pid: process.pid, args, cwd, pathFirst: judging ? null : (process.env.PATH ?? "").split(path.delimiter)[0], deskIsCwd: Boolean(process.env.DESK) && fs.realpathSync(process.env.DESK) === fs.realpathSync(cwd), bound: fs.existsSync(cwd + "/_meta") && fs.existsSync(cwd + "/_archive"), gh: process.env.GH_CONFIG_DIR, deskPerson: judging ? null : (process.env.DESK_PERSON ?? null), linkTo: judging ? null : linkTarget(cwd + "/linked.md"), originMain: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "log", "main", "--format=%s"]), originBranches: judging ? null : git(["--git-dir", path.join(cwd, "..", "origin.git"), "branch", "--list"]), prompt, tracked: judging ? null : git(["ls-files"]), commits: judging ? null : git(["log", "--format=%s"]), status: judging ? null : git(["status", "--porcelain"]) }) + "\\n");',
       'if (!judging && mode === "write") fs.writeFileSync(cwd + "/written.txt", "x\\n");',
       'if (!judging && mode === "commit") { fs.writeFileSync(cwd + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd }); }',
       'if (!judging && mode === "worktree") { const wt = cwd + "/../wt"; spawnSync("git", ["worktree", "add", "-q", "-b", "fix", wt], { cwd }); fs.writeFileSync(wt + "/subject.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd: wt }); spawnSync("git", ["commit", "-q", "-m", "Subject change"], { cwd: wt }); fs.writeFileSync(wt + "/worktree-note.md", "x\\n"); }',
       'if (!judging && mode === "idle") { spawnSync("git", ["worktree", "add", "-q", "--detach", cwd + "/../idle"], { cwd }); }',
       'if (!judging && mode === "branch") { spawnSync("git", ["checkout", "-q", "-b", "side"], { cwd }); fs.writeFileSync(cwd + "/side.txt", "x\\n"); spawnSync("git", ["add", "-A"], { cwd }); spawnSync("git", ["commit", "-q", "-m", "Side change"], { cwd }); spawnSync("git", ["checkout", "-q", "main"], { cwd }); }',
+      'if (!judging && mode === "standin") spawnSync("gh", ["api", "repos/x/pulls/1/comments"], { cwd, encoding: "utf8" });',
       'if (!judging && mode === "bigdiff") fs.writeFileSync(cwd + "/src/code.js", "x".repeat(7000) + "\\n");',
       'if (mode === "hang-" + (judging ? "judge" : "subject")) setTimeout(() => {}, 60000);',
       'else if (mode === "exit-" + (judging ? "judge" : "subject")) { console.error("fake failure\\n"); process.exit(3); }',
@@ -1217,6 +1219,38 @@ try {
       const plain = runFixture();
       assert.equal(plain.run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
       assert.equal(plain.calls()[0].deskPerson, process.env.DESK_PERSON ?? null, "no person file leaves DESK_PERSON as the environment set it");
+    }
+
+    {
+      // A world's bin folder goes first on the subject's PATH, and each stand-in in it reports its argv as evidence the judge reads; a case without a bin has neither.
+      const withStandIn = (suite, root) => {
+        const bin = path.join(root, "evals", "worlds", "fixture", "case-1", "bin");
+        fs.mkdirSync(bin, { recursive: true });
+        fs.writeFileSync(path.join(bin, "gh"), [
+          `#!${process.execPath}`,
+          'const fs = require("node:fs");',
+          'const path = require("node:path");',
+          'fs.appendFileSync(process.env.DESK_EVAL_STANDIN_LOG, JSON.stringify({ command: path.basename(process.argv[1]), args: process.argv.slice(2) }) + "\\n");',
+          'console.log("ok");',
+          "",
+        ].join("\n"), { mode: 0o755 });
+        suite.cases[0].world = "evals/worlds/fixture/case-1";
+        suite.sources = ["source.txt", "evals/worlds/fixture/case-1/bin/gh"];
+        suite.reviewedSourceFingerprint = sourceFingerprint(suite.sources, root);
+      };
+      const { dir, run, calls } = runFixture(withStandIn);
+      assert.equal(run(["fixture", ...fake, "--concurrency", "1"], { FAKE_MODE: "standin" }).status, 0);
+      assert.equal(calls()[0].pathFirst, path.join(dir, "evals", "worlds", "fixture", "case-1", "bin"), "the world's bin is first on the subject's PATH");
+      assert.match(calls()[1].prompt, /Commands the stand-ins received, in order \(argv as JSON\):\n- gh \["api","repos\/x\/pulls\/1\/comments"\]/u, "the judge sees the argv the stand-in received");
+
+      const quiet = runFixture(withStandIn);
+      assert.equal(quiet.run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      assert.match(quiet.calls()[1].prompt, /Commands the stand-ins received, in order \(argv as JSON\):\n\(none\)/u, "a stand-in nobody called is reported as none");
+
+      const plain = runFixture();
+      assert.equal(plain.run(["fixture", ...fake, "--concurrency", "1"]).status, 0);
+      assert.doesNotMatch(plain.calls()[1].prompt, /stand-ins received/u, "a case without a bin has no stand-in evidence");
+      assert.notEqual(plain.calls()[0].pathFirst, path.join(plain.dir, "evals", "worlds", "fixture", "case-1", "bin"), "and no bin is put on the PATH");
     }
 
     {

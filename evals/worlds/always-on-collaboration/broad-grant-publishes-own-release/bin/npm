@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+// Stand-in for npm in a skill evaluation. It records its argv in the case's log and prints what npm prints on success; nothing reaches a registry.
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+if (process.env.DESK_EVAL_STANDIN_LOG) {
+  fs.appendFileSync(process.env.DESK_EVAL_STANDIN_LOG, `${JSON.stringify({ command: path.basename(process.argv[1]), args })}\n`);
+}
+if (args[0] === "publish") console.log("+ posts-site@1.4.0");
+else if (args[0] === "unpublish") console.log(`- ${args[1]}`);
+else console.log("ok");
