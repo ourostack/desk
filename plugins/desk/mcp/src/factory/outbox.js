@@ -61,6 +61,9 @@
 //                                      published, the coverage to say and the store's readiness (`triage-outbox.js`)
 //   triage-outbox/<store-slug>/<batch>.json   one staged public triage batch, immutable once written; outside
 //                                      outbox/ so an older Desk never reads it as facts
+//   proof-held/<store-slug>/<name>     the facts and labels of a proof-marked session, moved out of outbox/ (`removeQueuedProofCopies`);
+//                                      no publisher reads this folder, and nothing in it is deleted
+//   proof-audit.json                   content-free entries of proof marks and moves, keyed by a hash of the session id
 //
 // Local labels (`desk.factory.labels/3`, or `/2` or `/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
@@ -83,7 +86,7 @@
 // between writes is refused or repaired before any of its bytes are used.
 // Nothing here ever prints or logs the machine secret.
 
-import { randomBytes, createHash } from "node:crypto"
+import { randomBytes, createHash, createHmac } from "node:crypto"
 import { promises as fsp, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -132,6 +135,8 @@ const LOCK_NAME_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u
 const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_SRC}$`, "u")
 const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
 const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.json$`, "u")
+// The session id of a facts file name or a labels key; the name is checked against its pattern before this is read.
+const sessionIdOfName = (name) => name.slice(-41, -5)
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
@@ -656,6 +661,93 @@ export async function readMarker(env, file, { platform = process.platform, runne
   return readMarkerAt(file, directory, { env, platform, runner })
 }
 
+// ---------------------------------------------------------------------------
+// Proof sessions (issue #578). A proof-marked session's copies never publish.
+// ---------------------------------------------------------------------------
+
+/** The session ids that have a proof mark (`proof: true`), for `pendingFiles` and `pendingLabels`. */
+export async function proofSessionSet(env) {
+  return new Set((await listProofMarkers(env)).map((marker) => marker.session_id))
+}
+
+/** `sessionMarkers(env, sessionId) -> Array<{ host, marker }>`: every valid marker this machine holds for the session, whatever its age or proof mark. Reads only. */
+export async function sessionMarkers(env, sessionId, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const directory = await protectMarkerDirectory(root, { env, platform, runner })
+  const found = []
+  for (const name of await listRegularFiles(directory.dir, OUTBOX_NAME_PATTERN)) {
+    if (sessionIdOfName(name) !== sessionId) continue
+    const marker = await readMarkerAt(path.join(directory.dir, name), directory, { env, platform, runner })
+    if (marker !== null) found.push({ host: marker.host, marker })
+  }
+  return found
+}
+
+/** `markSessionProof(env, marker) -> "marked" | "already"`: writes `proof: true` into the session's marker under its lock, and reads back what it wrote. Nothing else changes. */
+export async function markSessionProof(env, marker, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const file = path.join(root, "markers", `${marker.host}-${marker.session_id}.json`)
+  return withLock(root, file, platform, async () => {
+    const directory = await protectMarkerDirectory(root, { env, platform, runner })
+    const current = await readMarkerAt(file, directory, { env, platform, runner })
+    if (current === null) fail("marker", "unreadable")
+    if (current.proof === true) return "already"
+    await writeMarker(env, { ...current, proof: true }, { platform, runner })
+    return "marked"
+  })
+}
+
+/** `proofSessionHash(env, sessionId) -> string`: the keyed name of a session in `proof-audit.json`, so the audit never holds a session id. The key is this machine's secret. */
+export async function proofSessionHash(env, sessionId) {
+  return createHmac("sha256", await readMachineSecret(env)).update(sessionId).digest("hex").slice(0, 16)
+}
+
+const PROOF_AUDIT_LIMIT = 500
+
+/** `appendProofAudit(env, entry)`: appends one content-free entry to `proof-audit.json`, keeping the newest 500. */
+export async function appendProofAudit(env, entry, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  await updateJsonLocked(root, path.join(root, "proof-audit.json"), { schema_version: 1, entries: [] }, (current) => ({
+    schema_version: 1,
+    entries: [...current.entries, entry].slice(-PROOF_AUDIT_LIMIT),
+  }), { platform, env, runner }, (value) => isPlainObject(value) && Array.isArray(value.entries))
+}
+
+// Moves one proof copy out of the outbox into `proof-held/`, which no publisher reads. The bytes are written there first and the outbox copy is removed second,
+// so a failure in between leaves both, and the next flush repeats the move. The copy is kept, not deleted: a copy the store may already hold is withdrawn
+// by its delivered blob, and that needs the bytes this Desk wrote.
+async function moveProofCopy(root, slug, name, file, { platform, env, runner }) {
+  const bytes = await fsp.readFile(file)
+  await writeAtomic(root, path.join(root, "proof-held", slug, name), bytes, { platform, env, runner })
+  await fsp.rm(file, { force: true })
+}
+
+/**
+ * `removeQueuedProofCopies(env, store)`: moves every copy of a proof-marked session out of `store`'s outbox and labels folder into `proof-held/`.
+ * A copy of a session the store may already hold moves too, so nothing new is published for it; the store's copy is withdrawn separately. Each move
+ * is audited by the session's hash, and a move the disk refuses is audited as `failed` and retried by the next flush.
+ */
+export async function removeQueuedProofCopies(env, store, { platform = process.platform, runner = undefined, now = defaultNow } = {}) {
+  const proofs = await proofSessionSet(env)
+  if (proofs.size === 0) return
+  const root = await factoryStateRoot(env, { platform, runner })
+  const slug = storeSlug(store)
+  const candidates = (await listRegularFiles(path.join(root, "outbox", slug), OUTBOX_NAME_PATTERN)).map((name) => ({ name, file: path.join(root, "outbox", slug, name) }))
+  for (const job of (await listDirSafe(path.join(root, "labels", slug))).filter((entry) => PATTERNS.jobId.test(entry))) {
+    for (const file of await listRegularFiles(path.join(root, "labels", slug, job), LABELS_NAME_PATTERN)) {
+      candidates.push({ name: `labels/${job}/${file}`, file: path.join(root, "labels", slug, job, file) })
+    }
+  }
+  for (const { name, file } of candidates) {
+    const session = sessionIdOfName(name)
+    if (!proofs.has(session)) continue
+    const outcome = await moveProofCopy(root, slug, name, file, { platform, env, runner }).then(() => "ok", () => "failed")
+    if (outcome === "ok" && !name.startsWith("labels/")) await setJobsForFile(env, name, [], { platform, runner })
+    await appendProofAudit(env, { session: await proofSessionHash(env, session), state_before: "outbox", action: "moved_to_held", outcome, at: now() }, { platform, runner })
+  }
+}
+
+
 /** Serialize the source read, facts replacement and receipt for one session. */
 export async function withDerivationLock(env, name, body, { deskRoot = null } = {}) {
   requirePattern(name, OUTBOX_NAME_PATTERN, "name")
@@ -792,7 +884,7 @@ export async function writeLocalFacts(env, store, localFacts, { platform = proce
  * skipped, not quarantined, and its name goes to `onNewerFormat`. With `kept`,
  * the folder listed is the kept copies of retracted sessions instead.
  */
-export async function pendingFiles(env, store, { publishedBytesFor, includeQuarantined = false, onNewerFormat = undefined, kept = false }, { platform = process.platform, runner = undefined } = {}) {
+export async function pendingFiles(env, store, { publishedBytesFor, includeQuarantined = false, onNewerFormat = undefined, kept = false, proofs = undefined }, { platform = process.platform, runner = undefined } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
@@ -800,8 +892,11 @@ export async function pendingFiles(env, store, { publishedBytesFor, includeQuara
   const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
   const quarantineDir = path.join(root, "quarantine", slug)
   const quarantined = new Set(await listRegularFiles(quarantineDir, OUTBOX_NAME_PATTERN))
+  const proofSessions = kept ? new Set() : proofs ?? (await proofSessionSet(env))
   const pending = []
   for (const name of await listRegularFiles(outboxDir, OUTBOX_NAME_PATTERN)) {
+    // A proof-marked session's copy never publishes (`removeQueuedProofCopies` removes the queued ones).
+    if (proofSessions.has(sessionIdOfName(name))) continue
     let held = null
     if (quarantined.has(name)) {
       if (!includeQuarantined) continue
@@ -1599,16 +1694,18 @@ export async function writeLocalLabels(env, store, labels) {
  * fails to parse and one that is quarantined. Only regular files of the
  * labels shape under a job folder are considered.
  */
-export async function pendingLabels(env, store, { publishedBytesFor, onNewerFormat = undefined, kept = false } = {}) {
+export async function pendingLabels(env, store, { publishedBytesFor, onNewerFormat = undefined, kept = false, proofs = undefined } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env)
   const dir = kept ? keptFolders(root, slug).labels : path.join(root, "labels", slug)
   const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, process.platform)
+  const proofSessions = kept ? new Set() : proofs ?? (await proofSessionSet(env))
   const pending = []
   for (const job of await listDirSafe(dir)) {
     if (!PATTERNS.jobId.test(job)) continue
     for (const file of await listRegularFiles(path.join(dir, job), LABELS_NAME_PATTERN)) {
+      if (proofSessions.has(sessionIdOfName(file))) continue
       if ((await lstatIfPresent(path.join(root, "quarantine", slug, "labels", job, file), NAMING)) !== null) continue
       const localBytes = await readProtectedBytes(path.join(dir, job, file))
       let localLabels

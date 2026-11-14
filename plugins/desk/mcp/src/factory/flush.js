@@ -167,6 +167,7 @@ import {
   keptSessions,
   pendingFiles,
   pendingLabels,
+  proofSessionSet,
   quarantine,
   readConsent,
   recordDeskUnprotected,
@@ -181,6 +182,7 @@ import {
   outdatedLabelRecords,
   releaseOutdatedLabelQuarantines,
   releaseRefusedPluginNames,
+  removeQueuedProofCopies,
   returnToDelivered,
   undeliver,
   writeStatus,
@@ -931,8 +933,11 @@ async function deliver(env, context) {
   const listed = (name) => newer.add(name)
   // A label withdrawn because its session stopped binding its job comes back when the session binds the job again.
   if ((await releaseReboundLabels(env, store)).length > 0) delivered = await readDelivered(env, store)
-  let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
-  let labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
+  // A proof-marked session's copies leave the outbox (`proof-held/`) before anything is listed; the listings below never read them.
+  await removeQueuedProofCopies(env, store)
+  const proofs = await proofSessionSet(env)
+  let candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed, proofs })
+  let labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed, proofs })
   progress.newerFormat = newer.size
   // The kept copies of sessions that left this store, which a lost record may leave with no session to name them.
   const keptNow = await keptSessions(env, store)
@@ -1002,8 +1007,8 @@ async function deliver(env, context) {
   let checkSecret
   const outdatedReleased = await releaseOutdatedLabelQuarantines(env, store, { sessions: hereSessions, check: async (labels, key) => publishLabelsOne(labels, key, { known: new Map(), desks: new Map(), secret: (checkSecret ??= await readMachineSecret(env)) }).bytes !== undefined })
   if (restored.length > 0 || refusedReleased.facts.length + refusedReleased.labels.length + outdatedReleased.length > 0) {
-    candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed })
-    labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed })
+    candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true, onNewerFormat: listed, proofs })
+    labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, onNewerFormat: listed, proofs })
     delivered = await readDelivered(env, store)
   }
   // Kept copies still waiting (their session routes elsewhere) are what finds an away session's files in the store when its records are lost.
@@ -1151,7 +1156,7 @@ async function deliver(env, context) {
   // Labels held back behind facts released above are ordinary candidates now; their facts' repositories were resolved with the facts.
   if (releasedLabels) {
     const seen = new Set(labelsByKey.keys())
-    const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })).filter(({ name }) => !seen.has(name) && here(name))
+    const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL, proofs })).filter(({ name }) => !seen.has(name) && here(name))
     await publishLabels(again.map((item) => ({ key: item.name, local: parse(item) })))
   }
   const localByName = new Map(parsed.map((entry) => [entry.name, entry.local]))
@@ -1180,9 +1185,9 @@ async function deliver(env, context) {
     await contextSafely(null, () => recordContextError(env, store, progress.contextHeld))
   }
   // Only files with published bytes are listed, and only those of `here` sessions have them. A file without bytes is one whose record is not a regular file (its file stays where it is), a held file that stays held, or a file of a session that is not `here`.
-  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null }))
+  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null, proofs }))
     .map(({ name, localBytes }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)), localSha: gitBlobSha(localBytes) }))
-  const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`)?.bytes ?? null }))
+  const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`)?.bytes ?? null, proofs }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
       const [, job, session] = LABELS_KEY.exec(name)

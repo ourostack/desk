@@ -19,6 +19,7 @@
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]
 //   node scripts/factory.js loop --desk <absolute desk root> [--person-prefix desks/<alias>]
+//   node scripts/factory.js proof <session id> [--desk <absolute desk root>]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -67,6 +68,7 @@ import { normalizeTimestamp } from "../src/factory/time.js"
 import { noteConsentMentioned } from "../src/runtime/consent-mentioned.js"
 import { resolveDeskStateDir } from "../src/runtime/last-start.js"
 import { reconcile } from "../src/factory/reconcile.js"
+import { markProofSession } from "../src/factory/proof-session.js"
 import { keyedJobId } from "../src/factory/publish.js"
 import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
@@ -75,7 +77,7 @@ import { issuesClient } from "../src/factory/store-issues.js"
 import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "context-request", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "proof"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -153,6 +155,17 @@ export async function runFinalizeCommand({ argv, env, runner, kick = kickLoop })
     // The next end of a turn or session start starts the worker instead.
   }
   return { jobs: results }
+}
+
+/** `proof <session id> [--desk <absolute desk root>]`: marks an existing local session as a controlled proof (`proof-session.js`); prints `{ result, reason? }`. */
+export async function runProofCommand({ argv, env }) {
+  const [sessionId, ...rest] = argv
+  const options = parseOptions(rest)
+  const desk = options?.get("desk") ?? null
+  if (typeof sessionId !== "string" || sessionId.startsWith("--") || options === null || [...options.keys()].some((key) => key !== "desk") || (desk !== null && !path.isAbsolute(desk))) {
+    throw new Error("Usage: factory.js proof <session id> [--desk <absolute desk root>]")
+  }
+  return markProofSession(env, { sessionId, desk })
 }
 
 export async function runStatusCommand({ argv, env }) {
@@ -679,10 +692,11 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       andon: runAndonCommand,
       reconcile: runReconcileCommand,
       loop: runLoopCommand,
+      proof: runProofCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile" || subcommand === "context-request") && result.ok === false) || (subcommand === "proof" && !["marked", "already_proof"].includes(result.result)) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
