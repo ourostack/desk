@@ -389,7 +389,7 @@ function loadSuites(repoRoot) {
 }
 
 // A case's scenario world: the folders the runner lays over the scratch desk and repository copy, lands on the case's origin, or puts on the subject's PATH.
-const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person", "bin"];
+const worldFolders = ["desk", "repo", "desk-origin-ahead", "desk-origin-branches", "person", "bin", "held-out"];
 const branchName = /^[a-z0-9][a-z0-9-]*$/u;
 const personLine = /^[a-z0-9-]+\n?$/u;
 
@@ -414,6 +414,9 @@ function validateWorld(suite, testCase, repoRoot, label) {
   }
   if (entries.includes("repo") && !suite.sources.some((source) => /^evals\/fixtures\/[^/]+\//u.test(source))) {
     fail(`${label}: world ${world} has repo/ but suite ${suite.id} has no evals/fixtures/<name> source to copy it over`);
+  }
+  if (entries.includes("held-out") && !suite.sources.some((source) => /^evals\/fixtures\/[^/]+\//u.test(source))) {
+    fail(`${label}: world ${world} has held-out/ but suite ${suite.id} has no evals/fixtures/<name> source whose repository copy runs it`);
   }
   if (fs.existsSync(path.join(directory, "desk-origin-branches"))) {
     for (const name of fs.readdirSync(path.join(directory, "desk-origin-branches"))) {

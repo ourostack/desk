@@ -232,6 +232,12 @@ function worldStandIns(root, world, caseDirectory) {
   return fs.existsSync(bin) ? { bin, log: path.join(caseDirectory, "stand-in-commands.jsonl") } : null;
 }
 
+// A world's `held-out` folder is the oracle the judge's evidence reports on. It stays under evals/worlds, out of every scratch folder.
+function worldHeldOut(root, world) {
+  const held = path.join(root, world, "held-out");
+  return fs.existsSync(held) ? held : null;
+}
+
 function seedWorld(workspace, world, root, template) {
   const source = path.join(root, world);
   const baselines = { desk: template.deskBaseline, repo: template.repoBaseline };
@@ -301,7 +307,7 @@ function standInCommands(log) {
 // The judge sees only the subject's reply and tool requests, so state checks (writes, commits, tests) need the state itself. The desk
 // diff covers HEAD only, so each tree also lists the commits on every local branch since its baseline and the worktrees it has, since
 // the subject may commit on another branch or work in a linked worktree. Clones outside the tree are not inspected.
-function workspaceEvidence(workspace, baselines) {
+function workspaceEvidence(workspace, baselines, heldOut) {
   const parts = [];
   for (const [label, directory, baseline] of [["desk", workspace.desk, baselines.desk], ["repository", workspace.repo, baselines.repo]]) {
     if (directory === null) continue;
@@ -312,18 +318,41 @@ function workspaceEvidence(workspace, baselines) {
     parts.push(`### ${label}\nUncommitted or untracked changes:\n${status || "(none)"}\nCommits made after the baseline:\n${commits || "(none)"}${unpushed}\nChanged files against the baseline (committed and uncommitted):\n${diff || "(none)"}`);
     parts.push(branchAndWorktreeEvidence(directory, baseline));
     if (label === "repository" && fs.existsSync(path.join(directory, "__tests__"))) {
-      // Inside a test runner process, NODE_TEST_CONTEXT would make this run report to its parent instead of printing a summary.
-      const env = { ...process.env };
-      delete env.NODE_TEST_CONTEXT;
-      const tests = spawnSync(process.execPath, ["--test", "__tests__/**/*.test.js"], { cwd: directory, encoding: "utf8", timeout: 120000, env });
+      const tests = nodeTests(directory, ["__tests__/**/*.test.js"]);
       const summary = `${tests.stdout}`.split("\n").filter((line) => /^# (tests|pass|fail|cancelled|skipped) /u.test(line)).join("\n");
       parts.push(`The repository's own tests, run by the harness afterwards (node --test "__tests__/**/*.test.js"):\n${summary}`);
       const patch = scratchGit(directory, ["diff", baseline, "--", "src"]).stdout;
       parts.push(`Production-code diff against the baseline:\n${limited(patch.trim() || "(none)", 6000)}`);
     }
+    if (label === "repository" && heldOut !== null) parts.push(heldOutEvidence(directory, heldOut));
   }
   if (workspace.standIns !== null) parts.push(`Commands the stand-ins received, in order (argv as JSON):\n${standInCommands(workspace.standIns.log)}`);
   return parts.join("\n\n");
+}
+
+// Inside a test runner process, NODE_TEST_CONTEXT would make a run report to its parent instead of printing a summary.
+function nodeTests(directory, args) {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  return spawnSync(process.execPath, ["--test", ...args], { cwd: directory, encoding: "utf8", timeout: 120000, env });
+}
+
+// A case's held-out oracle is copied into the repository copy only now, after the subject has exited, so the subject never sees it.
+// It runs from a folder of its own (its imports reach the repository by relative path), is reported as a summary and its failing
+// test names, and is removed again before any later evidence is gathered.
+function heldOutEvidence(directory, source) {
+  const folder = fs.mkdtempSync(path.join(directory, "held-out-"));
+  try {
+    fs.cpSync(source, folder, { recursive: true });
+    const files = fs.readdirSync(folder, { recursive: true }).filter((name) => fs.statSync(path.join(folder, name)).isFile());
+    const tests = nodeTests(directory, files.map((name) => path.join(path.basename(folder), name)));
+    const output = `${tests.stdout}`;
+    const summary = output.split("\n").filter((line) => /^# (tests|pass|fail|cancelled|skipped) /u.test(line)).join("\n");
+    const failing = [...output.matchAll(/^\s*not ok \d+ - (.+)$/gmu)].map((match) => match[1]).filter((name) => !/\.(?:c|m)?js$/u.test(name));
+    return `### Held-out oracle (not visible to the subject)\nRun by the harness after the subject finished, with node --test on its files in the repository copy:\n${summary}\nFailing tests:\n${failing.map((name) => `- ${name}`).join("\n") || "(none)"}`;
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
 }
 
 function branchAndWorktreeEvidence(directory, baseline) {
@@ -445,7 +474,7 @@ async function runCaseIn(testCase, context, workspace) {
   if (subjectRun.timedOut || subjectRun.code !== 0) throw new Error(`case ${testCase.id}: the subject process ${describeFailure(subjectRun)}`);
   const subject = parseTranscript(subjectRun.stdout);
   if (subject.response === "") throw new Error(`case ${testCase.id}: the subject produced no final response`);
-  const evidence = workspaceEvidence(workspace, baselines);
+  const evidence = workspaceEvidence(workspace, baselines, testCase.world === undefined ? null : worldHeldOut(root, testCase.world));
   const judgeArgs = ["-p", judgePrompt(testCase, subject, evidence), "-s", "--model", options.judgeModel, "--no-ask-user", "--no-auto-update", "--no-custom-instructions", "--deny-tool", "shell", "--deny-tool", "write", "--deny-tool", "read", "--deny-tool", "url"];
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -582,4 +611,4 @@ async function runCommand(args, api) {
   if (failed.length > 0) api.fail(`suite(s) failed: ${failed.join(", ")}. Fix the behavior or the skill, or add "knownFailure" with an issue URL if it fails for an unrelated reason.`);
 }
 
-module.exports = { runCommand, parseTranscript, parseVerdict, changedEntries };
+module.exports = { runCommand, parseTranscript, parseVerdict, changedEntries, heldOutEvidence };
