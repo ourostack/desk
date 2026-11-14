@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.125 — 2026-11-14
+
+The Windows suite now runs on 20 shards and the Linux coverage tests on 12, both balanced by freshly measured per-file times, so a pull request's slowest check finishes in about 6 minutes instead of 8.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.124 — 2026-11-14
 
 A request to get new work started, permission over a contribution target, or a run where nobody can answer is no longer read as go. On new work the agent now sends its alignment note and stops, editing no product, test or docs files, until the person says go. Approved work with an explicit go is unchanged.
