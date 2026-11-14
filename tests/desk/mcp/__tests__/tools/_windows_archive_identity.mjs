@@ -5,6 +5,9 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
+// Covers a cold Windows PowerShell 5.1 start plus native type setup; the start alone measured up to about 20 s on hosted runners (#573).
+const IDENTITY_READINESS_MS = 30000
+
 const PROGRAM = `
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -397,7 +400,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
       identity: "GetFileInformationByHandleEx_FileIdInfo", attributes: "GetFileInformationByHandleEx_FileAttributeTagInfo",
       close: "CloseHandle" },
     win32ErrorSemantics: "cached_immediately_after_call_failure_only_success_error_null",
-    bounds: { readinessMs: 5000, ackMs: 5000, observationPhaseMs: 5000, retirementMs: 2000,
+    bounds: { readinessMs: IDENTITY_READINESS_MS, ackMs: 5000, observationPhaseMs: 5000, retirementMs: 2000,
       closeMs: 2000, stdoutBytes: 16384, stderrBytes: 16384, events: 128, commands: 16 },
     nodeSourceContract: "Node24.18.0_uv_dev_VolumeSerial_LowPart_ino_FileId_QuadPart",
     outcome: "incomplete", uncertain: false, childPid: null, readyPidMatchesChild: false,
@@ -579,7 +582,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
       closeResolve()
     })
     try { child.stdin.write(initial) } catch { fail("stdin_error") }
-    await bounded(ready, 5000, "readiness timeout")
+    await bounded(ready, IDENTITY_READINESS_MS, "readiness timeout")
     receipt.baseline = { ...facts(rawBaseline, nodeBaseline, admittedIdentity), replacementPhaseBegun: false }
     if (rawBaseline?.filesystem !== "NTFS" || !receipt.baseline.identityAvailable || receipt.baseline.directory !== true) {
       receipt.outcome = "unsupported"

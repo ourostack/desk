@@ -945,7 +945,7 @@ async function fixture(record, { rootAlias = false, nodeReference = true } = {})
     admission: prepared.snapshot.get("").identity, node }
 }
 function actualCell(name, body, options = {}) {
-  test(`actual Windows: ${name}`, { skip: process.platform !== "win32", timeout: 20000 }, async () => {
+  test(`actual Windows: ${name}`, { skip: process.platform !== "win32", timeout: 60000 }, async () => {
     const record = { name, platform: process.platform, node: process.versions.node,
       caseKind: options.diagnostic ? "rename_handle_route_discriminator" : "identity_relationship_acceptance",
       replacementPhaseBegunAtBaseline: false, receipt: null,
