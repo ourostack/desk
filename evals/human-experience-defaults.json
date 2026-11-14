@@ -10,7 +10,7 @@
     "plugins/desk/skills/task-lifecycle/SKILL.md",
     "plugins/desk/skills/fast-honest-ci/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "c4c1f11924f7fc347a10c67c0b0f33dfba33d38531cd7ec033082f8a08072969",
+  "reviewedSourceFingerprint": "043eab1fe572d8383a84df099f9931298e5249f2b72b06303b2673890d7d33ab",
   "knownFailure": {"issue": "https://github.com/ourostack/desk/issues/851", "case": "relayed-dates", "observed": "2026-11-13"},
   "requirements": [
     {
