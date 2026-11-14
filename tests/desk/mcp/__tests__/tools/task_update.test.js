@@ -229,7 +229,7 @@ test("task_update refuses a bare move to `done`, leaving the card untouched, and
       deskRoot: root,
       input: { track: "t", slug: "book-flights", frontmatter: { status: "done" } },
     }),
-    /task_update: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
+    /task_update: Pass `evidence: \{ kind, ref \}`: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
   )
 
   const after = await readFront(filePath)
@@ -253,7 +253,7 @@ test("task_update refuses `done` with a malformed evidence object, naming the ba
         evidence: { kind: "vibes", ref: "trust me" },
       },
     }),
-    /task_update: `evidence` is not valid.*"kind":"vibes"/,
+    /task_update: Pass `evidence: \{ kind, ref \}`: `evidence` is not valid.*"kind":"vibes"/,
   )
 
   await assert.rejects(
@@ -266,7 +266,7 @@ test("task_update refuses `done` with a malformed evidence object, naming the ba
         evidence: { kind: "pr", ref: "   " },
       },
     }),
-    /task_update: `evidence` is not valid/,
+    /task_update: Pass `evidence: { kind, ref }`: `evidence` is not valid/,
     "a blank ref is not a reference",
   )
 })
@@ -360,7 +360,7 @@ for (const evidence of [
         deskRoot: root,
         input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
       }),
-      new RegExp(`task_update: \`evidence.ref\` is not a checkable ${evidence.kind} reference`),
+      new RegExp(`task_update: Pass a checkable \`evidence.ref\`: \`evidence.ref\` is not a checkable ${evidence.kind} reference`),
     )
   })
 }
@@ -419,7 +419,7 @@ test("task_update refuses non_code evidence whose ref escapes the desk root via 
         evidence: { kind: "non_code", ref },
       },
     }),
-    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+    /task_update: Pass a checkable `evidence\.ref`: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
   )
 })
 
@@ -440,7 +440,7 @@ test("task_update refuses non_code evidence whose ref names nothing that exists 
         evidence: { kind: "non_code", ref: "reports/does-not-exist.md" },
       },
     }),
-    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+    /task_update: Pass a checkable `evidence\.ref`: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
   )
 })
 
@@ -987,7 +987,7 @@ test("a rewrite by task_update keeps a returns list, a signoff and a flow as wri
 
 // ── a backwards move needs a reason ─────────────────────────────────────────
 
-const REFUSAL = "task_update: moving this task from validating back to processing is a return and needs a reason. Repeat the call with `return_reason` set to one of agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)."
+const REFUSAL = "task_update: Repeat the call with `return_reason`: moving this task from validating back to processing is a return and needs a reason. Repeat the call with `return_reason` set to one of agent_error (you got it wrong), changed_ask (the operator changed what they want), new_information (something nobody knew), external (something outside the task broke)."
 const finalizeSpy = () => {
   const calls = []
   return { calls, finalize: async (request) => { calls.push(request) } }
@@ -1093,7 +1093,7 @@ test("a return_reason on a forward move or an unchanged status is refused in one
   const file = path.join(root, "t", "no-spray", "task.md")
   const before = await fs.readFile(file, "utf8")
   const spy = finalizeSpy()
-  const dropIt = /^Error: task_update: `return_reason` is only for moving a task back; this call is not a return, so drop it\.$/u
+  const dropIt = /^Error: task_update: Drop `return_reason`: `return_reason` is only for moving a task back; this call is not a return, so drop it\.$/u
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", frontmatter: { status: "processing" }, return_reason: "agent_error" }, finalize: spy.finalize }), dropIt)
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", note: "x", return_reason: "agent_error" }, finalize: spy.finalize }), dropIt)
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "no-spray", frontmatter: { status: "processing" }, return_reason: "bogus" }, finalize: spy.finalize }), dropIt)
@@ -1108,7 +1108,7 @@ test("an unknown return_reason names the four values and writes nothing", async 
   for (const bad of ["oops", 7, ""]) {
     await assert.rejects(
       task_update({ deskRoot: root, input: { track: "t", slug: "bad-reason", frontmatter: { status: "processing" }, return_reason: bad }, finalize: async () => {} }),
-      /^Error: task_update: `return_reason` must be one of agent_error, changed_ask, new_information, external\.$/u,
+      /^Error: task_update: Pass `return_reason` as one of the listed values: `return_reason` must be one of agent_error, changed_ask, new_information, external\.$/u,
     )
   }
   assert.equal(await fs.readFile(file, "utf8"), before)

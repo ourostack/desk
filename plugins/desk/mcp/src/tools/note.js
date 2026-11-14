@@ -68,7 +68,7 @@ function personOf(person, tool) {
 function textOf(value, name, max, rule) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`note_leave: Pass the missing argument as a string: \`${name}\` is required (string)`)
   const text = value.trim()
-  if (text.length > max || (rule === "one line" && /[\r\n]/u.test(text))) throw new Error(`note_leave: Pass \`$${name}\` within its limit: \`${name}\` must be ${rule === "one line" ? "one line of " : ""}at most ${max} characters`)
+  if (text.length > max || (rule === "one line" && /[\r\n]/u.test(text))) throw new Error(`note_leave: Pass \`${name}\` within its limit: \`${name}\` must be ${rule === "one line" ? "one line of " : ""}at most ${max} characters`)
   return text
 }
 

@@ -56,7 +56,7 @@
     "error.has-code:plugins/desk/mcp/src/factory/store-issues.js": 5,
     "error.has-code:plugins/desk/mcp/src/factory/store-route.js": 1,
     "error.has-code:plugins/desk/mcp/src/factory/test-state-guard.js": 1,
-    "error.has-code:plugins/desk/mcp/src/factory/windows-acl.js": 16,
+    "error.has-code:plugins/desk/mcp/src/factory/windows-acl.js": 6,
     "error.has-code:plugins/desk/mcp/src/indexer/exclusions.js": 1,
     "error.has-code:plugins/desk/mcp/src/runtime/admission-worker.js": 3,
     "error.has-code:plugins/desk/mcp/src/runtime/agency-desk-channel.js": 1,

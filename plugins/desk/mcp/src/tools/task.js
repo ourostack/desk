@@ -961,7 +961,7 @@ function patchedCardText(raw, existing, fields) {
 // `note` and `next_step` are checked before any write: an empty one would record progress that says nothing.
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`task_update: Pass \`$${field}\` as a non-empty string: \`${field}\` must be a non-empty string`)
+    throw new Error(`task_update: Pass \`${field}\` as a non-empty string: \`${field}\` must be a non-empty string`)
   }
   return value
 }
@@ -1022,7 +1022,7 @@ export async function task_update({ deskRoot, input, person = null, search, stat
     for (const key of aliasKeys) {
       const given = frontmatter[key]
       delete frontmatter[key]
-      if (typeof given !== "string") throw new Error(`task_update: Pass \`frontmatter.$${key}\` as a non-empty string: \`frontmatter.${key}\` must be a non-empty string; nothing was changed`)
+      if (typeof given !== "string") throw new Error(`task_update: Pass \`frontmatter.${key}\` as a non-empty string: \`frontmatter.${key}\` must be a non-empty string; nothing was changed`)
       if (nextStepValue !== undefined && (typeof nextStepValue !== "string" || given.trim() !== nextStepValue.trim())) {
         throw new Error(`task_update: Pass the next step once, as the top-level \`next_step\`: \`${nextStepKey}\` and \`frontmatter.${key}\` disagree; pass the next step once, as the top-level \`next_step\``)
       }

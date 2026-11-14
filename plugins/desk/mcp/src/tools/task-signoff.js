@@ -27,7 +27,7 @@ function folderName(field, value) {
   try {
     validateWriteSegment(value)
   } catch {
-    throw new Error(`task_signoff: Pass \`$${field}\` as a task folder name: \`${field}\` is not a valid task folder name.`)
+    throw new Error(`task_signoff: Pass \`${field}\` as a task folder name: \`${field}\` is not a valid task folder name.`)
   }
 }
 

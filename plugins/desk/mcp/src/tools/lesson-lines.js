@@ -9,7 +9,7 @@ export { SECTION, lead, lessonLine, withLesson } from "../runtime/lesson-section
 export function oneLine(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`lesson_add: Pass the missing argument as a string: \`${name}\` is required (string)`)
   const trimmed = value.trim()
-  if (/[\r\n]/u.test(trimmed)) throw new Error(`lesson_add: Pass \`$${name}\` on one line: \`${name}\` must be one line: a lesson is one rule`)
+  if (/[\r\n]/u.test(trimmed)) throw new Error(`lesson_add: Pass \`${name}\` on one line: \`${name}\` must be one line: a lesson is one rule`)
   return trimmed
 }
 

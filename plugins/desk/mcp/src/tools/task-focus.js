@@ -34,11 +34,11 @@ export const focusedHint = ({ track, slug }) => `If you are the session's main a
 const sameTask = (a, b) => a.track === b.track && a.slug === b.slug
 
 function folderName(field, value) {
-  if (typeof value !== "string") throw new Error(`task_focus: Pass \`$${field}\` as a string: \`${field}\` must be a string; ${ACCEPTED}`)
+  if (typeof value !== "string") throw new Error(`task_focus: Pass \`${field}\` as a string: \`${field}\` must be a string; ${ACCEPTED}`)
   try {
     validateWriteSegment(value)
   } catch {
-    throw new Error(`task_focus: Pass \`$${field}\` as a task folder name: \`${field}\` is not a valid task folder name; ${ACCEPTED}`)
+    throw new Error(`task_focus: Pass \`${field}\` as a task folder name: \`${field}\` is not a valid task folder name; ${ACCEPTED}`)
   }
   return value
 }

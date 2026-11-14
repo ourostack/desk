@@ -87,7 +87,7 @@ function rejectTraversalShapedInput(tool, field, value) {
     value.includes("\\")
   ) {
     throw new Error(
-      `${tool}: Pass \`$${field}\` as a non-empty path segment: \`${field}\` must be a non-empty path segment with no ".." or path separators`,
+      `${tool}: Pass \`${field}\` as a non-empty path segment: \`${field}\` must be a non-empty path segment with no ".." or path separators`,
     )
   }
 }
@@ -369,7 +369,7 @@ function iterationDate(created) {
 
 function trueOrAbsent(tool, field, value) {
   if (value !== undefined && typeof value !== "boolean") {
-    throw new Error(`${tool}: Pass \`$${field}\` as true or false: \`${field}\` must be true or false`)
+    throw new Error(`${tool}: Pass \`${field}\` as true or false: \`${field}\` must be true or false`)
   }
   return value === true
 }

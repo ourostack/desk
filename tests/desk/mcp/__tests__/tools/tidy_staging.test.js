@@ -117,7 +117,7 @@ test("another session's unstaged edit to a track.md is still refused, even after
   const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "task-two", to_slug: "second-outcome" } }).catch((e) => e)
   assert.equal(
     error.message,
-    "task_move: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    "task_move: Commit or finish that work first, or pass allow_dirty: true: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
   )
   assert.ok(await exists(path.join(root, "track-a", "task-two", "task.md")), "nothing moved")
 })
@@ -129,7 +129,7 @@ test("another session's untracked file in a task folder is still refused, even i
 
   await assert.rejects(
     task_move({ deskRoot: root, input: { track: "track-a", slug: "busy-task", to_slug: "busy-outcome" } }),
-    /^Error: task_move: the source has unstaged changes or untracked files, so another session may be working there/,
+    /^Error: task_move: Commit or finish that work first, or pass allow_dirty: true: the source has unstaged changes or untracked files, so another session may be working there/,
   )
   await assert.rejects(track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } }), OTHER_SESSION)
 })
