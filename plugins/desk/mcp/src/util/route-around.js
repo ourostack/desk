@@ -168,20 +168,25 @@ export function commitFailure({ root, paths, message, committed, card = null, de
 }
 
 /**
- * The `next` sentence a result gives first when its commit did not finish (#623): run the route's steps as written, or, when the
- * route is held, read it back and report. `where` names the route's field in the result, so the sentence points at it.
+ * Where an unfinished change is, which sets the first sentence of its `next` (#623): a commit's, a pull request's, or a lesson
+ * whose improvement card is not written. The caller passes it, because the route's own shape does not say which it is.
  */
-export function unfinishedNext(route, where) {
+export const UNFINISHED = Object.freeze({ COMMIT: "commit", PULL_REQUEST: "pull_request", UNOPENED_CARD: "unopened_card" })
+
+// `where` names the route's field in the result, so the sentence points at it.
+export function unfinishedNext(route, where, kind = UNFINISHED.COMMIT) {
+  if (kind === UNFINISHED.PULL_REQUEST) return `The change is on a pull request that has not merged: run ${where}.steps now, in order, then read back that it merged.`
+  if (kind === UNFINISHED.UNOPENED_CARD) return `The lesson is recorded but its improvement card isn't written yet: run ${where}.steps now, in order, then read back that the card is open.`
   if (route.held) return `The change is on disk but not committed, and Desk will not finish it from here: read back with ${where}.steps step 1 (it only reads), then report its JSON together with the tool's failure.`
   return `The change is on disk but not committed or on the remote yet: run ${where}.steps now, in order, then read back the remote.`
 }
 
 /**
  * The answer with its `next` sentence as its first key, when the answer carries a route: its own `route_around`, else its
- * `commit`'s (#623). An answer with neither comes back unchanged.
+ * `commit`'s (#623). `kind` is what the answer's own `route_around` is; a commit's route is always a commit.
  */
-export function withNext(answer) {
-  if (answer.route_around) return { next: unfinishedNext(answer.route_around, "route_around"), ...answer }
+export function withNext(answer, kind = UNFINISHED.COMMIT) {
+  if (answer.route_around) return { next: unfinishedNext(answer.route_around, "route_around", kind), ...answer }
   if (answer.commit?.route_around) return { next: unfinishedNext(answer.commit.route_around, "commit.route_around"), ...answer }
   return answer
 }

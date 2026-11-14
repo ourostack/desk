@@ -24,7 +24,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { crewWorkspace, parseCrewRoster } from "../desk/crew-roster.js"
 import { INBOX, acknowledgeNote, parseNote, renderNote } from "../runtime/inbox.js"
 import { stageAndCommitFiles } from "./_card-commit.js"
-import { commitFailureWords, pullRequestRoute, retryRoute, withNext } from "../util/route-around.js"
+import { commitFailureWords, pullRequestRoute, retryRoute, UNFINISHED, withNext } from "../util/route-around.js"
 import { Failed, githubStore, pause, runGit, sharedWrite } from "./shared-write.js"
 
 // Every field each tool reads off `input`; __tests__/tool_schema_parity.test.js checks these against tool-schemas.js.
@@ -195,13 +195,13 @@ export async function note_leave({ deskRoot, input, person = null, spawnGit = sp
         tool: "note_leave",
         arguments: { to, subject, body, related },
       })
-    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` })
+    return withNext({ ...result, status: "failed", stage: error.stage, reason: error.message, route_around: route, message: `Not left: the note stopped at ${error.stage} (${error.message}).${open}` }, result.pr ? UNFINISHED.PULL_REQUEST : UNFINISHED.COMMIT)
   }
   if (outcome.status === "unchanged") {
     return { ...result, status: "duplicate", note: existing.note, note_status: existing.status, message: `Not left: ${to} already has this note from you (${existing.note}, ${existing.status}).` }
   }
   if (outcome.status === "pr_open") {
-    return withNext({ ...result, status: "pr_open", reason: outcome.reason, route_around: outcome.route_around, message: `Not delivered yet: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${outcome.reason}). ${to} sees the note once it merges.` })
+    return withNext({ ...result, status: "pr_open", reason: outcome.reason, route_around: outcome.route_around, message: `Not delivered yet: the pull request ${result.pr} is open on branch ${result.branch} and has not merged (${outcome.reason}). ${to} sees the note once it merges.` }, UNFINISHED.PULL_REQUEST)
   }
   return { ...result, status: "merged", commit: outcome.commit, message: `Left for ${to}: merged in ${result.pr}. ${to}'s session start lists it until they acknowledge it with note_ack. Everyone in the workspace can read it.` }
 }
