@@ -670,7 +670,7 @@ function recordReceipt(suiteFile, resultFile, repoRoot = process.cwd()) {
 }
 
 function usage() {
-  return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
+  return "usage: node scripts/skill-evals.cjs validate [repoRoot] | fingerprint <suite-file> [repoRoot] | verify <result-file> [repoRoot] | run <suite-file|suite-id|--changed> [--case <ids>] [--keep <directory>] [--dry-run] (see evals/README.md) | revision --request <request.json> [--controls <trusted-controls.json>] [--result <published-status.json>]";
 }
 
 async function main(args) {

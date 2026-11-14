@@ -945,7 +945,8 @@ try {
       'if (mode === "hang-" + (judging ? "judge" : "subject")) setTimeout(() => {}, 60000);',
       'else if (mode === "exit-" + (judging ? "judge" : "subject")) { console.error("fake failure\\n"); process.exit(3); }',
       'else if (!judging) {',
-      '  const content = mode === "empty" ? "" : "Subject answer.";',
+      '  const subjectCalls = log ? fs.readFileSync(log, "utf8").split("\\n").filter((line) => line.includes(\'"role":"subject"\')).length : 0;',
+      '  const content = mode === "empty" || (mode === "empty-once" && subjectCalls === 1) ? "" : "Subject answer.";',
       '  const toolRequests = mode === "tools" ? [{ name: "view", arguments: { path: "SKILL.md" } }] : [];',
       '  console.log(JSON.stringify({ type: "assistant.message", data: { content, toolRequests } }));',
       '} else if (mode === "garbage" || (mode === "flaky" && earlier === 0)) {',
@@ -1050,6 +1051,13 @@ try {
       assert.equal(kept.status, 0, kept.stderr);
       assert.match(kept.stdout, /Dry run/u, "--case never writes a receipt");
       assert.equal(JSON.parse(fs.readFileSync(path.join(keepDir, fs.readdirSync(keepDir)[0]), "utf8")).case, "case-1");
+      const onceLog = path.join(path.dirname(receiptFile), "once.jsonl");
+      const once = run(["fixture", ...fake], { FAKE_MODE: "empty-once", FAKE_LOG: onceLog });
+      assert.equal(once.status, 0, once.stderr);
+      assert.match(once.stdout, /case-1: the subject produced no final response; running the case once more/u);
+      const blankCase = run(["fixture", ...fake, "--case", ","]);
+      assert.equal(blankCase.status, 1);
+      assert.match(blankCase.stderr, /--case needs at least one case id/u);
       const noCase = run(["fixture", ...fake, "--case", "no-such-case"]);
       assert.equal(noCase.status, 1);
       assert.match(noCase.stderr, /fixture has no case no-such-case/u);
