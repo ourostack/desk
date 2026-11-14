@@ -133,7 +133,7 @@ async function workerRunning(root, now) {
     const locks = path.join(root, "locks")
     // Windows reports ENOENT for a leaf below a non-directory too.
     if (!(await fsp.lstat(locks)).isDirectory()) {
-      throw new Error("Make the factory loop locks path a directory: it is not one")
+      throw Object.assign(new Error("Make the factory loop locks path a directory: it is not one"), { code: "evaluate_kick_make_the_factory_loop_locks" })
     }
     const stat = await fsp.lstat(path.join(locks, LOOP_LOCK_NAME))
     return now - stat.mtimeMs < KICK_LOCK_AGE_MS

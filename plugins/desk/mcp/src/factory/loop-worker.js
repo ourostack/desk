@@ -163,7 +163,7 @@ export async function runLoopWorker(env, {
   ceilingMs = budgetMs + CEILING_GRACE_MS, exit = process.exit, notify = notifyLauncher, readStatusImpl = readStatus, updateStatusImpl = updateStatus, impls = {},
   ownDesk = isOwnDesk,
 }) {
-  if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw new TypeError("Pass deskRoot as an absolute path")
+  if (deskRoot !== null && !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "loop_worker_pass_deskroot_as_an_absolute" })
   checkPersonPrefix(personPrefix, "runLoopWorker")
   if (isHeadlessFactorySession(env)) return answer("headless_session")
   const root = await factoryStateRoot(env, { create: false })

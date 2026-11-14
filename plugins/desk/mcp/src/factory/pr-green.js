@@ -21,7 +21,7 @@ const MAX_CHECK_RUNS = 100
 const GREEN = new Set(["success", "neutral", "skipped"])
 
 function failure(code) {
-  const error = new Error(`pr green: ${code}`)
+  const error = Object.assign(new Error(`pr green: ${code}`), { code: "pr_green_pr_green" })
   error.code = code
   return error
 }

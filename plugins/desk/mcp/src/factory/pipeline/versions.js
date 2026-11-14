@@ -13,7 +13,7 @@ export function isVersion(value) {
 }
 
 function parseVersion(version) {
-  if (!isVersion(version)) throw new TypeError(`compareVersions: Pass a version: ${JSON.stringify(version)} is not one`)
+  if (!isVersion(version)) throw Object.assign(new TypeError(`compareVersions: Pass a version: ${JSON.stringify(version)} is not one`), { code: "versions_compareversions_pass_a_version_is" })
   const [core, prerelease] = version.split(/-(.*)/su)
   return { core: core.split(".").map(Number), prerelease: prerelease === undefined ? [] : prerelease.split(".") }
 }

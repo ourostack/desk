@@ -127,7 +127,7 @@ const costOrNull = (value) => (typeof value === "number" && Number.isFinite(valu
 
 function toMs(value, name) {
   const ms = value === null ? Number.NaN : new Date(value).getTime()
-  if (Number.isNaN(ms)) throw new TypeError(`Pass ${name} as a valid time`)
+  if (Number.isNaN(ms)) throw Object.assign(new TypeError(`Pass ${name} as a valid time`), { code: "evaluator_step_pass_as_a_valid_time" })
   return ms
 }
 
@@ -195,12 +195,12 @@ function readDay(evaluator, clockDay) {
 export async function runEvaluatorStep(env, options = {}) {
   const impl = { ...DEFAULT_SEAMS, ...options }
   const { pluginVersion, onChild, onChildExit } = impl
-  if (typeof pluginVersion !== "string" || pluginVersion === "") throw new TypeError("Pass pluginVersion as a Desk version")
+  if (typeof pluginVersion !== "string" || pluginVersion === "") throw Object.assign(new TypeError("Pass pluginVersion as a Desk version"), { code: "evaluator_step_pass_pluginversion_as_a_desk" })
   const nowMs = toMs(impl.now === undefined ? new Date() : impl.now, "now")
   const deadlineMs = toMs(impl.deadline ?? null, "deadline")
-  if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw new TypeError("Pass deskRoot as an absolute path or null")
+  if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw Object.assign(new TypeError("Pass deskRoot as an absolute path or null"), { code: "evaluator_step_pass_deskroot_as_an_absolute" })
   const maxRuns = impl.maxRuns ?? Number.POSITIVE_INFINITY
-  if (maxRuns !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) throw new TypeError("Pass maxRuns as a positive whole number")
+  if (maxRuns !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) throw Object.assign(new TypeError("Pass maxRuns as a positive whole number"), { code: "evaluator_step_pass_maxruns_as_a_positive" })
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return { ok: true, result: "no_factory_state" }

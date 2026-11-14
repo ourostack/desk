@@ -22,7 +22,7 @@ const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const STATES = new Set(["open", "closed", "all"])
 
 function failure(code) {
-  const error = new Error(`factory issues: ${code}`)
+  const error = Object.assign(new Error(`factory issues: ${code}`), { code: "store_issues_factory_issues" })
   error.code = code
   return error
 }
@@ -60,9 +60,9 @@ function commentView(raw) {
  * the store `repo`.
  */
 export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  if (typeof runner !== "function") throw new TypeError("issuesClient: Pass runner as a function")
-  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo)) throw new TypeError("issuesClient: Pass repo as owner/repo")
-  if (typeof token !== "string" || token === "") throw new TypeError("issuesClient: Pass token as a non-empty string")
+  if (typeof runner !== "function") throw Object.assign(new TypeError("issuesClient: Pass runner as a function"), { code: "store_issues_issuesclient_pass_runner_as_a" })
+  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo)) throw Object.assign(new TypeError("issuesClient: Pass repo as owner/repo"), { code: "store_issues_issuesclient_pass_repo_as_owner" })
+  if (typeof token !== "string" || token === "") throw Object.assign(new TypeError("issuesClient: Pass token as a non-empty string"), { code: "store_issues_issuesclient_pass_token_as_a" })
 
   async function api(method, route, body) {
     const args = ["api", "--method", method, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]
@@ -97,7 +97,7 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
   const base = `repos/${repo}`
   return {
     async listIssues({ label, state }) {
-      if (typeof label !== "string" || !STATES.has(state)) throw new TypeError("listIssues: Pass a label and a state")
+      if (typeof label !== "string" || !STATES.has(state)) throw Object.assign(new TypeError("listIssues: Pass a label and a state"), { code: "store_issues_listissues_pass_a_label_and" })
       return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView, "too_many_issues")
     },
     async listComments(number) {
@@ -124,7 +124,7 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
       await api("PATCH", `${base}/issues/${number}`, patch)
     },
     async readFile(file) {
-      if (typeof file !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/u.test(file)) throw new TypeError("readFile: file must be a relative path")
+      if (typeof file !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/u.test(file)) throw Object.assign(new TypeError("readFile: file must be a relative path"), { code: "store_issues_readfile_file_must_be_a" })
       let answer
       try {
         answer = await api("GET", `${base}/contents/${file}`)

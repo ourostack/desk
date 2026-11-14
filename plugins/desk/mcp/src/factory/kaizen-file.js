@@ -189,7 +189,7 @@ async function recentFilings(env, store, now) {
  * result codes.
  */
 export async function fileKaizenCard(env, { deskRoot, title, body, plugin = "desk", frictionClass = "other", signal = null, evidenceJobs = [], runner = ghRunner({ env }), now = Date.now }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("fileKaizenCard: Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("fileKaizenCard: Pass deskRoot as an absolute path"), { code: "kaizen_file_filekaizencard_pass_deskroot_as_an" })
   const invalid = invalidInput({ title, body, plugin, frictionClass, signal, evidenceJobs })
   if (invalid !== null) return { result: invalid }
   const store = await route(env, deskRoot)

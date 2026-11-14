@@ -23,7 +23,7 @@ const DAY_MS = 86_400_000
 // class. A wait that is negative or not a finite number is a bug upstream, so
 // it throws rather than being filed under a class.
 export function waitClass(ms) {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw new RangeError("Pass a wait as a finite, non-negative number of milliseconds")
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) throw Object.assign(new RangeError("Pass a wait as a finite, non-negative number of milliseconds"), { code: "outcome_pass_a_wait_as_a" })
   if (ms < HOUR_MS) return "lt_1h"
   if (ms < DAY_MS) return "lt_1d"
   if (ms < 7 * DAY_MS) return "lt_7d"

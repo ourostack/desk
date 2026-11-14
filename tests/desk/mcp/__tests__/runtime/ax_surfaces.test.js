@@ -31,6 +31,10 @@ const NOT_ERRORS = {
   "plugins/desk/mcp/src/runtime/diagnostics.js#run-now-the-active-overlay": "remediation text on a diagnostic record whose `code` names it",
   "plugins/desk/mcp/src/runtime/diagnostics.js#check-write-permissions-and-free": "remediation text on a diagnostic record whose `code` names it",
   "plugins/desk/mcp/src/runtime/diagnostics.js#refresh-or-reinstall-desk-from": "remediation text on a diagnostic record whose `code` names it",
+  "plugins/desk/mcp/src/factory/desk-problem-file.js#desk-problem-run-it-again~3": "a log line the filer writes",
+  "plugins/desk/mcp/src/factory/desk-problem-file.js#desk-problem-run-it-again~2": "a log line the filer writes",
+  "plugins/desk/mcp/src/factory/desk-problem-file.js#desk-problem-run-it-again": "a log line the filer writes",
+  "plugins/desk/mcp/src/factory/headless-flag.js#use-a-read-tool-this": "a refusal reply that carries the exported headless code",
   "plugins/desk/mcp/src/tools/task-archived-resource.js#task-update-pass-only-resource": "carrier: each call site passes its own code",
   // Tool replies that report an outcome, with their stable status beside them, not failures.
   "plugins/desk/mcp/src/tools/lesson-team.js#in-effect-merged-in-from": "a status reply, not a failure",

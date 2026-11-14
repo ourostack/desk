@@ -285,11 +285,11 @@ export async function runFileDeskProblemCli({ argv = process.argv.slice(2), env 
   const options = new Map()
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
-    if (typeof key !== "string" || !key.startsWith("--")) throw new Error(`file-desk-problem.js: Pass only --<name> <value> pairs: unexpected argument ${JSON.stringify(key ?? "")}`)
+    if (typeof key !== "string" || !key.startsWith("--")) throw Object.assign(new Error(`file-desk-problem.js: Pass only --<name> <value> pairs: unexpected argument ${JSON.stringify(key ?? "")}`), { code: "desk_problem_file_file_desk_problem_js_pass_2" })
     options.set(key.slice(2), argv[index + 1])
   }
   const mechanism = options.get("mechanism")
-  if (typeof mechanism !== "string" || mechanism === "") throw new Error("file-desk-problem.js: Pass --mechanism <name>: it is required")
+  if (typeof mechanism !== "string" || mechanism === "") throw Object.assign(new Error("file-desk-problem.js: Pass --mechanism <name>: it is required"), { code: "desk_problem_file_file_desk_problem_js_pass" })
   const reason = options.get("reason") ?? ""
   try {
     await fileDeskProblem(env, { mechanism, rawText: reason, fixAttempt: options.get("fix-attempt") ?? "not recorded", host: options.get("host") ?? "unknown" })

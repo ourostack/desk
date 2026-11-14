@@ -57,9 +57,9 @@ export async function runMirrorStep(env, {
   deskRoot, personPrefix, now,
   fileCard = fileKaizenCard, writeCardCommitted = writeCardCommittedDefault, readCardsImpl = readCards, recordStepImpl = recordStep,
 }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "mirror_step_pass_deskroot_as_an_absolute" })
   const nowMs = new Date(now).getTime()
-  if (Number.isNaN(nowMs)) throw new TypeError("Pass now as a valid time")
+  if (Number.isNaN(nowMs)) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "mirror_step_pass_now_as_a_valid" })
   const mirrored = []
   const counts = {}
   const count = (code, n = 1) => { counts[code] = (counts[code] ?? 0) + n }

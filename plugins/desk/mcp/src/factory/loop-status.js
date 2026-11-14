@@ -20,13 +20,13 @@ const RESULT_CODE = /^[a-z0-9][a-z0-9_:-]{0,63}$/
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
 
 function requireStep(name) {
-  if (!STEPS.includes(name)) throw new TypeError("step: Pass a known step")
+  if (!STEPS.includes(name)) throw Object.assign(new TypeError("step: Pass a known step"), { code: "step_pass_a_known_step" })
 }
 
 function toTime(value) {
-  if (value === null) throw new TypeError("Pass now as a valid time")
+  if (value === null) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "loop_status_pass_now_as_a_valid_2" })
   const time = new Date(value).getTime()
-  if (Number.isNaN(time)) throw new TypeError("Pass now as a valid time")
+  if (Number.isNaN(time)) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "loop_status_pass_now_as_a_valid" })
   return time
 }
 
@@ -48,8 +48,8 @@ function stepsOf(status) {
  */
 export async function recordStep(env, name, { ok, result, now = new Date() } = {}) {
   requireStep(name)
-  if (typeof ok !== "boolean") throw new TypeError("Pass ok as a boolean")
-  if (typeof result !== "string" || !RESULT_CODE.test(result)) throw new TypeError("Pass result as a lowercase code of at most 64 characters")
+  if (typeof ok !== "boolean") throw Object.assign(new TypeError("Pass ok as a boolean"), { code: "loop_status_pass_ok_as_a_boolean" })
+  if (typeof result !== "string" || !RESULT_CODE.test(result)) throw Object.assign(new TypeError("Pass result as a lowercase code of at most 64 characters"), { code: "loop_status_pass_result_as_a_lowercase" })
   const at = new Date(toTime(now)).toISOString()
   let record
   await updateStatus(env, (current) => {

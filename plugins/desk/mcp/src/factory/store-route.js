@@ -148,7 +148,7 @@ function overlayDeclaration(pluginDirs, warnings, read, stat) {
 
 /** `resolveStore({ deskRoot, pluginDirs }) -> { store, source, warnings }`; see the header. */
 export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync, stat = statSync }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveStore: Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("resolveStore: Pass deskRoot as an absolute path"), { code: "store_route_resolvestore_pass_deskroot_as_an" })
   const warnings = []
   const result = deskDeclaration(deskRoot, read) ?? overlayDeclaration(pluginDirs, warnings, read, stat) ?? { store: DEFAULT_STORE, source: "default" }
   return { ...result, warnings }

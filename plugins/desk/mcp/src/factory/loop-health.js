@@ -331,7 +331,7 @@ export function assembleLoop({ status, read, nowMs, version }) {
 
 function toMillis(now) {
   const time = now === null ? Number.NaN : new Date(now).getTime()
-  if (Number.isNaN(time)) throw new TypeError("Pass now as a valid time")
+  if (Number.isNaN(time)) throw Object.assign(new TypeError("Pass now as a valid time"), { code: "loop_health_pass_now_as_a_valid" })
   return time
 }
 
@@ -420,7 +420,7 @@ export async function runMeasureStep(env, {
   writeCardCommitted = writeCardCommittedDefault, observe = observeConditions, readStatusImpl = readStatus, updateStatusImpl = updateStatus,
   readCardsImpl = readCardsDefault, recordStepImpl = recordStep, pluginVersion: version,
 }) {
-  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("Pass deskRoot as an absolute path")
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw Object.assign(new TypeError("Pass deskRoot as an absolute path"), { code: "loop_health_pass_deskroot_as_an_absolute" })
   const nowMs = toMillis(now)
   const counts = {}
   const tally = (code) => { counts[code] = (counts[code] ?? 0) + 1 }

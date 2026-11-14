@@ -119,12 +119,12 @@ const same = (left, right) => canonical(left) === canonical(right)
 
 function toMs(value, name) {
   const ms = value instanceof Date || typeof value === "string" || typeof value === "number" ? new Date(value).getTime() : Number.NaN
-  if (Number.isNaN(ms)) throw new TypeError(`Pass ${name} as a valid time`)
+  if (Number.isNaN(ms)) throw Object.assign(new TypeError(`Pass ${name} as a valid time`), { code: "headless_ledger_pass_as_a_valid_time" })
   return ms
 }
 
 function requireGeneration(value) {
-  if (value !== null && value !== undefined && (typeof value !== "string" || !GENERATION.test(value))) throw new TypeError("Pass generation as a short code or null")
+  if (value !== null && value !== undefined && (typeof value !== "string" || !GENERATION.test(value))) throw Object.assign(new TypeError("Pass generation as a short code or null"), { code: "headless_ledger_pass_generation_as_a_short_2" })
   return value ?? null
 }
 
@@ -634,8 +634,8 @@ export function createHeadlessLedger(seams = {}) {
    * `status.evaluator`, read only by the first migration. A reservation is never given back.
    */
   async function reserveAgentLaunch(env, { kind, generation = null, now, legacyEvaluator, launches = 1 } = {}) {
-    if (!KINDS.has(kind)) throw new TypeError("Pass kind as evaluate or triage")
-    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw new TypeError("Pass launches as 1, or 2 for a triage qualification")
+    if (!KINDS.has(kind)) throw Object.assign(new TypeError("Pass kind as evaluate or triage"), { code: "headless_ledger_pass_kind_as_evaluate_or_2" })
+    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw Object.assign(new TypeError("Pass launches as 1, or 2 for a triage qualification"), { code: "headless_ledger_pass_launches_as_1_or_2" })
     requireGeneration(generation)
     const readMs = toMs(now, "now")
     return transact(io, env, { nowMs: readMs, legacyEvaluator }, (current, nowMs) => {
@@ -661,8 +661,8 @@ export function createHeadlessLedger(seams = {}) {
    * the one authority that spends or refuses.
    */
   async function peekAgentLaunch(env, { kind, now, launches = 1 } = {}) {
-    if (!KINDS.has(kind)) throw new TypeError("Pass kind as evaluate or triage")
-    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw new TypeError("Pass launches as 1, or 2 for a triage qualification")
+    if (!KINDS.has(kind)) throw Object.assign(new TypeError("Pass kind as evaluate or triage"), { code: "headless_ledger_pass_kind_as_evaluate_or" })
+    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw Object.assign(new TypeError("Pass launches as 1, or 2 for a triage qualification"), { code: "headless_ledger_pass_launches_as_1_or" })
     const readMs = toMs(now, "now")
     const read = await readRecord(io, await factoryStateRoot(env), LEDGER_FILE, validLedger)
     if (read.state !== "ok") return { state: "unknown" }
@@ -678,8 +678,8 @@ export function createHeadlessLedger(seams = {}) {
    * not reserved, or one already finished), `day_closed` (the launch's day has ended) or a blocking state.
    */
   async function finishAgentLaunch(env, { token, state, now } = {}) {
-    if (!OUTCOMES.has(state)) throw new TypeError("Pass state as ran, failed or not_started")
-    if (!isObject(token) || !KINDS.has(token.kind) || !Number.isSafeInteger(token.revision) || typeof token.epoch !== "string" || typeof token.day !== "string" || ![undefined, 2].includes(token.launches)) throw new TypeError("Pass token as a reservation token")
+    if (!OUTCOMES.has(state)) throw Object.assign(new TypeError("Pass state as ran, failed or not_started"), { code: "headless_ledger_pass_state_as_ran_failed" })
+    if (!isObject(token) || !KINDS.has(token.kind) || !Number.isSafeInteger(token.revision) || typeof token.epoch !== "string" || typeof token.day !== "string" || ![undefined, 2].includes(token.launches)) throw Object.assign(new TypeError("Pass token as a reservation token"), { code: "headless_ledger_pass_token_as_a_reservation" })
     const readMs = toMs(now, "now")
     return transact(io, env, { nowMs: readMs }, (settled, nowMs) => {
       // Every write carries the current clock, so the record moves to today's UTC day first; a launch from an earlier day is closed.
@@ -701,8 +701,8 @@ export function createHeadlessLedger(seams = {}) {
    * token, answered again), `not_runnable` (no evaluation was waiting) or a blocking state. A new token replaces an older one.
    */
   async function createEvaluationContinuation(env, { generation, expectedEvaluation, now } = {}) {
-    if (typeof generation !== "string" || !GENERATION.test(generation)) throw new TypeError("Pass generation as a short code")
-    if (!validBasis(expectedEvaluation)) throw new TypeError("Pass expectedEvaluation as an evaluation continuation basis")
+    if (typeof generation !== "string" || !GENERATION.test(generation)) throw Object.assign(new TypeError("Pass generation as a short code"), { code: "headless_ledger_pass_generation_as_a_short" })
+    if (!validBasis(expectedEvaluation)) throw Object.assign(new TypeError("Pass expectedEvaluation as an evaluation continuation basis"), { code: "headless_ledger_pass_expectedevaluation_as_an_evaluation" })
     const readMs = toMs(now, "now")
     if (expectedEvaluation.ready_now + expectedEvaluation.ready_later === 0) return { state: "not_runnable" }
     return transact(io, env, { nowMs: readMs }, (settled, nowMs) => {
@@ -723,7 +723,7 @@ export function createHeadlessLedger(seams = {}) {
    * triage slot imposed: the shared quota, attempt limits, the lock and every other gate still apply.
    */
   async function consumeEvaluationContinuation(env, { token, now, status } = {}) {
-    if (!isObject(token) || !Number.isSafeInteger(token.serial) || typeof token.epoch !== "string") throw new TypeError("Pass token as a continuation token")
+    if (!isObject(token) || !Number.isSafeInteger(token.serial) || typeof token.epoch !== "string") throw Object.assign(new TypeError("Pass token as a continuation token"), { code: "headless_ledger_pass_token_as_a_continuation" })
     const readMs = toMs(now, "now")
     const basis = sha256(canonical(evaluationContinuationBasis(status)))
     return transact(io, env, { nowMs: readMs }, (settled, nowMs) => {

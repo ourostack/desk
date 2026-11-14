@@ -154,7 +154,7 @@ export const REASON_TEXT = Object.freeze({ ...FACT_REASON_TEXT, ...REPORT_REASON
 
 /** `reasonText(id) -> string`: the plain words for a reason. An id with no words is a defect and stops the build. */
 export function reasonText(id) {
-  if (!Object.hasOwn(REASON_TEXT, id)) throw new Error(`Add plain text for the reason ${String(id)}: it has none`)
+  if (!Object.hasOwn(REASON_TEXT, id)) throw Object.assign(new Error(`Add plain text for the reason ${String(id)}: it has none`), { code: "report_add_plain_text_for_the" })
   return REASON_TEXT[id]
 }
 
@@ -184,7 +184,7 @@ export const FIELD_TEXT = Object.freeze({
 })
 
 function fieldText(field) {
-  if (!Object.hasOwn(FIELD_TEXT, field)) throw new Error(`Add a plain name for the field ${String(field)}: it has none`)
+  if (!Object.hasOwn(FIELD_TEXT, field)) throw Object.assign(new Error(`Add a plain name for the field ${String(field)}: it has none`), { code: "report_add_a_plain_name_for" })
   return FIELD_TEXT[field]
 }
 
@@ -203,7 +203,7 @@ function reasonsPhrase(value) {
 // The state a number carries, in words. A result with no known state is a
 // defect upstream and stops the page; it is never read as measured.
 function stateText(value, evidence = true) {
-  if (!["measured", "partial", "unavailable"].includes(value.state)) throw new Error(`Give the number a known state: ${String(value.state)} is not one`)
+  if (!["measured", "partial", "unavailable"].includes(value.state)) throw Object.assign(new Error(`Give the number a known state: ${String(value.state)} is not one`), { code: "report_give_the_number_a_known" })
   if (value.state === "unavailable") return `not recorded (${reasonsPhrase(value)})`
   const note = evidence && value.class !== "measured" ? [`${value.class} evidence`] : []
   if (value.state === "measured") return ["measured", ...note].join(", ")

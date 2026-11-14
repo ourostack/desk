@@ -314,7 +314,7 @@ const PARTLY = "host_records_partly"
 // reason it is left out.
 // A formula result always says its state; a missing or unknown one is a defect upstream, never read as measured.
 export function fromFormula(value) {
-  if (!NUMBER_STATES.includes(value.state)) throw new Error(`Give the formula result a known state: ${String(value.state)} is not one`)
+  if (!NUMBER_STATES.includes(value.state)) throw Object.assign(new Error(`Give the formula result a known state: ${String(value.state)} is not one`), { code: "rollups_give_the_formula_result_a" })
   if (value.state === "unavailable") return { excluded: value.reason }
   if (value.censored) return { excluded: "censored" }
   if (value.state === "partial") return value.reasons.length === 1 && value.reasons[0] === PARTLY ? { value: value.value, state: "partial", reasons: [PARTLY] } : { excluded: "partial" }
@@ -607,7 +607,7 @@ function byGrouping(records, groupings, summarize) {
 // `value` is the key absent, never 0 and never null, when no session supplied a count. The state is measured when `n === N`, partial when a value exists and `n < N`, and unavailable when no session supplied a count.
 // A rollup number that is not measured always names why; the one place that refuses one that does not.
 export function assertNamed(number) {
-  if (number.state !== "measured" && number.reasons.length === 0) throw new Error(`Add a reason to the ${number.state} rollup number: it has none`)
+  if (number.state !== "measured" && number.reasons.length === 0) throw Object.assign(new Error(`Add a reason to the ${number.state} rollup number: it has none`), { code: "rollups_add_a_reason_to_the" })
   return number
 }
 

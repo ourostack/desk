@@ -169,7 +169,7 @@ export function validateContextBytes(bytes) {
 
 /** Only public clock, binding and outcome evidence affects freshness, never model/token totals. */
 export function contextSource(facts, job) {
-  if (!validatePublished(facts).ok || !facts.jobs.some((entry) => entry.job === job)) throw new TypeError("contextSource: Pass valid bound published facts that hold the job")
+  if (!validatePublished(facts).ok || !facts.jobs.some((entry) => entry.job === job)) throw Object.assign(new TypeError("contextSource: Pass valid bound published facts that hold the job"), { code: "context_schema_contextsource_pass_valid_bound_published" })
   const normalized = normalizePublished(facts)
   return {
     session: normalized.session.id,

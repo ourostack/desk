@@ -1685,7 +1685,7 @@ export function signedInAccounts(text) {
  * Tokens stay in memory and reach gh only as `GH_TOKEN`.
  */
 export async function chooseAccount({ store, runner, deadlineMs = 60000, now = Date.now }) {
-  if (!isRepo(store)) throw new Error("chooseAccount: Pass store as <owner>/<repo>")
+  if (!isRepo(store)) throw Object.assign(new Error("chooseAccount: Pass store as <owner>/<repo>"), { code: "flush_chooseaccount_pass_store_as_owner" })
   const deadline = now() + deadlineMs
   try {
     const status = await createClient({ runner, deadline, now }).call(["auth", "status", "--hostname", "github.com"])
